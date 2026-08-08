@@ -1,0 +1,219 @@
+"""Pruebas de postprocesadores de fecha (día/mes/año y combinación)."""
+
+from __future__ import annotations
+
+import unittest
+
+from app.utils.postprocess import WEAK_MATRICULA_NOTE, apply_postprocess, \
+    combine_date
+
+
+class TestDay(unittest.TestCase):
+    def test_valid_days(self):
+        for value, expected in (("20", "20"), ("05", "05"), ("1", "1")):
+            self.assertEqual(apply_postprocess("x", "day", value),
+                             (expected, ""))
+
+    def test_two_digit_run_preferred(self):
+        self.assertEqual(apply_postprocess("x", "day", "21 0"), ("21", ""))
+        self.assertEqual(apply_postprocess("x", "day", "11 6"), ("11", ""))
+
+    def test_split_by_cell_separator_joined(self):
+        # Separador vertical de casilla impreso parte el día en dos tokens.
+        self.assertEqual(apply_postprocess("x", "day", "2 0"), ("20", ""))
+        self.assertEqual(apply_postprocess("x", "day", "1 5"), ("15", ""))
+        self.assertEqual(apply_postprocess("x", "day", "2|6"), ("26", ""))
+
+    def test_split_invalid_range_still_rejected(self):
+        value, note = apply_postprocess("x", "day", "3 5")
+        self.assertEqual(value, "")
+        self.assertIn("invalid day", note)
+
+    def test_three_digit_rejected(self):
+        value, note = apply_postprocess("x", "day", "210")
+        self.assertEqual(value, "")
+        self.assertIn("invalid day", note)
+
+    def test_out_of_range_rejected(self):
+        value, note = apply_postprocess("x", "day", "35")
+        self.assertEqual(value, "")
+        self.assertIn("invalid day", note)
+        value, note = apply_postprocess("x", "day", "0")
+        self.assertEqual(value, "")
+        self.assertIn("invalid day", note)
+
+    def test_no_digits_rejected(self):
+        value, note = apply_postprocess("x", "day", "Non-Schedule")
+        self.assertEqual(value, "")
+        self.assertIn("invalid day", note)
+
+    def test_label_contamination_rejected(self):
+        value, note = apply_postprocess(
+            "x", "day", "Schedule Fit (X) Non-Schedule Flt (II) 211 DATE"
+        )
+        self.assertEqual(value, "")
+        self.assertIn("invalid day", note)
+
+
+class TestMonth(unittest.TestCase):
+    def test_digits(self):
+        self.assertEqual(apply_postprocess("x", "month", "07"), ("7", ""))
+        self.assertEqual(apply_postprocess("x", "month", "001"), ("1", ""))
+
+    def test_letters_exact(self):
+        self.assertEqual(apply_postprocess("x", "month", "JUL"), ("JUL", ""))
+        self.assertEqual(apply_postprocess("x", "month", "dic"),
+                         ("DIC", ""))
+
+    def test_fuzzy(self):
+        value, note = apply_postprocess("x", "month", "JUIL")
+        self.assertEqual(value, "JUL")
+        self.assertIn("fuzzy", note)
+        value, note = apply_postprocess("x", "month", "GUL")
+        self.assertEqual(value, "JUL")
+        self.assertIn("fuzzy", note)
+
+    def test_digit_misread_as_letter(self):
+        # '1' del separador de casilla leído como dígito -> letra 'i'.
+        value, note = apply_postprocess("x", "month", "JU1")
+        self.assertEqual(value, "JUL")
+        self.assertIn("fuzzy", note)
+        value, note = apply_postprocess("x", "month", "JUI")
+        self.assertEqual(value, "JUL")
+        self.assertIn("fuzzy", note)
+
+    def test_split_by_cell_separator(self):
+        # Separador vertical impreso: el OCR devuelve letras partidas.
+        value, note = apply_postprocess("x", "month", "J U L")
+        self.assertEqual(value, "JUL")
+        self.assertEqual(note, "")
+
+    def test_label_contamination(self):
+        value, note = apply_postprocess("x", "month", "JUL Month")
+        self.assertEqual(value, "JUL")
+        self.assertEqual(note, "")
+
+    def test_invalid(self):
+        value, note = apply_postprocess("x", "month", "JJ")
+        self.assertEqual(value, "")
+        self.assertIn("invalid month", note)
+        value, note = apply_postprocess("x", "month", "2241 Month YR")
+        self.assertEqual(value, "")
+        self.assertIn("invalid month", note)
+        value, note = apply_postprocess("x", "month", "0")
+        self.assertEqual(value, "")
+        self.assertIn("invalid month", note)
+        value, note = apply_postprocess("x", "month", "51012")
+        self.assertEqual(value, "")
+        self.assertIn("invalid month", note)
+
+
+class TestYear(unittest.TestCase):
+    def test_valid(self):
+        self.assertEqual(apply_postprocess("x", "year", "26"), ("26", ""))
+        self.assertEqual(apply_postprocess("x", "year", "2026"), ("2026", ""))
+
+    def test_label_contamination_extracts_digits(self):
+        self.assertEqual(
+            apply_postprocess("x", "year", "05450 Year YR 26"), ("26", "")
+        )
+        self.assertEqual(
+            apply_postprocess("x", "year", "Year YR 26"), ("26", "")
+        )
+
+    def test_three_digit_kept_for_corrector(self):
+        value, note = apply_postprocess("x", "year", "216")
+        self.assertEqual(value, "216")
+        self.assertIn("invalid year", note)
+        self.assertEqual(
+            apply_postprocess("x", "year", "05332 Year YR 216"),
+            ("216", "invalid year: 216"),
+        )
+
+    def test_split_by_cell_separator_joined(self):
+        self.assertEqual(apply_postprocess("x", "year", "2 6"), ("26", ""))
+        self.assertEqual(apply_postprocess("x", "year", "2|6"), ("26", ""))
+        self.assertEqual(apply_postprocess("x", "year", "Year YR 2 6"),
+                         ("26", ""))
+        # Cuatro dígitos partidos por separadores forman el año completo.
+        self.assertEqual(apply_postprocess("x", "year", "2 0 2 6"),
+                         ("2026", ""))
+
+    def test_invalid(self):
+        value, note = apply_postprocess("x", "year", "Year")
+        self.assertEqual(value, "")
+        self.assertIn("invalid year", note)
+        value, note = apply_postprocess("x", "year", "1")
+        self.assertEqual(value, "")
+        self.assertIn("invalid year", note)
+
+    def test_implausible_four_digit_rejected(self):
+        # Restos del log_number (p. ej. "8313", "5102") no son años.
+        value, note = apply_postprocess("x", "year", "8313")
+        self.assertEqual(value, "")
+        self.assertIn("invalid year", note)
+        value, note = apply_postprocess("x", "year", "5102")
+        self.assertEqual(value, "")
+        self.assertIn("invalid year", note)
+
+
+class TestMatricula(unittest.TestCase):
+    def test_valid(self):
+        for value in ("1717", "hp1717", "1717cmp", "HP-1717", "1717 CMP"):
+            self.assertEqual(apply_postprocess("x", "matricula", value),
+                             ("HP-1717CMP", ""))
+
+    def test_wwp_exceptions(self):
+        self.assertEqual(apply_postprocess("x", "matricula", "HP-1990WWP"),
+                         ("HP-1990WWP", ""))
+        self.assertEqual(apply_postprocess("x", "matricula", "1522"),
+                         ("HP-1522WWP", ""))
+
+    def test_scattered_digits_weak(self):
+        value, note = apply_postprocess("x", "matricula",
+                                        "wAT 1Hp i712cmp")
+        self.assertEqual(value, "HP-1712CMP")
+        self.assertEqual(note, WEAK_MATRICULA_NOTE)
+
+    def test_garbage_returns_empty(self):
+        for value in ("All H89916cmp FL /C", "AIF 189915CHP FLT. /CHE",
+                      "All HP-GGIFCal R0", "All itp-g916", "AI", "HP"):
+            value, note = apply_postprocess("x", "matricula", value)
+            self.assertEqual(value, "")
+            self.assertIn("registration without 4-digit number", note)
+
+
+class TestCombineDate(unittest.TestCase):
+    def test_valid(self):
+        self.assertEqual(combine_date("4", "JUL", "26"),
+                         ("2026/07/04", ""))
+        self.assertEqual(combine_date("16", "7", "2026"),
+                         ("2026/07/16", ""))
+
+    def test_three_digit_year_rejected(self):
+        value, note = combine_date("16", "JUL", "216")
+        self.assertIn("invalid year", note)
+
+    def test_implausible_year_rejected(self):
+        value, note = combine_date("16", "JUL", "1751")
+        self.assertIn("invalid year", note)
+        value, note = combine_date("16", "JUL", "2216")
+        self.assertIn("invalid year", note)
+
+    def test_bad_month_rejected(self):
+        value, note = combine_date("16", "JJ", "26")
+        self.assertIn("invalid month", note)
+
+    def test_bad_day_rejected(self):
+        value, note = combine_date("35", "JUL", "26")
+        self.assertIn("invalid day", note)
+        value, note = combine_date("210", "JUL", "26")
+        self.assertIn("invalid day", note)
+
+    def test_incomplete(self):
+        value, note = combine_date("16", None, "26")
+        self.assertIn("incomplete date", note)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.Python
+
+# Entornos virtuales y portable (muy pesados, se obtienen por separado)
+.venv/
+venv/
+env/
+portable/
+
+# Caches de herramientas
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Outputs generados (se regeneran al correr la app)
+output/
+recortes_firmas/
+
+# Directorio de entrada (PDFs escaneados, descargables por separado)
+input/*
+!input/.gitkeep
+
+# Archivo huérfano (de una mala redirección de shell)
+=1.8.0
+
+# Sistema
+.DS_Store
+Thumbs.db
+desktop.ini
