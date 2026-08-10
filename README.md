@@ -159,7 +159,7 @@ Una vez reconstruida `portable/`, regenere el launcher:
 
 ```batch
 portable\python312\tools\python.exe -m pip install pyinstaller
-portable\python312\tools\python.exe -m PyInstaller --onefile --name LogbookClassification --icon assets\icon.ico --distpath . --workpath build --specpath build launcher_gui.py
+portable\python312\tools\python.exe -m PyInstaller --onefile --noconsole --name LogbookClassification --icon assets\icon.ico --distpath . --workpath build --specpath build launcher_gui.py
 ```
 
 ## Uso
@@ -179,7 +179,7 @@ Si se quiere regenerar el launcher o el cache de modelos en otra máquina:
 
 ```batch
 portable\python312\tools\python.exe -m pip install pyinstaller
-portable\python312\tools\python.exe -m PyInstaller --onefile --name LogbookClassification --icon assets\icon.ico --distpath . --workpath build --specpath build launcher_gui.py
+portable\python312\tools\python.exe -m PyInstaller --onefile --noconsole --name LogbookClassification --icon assets\icon.ico --distpath . --workpath build --specpath build launcher_gui.py
 
 portable\python312\tools\python.exe tools\make_icon.py     # (re)genera assets\icon.png e icon.ico
 portable\python312\tools\python.exe tools\precache_paddle.py
@@ -317,22 +317,29 @@ portable\python312\tools\python.exe run_gui.py
 3. Procesamiento: motor OCR (`PaddleOCR` o `Tesseract`) con idioma
    automático, "Bitácoras" (primeras N, 0 = todas), "Páginas" por bitácora,
    corrección de inclinación y alineación.
-4. Salidas: casillas "Matrícula" y "Mes" para separar los PDFs por esos
+4. Preprocesamiento: **Preprocesar** aplica corrección de inclinación y
+   alineación sin ejecutar OCR, para revisar visualmente las páginas antes del
+   procesamiento completo.
+5. Salidas: casillas "Matrícula" y "Mes" para separar los PDFs por esos
    criterios (con ambas, separado por matrícula y mes), "Discrepancia"
    (`discrepancias.pdf`) y "Visualizar campos" (las bitácoras con sus
    bounding boxes en `debug.pdf`).
-5. Opciones avanzadas (colapsable): hilos totales del procesador y página de
+6. Opciones avanzadas (colapsable): hilos totales del procesador y página de
    referencia. La aplicación detecta los hilos disponibles, selecciona todos
    por defecto y distribuye automáticamente el trabajo entre workers e hilos
    internos. Solo se puede cambiar el total de hilos.
-6. Procesar → barra de progreso con tiempo transcurrido, restante estimado
-    (medido en vivo según el ritmo real de cada bitácora) y, al terminar,
-    el tiempo por bitácora. El resultado OCR queda disponible en memoria para
-    exportarlo varias veces.
-7. La tabla de resultados usa las mismas columnas del CSV y muestra una sola
-   línea por página. La vista previa muestra los bounding boxes cuando
-   "Visualizar campos" está marcado (solo dibujo, sin costo extra).
-8. Los outputs (CSV y JSON consolidado en `datos/`, `stats.json`, PDFs
+7. Procesar → barra de progreso con tiempo transcurrido, restante estimado
+   (medido en vivo según el ritmo real de cada bitácora) y, al terminar,
+   el tiempo por bitácora. El resultado OCR queda disponible en memoria para
+   exportarlo varias veces.
+8. La vista previa carga la primera página del PDF seleccionado inmediatamente,
+   antes del procesamiento, para revisar los bounding boxes cuando
+   "Visualizar campos" está marcado (solo dibujo, sin costo extra). Al terminar
+   el OCR, se actualiza con la versión de la corrida. Se reajusta al área de la
+   ventana cuando esta cambia de tamaño; los controles de zoom permiten ampliar
+   y desplazarse por la página. La tabla de resultados usa las mismas columnas
+   del CSV y muestra una sola línea por página.
+9. Los outputs (CSV y JSON consolidado en `datos/`, `stats.json`, PDFs
     por matrícula/mes, `discrepancias.pdf`, `debug.pdf`) se exportan
     automáticamente en `output/<nombre del CSV>/` según las casillas
     marcadas. Después de procesar se pueden cambiar las opciones de

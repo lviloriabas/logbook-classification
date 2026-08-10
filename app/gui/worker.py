@@ -9,10 +9,7 @@ from typing import List, Union
 from PySide6.QtCore import QThread, Signal
 
 from app.core.config import AppConfig
-from app.core.pipeline import Pipeline
 from app.models.schemas import ValidationReport
-from app.ocr.engine import create_engine
-from app.reports.outputs import OutputOptions, write_outputs
 from app.templates.manager import TemplateManager
 from app.validation.book_corrector import correct_matricula_by_book
 from app.validation.date_corrector import correct_dates_by_book
@@ -65,6 +62,9 @@ class PipelineWorker(QThread):
     def run(self) -> None:
         """Punto de entrada del hilo."""
         try:
+            from app.core.pipeline import Pipeline
+            from app.ocr.engine import create_engine
+
             template = TemplateManager().load(self.template_path)
             engine_kwargs = {}
             if self.cpu_threads is not None:
@@ -144,6 +144,87 @@ class PipelineWorker(QThread):
                            self._progress_offset + total, prefix + message)
 
 
+class PreprocessWorker(QThread):
+    """Aplica el preprocesamiento de página sin ejecutar OCR."""
+
+    progress = Signal(int, int, str)
+    page_ready = Signal(str, int, object)
+    succeeded = Signal(bool)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        pdf_paths: List[Path],
+        config: AppConfig,
+        max_pages: int | None = None,
+        reference_page: int = 1,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.pdf_paths = [Path(path) for path in pdf_paths]
+        self.config = config
+        self.max_pages = max_pages
+        self.reference_page = max(1, reference_page)
+
+    def run(self) -> None:
+        """Renderiza, endereza y alinea las páginas para su revisión visual."""
+        try:
+            from app.vision.alignment import apply_transform, compute_similarity_transform
+            from app.vision.pdf_loader import page_count, render_page
+            from app.vision.preprocessing import deskew
+
+            total = 0
+            counts: list[int] = []
+            for pdf_path in self.pdf_paths:
+                count = page_count(pdf_path)
+                if self.max_pages is not None:
+                    count = min(count, self.max_pages)
+                counts.append(count)
+                total += count
+
+            done = 0
+            for pdf_path, count in zip(self.pdf_paths, counts):
+                if self.isInterruptionRequested():
+                    break
+
+                reference = None
+                if self.config.align and count:
+                    reference = render_page(
+                        pdf_path,
+                        min(self.reference_page, count),
+                        self.config.dpi,
+                    )
+
+                for page_number in range(1, count + 1):
+                    if self.isInterruptionRequested():
+                        break
+                    self.progress.emit(
+                        done,
+                        total,
+                        f"Preprocesando {pdf_path.name}: "
+                        f"página {page_number}/{count}",
+                    )
+                    image = render_page(pdf_path, page_number, self.config.dpi)
+                    if self.config.deskew:
+                        image, _angle = deskew(image)
+                    if self.config.align and reference is not None:
+                        transform = compute_similarity_transform(
+                            image, reference, self.config
+                        )
+                        image = apply_transform(image, transform)
+                    done += 1
+                    self.page_ready.emit(str(pdf_path), page_number, image)
+                    self.progress.emit(
+                        done,
+                        total,
+                        f"Preprocesando {pdf_path.name}: "
+                        f"página {page_number}/{count}",
+                    )
+            self.succeeded.emit(self.isInterruptionRequested())
+        except Exception as exc:  # noqa: BLE001 - la GUI muestra el error
+            self.failed.emit(f"{exc}\n{traceback.format_exc()}")
+
+
 class OutputsWorker(QThread):
     """Genera las salidas de una corrida sin bloquear la interfaz."""
 
@@ -166,6 +247,8 @@ class OutputsWorker(QThread):
     def run(self) -> None:
         """Punto de entrada del hilo de generación de salidas."""
         try:
+            from app.reports.outputs import write_outputs
+
             output_dir = write_outputs(
                 self.reports,
                 self.options,

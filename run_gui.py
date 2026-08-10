@@ -21,6 +21,7 @@ from app.utils.logging import setup_logging
 def main() -> int:
     setup_logging(Path("output") / "logs")
     try:
+        from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QApplication
         from app.gui.main_window import MainWindow
     except ImportError as exc:
@@ -32,13 +33,19 @@ def main() -> int:
     from PySide6.QtGui import QIcon
 
     root = Path(__file__).resolve().parent
-    icon = root / "assets" / "icon.png"
+    icon = root / "assets" / "icon.ico"
+    if not icon.exists():
+        icon = root / "assets" / "icon.png"
     app = QApplication(sys.argv)
     app.setApplicationName("Logbook Classification")
-    if icon.exists():
-        app.setWindowIcon(QIcon(str(icon)))
+    app_icon = QIcon(str(icon))
+    app.setWindowIcon(app_icon)
     window = MainWindow()
+    window.setWindowIcon(app_icon)
     window.show()
+    # Detectar PDFs y calcular la estimación puede tocar archivos grandes.
+    # Se difiere para que la ventana sea visible inmediatamente.
+    QTimer.singleShot(0, window.load_initial_data)
     return app.exec()
 
 

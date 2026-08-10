@@ -7,10 +7,9 @@ vecinas. Esta módulo separa la casilla en celdas fijas usando la
 posición de los separadores impresos (constantes de un formulario a
 otro), para que el OCR de respaldo lea carácter por carácter.
 
-El mapa de ranuras se calcula sobre la MÁSCARA del fondo impreso
-(que contiene solo lo impreso: etiquetas, separadores, grilla), no
-sobre la página con escritura: así las ranuras son estables y no se
-contaminan con la tinta manuscrita.
+    El mapa de ranuras se calcula sobre el mapa del fondo impreso, no sobre
+    la página que contiene la escritura: así las posiciones de las ranuras
+    permanecen estables aunque la tinta manuscrita varíe entre páginas.
 """
 
 from __future__ import annotations
@@ -20,7 +19,7 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from app.templates.schema import Template
-from app.vision.ink_extent import crop_to_ink
+from app.vision.ink_extent import crop_to_ink, strip_date_label
 from app.vision.preprocessing import crop_region
 
 # Fracción mínima de filas oscuras de la banda para que una columna sea
@@ -150,7 +149,8 @@ def crop_slots(image, field, pad: float = 0.01, spec: Dict = None) -> Optional[L
     return slots or None
 
 
-def localize_slot(slot: np.ndarray) -> np.ndarray:
+def localize_slot(slot: np.ndarray, dpi: Optional[int] = None) -> np.ndarray:
     """Recorta una ranura al extento de su tinta (o la deja tal cual)."""
-    localized = crop_to_ink(slot)
+    slot = strip_date_label(slot)
+    localized = crop_to_ink(slot, dpi=dpi)
     return localized if localized is not None else slot

@@ -110,9 +110,8 @@ def parse_args() -> argparse.Namespace:
                         help="Desactivar alineación con plantilla")
     parser.add_argument(
         "--no-remove-printed", action="store_true",
-        help="No quitar del OCR el fondo impreso idéntico en todas las "
-             "páginas (etiquetas, separadores, grilla). Recomendado dejarlo "
-             "activado: mejora la lectura de fecha y matrícula.",
+        help="No construir el mapa del fondo impreso idéntico en todas las "
+             "páginas. Recomendado dejarlo activado para firmas y ranuras.",
     )
     parser.add_argument(
         "--no-crop-preprocess", action="store_true",

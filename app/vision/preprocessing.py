@@ -114,12 +114,35 @@ def crop_region(image: np.ndarray, field: FieldTemplate,
     return image[top:bottom, left:right]
 
 
-def upscale_for_ocr(region: np.ndarray, min_side: int = 800) -> np.ndarray:
-    """Escala la región para mejorar la precisión del OCR."""
+def upscale_for_ocr(
+    region: np.ndarray,
+    min_side: int = 800,
+    max_scale: float = 3.0,
+    skip_if_ge: int = 150,
+) -> np.ndarray:
+    """Escala la región para mejorar la precisión del OCR.
+
+    Reescala los recortes *pequeños* (los que el motor lee borrosos),
+    pero sin exagerar: un recorte que ya tiene un lado razonable se deja
+    intacto y el factor de escala se limita a ``max_scale``. Escalar en
+    exceso un recorte de escritura a mano lo emborrona (el detector
+    falla) en lugar de ayudarlo; a 400 DPI los recortes ya son grandes y
+    no necesitan reescalado.
+
+    Args:
+        region: Recorte (BGR o gris).
+        min_side: Lado objetivo en píxeles (solo como tope del factor).
+        max_scale: Factor máximo de escala aplicado.
+        skip_if_ge: Si el lado más largo ya mide al menos este número de
+            píxeles, se devuelve el recorte sin reescalar.
+
+    Returns:
+        Recorte reescalado (o el original si ya es suficientemente grande).
+    """
     height, width = region.shape[:2]
     longest = max(height, width)
-    if longest >= min_side:
+    if longest >= min_side or longest >= skip_if_ge:
         return region
-    scale = min_side / longest
+    scale = min(max_scale, min_side / longest)
     new_size = (int(width * scale), int(height * scale))
     return cv2.resize(region, new_size, interpolation=cv2.INTER_CUBIC)

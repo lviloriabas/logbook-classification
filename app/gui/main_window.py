@@ -21,14 +21,16 @@ from PySide6.QtCore import (
     QObject,
     QProcess,
     QRectF,
+    QSize,
+    Qt,
     QThread,
     QTimer,
-    Qt,
     Signal,
 )
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QIcon,
     QImage,
     QKeySequence,
     QPainter,
@@ -64,14 +66,12 @@ from PySide6.QtWidgets import (
 
 from app.core.config import AppConfig
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
-from app.gui.worker import OutputsWorker, PipelineWorker
+from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
 from app.models.schemas import Status, ValidationReport
 from app.reports.csv_reporter import CsvReporter
-from app.reports.outputs import OutputOptions
-from app.templates.schema import Template
 from app.templates.manager import TemplateManager
+from app.templates.schema import Template
 from app.utils.io import send_to_trash
-from app.vision.pdf_loader import detect_dpi, page_count
 
 SCRIPT_DIR = Path(__file__).resolve().parents[2]
 PERF_CACHE = SCRIPT_DIR / "output" / ".performance.json"
@@ -89,15 +89,67 @@ _COLORS = {
 
 _QSS = """
 QPushButton {
-    min-height: 32px;
-    padding: 4px 12px;
+    min-height: 26px;
+    padding: 2px 10px;
+}
+#primaryButton {
+    background-color: rgb(49, 49, 49);
+    color: #ffffff;
+}
+#primaryButton:hover {
+    background-color: rgb(64, 64, 64);
+}
+#primaryButton:pressed {
+    background-color: rgb(38, 38, 38);
+}
+#zoomOverlay {
+    background-color: rgb(49, 49, 49);
+    border: 1px solid rgb(49, 49, 49);
+    border-radius: 8px;
+}
+#zoomOverlay QLabel {
+    border: 0;
+    background: transparent;
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 600;
+}
+#zoomOverlay QToolButton#zoomControl {
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background-color: rgb(49, 49, 49);
+}
+#zoomOverlay QToolButton#zoomControl:hover {
+    background-color: rgb(64, 64, 64);
+    border-color: rgb(102, 102, 102);
+}
+#zoomOverlay QToolButton#zoomControl:pressed {
+    background-color: rgb(38, 38, 38);
+    border-color: rgb(102, 102, 102);
+}
+#zoomOverlay QToolButton#zoomControl:disabled {
+    background-color: rgb(49, 49, 49);
+}
+#zoomOverlay QLabel#zoomCaption,
+#zoomOverlay QLabel#zoomValue {
+    min-width: 28px;
+    max-width: 28px;
+    padding: 0;
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 600;
 }
 QPushButton:disabled { color: #8c959f; }
-QToolButton { padding: 4px 8px; }
+QToolButton { padding: 2px 6px; }
 QGroupBox {
     font-weight: 600;
     border: 1px solid #c9d1d9; border-radius: 6px;
-    margin-top: 10px; padding-top: 6px;
+    margin-top: 8px; padding-top: 4px;
 }
 QGroupBox::title {
     subcontrol-origin: margin; left: 8px; padding: 0 4px;
@@ -107,8 +159,22 @@ QProgressBar {
     text-align: center;
 }
 QProgressBar::chunk { background-color: #2f81f7; border-radius: 4px; }
-QSpinBox, QComboBox, QLineEdit { padding: 4px; }
-#timeBar { background-color: #ddf4ff; }
+QSpinBox, QComboBox, QLineEdit { padding: 3px; }
+#timeBar { background-color: #e1e7ee; }
+#timeSummary {
+    background-color: rgb(49, 49, 49);
+    border: 1px solid rgb(49, 49, 49);
+    border-radius: 6px;
+}
+#timeSummary QLabel[role="caption"] {
+    color: #ffffff;
+    font-size: 10px;
+}
+#timeSummary QLabel[role="value"] {
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 600;
+}
 """
 
 
@@ -123,6 +189,14 @@ def _format_duration(seconds: float) -> str:
     hours = int(minutes // 60)
     mins = int(minutes % 60)
     return f"{hours} h {mins} min"
+
+
+def _format_clock(seconds: float) -> str:
+    """Muestra una duración con precisión de segundos, como un cronómetro."""
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 def _load_ms_per_page() -> float:
@@ -160,6 +234,22 @@ def _clear_layout(layout) -> None:
                 _clear_layout(sub)
 
 
+def _load_app_icon() -> QIcon:
+    """Icono de la aplicación: .ico (multi-tamaño, ideal en Windows) o PNG."""
+    assets = SCRIPT_DIR / "assets"
+    for name in ("icon.ico", "icon.png"):
+        path = assets / name
+        if path.is_file():
+            return QIcon(str(path))
+    return QIcon()
+
+
+def _load_zoom_icon(name: str) -> QIcon:
+    """Carga un icono de zoom local para que el visor sea consistente en Windows."""
+    path = SCRIPT_DIR / "assets" / f"zoom_{name}.svg"
+    return QIcon(str(path)) if path.is_file() else QIcon.fromTheme(f"zoom-{name}")
+
+
 class QtLogSink(QObject):
     """Sink de Loguru que reenvía mensajes a la GUI vía señal."""
 
@@ -180,21 +270,19 @@ class PreviewLoader(QObject):
     previewReady = Signal(int, str, object)
 
     def run(self, page_number: int, pdf_path: str) -> None:
-        from app.vision.pdf_loader import render_page
-
         import cv2
+
+        from app.vision.pdf_loader import render_page
 
         try:
             image = render_page(Path(pdf_path), page_number, dpi=150)
             rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
-            qimage = QImage(rgb.data, w, h, ch * w,
-                            QImage.Format.Format_RGB888).copy()
+            qimage = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
             self.previewReady.emit(page_number, pdf_path, qimage)
         except Exception as exc:  # noqa: BLE001 - vista previa no crítica
             logger.warning(
-                f"Vista previa no disponible ({pdf_path} p. {page_number}): "
-                f"{exc}"
+                f"Vista previa no disponible ({pdf_path} p. {page_number}): {exc}"
             )
             self.previewReady.emit(page_number, pdf_path, None)
 
@@ -207,11 +295,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Logbook Classification")
         self.resize(1280, 800)
         self.setStyleSheet(_QSS)
+        self.setWindowIcon(_load_app_icon())
 
         self._pdf_paths: list[Path] = []
         self._template_path: Path | None = None
         self._reports: list[ValidationReport] | None = None
         self._worker: PipelineWorker | None = None
+        self._preprocess_worker: PreprocessWorker | None = None
         self._outputs_worker: OutputsWorker | None = None
         self._outputs_context: str | None = None
         self._corrida_dir: Path | None = None
@@ -220,6 +310,10 @@ class MainWindow(QMainWindow):
         self._preview_total = 0
         self._preview_pdf: Path | None = None
         self._row_pdfs: list[Path] = []
+        self._preview_source_pixmap: QPixmap | None = None
+        self._preview_zoom = 1.0  # 1.0 = ajustado a la altura disponible
+        self._preprocessed_images: dict[tuple[str, int], QImage] = {}
+        self._preprocessed_active = False
         self._log_sink = QtLogSink()
         self._processed_template: Template | None = None
         self._processed_dpi: int | None = None
@@ -269,6 +363,9 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._attach_logger()
         self._refresh_templates()
+
+    def load_initial_data(self) -> None:
+        """Carga los datos del disco después de mostrar la ventana."""
         self._load_default_input()
 
     # ── UI ──────────────────────────────────────────────────────────────
@@ -279,27 +376,16 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
 
         controls = self._build_controls()
-        # Los controles viven en un QScrollArea con altura tope igual a su
-        # tamaño natural: nunca roban espacio vertical a la tabla ni a la
-        # parte inferior. Si la ventana queda chica, se hace scroll de los
-        # controles en vez de aplastar (y ocultar) lo que está abajo.
-        self._controls_scroll = QScrollArea()
-        self._controls_scroll.setWidgetResizable(True)
-        self._controls_scroll.setWidget(controls)
-        self._controls_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._controls_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        self._controls_scroll.setMaximumHeight(
-            controls.sizeHint().height()
-        )
-        root.addWidget(self._controls_scroll)
+        # Los controles se muestran siempre completos, sin barra de scroll:
+        # la ventana no se deja encoger por debajo de su altura mínima y el
+        # espacio sobrante lo absorbe la tabla, no esta zona superior.
+        root.addWidget(controls)
 
         root.addLayout(self._build_progress_row())
         root.addWidget(self._build_splitter(), stretch=1)
 
         bottom = self._build_bottom_splitter()
-        bottom.setMinimumHeight(120)
+        bottom.setMinimumHeight(100)
         root.addWidget(bottom)
 
     def _build_controls(self) -> QWidget:
@@ -333,13 +419,11 @@ class MainWindow(QMainWindow):
         grid.addWidget(btn_pick, 0, 2)
 
         btn_input = QPushButton("Detectar")
-        btn_input.setToolTip(
-            "Detectar los PDF de la carpeta input/ del programa"
-        )
+        btn_input.setToolTip("Detectar los PDF de la carpeta input/ del programa")
         btn_input.clicked.connect(self._load_default_input)
         grid.addWidget(btn_input, 0, 3)
 
-        btn_clear_input = QPushButton("Vaciar input/")
+        btn_clear_input = QPushButton("Vaciar input")
         btn_clear_input.setToolTip(
             "Mover todos los archivos de input/ a la Papelera de reciclaje"
         )
@@ -349,6 +433,9 @@ class MainWindow(QMainWindow):
         grid.addWidget(QLabel("Plantilla:"), 1, 0)
         self.template_combo = QComboBox()
         self.template_combo.setMinimumWidth(200)
+        self.template_combo.currentIndexChanged.connect(
+            self._refresh_preview_template
+        )
         grid.addWidget(self.template_combo, 1, 1)
 
         btn_tpl = QPushButton("Buscar…")
@@ -386,9 +473,7 @@ class MainWindow(QMainWindow):
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(0, 9999)
         self.limit_spin.setValue(0)
-        self.limit_spin.setToolTip(
-            "Procesar solo los primeros N archivos (0 = todos)"
-        )
+        self.limit_spin.setToolTip("Procesar solo los primeros N archivos (0 = todos)")
         self.limit_spin.valueChanged.connect(self._refresh_estimate)
         row.addWidget(self.limit_spin)
 
@@ -404,9 +489,7 @@ class MainWindow(QMainWindow):
 
         self.deskew_check = QCheckBox("Corrección de inclinación")
         self.deskew_check.setChecked(True)
-        self.deskew_check.setToolTip(
-            "Enderezar páginas inclinadas antes de alinear"
-        )
+        self.deskew_check.setToolTip("Enderezar páginas inclinadas antes de alinear")
         row.addWidget(self.deskew_check)
 
         self.align_check = QCheckBox("Alineación")
@@ -415,6 +498,14 @@ class MainWindow(QMainWindow):
             "Alinear cada página contra la referencia de la plantilla"
         )
         row.addWidget(self.align_check)
+
+        self.crop_preprocess_check = QCheckBox("Preprocesar recortes")
+        self.crop_preprocess_check.setChecked(True)
+        self.crop_preprocess_check.setToolTip(
+            "Aplica localización de tinta y reescalado a cada recorte antes "
+            "del OCR. Desactívelo para enviar los recortes crudos al motor."
+        )
+        row.addWidget(self.crop_preprocess_check)
         row.addStretch()
         return group
 
@@ -430,9 +521,7 @@ class MainWindow(QMainWindow):
         formato_row.addSpacing(8)
         self.modo_grupo = QButtonGroup(self)
         self.radio_varios = QRadioButton("Varios PDF")
-        self.radio_varios.setToolTip(
-            "Genera un PDF por cada matrícula/mes marcado"
-        )
+        self.radio_varios.setToolTip("Genera un PDF por cada matrícula/mes marcado")
         self.radio_unico = QRadioButton("Un solo PDF")
         self.radio_unico.setToolTip(
             "Genera un único PDF con el mismo nombre que la carpeta de la "
@@ -461,8 +550,7 @@ class MainWindow(QMainWindow):
         sep_row.addWidget(self.matricula_check)
         self.mes_check = QCheckBox("Mes")
         self.mes_check.setToolTip(
-            "Varios PDF: un archivo por mes. "
-            "Un solo PDF: página separadora por mes."
+            "Varios PDF: un archivo por mes. Un solo PDF: página separadora por mes."
         )
         sep_row.addWidget(self.mes_check)
 
@@ -516,11 +604,11 @@ class MainWindow(QMainWindow):
         adv = QVBoxLayout(self.advanced_panel)
         adv.setContentsMargins(0, 0, 0, 0)
 
-        controls = QHBoxLayout()
+        top_row = QHBoxLayout()
         available = available_cpu_threads()
         self._available_cpu_threads = available
 
-        controls.addWidget(QLabel("Hilos del procesador:"))
+        top_row.addWidget(QLabel("Hilos del procesador:"))
         self.threads_spin = QSpinBox()
         self.threads_spin.setRange(1, available)
         self.threads_spin.setValue(available)
@@ -528,28 +616,17 @@ class MainWindow(QMainWindow):
             "Cantidad total de hilos que puede utilizar el procesamiento. "
             f"Disponibles detectados: {available}."
         )
-        controls.addWidget(self.threads_spin)
+        top_row.addWidget(self.threads_spin)
 
-        controls.addSpacing(12)
-        controls.addWidget(QLabel("Página de referencia:"))
+        top_row.addSpacing(12)
+        top_row.addWidget(QLabel("Página de referencia:"))
         self.ref_spin = QSpinBox()
         self.ref_spin.setRange(1, 1000)
         self.ref_spin.setValue(1)
-        self.ref_spin.setToolTip(
-            "Página usada como referencia de alineación"
-        )
-        controls.addWidget(self.ref_spin)
-        controls.addStretch()
-        adv.addLayout(controls)
+        self.ref_spin.setToolTip("Página usada como referencia de alineación")
+        top_row.addWidget(self.ref_spin)
 
-        self.parallelism_hint = QLabel()
-        self.parallelism_hint.setWordWrap(True)
-        self.parallelism_hint.setStyleSheet("color: #57606a;")
-        adv.addWidget(self.parallelism_hint)
-        self.threads_spin.valueChanged.connect(self._update_parallelism_hint)
-        self._update_parallelism_hint()
-
-        reserve_row = QHBoxLayout()
+        top_row.addSpacing(16)
         self.reserve_core_check = QCheckBox(
             "Reservar un núcleo para la interfaz (recomendado)"
         )
@@ -558,20 +635,25 @@ class MainWindow(QMainWindow):
             "Deja un hilo del procesador libre para que la interfaz siga "
             "fluida mientras se procesa; el OCR usa los hilos restantes."
         )
+        top_row.addWidget(self.reserve_core_check)
+        top_row.addStretch()
+        adv.addLayout(top_row)
+
+        self.parallelism_hint = QLabel()
+        self.parallelism_hint.setStyleSheet("color: #57606a;")
+        adv.addWidget(self.parallelism_hint)
+        self.threads_spin.valueChanged.connect(self._update_parallelism_hint)
         self.reserve_core_check.toggled.connect(self._update_parallelism_hint)
-        reserve_row.addWidget(self.reserve_core_check)
-        reserve_row.addStretch()
-        adv.addLayout(reserve_row)
+        self._update_parallelism_hint()
 
         check_row = QHBoxLayout()
-        self.remove_printed_check = QCheckBox(
-            "Quitar fondo impreso (recomendado)"
-        )
+        self.remove_printed_check = QCheckBox("Mapear fondo impreso (recomendado)")
         self.remove_printed_check.setChecked(True)
         self.remove_printed_check.setToolTip(
-            "Blanquea etiquetas, separadores de casilla y líneas de grilla "
-            "que aparecen idénticos en todas las páginas, dejando solo la "
-            "escritura manuscrita. Mejora la detección de fecha y matrícula."
+            "Construye un mapa de etiquetas, separadores y líneas de grilla "
+            "idénticos en todas las páginas para firmas y ranuras de fecha. "
+            "El OCR conserva la imagen original para no borrar escritura "
+            "repetida."
         )
         check_row.addWidget(self.remove_printed_check)
         self.date_fallback_check = QCheckBox("OCR de respaldo para fechas")
@@ -591,14 +673,6 @@ class MainWindow(QMainWindow):
             "fallan."
         )
         check_row.addWidget(self.date_slot_check)
-        self.crop_preprocess_check = QCheckBox("Preprocesar recortes (escala + tinta)")
-        self.crop_preprocess_check.setChecked(True)
-        self.crop_preprocess_check.setToolTip(
-            "Localiza la tinta y reescala los recortes antes del OCR. "
-            "Desactivarlo envía el recorte crudo al motor: útil para "
-            "comparar motores con escritura a mano."
-        )
-        check_row.addWidget(self.crop_preprocess_check)
         check_row.addStretch()
         adv.addLayout(check_row)
 
@@ -629,37 +703,31 @@ class MainWindow(QMainWindow):
         """Muestra la distribución automática para los hilos seleccionados."""
         selected_threads = self.threads_spin.value()
         effective = self._effective_threads(selected_threads)
-        selected_workers, selected_per_worker = recommended_parallelism(
-            effective
-        )
+        selected_workers, selected_per_worker = recommended_parallelism(effective)
         automatic = (
             f"{selected_workers} worker(s) x {selected_per_worker} "
             f"hilo(s) = {effective} hilos"
         )
         if self._effective_threads(selected_threads) < selected_threads:
             automatic += (
-                f" ({selected_threads - effective} reservado(s) "
-                "para la interfaz)"
+                f" ({selected_threads - effective} reservado(s) para la interfaz)"
             )
         if selected_threads == self._available_cpu_threads:
-            current = (
-                " Es la configuración más rápida y está seleccionada "
-                "por defecto."
-            )
+            current = " Es la configuración más rápida y está seleccionada por defecto."
         else:
             current = (
                 f" La configuración más rápida usa los "
                 f"{self._available_cpu_threads} hilos disponibles."
             )
-        self.parallelism_hint.setText(
-            f"Distribución automática: {automatic}.{current}"
-        )
+        self.parallelism_hint.setText(f"Distribución automática: {automatic}.{current}")
 
     def _toggle_advanced(self, checked: bool) -> None:
         self.advanced_panel.setVisible(checked)
         self.advanced_btn.setArrowType(
             Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
         )
+        if checked and self.height() < self.minimumSizeHint().height():
+            self.resize(self.width(), self.minimumSizeHint().height())
 
     def _build_progress_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -670,9 +738,7 @@ class MainWindow(QMainWindow):
 
         self.busy_label = QLabel("")
         self.busy_label.setMinimumWidth(24)
-        self.busy_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
+        self.busy_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.busy_label.setToolTip("Procesamiento en curso")
         row.addWidget(self.busy_label)
 
@@ -681,21 +747,53 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         row.addWidget(self.progress, 2)
 
-        self.time_label = QLabel("")
-        self.time_label.setMinimumWidth(220)
-        self.time_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        row.addWidget(self.time_label)
+        time_summary = QFrame()
+        time_summary.setObjectName("timeSummary")
+        time_summary.setMinimumWidth(270)
+        time_summary.setFixedHeight(30)
+        time_summary.setToolTip(
+            "El tiempo restante se recalcula con las páginas completadas y el "
+            "ritmo observado."
+        )
+        time_layout = QHBoxLayout(time_summary)
+        time_layout.setContentsMargins(9, 2, 9, 2)
+        time_layout.setSpacing(12)
+        self.time_labels: dict[str, QLabel] = {}
+        for key, caption in (
+            ("elapsed", "TRANSCURRIDO"),
+            ("remaining", "RESTANTE"),
+            ("total", "TOTAL ESTIMADO"),
+        ):
+            metric = QVBoxLayout()
+            metric.setSpacing(1)
+            caption_label = QLabel(caption)
+            caption_label.setProperty("role", "caption")
+            value_label = QLabel("--:--:--")
+            value_label.setProperty("role", "value")
+            value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            metric.addWidget(caption_label, alignment=Qt.AlignmentFlag.AlignCenter)
+            metric.addWidget(value_label)
+            time_layout.addLayout(metric, 1)
+            self.time_labels[key] = value_label
+        row.addWidget(time_summary)
 
         self.btn_process = QPushButton("Procesar")
+        self.btn_process.setObjectName("primaryButton")
         self.btn_process.setDefault(True)
         self.btn_process.clicked.connect(self._start_processing)
+
+        self.btn_preprocess = QPushButton("Preprocesar")
+        self.btn_preprocess.setToolTip(
+            "Aplica corrección de inclinación y alineación sin ejecutar OCR."
+        )
+        self.btn_preprocess.clicked.connect(self._start_preprocessing)
+        row.addWidget(self.btn_preprocess)
         row.addWidget(self.btn_process)
 
         self.btn_cancel = QPushButton("Cancelar")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.setToolTip(
-            "Detener el procesamiento; las páginas ya leídas se guardan "
-            "en el CSV"
+            "Detener el procesamiento; las páginas ya leídas se guardan en el CSV"
         )
         self.btn_cancel.clicked.connect(self._request_cancel)
         row.addWidget(self.btn_cancel)
@@ -710,6 +808,23 @@ class MainWindow(QMainWindow):
         row.addWidget(self.btn_export)
         return row
 
+    def _set_time_summary(
+        self,
+        elapsed: float | None = None,
+        remaining: float | None = None,
+        total: float | None = None,
+    ) -> None:
+        """Actualiza las tres métricas sin mezclar estados o estimaciones."""
+        values = {
+            "elapsed": elapsed,
+            "remaining": remaining,
+            "total": total,
+        }
+        for key, value in values.items():
+            self.time_labels[key].setText(
+                _format_clock(value) if value is not None else "--:--:--"
+            )
+
     def _build_splitter(self) -> QSplitter:
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -718,40 +833,116 @@ class MainWindow(QMainWindow):
 
         self.preview_label = QLabel("Vista previa")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumSize(400, 400)
+        self.preview_label.setMinimumSize(0, 0)
         self.preview_label.setStyleSheet(
             "border: 1px solid #bbb; background: transparent;"
         )
         self.preview_label.setAccessibleName("Vista previa de la página")
-        preview_layout.addWidget(self.preview_label, stretch=1)
+
+        self.preview_scroll = QScrollArea()
+        self.preview_scroll.setWidgetResizable(False)
+        self.preview_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_scroll.setMinimumSize(300, 220)
+        self.preview_scroll.setWidget(self.preview_label)
 
         nav = QHBoxLayout()
-        self.btn_prev = QPushButton("Anterior")
+        self.btn_prev = QToolButton()
+        self.btn_prev.setArrowType(Qt.ArrowType.LeftArrow)
         self.btn_prev.setToolTip("Página anterior (flecha izquierda)")
         self.btn_prev.setAccessibleName("Página anterior")
         self.btn_prev.setShortcut(QKeySequence(Qt.Key.Key_Left))
         self.btn_prev.setEnabled(False)
         self.btn_prev.clicked.connect(self._prev_page)
-        self.btn_next = QPushButton("Siguiente")
+        self.btn_next = QToolButton()
+        self.btn_next.setArrowType(Qt.ArrowType.RightArrow)
         self.btn_next.setToolTip("Página siguiente (flecha derecha)")
         self.btn_next.setAccessibleName("Página siguiente")
         self.btn_next.setShortcut(QKeySequence(Qt.Key.Key_Right))
         self.btn_next.setEnabled(False)
         self.btn_next.clicked.connect(self._next_page)
         self.page_label = QLabel("Página 0/0")
+        self.page_label.setMinimumWidth(90)
         nav.addStretch()
         nav.addWidget(self.btn_prev)
         nav.addWidget(self.page_label)
         nav.addWidget(self.btn_next)
         nav.addStretch()
-        preview_layout.addLayout(nav)
+
+        viewer_frame = QWidget()
+        viewer_frame_layout = QGridLayout(viewer_frame)
+        viewer_frame_layout.setContentsMargins(0, 0, 0, 0)
+        viewer_frame_layout.addWidget(self.preview_scroll, 0, 0)
+
+        zoom_overlay = QFrame(viewer_frame)
+        zoom_overlay.setObjectName("zoomOverlay")
+        zoom_overlay.setFixedWidth(42)
+        zoom_panel = QVBoxLayout(zoom_overlay)
+        zoom_panel.setContentsMargins(5, 6, 5, 6)
+        zoom_panel.setSpacing(2)
+        zoom_title = QLabel("Zoom")
+        zoom_title.setObjectName("zoomCaption")
+        zoom_title.setFixedWidth(28)
+        zoom_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_panel.addWidget(zoom_title, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.btn_zoom_out = QToolButton()
+        self.btn_zoom_out.setObjectName("zoomControl")
+        self.btn_zoom_out.setIcon(_load_zoom_icon("out"))
+        self.btn_zoom_out.setToolTip("Alejar la vista previa")
+        self.btn_zoom_out.setAccessibleName("Alejar vista previa")
+        self.btn_zoom_out.setIconSize(QSize(14, 14))
+        self.btn_zoom_out.setFixedSize(28, 28)
+        self.btn_zoom_out.clicked.connect(lambda: self._zoom_preview(0.8))
+        zoom_panel.addWidget(self.btn_zoom_out, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.btn_zoom_fit = QToolButton()
+        self.btn_zoom_fit.setObjectName("zoomControl")
+        self.btn_zoom_fit.setIcon(_load_zoom_icon("fit"))
+        self.btn_zoom_fit.setToolTip(
+            "Ajustar la página a la ventana"
+        )
+        self.btn_zoom_fit.setAccessibleName("Ajustar página a la ventana")
+        self.btn_zoom_fit.setIconSize(QSize(14, 14))
+        self.btn_zoom_fit.setFixedSize(28, 28)
+        self.btn_zoom_fit.clicked.connect(self._fit_preview_vertical)
+        zoom_panel.addWidget(self.btn_zoom_fit, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.btn_zoom_in = QToolButton()
+        self.btn_zoom_in.setObjectName("zoomControl")
+        self.btn_zoom_in.setIcon(_load_zoom_icon("in"))
+        self.btn_zoom_in.setToolTip("Acercar la vista previa")
+        self.btn_zoom_in.setAccessibleName("Acercar vista previa")
+        self.btn_zoom_in.setIconSize(QSize(14, 14))
+        self.btn_zoom_in.setFixedSize(28, 28)
+        self.btn_zoom_in.clicked.connect(lambda: self._zoom_preview(1.25))
+        zoom_panel.addWidget(self.btn_zoom_in, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setObjectName("zoomValue")
+        self.zoom_label.setFixedWidth(28)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_panel.addWidget(self.zoom_label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        zoom_holder = QWidget(viewer_frame)
+        zoom_holder_layout = QVBoxLayout(zoom_holder)
+        zoom_holder_layout.setContentsMargins(8, 8, 8, 8)
+        zoom_holder_layout.addWidget(zoom_overlay)
+        viewer_frame_layout.addWidget(
+            zoom_holder,
+            0,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        )
+        zoom_holder.raise_()
+
+        page_area = QWidget()
+        page_layout = QVBoxLayout(page_area)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.addWidget(viewer_frame, stretch=1)
+        page_layout.addLayout(nav)
+        preview_layout.addWidget(page_area, stretch=1)
+        self._update_preview_zoom_controls()
 
         self.table = QTableWidget(0, 0)
         self.table.setAccessibleName("Resultados de validación")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(
-            QTableWidget.SelectionBehavior.SelectRows
-        )
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.cellDoubleClicked.connect(self._jump_to_page)
 
@@ -817,6 +1008,7 @@ class MainWindow(QMainWindow):
             name.setMinimumWidth(150)
             name.setMaximumWidth(220)
             bar = QProgressBar()
+            bar.setObjectName("timeBar")
             bar.setFixedHeight(14)
             bar.setMinimumWidth(120)
             bar.setRange(0, 100)
@@ -890,16 +1082,16 @@ class MainWindow(QMainWindow):
             self._set_input_paths([])
             return
         pdfs = sorted(
-            p for p in folder.iterdir()
-            if p.is_file() and p.suffix.lower() == ".pdf"
+            p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"
         )
         self._set_input_paths(pdfs)
         if pdfs:
-            logger.info(f"Entrada por defecto: {len(pdfs)} archivo(s) "
-                        f"de {folder}")
+            logger.info(f"Entrada por defecto: {len(pdfs)} archivo(s) de {folder}")
 
     def _set_input_paths(self, paths: list[Path]) -> None:
         self._pdf_paths = []
+        self._preprocessed_images = {}
+        self._preprocessed_active = False
         seen: set[str] = set()
         for p in paths:
             p = Path(p)
@@ -907,11 +1099,41 @@ class MainWindow(QMainWindow):
             if p.exists() and p.suffix.lower() == ".pdf" and key not in seen:
                 seen.add(key)
                 self._pdf_paths.append(p)
-        self._detect_dpi()
         self._refresh_input_summary()
+        self._preview_selected_input()
+        self._detect_dpi()
         self._refresh_estimate()
 
+    def _preview_selected_input(self) -> None:
+        """Muestra la entrada seleccionada antes de iniciar el procesamiento.
+
+        El render se realiza en ``PreviewLoader`` para que seleccionar PDFs no
+        espere al OCR ni bloquee la interfaz. La misma vista se sustituye por
+        la página solicitada por el resultado del procesamiento cuando este
+        termina.
+        """
+        if not self._pdf_paths:
+            self._preview_pending = None
+            self._preview_pdf = None
+            self._preview_page = 1
+            self._preview_total = 0
+            self._preview_source_pixmap = None
+            self._preview_zoom = 1.0
+            self.preview_label.clear()
+            self.preview_label.setText("Vista previa")
+            self._update_preview_zoom_controls()
+            self._update_preview_nav()
+            return
+        self._preview_source_pixmap = None
+        self._preview_zoom = 1.0
+        self.preview_label.clear()
+        self.preview_label.setText("Cargando vista previa…")
+        self._update_preview_zoom_controls()
+        self._show_preview_page(1, self._pdf_paths[0])
+
     def _detect_dpi(self) -> None:
+        from app.vision.pdf_loader import detect_dpi
+
         for p in self._pdf_paths:
             try:
                 self._detected_dpi = detect_dpi(p, default=self._detected_dpi)
@@ -926,9 +1148,7 @@ class MainWindow(QMainWindow):
             return
         names = ", ".join(p.name for p in self._pdf_paths)
         self.input_edit.setText(names)
-        self.input_edit.setToolTip(
-            "\n".join(str(p) for p in self._pdf_paths)
-        )
+        self.input_edit.setToolTip("\n".join(str(p) for p in self._pdf_paths))
 
     def _resolved_paths(self) -> list[Path]:
         """Aplica el límite 'primeros N archivos' a la entrada actual."""
@@ -939,6 +1159,8 @@ class MainWindow(QMainWindow):
         return paths
 
     def _total_pages_for(self, paths: list[Path]) -> int:
+        from app.vision.pdf_loader import page_count
+
         pages = self.pages_spin.value()
         total = 0
         for p in paths:
@@ -955,7 +1177,7 @@ class MainWindow(QMainWindow):
         if pages and self._ms_per_page:
             seconds = pages * self._ms_per_page / 1000.0
             self.estimate_label.setText(
-                f"Tiempo estimado: {_format_duration(seconds)}  "
+                f"Tiempo estimado: {_format_clock(seconds)}  "
                 f"{pages} páginas  {len(resolved)} archivos"
             )
         elif resolved:
@@ -974,8 +1196,7 @@ class MainWindow(QMainWindow):
 
     def _browse_pdfs(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Seleccionar archivos", str(SCRIPT_DIR),
-            "PDF (*.pdf)"
+            self, "Seleccionar archivos", str(SCRIPT_DIR), "PDF (*.pdf)"
         )
         if paths:
             self._set_input_paths([Path(p) for p in paths])
@@ -988,19 +1209,14 @@ class MainWindow(QMainWindow):
         if path:
             self._template_path = Path(path)
             self.template_combo.addItem(Path(path).stem, str(path))
-            self.template_combo.setCurrentIndex(
-                self.template_combo.count() - 1
-            )
+            self.template_combo.setCurrentIndex(self.template_combo.count() - 1)
             logger.info(f"Plantilla seleccionada: {path}")
 
     def _clear_input_folder(self) -> None:
         """Mueve todos los archivos de input/ a la Papelera tras confirmar."""
-        processing = (
-            self._worker is not None and self._worker.isRunning()
-        )
+        processing = self._worker is not None and self._worker.isRunning()
         exporting = (
-            self._outputs_worker is not None
-            and self._outputs_worker.isRunning()
+            self._outputs_worker is not None and self._outputs_worker.isRunning()
         )
         if processing or exporting:
             QMessageBox.warning(
@@ -1014,14 +1230,14 @@ class MainWindow(QMainWindow):
         folder = SCRIPT_DIR / "input"
         if not folder.is_dir():
             QMessageBox.information(
-                self, "Vaciar input/", "La carpeta input/ no existe."
+                self, "Vaciar input", "La carpeta input/ no existe."
             )
             return
 
         files = sorted(path for path in folder.iterdir() if path.is_file())
         if not files:
             QMessageBox.information(
-                self, "Vaciar input/", "La carpeta input/ ya está vacía."
+                self, "Vaciar input", "La carpeta input/ ya está vacía."
             )
             return
 
@@ -1039,14 +1255,11 @@ class MainWindow(QMainWindow):
         moved, failed = send_to_trash(files)
         self._load_default_input()
         logger.info(
-            f"Archivos enviados a la Papelera: {len(moved)}; "
-            f"fallidos: {len(failed)}"
+            f"Archivos enviados a la Papelera: {len(moved)}; fallidos: {len(failed)}"
         )
 
         if failed:
-            details = "\n".join(
-                f"- {path.name}: {error}" for path, error in failed
-            )
+            details = "\n".join(f"- {path.name}: {error}" for path, error in failed)
             QMessageBox.warning(
                 self,
                 "Vaciado incompleto",
@@ -1077,9 +1290,7 @@ class MainWindow(QMainWindow):
                 [str(editor_script)],
                 str(SCRIPT_DIR),
             )
-            started = (
-                result[0] if isinstance(result, (tuple, list)) else result
-            )
+            started = result[0] if isinstance(result, (tuple, list)) else result
         except Exception as exc:  # noqa: BLE001 - acción no crítica
             logger.error(f"No se pudo abrir el editor de plantillas: {exc}")
             started = False
@@ -1119,6 +1330,8 @@ class MainWindow(QMainWindow):
         template = self._processed_template or self._load_template()
         if template is None:
             raise ValueError("No hay una plantilla válida para exportar")
+        from app.reports.outputs import OutputOptions
+
         return OutputOptions(
             template=template,
             output_root=SCRIPT_DIR / "output",
@@ -1144,35 +1357,10 @@ class MainWindow(QMainWindow):
             logger.warning(f"No se pudo cargar la plantilla: {exc}")
             return None
 
-    def _start_processing(self) -> None:
-        if not self._pdf_paths:
-            QMessageBox.warning(
-                self, "Aviso",
-                "Seleccione al menos un PDF o use la carpeta input/."
-            )
-            return
-        template = self._load_template()
-        if template is None:
-            QMessageBox.warning(self, "Aviso",
-                                "Seleccione una plantilla válida.")
-            return
-        if (
-            self._worker is not None and self._worker.isRunning()
-        ) or (
-            self._outputs_worker is not None
-            and self._outputs_worker.isRunning()
-        ):
-            return
-
-        resolved = self._resolved_paths()
-        if not resolved:
-            QMessageBox.warning(
-                self, "Aviso", "No hay archivos para procesar."
-            )
-            return
-
+    def _current_processing_config(self) -> AppConfig:
+        """Captura las opciones compartidas por preprocesamiento y OCR."""
         engine = self.engine_combo.currentData() or "paddle"
-        self._config = AppConfig(
+        return AppConfig(
             dpi=self._detected_dpi,
             deskew=self.deskew_check.isChecked(),
             align=self.align_check.isChecked(),
@@ -1184,6 +1372,88 @@ class MainWindow(QMainWindow):
             date_slot_ocr=self.date_slot_check.isChecked(),
             vlm_enabled=self.vlm_check.isChecked(),
         )
+
+    def _start_preprocessing(self) -> None:
+        """Ejecuta solo el preprocesamiento y actualiza la vista previa."""
+        if not self._pdf_paths:
+            QMessageBox.warning(
+                self, "Aviso", "Seleccione al menos un PDF o use la carpeta input/."
+            )
+            return
+        if (
+            self._worker is not None and self._worker.isRunning()
+        ) or (
+            self._preprocess_worker is not None
+            and self._preprocess_worker.isRunning()
+        ) or (
+            self._outputs_worker is not None and self._outputs_worker.isRunning()
+        ):
+            return
+
+        resolved = self._resolved_paths()
+        if not resolved:
+            QMessageBox.warning(self, "Aviso", "No hay archivos para preprocesar.")
+            return
+
+        self._config = self._current_processing_config()
+        self._preprocessed_images = {}
+        self._preprocessed_active = False
+        worker = PreprocessWorker(
+            resolved,
+            self._config,
+            max_pages=self.pages_spin.value() or None,
+            reference_page=self.ref_spin.value(),
+            parent=self,
+        )
+        self._preprocess_worker = worker
+        worker.progress.connect(self._on_preprocess_progress)
+        worker.page_ready.connect(self._on_preprocessed_page)
+        worker.succeeded.connect(self._on_preprocess_succeeded)
+        worker.failed.connect(self._on_preprocess_failed)
+        worker.finished.connect(self._on_preprocess_thread_finished)
+        worker.finished.connect(worker.deleteLater)
+
+        self.btn_process.setEnabled(False)
+        self.btn_preprocess.setEnabled(False)
+        self.btn_export.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
+        total = self._total_pages_for(resolved)
+        self.progress.setRange(0, max(1, total))
+        self.progress.setValue(0)
+        self._total_global = total
+        self._done_global = 0
+        self._run_started = time.monotonic()
+        self._spinner_active = True
+        self._timer.start()
+        self.status_label.setText("Preprocesando…")
+        estimate = total * self._ms_per_page / 1000.0 if total else None
+        self._set_time_summary(0.0, estimate, estimate)
+        worker.start()
+
+    def _start_processing(self) -> None:
+        if not self._pdf_paths:
+            QMessageBox.warning(
+                self, "Aviso", "Seleccione al menos un PDF o use la carpeta input/."
+            )
+            return
+        template = self._load_template()
+        if template is None:
+            QMessageBox.warning(self, "Aviso", "Seleccione una plantilla válida.")
+            return
+        if (self._worker is not None and self._worker.isRunning()) or (
+            self._preprocess_worker is not None
+            and self._preprocess_worker.isRunning()
+        ) or (
+            self._outputs_worker is not None and self._outputs_worker.isRunning()
+        ):
+            return
+
+        resolved = self._resolved_paths()
+        if not resolved:
+            QMessageBox.warning(self, "Aviso", "No hay archivos para procesar.")
+            return
+
+        self._config = self._current_processing_config()
         # Asociar la plantilla y el DPI al resultado evita que una edición de
         # controles durante el procesamiento cambie la exportación posterior.
         self._processed_template = template
@@ -1214,9 +1484,10 @@ class MainWindow(QMainWindow):
         self._worker.failed.connect(self._on_failed)
 
         self.btn_process.setEnabled(False)
+        self.btn_preprocess.setEnabled(False)
         self.btn_export.setEnabled(False)
         self.btn_cancel.setEnabled(True)
-        self.progress.setRange(0, 100)
+        self.progress.setRange(0, max(1, self._total_pages_for(resolved)))
         self.progress.setValue(0)
         self.table.setRowCount(0)
         self._table_timer.stop()
@@ -1232,7 +1503,8 @@ class MainWindow(QMainWindow):
         self._spinner_active = True
         self._timer.start()
         self.status_label.setText("Procesando…")
-        self.time_label.setText("Transcurrido: 0 s")
+        estimate = self._total_global * self._ms_per_page / 1000.0
+        self._set_time_summary(0.0, estimate, estimate)
 
         logger.info(
             f"Iniciando procesamiento: {len(resolved)} archivo(s), "
@@ -1246,13 +1518,99 @@ class MainWindow(QMainWindow):
 
     def _request_cancel(self) -> None:
         """Pide la cancelación ordenada del pipeline en curso."""
-        if self._worker is None or not self._worker.isRunning():
+        worker = self._worker
+        message = "Cancelando… (las páginas en vuelo terminan y se guardan)"
+        if worker is None or not worker.isRunning():
+            worker = self._preprocess_worker
+            message = "Cancelando preprocesamiento…"
+        if worker is None or not worker.isRunning():
             return
-        self._worker.requestInterruption()
+        worker.requestInterruption()
         self.btn_cancel.setEnabled(False)
-        self.status_label.setText(
-            "Cancelando… (las páginas en vuelo terminan y se guardan)"
+        self.status_label.setText(message)
+
+    def _on_preprocess_progress(
+        self, done: int, total: int, message: str
+    ) -> None:
+        if total > 0:
+            self.progress.setRange(0, total)
+            self.progress.setValue(done)
+            self._done_global = done
+        self.status_label.setText(message)
+
+    def _on_preprocessed_page(
+        self, pdf_path: str, page_number: int, image
+    ) -> None:
+        """Guarda una página preprocesada y la muestra si está seleccionada."""
+        import cv2
+
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        height, width, channels = rgb.shape
+        qimage = QImage(
+            rgb.data,
+            width,
+            height,
+            channels * width,
+            QImage.Format.Format_RGB888,
+        ).copy()
+        key = (pdf_path, page_number)
+        self._preprocessed_images[key] = qimage
+        if self._preview_pdf is not None and key == (
+            str(self._preview_pdf),
+            self._preview_page,
+        ):
+            self._set_preview_qimage(qimage)
+
+    def _on_preprocess_succeeded(self, cancelled: bool) -> None:
+        elapsed = (
+            time.monotonic() - self._run_started
+            if self._run_started is not None
+            else None
         )
+        self._preprocessed_active = bool(self._preprocessed_images)
+        self._timer.stop()
+        self._run_started = None
+        self._spinner_active = False
+        self.busy_label.setText("")
+        self.btn_process.setEnabled(True)
+        self.btn_preprocess.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self.btn_export.setEnabled(bool(self._reports))
+        self.progress.setRange(0, max(1, self._total_global))
+        self.progress.setValue(
+            self._total_global if not cancelled else self._done_global
+        )
+        self._set_time_summary(
+            elapsed,
+            0.0 if not cancelled else None,
+            elapsed if not cancelled else None,
+        )
+        self.status_label.setText(
+            "Preprocesamiento cancelado."
+            if cancelled
+            else "Preprocesamiento terminado. Puede revisar las páginas."
+        )
+
+    def _on_preprocess_failed(self, message: str) -> None:
+        elapsed = (
+            time.monotonic() - self._run_started
+            if self._run_started is not None
+            else None
+        )
+        self._timer.stop()
+        self._run_started = None
+        self._spinner_active = False
+        self.busy_label.setText("")
+        self.btn_process.setEnabled(True)
+        self.btn_preprocess.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+        self._set_time_summary(elapsed, None, None)
+        self.status_label.setText("Preprocesamiento con errores.")
+        logger.error(f"Fallo de preprocesamiento: {message}")
+        QMessageBox.critical(self, "Error de preprocesamiento", message)
+
+    def _on_preprocess_thread_finished(self) -> None:
+        self._preprocess_worker = None
 
     def _on_file_started(self, index: int, total: int, name: str) -> None:
         """Activa la fila del archivo en curso en el panel de tiempos."""
@@ -1278,55 +1636,49 @@ class MainWindow(QMainWindow):
             font.setBold(False)
             row["name"].setFont(font)
             self._row_ms[index - 1] = report.processing_ms
-            row["secs"].setText(
-                _format_duration(report.processing_ms / 1000.0)
-            )
+            row["secs"].setText(_format_clock(report.processing_ms / 1000.0))
             self._rescale_time_bars()
         self._current_file_index = 0
 
     def _on_timer_tick(self) -> None:
         if self._spinner_active:
-            self.busy_label.setText(
-                _SPINNER[self._spinner_idx % len(_SPINNER)]
-            )
+            self.busy_label.setText(_SPINNER[self._spinner_idx % len(_SPINNER)])
             self._spinner_idx += 1
         elif self.busy_label.text():
             self.busy_label.setText("")
         if self._run_started is None:
             return
         elapsed = time.monotonic() - self._run_started
-        text = f"Transcurrido: {_format_duration(elapsed)}"
+        remaining = None
+        total = None
         # Estimación en vivo: ritmo = mezcla de lo aprendido (última corrida,
         # ya incluye calibración + VLM) con la mediana de los deltas reales
         # entre páginas completadas. La mediana ignora páginas lentas atípicas
         # y el total converge al mismo número que reporta el log final.
         if self._total_global > 0:
             pending = self._total_global - self._done_global
+            remaining = max(0.0, pending * self._ms_per_page / 1000.0)
             if pending > 0:
                 rate = self._ms_per_page
                 if self._page_deltas:
                     live = median(self._page_deltas)
-                    weight = min(0.7, self._done_global / 10.0)
+                    weight = min(1.0, self._done_global / 8.0)
                     rate = (1.0 - weight) * rate + weight * live
-                remaining = pending * rate / 1000.0
-                if remaining > 0:
-                    text += (
-                        f", restante: {_format_duration(remaining)} "
-                        f"(total ~{_format_duration(elapsed + remaining)})"
-                    )
-        self.time_label.setText(text)
+                remaining = max(0.0, pending * rate / 1000.0)
+            total = elapsed + remaining
+        self._set_time_summary(elapsed, remaining, total)
         # Reloj en vivo de la fila del archivo en curso.
         row = self._file_rows.get(self._current_file_index - 1)
         if row is not None and self._current_file_index:
             started = self._row_started.get(self._current_file_index - 1)
             if started is not None:
-                row["secs"].setText(
-                    _format_duration(time.monotonic() - started)
-                )
+                row["secs"].setText(_format_clock(time.monotonic() - started))
 
     def _on_progress(self, done: int, total: int, message: str) -> None:
         if total > 0:
-            self.progress.setValue(int(done * 100 / total))
+            if self.progress.maximum() != total:
+                self.progress.setRange(0, total)
+            self.progress.setValue(done)
             # Cada incremento de ``done`` es una página real completada (la
             # calibración anuncia etapas con done=0 y no cuenta). Los deltas
             # entre eventos alimentan el ritmo medido del estimador.
@@ -1340,6 +1692,11 @@ class MainWindow(QMainWindow):
         self.status_label.setText(message)
 
     def _on_succeeded(self, reports: list[ValidationReport]) -> None:
+        elapsed = (
+            time.monotonic() - self._run_started
+            if self._run_started is not None
+            else None
+        )
         self._timer.stop()
         self._reports = reports
         self._corrida_dir = None
@@ -1348,21 +1705,21 @@ class MainWindow(QMainWindow):
         # esperar a que termine la generación de salidas de fondo: re-exportar
         # es independiente y se encola si ya hay una generación en curso.
         self.btn_process.setEnabled(False)
+        self.btn_preprocess.setEnabled(False)
         self.btn_export.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self._update_performance(reports)
         self._refresh_estimate()
 
-        if self._run_started is not None:
-            elapsed = time.monotonic() - self._run_started
-            self.time_label.setText(
-                f"Tiempo total: {_format_duration(elapsed)}"
+        cancelled_any = any(getattr(r, "cancelled", False) for r in reports)
+        if elapsed is not None:
+            self._set_time_summary(
+                elapsed,
+                None if cancelled_any else 0.0,
+                None if cancelled_any else elapsed,
             )
         self._run_started = None
 
-        cancelled_any = any(
-            getattr(r, "cancelled", False) for r in reports
-        )
         self._last_run_cancelled = cancelled_any
         total_pages = sum(len(r.pages) for r in reports)
         ok = sum(r.summary.get("ok_pages", 0) for r in reports)
@@ -1371,11 +1728,13 @@ class MainWindow(QMainWindow):
         blank = sum(r.summary.get("blank_pages", 0) for r in reports)
         total_ms = sum(r.processing_ms for r in reports)
         calib_ms = sum(r.calibration_ms for r in reports)
-        summary = (f"OK: {ok} | WARNING: {warn} | ERROR: {err} | "
-                   f"En blanco: {blank} | "
-                   f"Calibración: {calib_ms / 1000:.2f} s + "
-                   f"Procesado: {(total_ms - calib_ms) / 1000:.2f} s = "
-                   f"Total: {total_ms / 1000:.2f} s")
+        summary = (
+            f"OK: {ok} | WARNING: {warn} | ERROR: {err} | "
+            f"En blanco: {blank} | "
+            f"Calibración: {calib_ms / 1000:.2f} s + "
+            f"Procesado: {(total_ms - calib_ms) / 1000:.2f} s = "
+            f"Total: {total_ms / 1000:.2f} s"
+        )
         state = "cancelado" if cancelled_any else "terminado"
         logger.info(
             f"Procesamiento {state} "
@@ -1398,8 +1757,9 @@ class MainWindow(QMainWindow):
         self._populate_table(reports)
         self._populate_times(reports)
         if reports and reports[0].pages:
-            self._show_preview_page(reports[0].pages[0].page_number,
-                                    Path(reports[0].pdf_path))
+            self._show_preview_page(
+                reports[0].pages[0].page_number, Path(reports[0].pdf_path)
+            )
         self.status_label.setText("Generando salidas…")
         self._timer.start()
         self._start_outputs(reports, context="proceso")
@@ -1418,8 +1778,7 @@ class MainWindow(QMainWindow):
             skip_pdfs: Si la corrida fue cancelada, solo se guardan los
                 datos (CSV/JSON/stats) sin generar PDFs.
         """
-        if (self._outputs_worker is not None
-                and self._outputs_worker.isRunning()):
+        if self._outputs_worker is not None and self._outputs_worker.isRunning():
             return
 
         self._outputs_context = context
@@ -1433,7 +1792,9 @@ class MainWindow(QMainWindow):
             return
 
         worker = OutputsWorker(
-            reports, options, vlm_stats=getattr(self._worker, "vlm_stats", []),
+            reports,
+            options,
+            vlm_stats=getattr(self._worker, "vlm_stats", []),
             parent=self,
         )
         self._outputs_worker = worker
@@ -1443,6 +1804,7 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self._on_outputs_thread_finished)
         worker.finished.connect(worker.deleteLater)
         self.btn_process.setEnabled(False)
+        self.btn_preprocess.setEnabled(False)
         self.btn_export.setEnabled(False)
         self._spinner_active = True
         self.progress.setRange(0, 0)  # modo ocupado durante las salidas
@@ -1461,23 +1823,17 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         if self._outputs_context == "export":
-            self.status_label.setText(
-                f"Exportación terminada: {output_dir.name}"
-            )
+            self.status_label.setText(f"Exportación terminada: {output_dir.name}")
             logger.info(f"Exportación completada en: {output_dir}")
         elif self._last_run_cancelled:
             self.status_label.setText(
                 "Procesamiento cancelado — resultados parciales guardados "
                 f"en {output_dir.name} (sin PDF)."
             )
-            logger.info(
-                f"Corrida cancelada guardada (datos sin PDF) en: "
-                f"{output_dir}"
-            )
+            logger.info(f"Corrida cancelada guardada (datos sin PDF) en: {output_dir}")
         else:
             self.status_label.setText(
-                "Procesamiento terminado. Puede cambiar la separación y "
-                "exportar."
+                "Procesamiento terminado. Puede cambiar la separación y exportar."
             )
             logger.info(f"Outputs generados en: {output_dir}")
 
@@ -1487,10 +1843,7 @@ class MainWindow(QMainWindow):
         logger.error(f"Error generando outputs: {message}")
         if context == "export":
             self.status_label.setText("Error al exportar.")
-            details = (
-                message.splitlines()[0]
-                if message else "Error desconocido"
-            )
+            details = message.splitlines()[0] if message else "Error desconocido"
             QMessageBox.critical(self, "Error al exportar", details)
         else:
             self.status_label.setText(
@@ -1507,11 +1860,10 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 100)
         self.btn_cancel.setEnabled(False)
         self.btn_process.setEnabled(True)
+        self.btn_preprocess.setEnabled(True)
         # Tras una corrida cancelada no hay Exportar: da la opción de
         # procesar los archivos restantes en vez de hacer PDFs parciales.
-        self.btn_export.setEnabled(
-            bool(self._reports) and not self._last_run_cancelled
-        )
+        self.btn_export.setEnabled(bool(self._reports) and not self._last_run_cancelled)
         if self._pending_export and not self._last_run_cancelled:
             self._pending_export = False
             self._exportar()
@@ -1522,28 +1874,23 @@ class MainWindow(QMainWindow):
         """Aprende el costo por página de la corrida para futuras estimas."""
         pages = sum(len(r.pages) for r in reports)
         if pages > 0:
-            self._ms_per_page = max(1.0, sum(r.processing_ms for r in reports)
-                                    / pages)
+            self._ms_per_page = max(1.0, sum(r.processing_ms for r in reports) / pages)
             _save_ms_per_page(self._ms_per_page)
 
     def _exportar(self) -> None:
         """Regenera CSV, JSON y PDFs con las opciones actuales, sin
         reprocesar los archivos ya analizados."""
         if not self._reports:
-            QMessageBox.information(
-                self, "Exportar", "Primero procese los archivos."
-            )
+            QMessageBox.information(self, "Exportar", "Primero procese los archivos.")
             return
-        if (self._outputs_worker is not None
-                and self._outputs_worker.isRunning()):
+        if self._outputs_worker is not None and self._outputs_worker.isRunning():
             # Ya hay una generación en curso (p. ej. la automática del
             # procesamiento): se encola y se ejecuta apenas termine.
             self._pending_export = True
             self.status_label.setText(
                 "Exportación en cola… (termina la generación en curso)"
             )
-            logger.info("Re-export en cola hasta que termine la generación "
-                        "en curso")
+            logger.info("Re-export en cola hasta que termine la generación en curso")
             return
         # Las casillas se capturan al hacer clic en Exportar, no al procesar:
         # cambiar la separación nunca vuelve a ejecutar OCR. El re-export se
@@ -1552,12 +1899,19 @@ class MainWindow(QMainWindow):
         self._start_outputs(self._reports, context="export")
 
     def _on_failed(self, message: str) -> None:
+        elapsed = (
+            time.monotonic() - self._run_started
+            if self._run_started is not None
+            else None
+        )
         self._timer.stop()
         self._run_started = None
         self._spinner_active = False
         self.busy_label.setText("")
         self.btn_process.setEnabled(True)
+        self.btn_preprocess.setEnabled(True)
         self.btn_cancel.setEnabled(False)
+        self._set_time_summary(elapsed, None, None)
         self.status_label.setText("Procesamiento con errores.")
         # Conserva en el panel de tiempos lo que alcanzó a procesarse.
         partial = getattr(self._worker, "reports", None)
@@ -1579,19 +1933,15 @@ class MainWindow(QMainWindow):
             reporter = CsvReporter()
             fields = reporter.fields_for(reports, self._processed_template)
             columns = reporter.columns_for(reports, self._processed_template)
-            pending: list[tuple[int, dict[str, object],
-                                dict[str, object], Path]] = []
+            pending: list[tuple[int, dict[str, object], dict[str, object], Path]] = []
             for report in reports:
                 pdf_path = Path(report.pdf_path)
                 for page in report.pages:
                     self._row_pdfs.append(pdf_path)
                     row = reporter.row_for_page(report, page, fields)
-                    field_results = {
-                        field.field_id: field for field in page.fields
-                    }
+                    field_results = {field.field_id: field for field in page.fields}
                     pending.append(
-                        (len(self._row_pdfs) - 1, row, field_results,
-                         pdf_path)
+                        (len(self._row_pdfs) - 1, row, field_results, pdf_path)
                     )
 
             self.table.setColumnCount(len(columns))
@@ -1635,9 +1985,7 @@ class MainWindow(QMainWindow):
         if self._table_pending:
             done = len(batch)
             total = done + len(self._table_pending)
-            self.status_label.setText(
-                f"Construyendo tabla… {done}/{total}"
-            )
+            self.status_label.setText(f"Construyendo tabla… {done}/{total}")
 
     # ── Tiempo por archivo ──────────────────────────────────────────────
 
@@ -1676,7 +2024,7 @@ class MainWindow(QMainWindow):
             bar.setRange(0, int(max_ms))
             bar.setValue(int(report.processing_ms))
             bar.setTextVisible(False)
-            seconds = QLabel(_format_duration(report.processing_ms / 1000.0))
+            seconds = QLabel(_format_clock(report.processing_ms / 1000.0))
             seconds.setAlignment(Qt.AlignmentFlag.AlignRight)
             seconds.setMinimumWidth(64)
             row.addWidget(name)
@@ -1686,6 +2034,11 @@ class MainWindow(QMainWindow):
         self.times_vbox.addStretch()
 
     # ── Vista previa ───────────────────────────────────────────────────
+
+    def _refresh_preview_template(self, _index: int = -1) -> None:
+        """Redibuja las casillas de la plantilla sobre la vista actual."""
+        if self._preview_pdf is not None:
+            self._show_preview_page(self._preview_page, self._preview_pdf)
 
     def _on_fields_toggled(self, _checked: bool) -> None:
         if self._preview_pdf is not None:
@@ -1713,17 +2066,17 @@ class MainWindow(QMainWindow):
 
     def _prev_page(self) -> None:
         if self._preview_pdf and self._preview_page > 1:
-            self._show_preview_page(self._preview_page - 1,
-                                    self._preview_pdf)
+            self._show_preview_page(self._preview_page - 1, self._preview_pdf)
 
     def _next_page(self) -> None:
-        if (self._preview_pdf and self._preview_total
-                and self._preview_page < self._preview_total):
-            self._show_preview_page(self._preview_page + 1,
-                                    self._preview_pdf)
+        if (
+            self._preview_pdf
+            and self._preview_total
+            and self._preview_page < self._preview_total
+        ):
+            self._show_preview_page(self._preview_page + 1, self._preview_pdf)
 
-    def _draw_template_boxes(self, pixmap: QPixmap, template, w: int,
-                             h: int) -> None:
+    def _draw_template_boxes(self, pixmap: QPixmap, template, w: int, h: int) -> None:
         """Dibuja sobre la vista previa los rectángulos de la plantilla."""
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -1733,8 +2086,7 @@ class MainWindow(QMainWindow):
         font.setBold(True)
         painter.setFont(font)
         for field in template.fields:
-            rect = QRectF(field.x * w, field.y * h,
-                          field.w * w, field.h * h)
+            rect = QRectF(field.x * w, field.y * h, field.w * w, field.h * h)
             painter.setBrush(QColor(0, 140, 220, 30))
             painter.setPen(pen)
             painter.drawRect(rect)
@@ -1747,8 +2099,9 @@ class MainWindow(QMainWindow):
             )
         painter.end()
 
-    def _show_preview_page(self, page_number: int,
-                           pdf_path: Path | None = None) -> None:
+    def _show_preview_page(
+        self, page_number: int, pdf_path: Path | None = None
+    ) -> None:
         """Pide la página al hilo de fondo y actualiza la navegación.
 
         El render ya no corre en el hilo de interfaz; mientras llega la
@@ -1768,20 +2121,27 @@ class MainWindow(QMainWindow):
         self._preview_page = page_number
         self._preview_pdf = pdf_path
         total = self._preview_total or "?"
-        self.page_label.setText(
-            f"{pdf_path.name} — Página {page_number}/{total}"
-        )
+        self.page_label.setText(f"{pdf_path.name} — Página {page_number}/{total}")
         self._update_preview_nav()
         self._preview_pending = (page_number, str(pdf_path))
+        cached = self._preprocessed_images.get((str(pdf_path), page_number))
+        if self._preprocessed_active and cached is not None:
+            self._set_preview_qimage(cached)
+            return
         self._preview_loader.requested.emit(page_number, str(pdf_path))
 
-    def _on_preview_ready(self, page_number: int, pdf_path: str,
-                          qimage: QImage | None) -> None:
+    def _on_preview_ready(
+        self, page_number: int, pdf_path: str, qimage: QImage | None
+    ) -> None:
         """Aplica el render solo si sigue siendo la página pedida."""
         if (page_number, pdf_path) != self._preview_pending:
             return  # respuesta obsoleta (el usuario ya navegó)
         if qimage is None:
             return
+        self._set_preview_qimage(qimage)
+
+    def _set_preview_qimage(self, qimage: QImage) -> None:
+        """Carga una imagen fuente y le aplica el overlay actual."""
         pixmap = QPixmap.fromImage(qimage)
         if self.fields_check.isChecked():
             template = self._load_template()
@@ -1789,12 +2149,52 @@ class MainWindow(QMainWindow):
                 self._draw_template_boxes(
                     pixmap, template, qimage.width(), qimage.height()
                 )
-        pixmap = pixmap.scaled(
-            self.preview_label.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+        self._preview_source_pixmap = pixmap
+        self._render_preview_pixmap()
+
+    def _update_preview_zoom_controls(self) -> None:
+        """Sincroniza los controles de zoom con la disponibilidad de una imagen."""
+        has_image = self._preview_source_pixmap is not None
+        self.btn_zoom_out.setEnabled(has_image and self._preview_zoom > 0.4)
+        self.btn_zoom_fit.setEnabled(has_image)
+        self.btn_zoom_in.setEnabled(has_image and self._preview_zoom < 4.0)
+        self.zoom_label.setText(f"{round(self._preview_zoom * 100)}%")
+
+    def _preview_fit_height(self) -> int:
+        """Devuelve la altura disponible para el ajuste vertical."""
+        height = self.preview_scroll.viewport().height()
+        return max(1, height - 4)
+
+    def _render_preview_pixmap(self) -> None:
+        """Escala la imagen fuente sin perder resolución para zoom o resize."""
+        source = self._preview_source_pixmap
+        if source is None or source.isNull():
+            return
+        target_height = max(
+            1, round(self._preview_fit_height() * self._preview_zoom)
+        )
+        pixmap = source.scaledToHeight(
+            target_height, Qt.TransformationMode.SmoothTransformation
         )
         self.preview_label.setPixmap(pixmap)
+        self.preview_label.setFixedSize(pixmap.size())
+        self._update_preview_zoom_controls()
+
+    def _fit_preview_vertical(self) -> None:
+        """Restablece la vista para mostrar la página completa en vertical."""
+        self._preview_zoom = 1.0
+        self._render_preview_pixmap()
+
+    def _zoom_preview(self, factor: float) -> None:
+        """Aplica zoom relativo; las barras de desplazamiento permiten mover la página."""
+        self._preview_zoom = min(4.0, max(0.4, self._preview_zoom * factor))
+        self._render_preview_pixmap()
+
+    def resizeEvent(self, event) -> None:
+        """Reajusta la vista también cuando cambia el tamaño de la ventana."""
+        super().resizeEvent(event)
+        if self._preview_source_pixmap is not None:
+            QTimer.singleShot(0, self._render_preview_pixmap)
 
     def closeEvent(self, event) -> None:
         self._timer.stop()

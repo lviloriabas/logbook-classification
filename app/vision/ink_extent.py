@@ -5,9 +5,15 @@ impresas, bordes y sombras que contaminan el OCR. ``crop_to_ink``
 sub-recorta la región al extento de la tinta de tamaño "escritura":
 
 1. Binarización adaptativa (robusta a sombras).
-2. Eliminación de componentes que son líneas impresas, tocan el borde
-   del recorte o cubren casi toda la región (blobs/sellos).
-3. Si la tinta restante está concentrada en una zona pequeña, devuelve
+2. Eliminación de componentes que son líneas impresas, el marco de la
+   celda impresa o cubren casi toda la región (blobs/sellos). La
+   escritura manuscrita que toca el borde del recorte se conserva: los
+   recortes de campos pequeños son ajustados y los dígitos caen sobre
+   el borde.
+3. Todos los umbrales en píxeles se escalan por ``scale`` (= dpi/150)
+   para que el comportamiento sea el mismo a cualquier resolución de
+   render (los recortes a 400 DPI son ~2.7× los de 150 DPI).
+4. Si la tinta restante está concentrada en una zona pequeña, devuelve
    el sub-recorte con un margen; si no, devuelve None (usar el recorte
    completo).
 """
@@ -20,8 +26,12 @@ import cv2
 import numpy as np
 
 # Componente con estas dimensiones se considera línea impresa (regla, marco).
+# Valores nominales a 150 DPI; se multiplican por ``scale``.
 MAX_LINE_THICKNESS = 4
 MIN_LINE_LENGTH = 10
+# Altura por debajo de la cual un componente se considera texto impreso
+# pequeño (etiquetas): a 150 DPI miden 7-8 px y la escritura ~20-30 px.
+MIN_WRITING_HEIGHT = 9
 # Fracción del área del recorte sobre la cual un componente es un blob
 # (sombra, sello, celda rellena) y se descarta.
 MAX_BLOB_AREA_RATIO = 0.15
@@ -29,18 +39,55 @@ MAX_BLOB_AREA_RATIO = 0.15
 # del recorte (si está dispersa, es texto impreso, no escritura).
 MAX_SUBCROP_AREA_RATIO = 0.75
 MAX_SUBCROP_WIDTH_RATIO = 0.85
-# Margen (px) alrededor de la tinta en el sub-recorte.
+# Margen (px) alrededor de la tinta en el sub-recorte (a 150 DPI).
 INK_MARGIN = 4
+# Área mínima (px²) de un componente para no ser ruido (a 150 DPI).
+MIN_AREA = 4
+# DPI de referencia al que están calibrados los umbrales nominales.
+REFERENCE_DPI = 150
+
+
+def strip_date_label(region: np.ndarray) -> np.ndarray:
+    """Blanquea la franja superior donde viven los rótulos de fecha.
+
+    Los formularios imprimen ``Day``, ``Month`` y ``Year`` dentro de la
+    misma caja que la escritura. La máscara por consenso no puede separar
+    ese texto de una escritura que se repite en varias páginas.
+    """
+    height = region.shape[0]
+    cut = max(1, round(height * 0.22))
+    result = region.copy()
+    result[:cut] = 255
+    return result
+
+
+def _dpi_scale(dpi: Optional[int]) -> float:
+    """Factor de escala de umbrales para el DPI de render.
+
+    Args:
+        dpi: DPI del render. None o <=0 asumen el DPI de referencia.
+
+    Returns:
+        Factor (1.0 a 150 DPI, ~2.67 a 400 DPI).
+    """
+    if dpi is None or dpi <= 0:
+        return 1.0
+    return dpi / REFERENCE_DPI
 
 
 def crop_to_ink(
-    region: np.ndarray, margin: int = INK_MARGIN
+    region: np.ndarray,
+    margin: Optional[int] = None,
+    dpi: Optional[int] = None,
 ) -> Optional[np.ndarray]:
     """Sub-recorta ``region`` al extento de la tinta manuscrita.
 
     Args:
         region: Recorte (BGR o gris) del campo.
-        margin: Píxeles de margen extra alrededor de la tinta.
+        margin: Píxeles de margen extra alrededor de la tinta. Si es
+            None, se usa ``INK_MARGIN`` escalado por el DPI.
+        dpi: DPI del render para escalar los umbrales en píxeles
+            (None = 150 DPI).
 
     Returns:
         Sub-imagen con la tinta localizada, o None si no se puede
@@ -50,12 +97,21 @@ def crop_to_ink(
     if height < 10 or width < 10:
         return None
 
+    scale = _dpi_scale(dpi)
+    if margin is None:
+        margin = int(round(INK_MARGIN * scale))
+
     gray = region if region.ndim == 2 else cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
     binary = cv2.adaptiveThreshold(
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV, 31, 12,
     )
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+
+    max_line_thickness = MAX_LINE_THICKNESS * scale
+    min_line_length = MIN_LINE_LENGTH * scale
+    min_writing_height = MIN_WRITING_HEIGHT * scale
+    min_area = MIN_AREA * scale * scale
 
     n, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
     kept: list[Tuple[int, int, int, int]] = []  # (x, y, w, h)
@@ -66,23 +122,23 @@ def crop_to_ink(
         h = int(stats[i, cv2.CC_STAT_HEIGHT])
         area = int(stats[i, cv2.CC_STAT_AREA])
 
+        # Marco de la celda impresa: su bbox abarca casi todo el recorte.
+        if w >= width - 2 and h >= height - 2:
+            continue
         # Líneas impresas (reglas de celdas, subrayados).
-        if (w >= MIN_LINE_LENGTH and h <= MAX_LINE_THICKNESS) or (
-            h >= MIN_LINE_LENGTH and w <= MAX_LINE_THICKNESS
+        if (w >= min_line_length and h <= max_line_thickness) or (
+            h >= min_line_length and w <= max_line_thickness
         ):
             continue
-        # Texto impreso pequeño (etiquetas, glifos de 6-9 px): la escritura
-        # manuscrita de estos campos mide ~20-30 px de alto.
-        if h <= 9:
-            continue
-        # Bordes del recorte (marco de celda impreso).
-        if x == 0 or y == 0 or x + w >= width - 1 or y + h >= height - 1:
+        # Texto impreso pequeño (etiquetas): su altura no llega a la de la
+        # escritura manuscrita. Escalado por DPI.
+        if h <= min_writing_height:
             continue
         # Blobs gigantes (sombra, sello, celda rellena).
         if area > width * height * MAX_BLOB_AREA_RATIO:
             continue
-        # Ruido de un píxel.
-        if area < 4:
+        # Ruido de unos pocos píxeles.
+        if area < min_area:
             continue
         kept.append((x, y, w, h))
 

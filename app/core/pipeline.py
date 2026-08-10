@@ -17,6 +17,7 @@ de cada motor (ajustar según la máquina: núcleos / workers).
 
 from __future__ import annotations
 
+import re
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -51,7 +52,7 @@ from app.vision.alignment import (
 )
 from app.vision.blank_detection import is_blank
 from app.vision.checkbox import detect_checkbox
-from app.vision.ink_extent import crop_to_ink
+from app.vision.ink_extent import crop_to_ink, strip_date_label
 from app.vision.pdf_loader import page_count, render_page
 from app.vision.preprocessing import crop_region, deskew, upscale_for_ocr
 from app.vision.signature import UNCLEAR, detect_signature
@@ -187,9 +188,10 @@ def process_page_image(
         if quality != "ok":
             logger.warning(f"[Página {page_number}] Alineación: {quality}")
 
-    # 3.5) Quitar del OCR el fondo impreso (etiquetas, grilla) que aparece
-    # idéntico en todas las páginas: blanca esos píxeles para que los
-    # recortes contengan solo la escritura manuscrita.
+    # 3.5) Preparar una copia sin fondo impreso para firmas y casillas.
+    # No se usa para OCR: si varias páginas repiten la misma escritura, el
+    # consenso del fondo también la clasifica como impresa.
+    analysis_image = image
     if printed_mask is not None:
         if printed_mask.shape != image.shape[:2]:
             mask = cv2.resize(
@@ -199,7 +201,8 @@ def process_page_image(
             ).astype(bool)
         else:
             mask = printed_mask
-        image[mask] = 255
+        analysis_image = image.copy()
+        analysis_image[mask] = 255
 
     # 4-7) Campos: recorte → OCR (en lote)/firma/checkbox → postproceso
     ocr_fields = [
@@ -208,13 +211,14 @@ def process_page_image(
     ]
     ocr_results = ocr_regions(engine, image, ocr_fields,
                               config.crop_padding,
-                              preprocess=config.crop_preprocess)
+                              preprocess=config.crop_preprocess,
+                              dpi=config.dpi)
     by_id = {field.id: result
              for field, result in zip(ocr_fields, ocr_results)}
 
     for field in template.fields:
         if field.type in (FieldType.SIGNATURE, FieldType.CHECKBOX):
-            region = crop_region(image, field, config.crop_padding)
+            region = crop_region(analysis_image, field, config.crop_padding)
             if field.type is FieldType.SIGNATURE:
                 result = detect_signature(region, field, page_number)
             else:
@@ -242,6 +246,7 @@ def process_page_image(
                 fb = _critical_ocr_fallback(
                     field, image, config.crop_padding,
                     preprocess=config.crop_preprocess,
+                    dpi=config.dpi,
                 )
                 if fb is not None:
                     fb_text, fb_conf = fb
@@ -264,13 +269,14 @@ def process_page_image(
             if (
                 config.date_slot_ocr
                 and field.postprocess in ("day", "month", "year")
-                and not text
+                and _needs_slot_recovery(field.id, field.postprocess, text)
                 and slot_map is not None
                 and field.id in slot_map
             ):
                 fb = _slot_ocr_fallback(
                     field, image, config.crop_padding, slot_map[field.id],
                     preprocess=config.crop_preprocess,
+                    dpi=config.dpi,
                 )
                 if fb is not None:
                     fb_text, fb_conf = fb
@@ -322,6 +328,19 @@ def process_page_image(
 _CRITICAL_POSTPROCESS = frozenset(
     {"day", "month", "year", "matricula", "digits"}
 )
+_TIGHT_CROP_POSTPROCESS = _CRITICAL_POSTPROCESS
+
+# Campos de fecha: se leen sin crop_to_ink (ver _critical_ocr_fallback).
+_DATE_FIELDS = frozenset({"day", "month", "year"})
+
+
+def _needs_slot_recovery(field_id: str, postprocess: str,
+                         text: str) -> bool:
+    """Si el año salió con un dígito intruso ('216' por el separador de
+    casilla o el rabo del 6), el OCR por ranuras puede leer '2'+'6'."""
+    if postprocess != "year":
+        return False
+    return not text or re.fullmatch(r"\d{3}", text or "") is not None
 
 
 def _critical_ocr_fallback(
@@ -329,21 +348,30 @@ def _critical_ocr_fallback(
     image: np.ndarray,
     crop_padding: float,
     preprocess: bool = True,
+    dpi: Optional[int] = None,
 ) -> Optional[Tuple[str, float]]:
     """Segunda pasada OCR (Tesseract restringido) para un campo crítico.
 
     Recorta la región igual que el OCR principal, la localiza por tinta y
     la escala, y delega en ``ocr_fallback``. Devuelve (texto, confianza)
     o None si no se puede leer. ``preprocess=False`` envía el recorte
-    crudo (sin crop_to_ink ni upscale).
+    crudo (sin crop_to_ink ni upscale). Los campos de fecha (day/month/
+    year) se leen sin localizar: se elimina solo la franja superior del
+    rótulo impreso.
     """
     try:
-        region = crop_region(image, field, pad=crop_padding)
+        field_padding = (
+            0.0 if field.postprocess in _TIGHT_CROP_POSTPROCESS
+            else crop_padding
+        )
+        region = crop_region(image, field, pad=field_padding)
     except ValueError:
         return None
     if preprocess:
-        if field.localize == "ink":
-            localized = crop_to_ink(region)
+        if field.postprocess in _DATE_FIELDS:
+            region = strip_date_label(region)
+        elif field.localize == "ink":
+            localized = crop_to_ink(region, dpi=dpi)
             if localized is not None:
                 region = localized
         region = upscale_for_ocr(region, min_side=600)
@@ -356,6 +384,7 @@ def _slot_ocr_fallback(
     crop_padding: float,
     slot_spec: dict,
     preprocess: bool = True,
+    dpi: Optional[int] = None,
 ) -> Optional[Tuple[str, float]]:
     """Tercera pasada: OCR por carácter sobre las ranuras de la casilla.
 
@@ -365,11 +394,11 @@ def _slot_ocr_fallback(
     decodificando con restricciones (dígitos o abreviatura de mes).
     ``preprocess=False`` lee las ranuras crudas.
     """
-    slots = crop_slots(image, field, crop_padding, slot_spec)
+    slots = crop_slots(image, field, 0.0, slot_spec)
     if not slots:
         return None
     if preprocess:
-        slots = [localize_slot(slot) for slot in slots]
+        slots = [localize_slot(slot, dpi=dpi) for slot in slots]
     return read_date_slots(field.id, field.postprocess, slots,
                            preprocess=preprocess)
 
@@ -612,7 +641,7 @@ class Pipeline:
         factor = self.config.dpi / calib_dpi
 
         own: List[TransformResult] = []
-        accum: Optional[np.ndarray] = None
+        calib_images: List[np.ndarray] = []
         for page_number in range(1, total + 1):
             if self._is_cancelled():
                 break
@@ -630,27 +659,35 @@ class Pipeline:
             tr.ty *= factor
             own.append(tr)
 
-            # Máscara del fondo impreso: páginas alineadas al marco de la
-            # referencia; lo que está oscuro en casi todas = texto impreso.
+            # Guardamos las imágenes ya deskewed. La máscara se construye
+            # después de estabilizar las anclas, para que use exactamente el
+            # mismo marco que la fase de OCR.
             if self.config.remove_printed and total >= 3:
-                calib_tr = TransformResult(
-                    rot=tr.rot, scale=tr.scale,
-                    tx=tr.tx / factor, ty=tr.ty / factor,
-                )
-                warped = warp_with_transform(
-                    image, calib_tr, (calib_ref.shape[1], calib_ref.shape[0])
-                )
-                dark = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY) < 150
-                if accum is None:
-                    accum = np.zeros_like(dark, dtype=np.float32)
-                accum += dark.astype(np.float32)
+                calib_images.append(image)
 
         anchors = self._stabilize_anchors(own)
         reliable = sum(1 for t in own if t.reliable)
         logger.info(f"[Pipeline] Calibración: {reliable}/{total} páginas "
-                    f"fiables; anchas estabilizadas por ventana")
+                    f"fiables; anclas estabilizadas por ventana")
+        accum: Optional[np.ndarray] = None
+        if calib_images:
+            for image, anchor in zip(calib_images, anchors):
+                calib_tr = TransformResult(
+                    rot=anchor.rot, scale=anchor.scale,
+                    tx=anchor.tx / factor, ty=anchor.ty / factor,
+                )
+                warped = warp_with_transform(
+                    image, calib_tr, (calib_ref.shape[1], calib_ref.shape[0])
+                )
+                dark = cv2.cvtColor(
+                    warped, cv2.COLOR_BGR2GRAY
+                ) < self.config.printed_ink_threshold
+                if accum is None:
+                    accum = np.zeros_like(dark, dtype=np.float32)
+                accum += dark.astype(np.float32)
+
         if accum is not None:
-            printed = (accum / total) >= 0.60
+            printed = (accum / len(calib_images)) >= 0.60
             printed = cv2.dilate(
                 printed.astype(np.uint8), np.ones((3, 3), np.uint8),
             )
@@ -787,8 +824,11 @@ class Pipeline:
                     )
                 except ValueError:
                     continue
-                if self.config.crop_preprocess and field_tmpl.localize == "ink":
-                    localized = crop_to_ink(crop)
+                if self.config.crop_preprocess and (
+                    field_tmpl.localize == "ink"
+                    and field_tmpl.postprocess not in _DATE_FIELDS
+                ):
+                    localized = crop_to_ink(crop, dpi=self.config.dpi)
                     if localized is not None:
                         crop = localized
                 field = next(

@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 import numpy as np
 from loguru import logger
 from PIL import Image, ImageDraw, ImageFont

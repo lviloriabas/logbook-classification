@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from loguru import logger
@@ -10,8 +10,13 @@ from loguru import logger
 from app.models.schemas import OcrResult
 from app.ocr.engine import OcrEngine
 from app.templates.schema import FieldTemplate
-from app.vision.ink_extent import crop_to_ink
+from app.vision.ink_extent import crop_to_ink, strip_date_label
 from app.vision.preprocessing import crop_region, upscale_for_ocr
+
+# Campos de fecha: casillas pequeñas (día/mes/año). Se elimina su franja de
+# rótulo, pero no se usa crop_to_ink porque la escritura toca separadores.
+_DATE_FIELDS = frozenset({"day", "month", "year"})
+_TIGHT_FIELDS = frozenset({"day", "month", "year", "matricula", "digits"})
 
 
 def ocr_regions(
@@ -20,6 +25,7 @@ def ocr_regions(
     fields: List[FieldTemplate],
     crop_padding: float = 0.01,
     preprocess: bool = True,
+    dpi: Optional[int] = None,
 ) -> List[Tuple[str, float]]:
     """Aplica OCR a varias regiones en una sola llamada al motor.
 
@@ -41,14 +47,19 @@ def ocr_regions(
 
     for index, field in enumerate(fields):
         try:
-            region = crop_region(page, field, pad=crop_padding)
+            field_padding = (
+                0.0 if field.postprocess in _TIGHT_FIELDS else crop_padding
+            )
+            region = crop_region(page, field, pad=field_padding)
         except ValueError as exc:
             logger.warning(f"OCR {field.id}: {exc}")
             results.append(("", 0.0))
             continue
         if preprocess:
-            if field.localize == "ink":
-                localized = crop_to_ink(region)
+            if field.postprocess in _DATE_FIELDS:
+                region = strip_date_label(region)
+            elif field.localize == "ink":
+                localized = crop_to_ink(region, dpi=dpi)
                 if localized is not None:
                     region = localized
             region = upscale_for_ocr(region, min_side=800)
@@ -79,6 +90,7 @@ def ocr_region(
     field: FieldTemplate,
     crop_padding: float = 0.01,
     preprocess: bool = True,
+    dpi: Optional[int] = None,
 ) -> Tuple[str, float]:
     """Aplica OCR a la región de un solo campo de la plantilla.
 
@@ -88,10 +100,11 @@ def ocr_region(
         field: Campo con coordenadas relativas.
         crop_padding: Margen relativo del recorte.
         preprocess: Ver ocr_regions.
+        dpi: DPI del render para escalar los umbrales de localización.
 
     Returns:
         (texto unido, confianza promedio 0-1).
     """
     text, confidence = ocr_regions(engine, page, [field], crop_padding,
-                                   preprocess)[0]
+                                   preprocess, dpi)[0]
     return text, confidence

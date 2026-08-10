@@ -40,6 +40,25 @@ MONTH_WORDS: list = [(nombre, numero)
                      for nombre, numero in _MESES_LETRAS.items()]
 # Confusiones típicas de OCR entre dígitos y letras.
 _OCR_CHAR_MAP = str.maketrans({"0": "o", "1": "i", "5": "s", "8": "b"})
+
+# Mapa de confusión OCR específico de meses: en las casillas de fecha el
+# '1'/'I' leídos tras la 'JU' son la 'L' de JUL pegada al separador, así
+# que aquí '1' e 'I' se mapean a 'L' (ningún mes contiene 'i'). Los
+# objetivos van en mayúscula porque se aplica tras raw.upper().
+_MESES_CHAR_MAP = str.maketrans({
+    "0": "O", "1": "L", "5": "S", "8": "B", "I": "L",
+})
+# OCR manuscrito: confunde letras y dígitos. Mapeo letra→dígito para
+# usar solo en lecturas donde la pieza esperada es numérica.
+_OCR_LETTER_TO_DIGIT_DICT = {
+    "O": "0", "o": "0", "Q": "0",
+    "I": "1", "i": "1", "l": "1", "!": "1",
+    "Z": "2", "z": "2",
+    "S": "5", "s": "5",
+    "B": "8", "b": "8",
+    "G": "6", "g": "6",
+}
+_OCR_LETTER_TO_DIGIT = str.maketrans(_OCR_LETTER_TO_DIGIT_DICT)
 WWP_ONLY = {"1990", "1522"}
 WEAK_MATRICULA_NOTE = (
     "registration: digits inferred from scattered OCR (low confidence)"
@@ -86,7 +105,7 @@ def _parse_month(value: str) -> Optional[int]:
 
     # El mapa OCR se aplica ANTES de filtrar letras: los dígitos mal leídos
     # ('JU1' -> 'JUI', 'JUL' bien leído) se convierten a su letra probable.
-    letters = re.sub(r"[^A-Za-z]", "", raw.upper().translate(_OCR_CHAR_MAP))
+    letters = re.sub(r"[^A-Za-z]", "", raw.upper().translate(_MESES_CHAR_MAP))
     if len(letters) < 2:
         return None
     # Subcadena exacta de un mes dentro de texto impreso ('JULMONTH').
@@ -131,6 +150,18 @@ def _day(value: str) -> Tuple[str, str]:
     dígitos separados por el separador de casilla impreso (p. ej. '2 0')
     se unen cuando forman un día válido.
     """
+    # OCR manuscrito: "Z0" → "20". Pre-normalizamos letras ambiguas
+    # SOLO cuando la cadena es corta (parece manuscrito puro, sin
+    # etiquetas como "DATE", "DAY", "OF CAPTAIN").
+    if len(value) <= 8 and not re.search(r"[A-Z]{3,}", value):
+        normalized = []
+        for i, ch in enumerate(value):
+            if (ch in _OCR_LETTER_TO_DIGIT_DICT
+                    and i + 1 < len(value) and value[i + 1].isdigit()):
+                normalized.append(_OCR_LETTER_TO_DIGIT_DICT[ch])
+            else:
+                normalized.append(ch)
+        value = "".join(normalized)
     runs = re.findall(r"\d+", value)
     if not runs:
         return "", f"invalid day: {value}"
@@ -192,7 +223,19 @@ def _year(value: str) -> Tuple[str, str]:
     dos runs de 1 dígito forman el año de 2 ('2 6' -> '26') y cuatro
     runs de 1 dígito forman el de 4 ('2 0 2 6' -> '2026').
     """
-    runs = re.findall(r"\d+", value)
+    # OCR manuscrito suele leer "Z" en lugar de "2" en el primer dígito
+    # del año ("Z6" → "26"). Pre-normalizamos letras ambiguas a dígitos
+    # cuando están pegadas a un run numérico (no en medio de palabras de
+    # etiqueta como "YEAR" o "EMPLOYEE NUMBER OF CAPTAIN").
+    normalized = []
+    for i, ch in enumerate(value):
+        if (ch in _OCR_LETTER_TO_DIGIT_DICT
+                and i + 1 < len(value) and value[i + 1].isdigit()):
+            normalized.append(_OCR_LETTER_TO_DIGIT_DICT[ch])
+        else:
+            normalized.append(ch)
+    normalized = "".join(normalized)
+    runs = re.findall(r"\d+", normalized)
     if not runs:
         return "", f"invalid year: {value}"
     if len(runs) == 2 and all(len(r) == 1 for r in runs):

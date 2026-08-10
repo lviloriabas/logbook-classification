@@ -247,7 +247,7 @@ class TestPdfsOrdenados(unittest.TestCase):
             [reporte], run_dir, ["avion"], None, dpi=100
         )
         self.assertEqual(ruta, run_dir / f"{run_dir.name}.pdf")
-        import fitz
+        import pymupdf as fitz
 
         doc = fitz.open(str(ruta))
         self.assertEqual(doc.page_count, 3)  # 2 escaneos + 1 divisor
@@ -262,7 +262,7 @@ class TestPdfsOrdenados(unittest.TestCase):
         )
         run_dir = Path(tempfile.mkdtemp())
         ruta = escribir_pdf_unico([reporte], run_dir, [], None, dpi=100)
-        import fitz
+        import pymupdf as fitz
 
         doc = fitz.open(str(ruta))
         self.assertEqual(doc.page_count, 1)
@@ -281,7 +281,7 @@ class TestPdfsOrdenados(unittest.TestCase):
         ruta = escribir_pdf_unico(
             [reporte], run_dir, ["mes"], None, dpi=100
         )
-        import fitz
+        import pymupdf as fitz
 
         doc = fitz.open(str(ruta))
         self.assertEqual(doc.page_count, 3)
@@ -301,7 +301,7 @@ class TestPdfsOrdenados(unittest.TestCase):
         ruta = escribir_pdf_unico(
             [reporte], run_dir, ["avion", "mes"], None, dpi=100
         )
-        import fitz
+        import pymupdf as fitz
 
         doc = fitz.open(str(ruta))
         self.assertEqual(doc.page_count, 5)  # 3 escaneos + 2 divisores

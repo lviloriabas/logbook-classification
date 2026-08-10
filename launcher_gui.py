@@ -66,7 +66,7 @@ def main() -> int:
         stderr=subprocess.DEVNULL,
     )
     # Si el intérprete muere al instante con error, se informa al usuario.
-    time.sleep(3)
+    time.sleep(1.5)
     if proc.poll() is not None and proc.returncode != 0:
         return _show_error(
             "La aplicación no pudo iniciarse (código "

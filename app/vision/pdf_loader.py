@@ -5,9 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-import cv2
-import numpy as np
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 from loguru import logger
 
 
@@ -21,6 +19,9 @@ def render_pdf_pages(pdf_path: Path, dpi: int = 200) -> List[np.ndarray]:
     Returns:
         Lista de imágenes BGR, una por página, en orden.
     """
+    import cv2
+    import numpy as np
+
     pdf_path = Path(pdf_path)
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF no encontrado: {pdf_path}")
@@ -94,6 +95,9 @@ def page_count(pdf_path: Path) -> int:
 def render_page(pdf_path: Path, page_number: int,
                 dpi: int = 150) -> np.ndarray:
     """Renderiza una sola página del PDF (para vistas previas)."""
+    import cv2
+    import numpy as np
+
     zoom = dpi / 72.0
     doc = fitz.open(str(pdf_path))
     try:

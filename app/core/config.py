@@ -21,11 +21,19 @@ class AppConfig(BaseModel):
     align: bool = True
     remove_printed: bool = Field(
         default=True,
-        description="Quitar del OCR el fondo impreso idéntico en todas las "
-                    "páginas (etiquetas, separadores de casilla, líneas de "
-                    "grilla), dejando solo la escritura manuscrita. "
-                    "Recomendado: mejora la lectura de fecha y matrícula. "
-                    "Se aplica solo con >= 3 páginas por archivo.",
+        description="Construir un mapa del fondo impreso idéntico en todas "
+                    "las páginas para análisis de firmas y ranuras de fecha. "
+                    "El OCR conserva la imagen original porque la escritura "
+                    "repetida también puede aparecer en el consenso. Se "
+                    "activa solo con >= 3 páginas por archivo.",
+    )
+    printed_ink_threshold: int = Field(
+        default=185, ge=0, le=255,
+        description="Umbral de gris para el mapa del fondo impreso: los "
+                    "píxeles con gris < este valor presentes en >=60% de las "
+                    "páginas alineadas se marcan como impresos. El mapa no "
+                    "se aplica directamente al OCR, porque la escritura "
+                    "repetida también puede aparecer en el consenso.",
     )
     crop_preprocess: bool = Field(
         default=True,

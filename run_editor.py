@@ -32,12 +32,15 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Logbook Classification - Editor de Plantillas")
     root = Path(__file__).resolve().parent
-    icon = root / "assets" / "icon.png"
-    if icon.exists():
-        from PySide6.QtGui import QIcon
+    icon = root / "assets" / "icon.ico"
+    if not icon.exists():
+        icon = root / "assets" / "icon.png"
+    from PySide6.QtGui import QIcon
 
-        app.setWindowIcon(QIcon(str(icon)))
+    app_icon = QIcon(str(icon))
+    app.setWindowIcon(app_icon)
     window = EditorWindow()
+    window.setWindowIcon(app_icon)
     window.show()
     return app.exec()
 

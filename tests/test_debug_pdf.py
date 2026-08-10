@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import fitz
+import pymupdf as fitz
 
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.reports.debug_pdf import write_debug_pdf

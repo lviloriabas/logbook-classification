@@ -105,17 +105,22 @@ class TestRunInference(unittest.TestCase):
         for page in pages:
             self.assertIs(_year(page).status, Status.OK)
 
-    def test_isolated_different_day_not_overwritten(self):
+    def test_isolated_different_day_overridden_with_warning(self):
+        # 4 votos a 16 vs 1 voto a 17: mayoría fuerte, ruido <= 1 → sobrescribe.
         pages = [
             _combine(1, "2026/07/16"),
             _combine(2, "2026/07/16"),
             _combine(3, "2026/07/16"),
-            _combine(4, "2026/07/17"),
-            _combine(5, "2026/07/16"),
+            _combine(4, "2026/07/16"),
+            _combine(5, "2026/07/17"),
         ]
         correct_dates_by_book([_report(*pages)])
-        self.assertEqual(pages[3].date, "2026/07/17")
-        self.assertEqual(_year(pages[3]).value, "26")
+        day5 = next(f for f in pages[4].fields if f.field_id == "day")
+        self.assertEqual(day5.value, "16")
+        self.assertIs(day5.status, Status.WARNING)
+        self.assertIn("Overridden", day5.comment)
+        for i in (0, 1, 2, 3):
+            self.assertEqual(pages[i].date, "2026/07/16")
 
 
 class TestMonthFill(unittest.TestCase):
@@ -141,14 +146,18 @@ class TestMonthFill(unittest.TestCase):
             _page(4, "100004", "15", "DIC", "26"),
         ]
         correct_dates_by_book([_report(*pages)])
+        # Mes DIC = 1 voto (frente a 3 de JUL); se queda como está.
+        # Day 15 también se queda: la mayoría (16) exige 3 votos y
+        # aquí los hay, pero solo es 1 vs 3 (1/4=25% < 60%): no
+        # sobrescribe. La fecha queda con día 15 y mes DIC.
         self.assertEqual(pages[3].date, "2026/12/15")
 
     def test_month_majority_weak_not_filled(self):
-        # Meses mitad/mitad -> no hay mayoría del 60%, no se rellena.
+        # Meses sin mayoría clara -> no se rellena.
         pages = [
             _combine(1, "2026/07/02"),
-            _combine(2, "2026/07/09"),
-            _combine(3, "2026/08/16"),
+            _combine(2, "2026/08/09"),
+            _combine(3, "2026/09/16"),
             _page(4, "100004", "15", None, "26"),
         ]
         correct_dates_by_book([_report(*pages)])
@@ -256,6 +265,27 @@ class TestNeverEmpty(unittest.TestCase):
         self.assertEqual(pages[3].date, "2026/07/20")
         self.assertGreaterEqual(year.confidence, 0.6)
         self.assertLessEqual(year.confidence, 0.95)
+
+
+class TestFillPieces(unittest.TestCase):
+    def test_each_page_one_piece_filled_iteratively(self):
+        """Una página tiene solo day, otra solo month, otra solo year.
+        Tras iterar, todas quedan con las tres piezas y la fecha
+        combinada por mayoría."""
+        pages = [
+            _page(1, "100001", "20", None, None),
+            _page(2, "100002", None, "JUL", None),
+            _page(3, "100003", None, None, "26"),
+            _page(4, "100004", "20", None, None),
+            _page(5, "100005", None, "JUL", None),
+            _page(6, "100006", None, None, "26"),
+        ]
+        correct_dates_by_book([_report(*pages)])
+        for p in pages:
+            self.assertEqual(p.date, "2026/07/20", msg=f"page {p.page_number}")
+        # Las piezas rellenadas llevan la nota de inferencia.
+        day_field = next(f for f in pages[2].fields if f.field_id == "day")
+        self.assertIn("Inferred", day_field.comment)
 
 
 if __name__ == "__main__":

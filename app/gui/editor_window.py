@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QIcon,
     QImage,
     QKeySequence,
     QPainter,
@@ -109,6 +110,16 @@ _FALLBACK_PRESETS: Dict[str, dict] = {
         "min_ink_ratio": 0.02, "max_ink_ratio": 0.90, "min_components": 2,
     },
 }
+
+
+def _load_icon() -> QIcon:
+    """Icono de la aplicación: .ico (multi-tamaño, ideal en Windows) o PNG."""
+    assets = Path(__file__).resolve().parents[2] / "assets"
+    for name in ("icon.ico", "icon.png"):
+        path = assets / name
+        if path.is_file():
+            return QIcon(str(path))
+    return QIcon()
 
 
 class ResizableRectItem(QGraphicsRectItem):
@@ -270,6 +281,7 @@ class EditorWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Logbook Classification - Editor de Plantillas")
         self.resize(1200, 800)
+        self.setWindowIcon(_load_icon())
 
         self._pdf_path: Optional[Path] = None
         self._current_page = 0
@@ -739,7 +751,7 @@ class EditorWindow(QMainWindow):
 
     @staticmethod
     def _count_pages(pdf_path: Path) -> int:
-        import fitz
+        import pymupdf as fitz
 
         with fitz.open(str(pdf_path)) as doc:
             return len(doc)

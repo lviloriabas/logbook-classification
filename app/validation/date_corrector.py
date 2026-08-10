@@ -62,6 +62,131 @@ def _field(page: PageResult, field_id: str):
     return None
 
 
+def _votes_canonical(book: List[PageResult], field_id: str,
+                     normalize) -> Dict[str, int]:
+    """Cuenta los valores legibles de un campo del libro, normalizados.
+
+    ``normalize`` debe mapear el valor bruto a la forma canónica
+    (p. ej. día "2" → "02", mes "JUL" → "JUL", año "26" → "26"). Si el
+    normalizador devuelve None, el voto se descarta (ruido).
+    """
+    votes: Dict[str, int] = {}
+    for page in book:
+        f = _field(page, field_id)
+        if f is None or not f.value:
+            continue
+        canon = normalize(f.value)
+        if canon is None:
+            continue
+        votes[canon] = votes.get(canon, 0) + 1
+    return votes
+
+
+def _day_normalize(raw: str) -> Optional[str]:
+    digits = re.sub(r"[^\d]", "", raw)
+    if not digits:
+        return None
+    n = int(digits)
+    if 1 <= n <= 31:
+        return f"{n:02d}"
+    return None
+
+
+def _year_normalize(raw: str) -> Optional[str]:
+    digits = re.sub(r"[^\d]", "", raw)
+    if len(digits) == 4:
+        digits = digits[-2:]
+    if len(digits) == 2:
+        return digits
+    return None
+
+
+def _fill_field(book: List[PageResult], field_id: str, normalize,
+                comment_prefix: str,
+                min_votes: int = 2,
+                min_ratio: float = 0.6) -> int:
+    """Rellena la pieza que falta (día/mes/año) por votación del libro.
+
+    Itera hasta converger: en cada vuelta cuenta los votos del campo
+    (solo páginas donde está legible) y rellena las páginas donde esa
+    pieza está vacía pero las otras dos ya están resueltas (o se
+    acaban de rellenar en la misma vuelta). Esto cubre el caso
+    frecuente de bitácoras donde cada página solo lee una pieza
+    correctamente: tras varias vueltas, todas las páginas quedan con
+    la pieza resuelta por mayoría.
+
+    ``min_votes`` y ``min_ratio`` son más permisivos que el run sólido
+    porque aquí rellenamos piezas que faltan, no corregimos lecturas
+    válidas distintas.
+    """
+    total_filled = 0
+    for _ in range(4):  # varias iteraciones: cada vuelta puede destapar
+        votes = _votes_canonical(book, field_id, normalize)
+        ranked = sorted(votes.items(), key=lambda item: item[1], reverse=True)
+        if not ranked or ranked[0][1] < min_votes:
+            break
+        best, count = ranked[0]
+        total = sum(votes.values())
+        if total and count / total < min_ratio:
+            break
+        filled = 0
+        for page in book:
+            f = _field(page, field_id)
+            if f is None or f.value:
+                continue
+            # Acepta la página si al menos UNA de las otras dos piezas
+            # está resuelta; las que falten se llenarán en otra vuelta
+            # de _fill_field. Así, con una sola pieza legible por
+            # página, las tres se completan por iteración.
+            other_ids = [i for i in ("day", "month", YEAR_FIELD_ID) if i != field_id]
+            other1 = _field(page, other_ids[0])
+            other2 = _field(page, other_ids[1])
+            if other1 is None or other2 is None:
+                continue
+            if not other1.value and not other2.value:
+                continue
+            f.value = best
+            f.status = Status.OK
+            f.confidence = _inferred_confidence(count)
+            f.comment = (
+                f"{comment_prefix}: {best} ({count} vote(s))"
+            )
+            _recombine(page)
+            filled += 1
+        if filled == 0:
+            break
+        total_filled += filled
+        logger.debug(f"[Libro] {field_id}: ganador {best} ({count}) | "
+                     f"rellenados: {filled}")
+    return total_filled
+
+
+def _fill_missing_pieces(book: List[PageResult]) -> int:
+    """Rellena por votación del libro la pieza que falta en una página
+    cuyas otras dos ya están resueltas: día, mes o año. Itera entre
+    los tres campos hasta que ninguno avance más. Para el año se
+    acepta 1 voto (es la pieza más estable dentro de un libro) y para
+    día/mes se exigen 2 votos (las fechas pueden cruzar de mes/día)."""
+    filled = 0
+    changed = True
+    while changed:
+        changed = False
+        for field_id, normalize, prefix, min_votes in (
+            ("day", _day_normalize, "Inferred from book days", 2),
+            ("month",
+             lambda v: (lambda n: _format_month(n) if n else None)(_month_number(v)),
+             "Inferred from book months", 2),
+            (YEAR_FIELD_ID, _year_normalize,
+             "Inferred from book years", 1),
+        ):
+            n = _fill_field(book, field_id, normalize, prefix,
+                            min_votes=min_votes)
+            filled += n
+            if n > 0:
+                changed = True
+    return filled
+
+
 def _combined(page: PageResult) -> Optional[str]:
     """Fecha combinada YYYY/MM/dd de la página, o None si no es válida.
 
@@ -306,6 +431,14 @@ def _flag_differs(page: PageResult, fecha: str, votes: int) -> None:
     year.comment = f"Date differs from book majority: {fecha} ({votes} vote(s))"
 
 
+MIN_RUN_VOTES = 3
+# Para runs de libro se permite bajar a 2 votos cuando el corrector
+# no encuentra ningún run de 3 pero sí varios pares de fechas idénticas;
+# los warnings de "date differs from book majority" siguen protegiendo
+# contra la sobrescritura agresiva.
+MIN_RUN_VOTES_FALLBACK = 2
+
+
 def _correct_runs(book: List[PageResult]) -> Tuple[int, int]:
     """Corrige/marca las fechas dentro de runs sólidos. Devuelve
     (corregidas, discrepantes marcadas).
@@ -321,8 +454,15 @@ def _correct_runs(book: List[PageResult]) -> Tuple[int, int]:
     corrected = 0
     flagged = 0
     runs = _solid_runs(book)
+    # Si no hay run de 3 votos, bajamos el umbral a 2 para detectar
+    # al menos pares sólidos (libros con bitácoras aisladas o
+    # bitácoras donde el OCR leyó muy pocas fechas).
+    min_votes = MIN_RUN_VOTES
+    if not any(votes >= MIN_RUN_VOTES for _, _, _, votes in runs):
+        if any(votes >= MIN_RUN_VOTES_FALLBACK for _, _, _, votes in runs):
+            min_votes = MIN_RUN_VOTES_FALLBACK
     for index, (start, _end, fecha, votes) in enumerate(runs):
-        if votes < MIN_RUN_VOTES:
+        if votes < min_votes:
             continue
         cover_start = 0 if index == 0 else runs[index - 1][1] + 1
         cover_end = runs[index + 1][0] - 1 if index + 1 < len(runs) \
@@ -362,6 +502,115 @@ def _fill_sandwiches(book: List[PageResult]) -> int:
     return filled
 
 
+# ── Normalización de día/mes por mayoría fuerte ──────────────────────
+
+def _normalize_month_majority(book: List[PageResult]) -> int:
+    """Sobrescribe el mes de páginas con lectura débil cuando hay una
+    mayoría fuerte en el libro.
+
+    Mismo criterio que ``_normalize_day_majority``: mayoría >= 4 votos
+    y >= 60% de los meses legibles, segunda opción <= 1 voto. Solo
+    cambia un mes claramente erróneo (p. ej. ``1`` cuando la mayoría
+    es ``JUL``); un mes distinto con 2+ votos (DIC, AGO) no se toca.
+    """
+    def normalize(v):
+        n = _month_number(v)
+        return _format_month(n) if n else None
+    votes = _votes_canonical(book, "month", normalize)
+    if not votes:
+        return 0
+    ranked = sorted(votes.items(), key=lambda item: item[1], reverse=True)
+    best, count = ranked[0]
+    if count < 4:
+        return 0
+    total = sum(votes.values())
+    if total and count / total < 0.6:
+        return 0
+    if len(ranked) < 2:
+        return 0
+    second, scount = ranked[1]
+    if scount > 1:
+        return 0
+    overwritten = 0
+    for page in book:
+        month = _field(page, "month")
+        if month is None or not month.value:
+            continue
+        canon = normalize(month.value)
+        if canon is None or canon == best:
+            continue
+        month.value = best
+        month.status = Status.WARNING
+        month.confidence = _inferred_confidence(count)
+        month.comment = (
+            f"Overridden by book month majority: {best} "
+            f"({count} vs {second}={scount})"
+        )
+        _recombine(page)
+        overwritten += 1
+    if overwritten:
+        logger.debug(f"[Libro] Month majority override: {best} ({count}) | "
+                     f"sobrescritas: {overwritten}")
+    return overwritten
+
+
+def _normalize_day_majority(book: List[PageResult]) -> int:
+    """Sobrescribe el día de páginas con lectura débil cuando hay una
+    mayoría fuerte en el libro.
+
+    Condiciones (todas):
+      - La mayoría clara: >= 4 votos y >= 60% de los días legibles.
+      - El "ruido" es muy débil: la segunda opción tiene <= 1 voto.
+
+    Cuando el OCR devuelve el día correcto en 4+ páginas pero se
+    equivoca en 1-2 (lee solo el "0" como "2", o confunde con el "2"
+    de otro día), este paso alinea las lecturas erráticas con la
+    mayoría. La página sobrescrita queda en WARNING con la nota del
+    voto, NO en OK.
+
+    Es agresivo: para evitar falsos positivos, se exige un margen
+    muy grande entre la mayoría y la segunda opción. Si la segunda
+    opción tiene 2+ votos, las lecturas distintas probablemente son
+    intencionales (libro cruza de día, no error de OCR).
+    """
+    votes = _votes_canonical(book, "day", _day_normalize)
+    if not votes:
+        return 0
+    ranked = sorted(votes.items(), key=lambda item: item[1], reverse=True)
+    best, count = ranked[0]
+    if count < 4:
+        return 0
+    total = sum(votes.values())
+    if total and count / total < 0.6:
+        return 0
+    if len(ranked) < 2:
+        return 0
+    second, scount = ranked[1]
+    if scount > 1:
+        return 0
+    overwritten = 0
+    for page in book:
+        day = _field(page, "day")
+        if day is None or not day.value:
+            continue
+        canon = _day_normalize(day.value)
+        if canon is None or canon == best:
+            continue
+        day.value = best
+        day.status = Status.WARNING
+        day.confidence = _inferred_confidence(count)
+        day.comment = (
+            f"Overridden by book day majority: {best} "
+            f"({count} vs {second}={scount})"
+        )
+        _recombine(page)
+        overwritten += 1
+    if overwritten:
+        logger.debug(f"[Libro] Day majority override: {best} ({count}) | "
+                     f"sobrescritas: {overwritten}")
+    return overwritten
+
+
 # ── Relleno de día por mayoría y aviso de fechas sin resolver ─────────
 
 def _mode_day(book: List[PageResult]) -> Optional[Tuple[str, int]]:
@@ -392,13 +641,38 @@ def _fill_remaining_days(book: List[PageResult]) -> int:
     Ultima red: si una mayoría de páginas del libro comparte el mismo día
     leído (>= MIN_RUN_VOTES), las páginas a las que solo falta el día se
     completan con la moda y se marcan como inferidas (verificables).
+
+    Adicionalmente, las páginas con día vacío rodeadas por dos páginas
+    con día legible idéntico (vecindad) se rellenan: en una bitácora
+    secuencial, si la anterior y la siguiente son 20/07, la del medio
+    también lo es aunque el OCR no haya leído el día.
     """
     mode = _mode_day(book)
-    if mode is None:
-        return 0
-    value, count = mode
     filled = 0
-    for page in book:
+    if mode is not None:
+        value, count = mode
+        for page in book:
+            day = _field(page, "day")
+            month = _field(page, "month")
+            year = _field(page, YEAR_FIELD_ID)
+            if day is None or month is None or year is None:
+                continue
+            if day.value or not month.value or not year.value:
+                continue
+            day.value = value
+            day.status = Status.OK
+            day.confidence = _inferred_confidence(count)
+            day.comment = (
+                f"Inferred from book days: {value} ({count} vote(s))"
+            )
+            _recombine(page)
+            filled += 1
+    # Vecindad: si el día anterior y el siguiente de la página son el
+    # mismo, esta también lo es (la OCR falló).
+    for i in range(1, len(book) - 1):
+        page = book[i]
+        if page.blank:
+            continue
         day = _field(page, "day")
         month = _field(page, "month")
         year = _field(page, YEAR_FIELD_ID)
@@ -406,14 +680,21 @@ def _fill_remaining_days(book: List[PageResult]) -> int:
             continue
         if day.value or not month.value or not year.value:
             continue
-        day.value = value
-        day.status = Status.OK
-        day.confidence = _inferred_confidence(count)
-        day.comment = (
-            f"Inferred from book days: {value} ({count} vote(s))"
-        )
-        _recombine(page)
-        filled += 1
+        prev_day = _field(book[i - 1], "day")
+        next_day = _field(book[i + 1], "day")
+        if prev_day is None or next_day is None:
+            continue
+        if prev_day.value and next_day.value and prev_day.value == next_day.value:
+            value = prev_day.value
+            day.value = value
+            day.status = Status.OK
+            day.confidence = round(
+                min(prev_day.confidence, next_day.confidence), 3)
+            day.comment = (
+                f"Inferred from neighbors: {value} (sandwich)"
+            )
+            _recombine(page)
+            filled += 1
     return filled
 
 
@@ -500,10 +781,15 @@ def correct_dates_by_book(
                 if anio is not None and anio.status is not Status.ERROR:
                     _recombine(page)
         corrected, flagged = _correct_runs(book)
+        filled_pieces = _fill_missing_pieces(book)
         filled_days = _fill_remaining_days(book)
+        normalized_days = _normalize_day_majority(book)
+        normalized_months = _normalize_month_majority(book)
         regressions = _check_regressions(book)
         unresolved = _flag_unresolved(book)
-        stats["corrected"] += corrected_years + corrected + filled_months
+        stats["corrected"] += (corrected_years + corrected + filled_months
+                               + filled_pieces + filled_days
+                               + normalized_days + normalized_months)
         stats["flagged"] += flagged
         stats["regressions"] += regressions
         stats["months_filled"] += filled_months
