@@ -1,0 +1,57 @@
+reference=2190x1700
+day: box px (1409, 111, 1573, 174) (y 111..174)
+month: box px (1651, 111, 1878, 174) (y 111..174)
+year: box px (1927, 111, 2082, 174) (y 111..174)
+--- day_1 columna x=1409..1486 (filas 21..264) ---
+  y= 186 densidad=0.19
+  y= 187 densidad=0.19
+  y= 188 densidad=0.19
+  y= 189 densidad=0.19
+--- day_2 columna x=1486..1573 (filas 21..264) ---
+  y= 130 densidad=0.17
+  y= 131 densidad=0.17
+  y= 132 densidad=0.17
+  y= 133 densidad=0.17
+  y= 134 densidad=0.17
+  y= 135 densidad=0.17
+--- month_1 columna x=1651..1727 (filas 21..264) ---
+  y= 154 densidad=0.21
+  y= 155 densidad=0.21
+  y= 156 densidad=0.21
+  y= 157 densidad=0.21
+  y= 158 densidad=0.21
+  y= 159 densidad=0.21
+  y= 174 densidad=0.21
+  y= 175 densidad=0.21
+  y= 176 densidad=0.21
+  y= 177 densidad=0.21
+  y= 178 densidad=0.21
+  y= 179 densidad=0.21
+--- month_2 columna x=1727..1802 (filas 21..264) ---
+  y= 128 densidad=0.19
+  y= 129 densidad=0.19
+  y= 130 densidad=0.19
+  y= 131 densidad=0.19
+  y= 132 densidad=0.19
+  y= 133 densidad=0.19
+  y= 134 densidad=0.19
+  y= 135 densidad=0.19
+--- month_3 columna x=1802..1878 (filas 21..264) ---
+  y= 106 densidad=0.24
+  y= 107 densidad=0.24
+  y= 108 densidad=0.24
+  y= 109 densidad=0.24
+--- year_1 columna x=1927..2004 (filas 21..264) ---
+  y= 104 densidad=0.18
+  y= 105 densidad=0.18
+  y= 106 densidad=0.18
+  y= 107 densidad=0.18
+  y= 108 densidad=0.18
+  y= 109 densidad=0.18
+--- year_2 columna x=2004..2082 (filas 21..264) ---
+  y= 130 densidad=0.18
+  y= 131 densidad=0.18
+  y= 132 densidad=0.21
+  y= 133 densidad=0.21
+  y= 134 densidad=0.21
+  y= 135 densidad=0.21

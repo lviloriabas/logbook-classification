@@ -1,11 +1,11 @@
 """Cliente del servidor VLM local (API compatible OpenAI).
 
-Resuelve casos que los detectores algorítmicos (Fase 0) no pueden
-cerrar: si una firma quedó "unclear" o un campo crítico quedó vacío, se
-recorta la región (en la página ya alineada) y se le pregunta a un
-pequeño modelo multimodal local. Solo se aplican respuestas terminantes
-(PRESENTE / AUSENTE, o un texto que pasa el postprocesado del campo); lo
-ambiguo se descarta.
+Procesa las fechas y resuelve casos que los detectores algorítmicos (Fase 0)
+no pueden cerrar: si una firma quedó "unclear" o un campo crítico quedó
+vacío, se recorta la región (en la página ya alineada) y se le pregunta al
+modelo multimodal local. Solo se aplican respuestas terminantes (PRESENTE /
+AUSENTE, o un texto que pasa el postprocesado del campo); lo ambiguo se
+descarta.
 
 El verificador nunca lanza excepciones hacia el flujo: cualquier fallo de
 servidor, timeout o presupuesto devuelve ``None`` y el pipeline conserva
@@ -25,7 +25,7 @@ import numpy as np
 from loguru import logger
 
 from app.core.config import AppConfig
-from app.verifier.launcher import LlamaServer, resolve_paths
+from app.verifier.launcher import LlamaServer, VlmPaths, resolve_paths
 
 _MAX_PIXELS = 512  # lado máximo del recorte (tamaño típico del VLM)
 
@@ -47,6 +47,8 @@ class VlmVerifier:
         self._server: Optional[LlamaServer] = None
         self._started = False
         self._budget_notified = False
+        self.paths: Optional[VlmPaths] = None
+        self.model_name: Optional[str] = None
 
     # ── Ciclo de vida ───────────────────────────────────────────────────
 
@@ -57,10 +59,19 @@ class VlmVerifier:
         if self._started:
             return self.available
         self._started = True
-        if not resolve_paths().complete:
+        self.paths = resolve_paths(
+            model=self.config.vlm_model,
+            mmproj=self.config.vlm_mmproj,
+        )
+        if self.paths.model is not None:
+            self.model_name = self.paths.model.name
+        if not self.paths.complete:
             logger.info("[VLM] Sin llama-server/modelos GGUF; no se usa")
             return False
-        self._server = LlamaServer(threads=self.config.vlm_threads)
+        self._server = LlamaServer(
+            threads=self.config.vlm_threads,
+            paths=self.paths,
+        )
         self.available = self._server.start(timeout_s=180.0)
         return self.available
 
@@ -176,7 +187,7 @@ class VlmVerifier:
 
         Args:
             crop: Recorte del campo.
-            kind: "matricula" | "digits" | "date".
+            kind: "matricula" | "digits" | "day" | "month" | "year".
         """
         prompts = {
             "matricula": (
@@ -191,11 +202,29 @@ class VlmVerifier:
                 "separadores ni comentarios. Si no puedes leerlo responde "
                 "NO LEGIBLE."
             ),
+            "day": (
+                "Esta imagen es el recorte del campo DAY de la fecha en "
+                "una bitacora de mantenimiento de aeronave. La casilla "
+                "tiene dos posiciones y puede contener lineas verticales "
+                "impresas entre los digitos. Ignora las lineas, bordes y "
+                "rotulos impresos. Escribe UNICAMENTE el dia manuscrito, "
+                "con uno o dos digitos, por ejemplo 7 o 20. No inventes "
+                "un digito si no se ve; en ese caso responde NO LEGIBLE."
+            ),
             "month": (
                 "Esta imagen es el recorte del campo MES de una bitacora "
                 "(abreviatura del mes en la fecha). Escribe UNICAMENTE la "
                 "abreviatura de 3 letras, por ejemplo JUL. Si no puedes "
                 "leerla con seguridad responde NO LEGIBLE."
+            ),
+            "year": (
+                "Esta imagen es el recorte del campo YR de la fecha en una "
+                "bitacora de mantenimiento de aeronave. Puede contener dos "
+                "posiciones y una linea vertical impresa entre los digitos. "
+                "Ignora las lineas, bordes y rotulos impresos. Escribe "
+                "UNICAMENTE el año manuscrito como dos o cuatro digitos, "
+                "por ejemplo 26 o 2026. Si no puedes leerlo con seguridad "
+                "responde NO LEGIBLE."
             ),
         }
         prompt = prompts.get(kind)

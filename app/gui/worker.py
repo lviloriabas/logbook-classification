@@ -78,6 +78,13 @@ class PipelineWorker(QThread):
                 lang=self.config.ocr_lang,
                 **engine_kwargs,
             )
+            date_engine = None
+            if self.config.date_engine_name:
+                date_engine = create_engine(
+                    self.config.date_engine_name,
+                    lang=self.config.ocr_lang,
+                    **engine_kwargs,
+                )
             reports: List[ValidationReport] = []
             for index, pdf_path in enumerate(self.pdf_paths):
                 if self.isInterruptionRequested():
@@ -92,6 +99,7 @@ class PipelineWorker(QThread):
                     on_progress=self._on_progress,
                     workers=self.workers,
                     cpu_threads=self.cpu_threads,
+                    date_engine=date_engine,
                 )
                 if self.reference_page and self.config.align:
                     from app.vision.pdf_loader import render_page
@@ -211,7 +219,8 @@ class PreprocessWorker(QThread):
                         transform = compute_similarity_transform(
                             image, reference, self.config
                         )
-                        image = apply_transform(image, transform)
+                        if transform.reliable:
+                            image = apply_transform(image, transform)
                     done += 1
                     self.page_ready.emit(str(pdf_path), page_number, image)
                     self.progress.emit(

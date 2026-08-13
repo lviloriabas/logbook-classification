@@ -22,7 +22,7 @@ from app.validation.discrepancias import (
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = TemplateManager().load(
-    ROOT / "app/templates/examples/aircraft_log.json"
+    ROOT / "template/aircraft_log.json"
 )
 
 # Umbrales por defecto de la plantilla

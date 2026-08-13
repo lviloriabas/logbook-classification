@@ -14,6 +14,7 @@ otro), para que el OCR de respaldo lea carácter por carácter.
 
 from __future__ import annotations
 
+from itertools import combinations
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -31,6 +32,7 @@ SEP_MAX_WIDTH = 10
 MIN_SLOTS = 2
 MAX_SLOTS = 4
 MIN_SLOT_WIDTH = 2
+SLOT_SEPARATOR_MARGIN_RATIO = 0.008
 
 SLOT_EXPECTED = {"day": 2, "month": 3, "year": 2}
 
@@ -42,7 +44,9 @@ def _uniform_boundaries(left: int, right: int, expected: int) -> List[int]:
     ] + [right]
 
 
-def compute_slot_map(printed_mask: np.ndarray, field) -> Optional[Dict]:
+def compute_slot_map(
+    printed_mask: np.ndarray, field, expected: Optional[int] = None
+) -> Optional[Dict]:
     """Detecta las ranuras de una casilla a partir del fondo impreso.
 
     Args:
@@ -55,6 +59,7 @@ def compute_slot_map(printed_mask: np.ndarray, field) -> Optional[Dict]:
         de página, o None si no se puede detectar (usar división uniforme).
     """
     height, width = printed_mask.shape[:2]
+    expected = expected or SLOT_EXPECTED.get(field.id)
     left, top, right, bottom = field.rect_pixels(width, height)
     if right - left < 8 or bottom - top < 4:
         return None
@@ -63,7 +68,7 @@ def compute_slot_map(printed_mask: np.ndarray, field) -> Optional[Dict]:
         return None
     per_col = band.astype(np.float32).mean(axis=0)
 
-    separators: List[int] = []
+    candidates: List[int] = []
     i, size = 0, len(per_col)
     while i < size:
         if per_col[i] < SEP_MIN_RATIO:
@@ -73,10 +78,33 @@ def compute_slot_map(printed_mask: np.ndarray, field) -> Optional[Dict]:
         while j < size and per_col[j] >= SEP_MIN_RATIO:
             j += 1
         if j - i <= SEP_MAX_WIDTH:
-            separators.append((i + j) // 2 + left)
+            center = (i + j) // 2
+            # Los bordes de la casilla también son líneas verticales. Solo
+            # los centros alejados del borde pueden ser separadores internos.
+            edge_margin = max(2, round(size * 0.08))
+            if edge_margin <= center < size - edge_margin:
+                candidates.append(center + left)
         i = j
 
-    slots = len(separators) + 1
+    if expected is not None:
+        separator_count = expected - 1
+        if separator_count < 1 or len(candidates) < separator_count:
+            return None
+        ideal = [left + (right - left) * i / expected
+                 for i in range(1, expected)]
+        selected = min(
+            combinations(candidates, separator_count),
+            key=lambda group: sum(
+                abs(actual - target)
+                for actual, target in zip(sorted(group), ideal)
+            ),
+        )
+        separators = sorted(selected)
+        slots = expected
+    else:
+        separators = candidates
+        slots = len(separators) + 1
+
     if separators and MIN_SLOTS <= slots <= MAX_SLOTS:
         boundaries = [left] + separators + [right]
         return {"boundaries": boundaries, "slots": slots}
@@ -98,7 +126,7 @@ def build_slot_maps(printed_mask: np.ndarray, template: Template) -> Dict:
         field = template.field(field_id)
         if field is None:
             continue
-        spec = compute_slot_map(printed_mask, field)
+        spec = compute_slot_map(printed_mask, field, expected=expected)
         if spec is None:
             left, top, right, bottom = field.rect_pixels(
                 printed_mask.shape[1], printed_mask.shape[0]
@@ -107,6 +135,23 @@ def build_slot_maps(printed_mask: np.ndarray, template: Template) -> Dict:
             spec = {"boundaries": boundaries, "slots": expected}
         maps[field_id] = spec
     return maps
+
+
+def scale_slot_map(
+    spec: Dict, source_shape: tuple, target_shape: tuple
+) -> Dict:
+    """Traslada los bordes de ranuras a otro DPI del mismo lienzo."""
+    if len(source_shape) < 2 or len(target_shape) < 2:
+        return spec
+    source_width = source_shape[1]
+    target_width = target_shape[1]
+    if source_width <= 0:
+        return spec
+    scale_x = target_width / source_width
+    return {
+        "boundaries": [int(round(x * scale_x)) for x in spec["boundaries"]],
+        "slots": spec["slots"],
+    }
 
 
 def crop_slots(image, field, pad: float = 0.01, spec: Dict = None) -> Optional[List[np.ndarray]]:
@@ -133,12 +178,22 @@ def crop_slots(image, field, pad: float = 0.01, spec: Dict = None) -> Optional[L
     left, top, right, bottom = field.rect_pixels(image.shape[1], image.shape[0])
     px = max(1, round(pad * (right - left)))
     region_left = max(0, left - px)
+    separator_margin = max(
+        1, round((right - left) * SLOT_SEPARATOR_MARGIN_RATIO)
+    )
 
     landmarks = sorted(int(round(x)) for x in spec["boundaries"])
     slots: List[np.ndarray] = []
-    for a, b in zip(landmarks, landmarks[1:]):
-        x1 = a - region_left
-        x2 = b - region_left
+    last_slot = len(landmarks) - 2
+    for index, (a, b) in enumerate(zip(landmarks, landmarks[1:])):
+        separator_margin_left = (
+            separator_margin if index > 0 else 0
+        )
+        separator_margin_right = (
+            separator_margin if index < last_slot else 0
+        )
+        x1 = a + separator_margin_left - region_left
+        x2 = b - separator_margin_right - region_left
         if x2 - x1 < MIN_SLOT_WIDTH:
             continue
         x1 = max(0, x1)

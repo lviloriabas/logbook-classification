@@ -1,8 +1,4 @@
-"""Pruebas del corrector de fechas por libro (bitácoras secuenciales).
-
-Se construyen casos sintéticos que simulan las reglas del dominio:
-entradas consecutivas, varias el mismo día, y días sin entrada.
-"""
+"""Pruebas de inferencia de mes y ano guiada por ``log_number``."""
 
 from __future__ import annotations
 
@@ -12,280 +8,240 @@ from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.validation.date_corrector import correct_dates_by_book
 
 
-def _field(pn: int, fid: str, value, status=Status.OK, conf=0.9) -> FieldResult:
-    return FieldResult(page_number=pn, field_id=fid, field_type="ocr",
-                       value=value, status=status, confidence=conf)
+def _field(
+    pn: int,
+    fid: str,
+    value,
+    status=Status.OK,
+    conf=0.9,
+    source="direct",
+) -> FieldResult:
+    return FieldResult(
+        page_number=pn,
+        field_id=fid,
+        field_type="ocr",
+        value=value,
+        status=status,
+        confidence=conf,
+        source=source,
+    )
 
 
-def _page(pn: int, log: str, day=None, month=None, year=None) -> PageResult:
+def _page(
+    pn: int,
+    log: str | None,
+    day=None,
+    month=None,
+    year=None,
+    month_status=Status.OK,
+    year_status=Status.OK,
+) -> PageResult:
     page = PageResult(page_number=pn)
     page.add_field(_field(pn, "log_number", log))
     page.add_field(_field(pn, "day", day))
-    page.add_field(_field(pn, "month", month))
-    page.add_field(_field(pn, "year", year))
+    page.add_field(_field(pn, "month", month, status=month_status))
+    page.add_field(_field(pn, "year", year, status=year_status))
     return page
 
 
-def _combine(pn: int, text: str) -> PageResult:
-    """Página con fecha combinada (page.date) y año de 2 dígitos."""
-    month = f"{int(text[5:7]):02d}"
-    page = PageResult(page_number=pn, date=text)
-    page.add_field(_field(pn, "log_number", f"22417{100 + pn:03d}"))
-    page.add_field(_field(pn, "day", text[8:10]))
-    page.add_field(_field(pn, "month", month))
-    page.add_field(_field(pn, "year", text[2:4]))
-    return page
+def _report(*pages: PageResult, name="fixture.pdf") -> ValidationReport:
+    return ValidationReport(
+        pdf_path=name,
+        template_name="fixture",
+        pages=list(pages),
+    )
 
 
-def _report(*pages: PageResult) -> ValidationReport:
-    return ValidationReport(pdf_path="fixture.pdf", template_name="fixture",
-                           pages=list(pages))
+def _field_of(page: PageResult, field_id: str) -> FieldResult:
+    return next(field for field in page.fields if field.field_id == field_id)
 
 
-def _year(page: PageResult) -> FieldResult:
-    return next(f for f in page.fields if f.field_id == "year")
+class TestLogNumberOrder(unittest.TestCase):
+    def test_uses_log_number_not_pdf_order(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        middle = _page(2, "2147302", "20", None, None)
+        last = _page(3, "2147303", "20", "JUL", "26")
 
+        # El PDF llega en el orden 3, 1, 2. La inferencia debe seguir 1, 2, 3.
+        correct_dates_by_book([_report(last, first, middle)])
 
-class TestYearNormalization(unittest.TestCase):
-    def test_three_digit_year_corrected_to_winner(self):
-        pages = [_page(1, "100001", "16", "JUL", "26"),
-                 _page(2, "100002", "16", "JUL", "26"),
-                 _page(3, "100003", "16", "JUL", "216")]
-        _year(pages[2]).status = Status.ERROR
-        correct_dates_by_book([_report(*pages)])
-        year = _year(pages[2])
+        month = _field_of(middle, "month")
+        year = _field_of(middle, "year")
+        self.assertEqual(month.value, "JUL")
         self.assertEqual(year.value, "26")
-        self.assertEqual(pages[2].date, "2026/07/16")
-        self.assertIs(year.status, Status.OK)
-        self.assertIn("Inferred from book readings: 26", year.comment)
-
-    def test_mismatch_year_flagged_not_overwritten(self):
-        pages = [_page(1, "100001", "16", "JUL", "26"),
-                 _page(2, "100002", "16", "JUL", "26"),
-                 _page(3, "100003", "16", "JUL", "26"),
-                 _page(4, "100004", "16", "JUL", "24")]
-        correct_dates_by_book([_report(*pages)])
-        year = _year(pages[3])
-        self.assertEqual(year.value, "24")
-        self.assertIs(year.status, Status.WARNING)
-        self.assertIn("differs from book majority: 26", year.comment)
+        self.assertEqual(month.source, "inferred")
+        self.assertEqual(year.source, "inferred")
+        self.assertEqual(middle.date, "2026/07/20")
 
 
-class TestRunInference(unittest.TestCase):
-    def test_missing_date_inferred_within_solid_run(self):
-        pages = [_combine(1, "2026/07/16"),
-                 _combine(2, "2026/07/16"),
-                 _combine(3, "2026/07/16"),
-                 _page(4, "100004", "16", "JUL", "26")]
-        _year(pages[3]).status = Status.ERROR
-        correct_dates_by_book([_report(*pages)])
-        year = _year(pages[3])
+class TestMonthAndYearInference(unittest.TestCase):
+    def test_infers_between_equal_anchors(self):
+        before = _page(1, "2147301", "20", "JUL", "26")
+        missing = _page(2, "2147302", "21", None, None)
+        after = _page(3, "2147303", "22", "JUL", "26")
+
+        stats = correct_dates_by_book([_report(before, missing, after)])
+
+        self.assertEqual(_field_of(missing, "month").value, "JUL")
+        self.assertEqual(_field_of(missing, "year").value, "26")
+        self.assertEqual(missing.date, "2026/07/21")
+        self.assertEqual(stats["months_filled"], 1)
+        self.assertEqual(stats["years_filled"], 1)
+
+    def test_does_not_infer_across_conflicting_month_anchors(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        middle = _page(2, "2147302", "21", None, None)
+        conflicting = _page(3, "2147303", "22", "AUG", "26")
+        last = _page(4, "2147304", "23", "JUL", "26")
+
+        correct_dates_by_book([_report(first, middle, conflicting, last)])
+
+        self.assertIsNone(_field_of(middle, "month").value)
+        # El ano es independiente del conflicto de mes y si puede
+        # inferirse entre las anclas 26.
+        self.assertEqual(_field_of(middle, "year").value, "26")
+        self.assertIsNone(middle.date)
+
+    def test_short_edge_is_inferred_from_two_local_anchors(self):
+        missing = _page(1, "2147301", "20", None, None)
+        second = _page(2, "2147302", "20", "JUL", "26")
+        third = _page(3, "2147303", "21", "JUL", "26")
+
+        correct_dates_by_book([_report(missing, second, third)])
+
+        self.assertEqual(_field_of(missing, "month").value, "JUL")
+        self.assertEqual(_field_of(missing, "year").value, "26")
+        self.assertEqual(missing.date, "2026/07/20")
+
+    def test_invalid_three_digit_year_can_be_recovered(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        invalid = _page(
+            2,
+            "2147302",
+            "20",
+            "JUL",
+            "216",
+            year_status=Status.ERROR,
+        )
+        last = _page(3, "2147303", "20", "JUL", "26")
+
+        correct_dates_by_book([_report(first, invalid, last)])
+
+        year = _field_of(invalid, "year")
         self.assertEqual(year.value, "26")
-        self.assertEqual(pages[3].date, "2026/07/16")
-        self.assertIs(year.status, Status.OK)
-        self.assertIn("Inferred from book dates: 2026/07/16", year.comment)
+        self.assertEqual(year.source, "inferred")
+        self.assertEqual(invalid.date, "2026/07/20")
 
-    def test_single_vote_run_not_inferred(self):
-        pages = [_combine(1, "2026/07/16"),
-                 _page(2, "100002", "16", "JUL", "26"),
-                 _page(3, "100003", "16", "JUL", "26")]
-        _year(pages[1]).status = Status.ERROR
-        _year(pages[2]).status = Status.ERROR
-        correct_dates_by_book([_report(*pages)])
-        self.assertEqual(_year(pages[1]).value, "26")
-        self.assertEqual(_year(pages[2]).value, "26")
+    def test_valid_conflicting_reading_is_preserved_and_flagged(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        conflicting = _page(2, "2147302", "21", "AUG", "26")
+        last = _page(3, "2147303", "22", "JUL", "26")
 
-    def test_same_day_multiple_entries_preserved(self):
-        pages = [_combine(1, "2026/07/16"),
-                 _combine(2, "2026/07/16"),
-                 _combine(3, "2026/07/16"),
-                 _combine(4, "2026/07/17"),
-                 _combine(5, "2026/07/17")]
-        correct_dates_by_book([_report(*pages)])
-        for page in pages:
-            self.assertIs(_year(page).status, Status.OK)
+        stats = correct_dates_by_book([_report(first, conflicting, last)])
 
-    def test_isolated_different_day_overridden_with_warning(self):
-        # 4 votos a 16 vs 1 voto a 17: mayoría fuerte, ruido <= 1 → sobrescribe.
-        pages = [
-            _combine(1, "2026/07/16"),
-            _combine(2, "2026/07/16"),
-            _combine(3, "2026/07/16"),
-            _combine(4, "2026/07/16"),
-            _combine(5, "2026/07/17"),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        day5 = next(f for f in pages[4].fields if f.field_id == "day")
-        self.assertEqual(day5.value, "16")
-        self.assertIs(day5.status, Status.WARNING)
-        self.assertIn("Overridden", day5.comment)
-        for i in (0, 1, 2, 3):
-            self.assertEqual(pages[i].date, "2026/07/16")
+        month = _field_of(conflicting, "month")
+        self.assertEqual(month.value, "AUG")
+        self.assertIs(month.status, Status.WARNING)
+        self.assertEqual(month.source, "direct")
+        self.assertGreater(stats["flagged"], 0)
 
+    def test_warning_reading_does_not_become_an_anchor(self):
+        doubtful = _page(
+            1,
+            "2147301",
+            "20",
+            "JUL",
+            "26",
+            month_status=Status.WARNING,
+        )
+        missing = _page(2, "2147302", "21", None, None)
+        reliable = _page(3, "2147303", "22", "JUL", "26")
 
-class TestMonthFill(unittest.TestCase):
-    def test_empty_month_filled_from_majority(self):
-        # día+año resueltos pero mes vacío -> se rellena con el mes
-        # mayoritario del libro (3+ votos, 60% de los meses legibles).
-        pages = [
-            _combine(1, "2026/07/16"),
-            _combine(2, "2026/07/16"),
-            _combine(3, "2026/07/16"),
-            _page(4, "100004", "17", None, "26"),
-            _page(5, "100005", "20", None, "26"),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        self.assertEqual(pages[3].date, "2026/07/17")
-        self.assertEqual(pages[4].date, "2026/07/20")
+        correct_dates_by_book([_report(doubtful, missing, reliable)])
 
-    def test_valid_month_kept(self):
-        pages = [
-            _combine(1, "2026/07/16"),
-            _combine(2, "2026/07/16"),
-            _combine(3, "2026/07/16"),
-            _page(4, "100004", "15", "DIC", "26"),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        # Mes DIC = 1 voto (frente a 3 de JUL); se queda como está.
-        # Day 15 también se queda: la mayoría (16) exige 3 votos y
-        # aquí los hay, pero solo es 1 vs 3 (1/4=25% < 60%): no
-        # sobrescribe. La fecha queda con día 15 y mes DIC.
-        self.assertEqual(pages[3].date, "2026/12/15")
+        self.assertIsNone(_field_of(missing, "month").value)
+        self.assertEqual(_field_of(missing, "year").value, "26")
 
-    def test_month_majority_weak_not_filled(self):
-        # Meses sin mayoría clara -> no se rellena.
-        pages = [
-            _combine(1, "2026/07/02"),
-            _combine(2, "2026/08/09"),
-            _combine(3, "2026/09/16"),
-            _page(4, "100004", "15", None, "26"),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        self.assertIsNone(pages[3].date)
+    def test_fuzzy_month_does_not_become_an_anchor(self):
+        doubtful = _page(1, "2147301", "20", "DIC", "26")
+        fuzzy = _field_of(doubtful, "month")
+        fuzzy.comment = "month fuzzy: 50c"
+        missing = _page(2, "2147302", "21", None, None)
+        reliable = _page(3, "2147303", "22", "DIC", "26")
+
+        correct_dates_by_book([_report(doubtful, missing, reliable)])
+
+        self.assertIsNone(_field_of(missing, "month").value)
+
+    def test_inferred_reading_does_not_feed_a_second_inference(self):
+        inferred = _page(1, "2147301", "20", "JUL", "26")
+        _field_of(inferred, "month").source = "inferred"
+        _field_of(inferred, "year").source = "inferred"
+        missing = _page(2, "2147302", "21", None, None)
+        reliable = _page(3, "2147303", "22", "JUL", "26")
+
+        correct_dates_by_book([_report(inferred, missing, reliable)])
+
+        self.assertIsNone(_field_of(missing, "month").value)
+        self.assertIsNone(_field_of(missing, "year").value)
 
 
-class TestRegression(unittest.TestCase):
-    def test_backwards_date_flagged(self):
-        pages = [_combine(1, "2026/07/16"),
-                 _combine(2, "2026/07/15")]
-        correct_dates_by_book([_report(*pages)])
-        self.assertIs(_year(pages[1]).status, Status.WARNING)
-        self.assertIn("regression", _year(pages[1]).comment)
+class TestDayPolicy(unittest.TestCase):
+    def test_day_is_never_inferred(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        missing_day = _page(2, "2147302", None, "JUL", "26")
+        last = _page(3, "2147303", "20", "JUL", "26")
 
-    def test_year_rollover_not_flagged(self):
-        pages = [_combine(1, "2025/12/31"),
-                 _combine(2, "2026/01/01")]
-        correct_dates_by_book([_report(*pages)])
-        self.assertIs(_year(pages[1]).status, Status.OK)
+        stats = correct_dates_by_book([_report(first, missing_day, last)])
 
-    def test_non_decreasing_same_day_ok(self):
-        pages = [_combine(1, "2026/07/16"),
-                 _combine(2, "2026/07/16"),
-                 _combine(3, "2026-07-18")]
-        correct_dates_by_book([_report(*pages)])
-        for page in pages:
-            self.assertIs(_year(page).status, Status.OK)
+        day = _field_of(missing_day, "day")
+        self.assertIsNone(day.value)
+        self.assertIs(day.status, Status.WARNING)
+        self.assertIsNone(missing_day.date)
+        self.assertEqual(stats["days_filled"], 0)
 
+    def test_missing_day_does_not_block_inferred_month_and_year(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        missing_day = _page(2, "2147302", None, None, None)
+        last = _page(3, "2147303", "20", "JUL", "26")
 
-class TestLeadingCoverage(unittest.TestCase):
-    def test_leading_empty_pages_inferred_from_first_solid_run(self):
-        pages = [
-            _page(1, "100001", "20", "JUL", "26"),
-            _page(2, "100002", "20", "JUL", "26"),
-            _page(3, "100003", "20", "JUL", "26"),
-            _combine(4, "2026/07/20"),
-            _combine(5, "2026/07/20"),
-            _combine(6, "2026/07/20"),
-        ]
-        for idx in (0, 1, 2):
-            _year(pages[idx]).status = Status.ERROR
-        correct_dates_by_book([_report(*pages)])
-        for idx in (0, 1, 2):
-            self.assertEqual(pages[idx].date, "2026/07/20")
-            self.assertIs(_year(pages[idx]).status, Status.OK)
-            self.assertGreater(round(_year(pages[idx]).confidence, 2), 0.6)
+        correct_dates_by_book([_report(first, missing_day, last)])
+
+        self.assertEqual(_field_of(missing_day, "month").value, "JUL")
+        self.assertEqual(_field_of(missing_day, "year").value, "26")
+        self.assertIsNone(missing_day.date)
 
 
-class TestSandwich(unittest.TestCase):
-    def test_isolated_empty_between_identical_dates_filled(self):
-        pages = [
-            _combine(1, "2026/07/20"),
-            _page(2, "100002", None, None, None),
-            _combine(3, "2026/07/20"),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        self.assertEqual(pages[1].date, "2026/07/20")
+class TestSafetyBoundaries(unittest.TestCase):
+    def test_unreadable_log_number_is_not_positionally_inferred(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        unknown = _page(2, None, "20", None, None)
+        last = _page(3, "2147303", "20", "JUL", "26")
 
+        correct_dates_by_book([_report(first, unknown, last)])
 
-class TestDayFill(unittest.TestCase):
-    def test_day_completed_from_book_mode(self):
-        pages = [
-            _page(1, "100001", "20", "JUL", "26"),
-            _page(2, "100002", "20", "JUL", "26"),
-            _page(3, "100003", "20", "JUL", "26"),
-            _page(4, "100004", None, "JUL", "26"),
-            _page(5, "100005", None, "JUL", "26"),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        self.assertEqual(pages[3].date, "2026/07/20")
-        self.assertEqual(pages[4].date, "2026/07/20")
+        self.assertIsNone(_field_of(unknown, "month").value)
+        self.assertIsNone(_field_of(unknown, "year").value)
+        self.assertIsNone(unknown.date)
 
-    def test_weak_day_majority_not_filled(self):
-        pages = [
-            _page(1, "100001", "20", "JUL", "26"),
-            _page(2, "100002", "21", "JUL", "26"),
-            _page(3, "100003", None, "JUL", "26"),
-            _page(4, "100004", "22", "JUL", "26"),
-            _page(5, "100005", None, "JUL", "26"),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        self.assertIsNone(pages[2].date)
+    def test_year_change_is_not_filled_across_conflicting_anchors(self):
+        first = _page(1, "2147301", "31", "DIC", "25")
+        missing = _page(2, "2147302", "01", "ENE", None)
+        last = _page(3, "2147303", "02", "ENE", "26")
 
+        correct_dates_by_book([_report(first, missing, last)])
 
-class TestNeverEmpty(unittest.TestCase):
-    def test_unresolved_flagged_error(self):
-        pages = [
-            _combine(1, "2026/07/20"),
-            _page(2, "100002", None, None, None),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        year = _year(pages[1])
+        year = _field_of(missing, "year")
+        self.assertIsNone(year.value)
         self.assertIs(year.status, Status.ERROR)
-        self.assertIn("sin resolver", year.comment)
 
-    def test_inferred_confidence_bounded(self):
-        pages = [
-            _combine(1, "2026/07/20"),
-            _combine(2, "2026/07/20"),
-            _combine(3, "2026/07/20"),
-            _page(4, "100004", None, None, None),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        year = _year(pages[3])
-        self.assertEqual(pages[3].date, "2026/07/20")
-        self.assertGreaterEqual(year.confidence, 0.6)
-        self.assertLessEqual(year.confidence, 0.95)
+    def test_unresolved_date_is_explicit(self):
+        page = _page(1, "2147301", None, None, None)
 
+        correct_dates_by_book([_report(page)])
 
-class TestFillPieces(unittest.TestCase):
-    def test_each_page_one_piece_filled_iteratively(self):
-        """Una página tiene solo day, otra solo month, otra solo year.
-        Tras iterar, todas quedan con las tres piezas y la fecha
-        combinada por mayoría."""
-        pages = [
-            _page(1, "100001", "20", None, None),
-            _page(2, "100002", None, "JUL", None),
-            _page(3, "100003", None, None, "26"),
-            _page(4, "100004", "20", None, None),
-            _page(5, "100005", None, "JUL", None),
-            _page(6, "100006", None, None, "26"),
-        ]
-        correct_dates_by_book([_report(*pages)])
-        for p in pages:
-            self.assertEqual(p.date, "2026/07/20", msg=f"page {p.page_number}")
-        # Las piezas rellenadas llevan la nota de inferencia.
-        day_field = next(f for f in pages[2].fields if f.field_id == "day")
-        self.assertIn("Inferred", day_field.comment)
+        self.assertIsNone(page.date)
+        self.assertIn("unresolved", _field_of(page, "year").comment)
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ from app.verifier.launcher import VlmPaths
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = TemplateManager().load(
-    ROOT / "app/templates/examples/aircraft_log.json"
+    ROOT / "template/aircraft_log.json"
 )
 
 
@@ -99,6 +99,76 @@ class TestSelectDeCasos(unittest.TestCase):
         )
         pipe = _pip(AppConfig(vlm_enabled=True, vlm_max_crops=0))
         self.assertEqual(pipe._vlm_targets([page]), [])
+
+    def test_fecha_con_valor_bajo_confidence_se_revisa(self):
+        page = _page(
+            FieldResult(
+                page_number=1,
+                field_id="day",
+                field_type="ocr",
+                value="2",
+                confidence=0.3,
+                status=Status.WARNING,
+            )
+        )
+        pipe = _pip(AppConfig(vlm_enabled=True, vlm_max_crops=10))
+        self.assertEqual(
+            pipe._vlm_targets([page]), [(0, "day", "day")]
+        )
+
+    def test_fecha_con_alta_confianza_tambien_se_envia_al_vlm(self):
+        page = _page(
+            FieldResult(
+                page_number=1,
+                field_id="day",
+                field_type="ocr",
+                value="20",
+                confidence=0.9,
+                status=Status.OK,
+            )
+        )
+        pipe = _pip(AppConfig(vlm_enabled=True, vlm_max_crops=10))
+        self.assertEqual(
+            pipe._vlm_targets([page]), [(0, "day", "day")]
+        )
+
+    def test_fecha_prioriza_sus_tres_partes_antes_de_otros_casos(self):
+        page = _page(
+            FieldResult(
+                page_number=1,
+                field_id="day",
+                field_type="ocr",
+                value="20",
+                confidence=0.9,
+                status=Status.OK,
+            ),
+            FieldResult(
+                page_number=1,
+                field_id="month",
+                field_type="ocr",
+                value="JUL",
+                confidence=0.9,
+                status=Status.OK,
+            ),
+            FieldResult(
+                page_number=1,
+                field_id="year",
+                field_type="ocr",
+                value="26",
+                confidence=0.9,
+                status=Status.OK,
+            ),
+            _field("pilot_signature", "unclear", fdtype="signature",
+                   status=Status.WARNING),
+        )
+        pipe = _pip(AppConfig(vlm_enabled=True, vlm_max_crops=3))
+        self.assertEqual(
+            pipe._vlm_targets([page]), [
+                (0, "day", "day"),
+                (0, "month", "month"),
+                (0, "year", "year"),
+            ]
+        )
 
 
 class TestArbitraje(unittest.TestCase):
@@ -180,6 +250,16 @@ class TestParsingRespuestas(unittest.TestCase):
         }
         for raw, expected in cases.items():
             self.assertEqual(self._verdict(raw), expected, raw)
+
+    def test_prompt_especifico_para_dia(self):
+        from app.verifier.verifier import VlmVerifier
+
+        verifier = VlmVerifier(AppConfig(vlm_enabled=False))
+        with mock.patch.object(verifier, "_ask", return_value="20") as ask:
+            self.assertEqual(verifier.read_text(np.zeros((20, 20)), "day"), "20")
+        prompt = ask.call_args.args[0]
+        self.assertIn("DAY", prompt)
+        self.assertIn("lineas verticales", prompt)
 
     @staticmethod
     def _verdict(raw: str):

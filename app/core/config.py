@@ -51,23 +51,40 @@ class AppConfig(BaseModel):
     )
     date_slot_ocr: bool = Field(
         default=True,
-        description="Tercera pasada para day/month/year: segmentación de la "
+        description="Lectura estructurada para day/month/year: segmentación de la "
                     "casilla en ranuras (según los separadores verticales "
                     "impresos) y OCR por carácter con restricciones "
-                    "(dígitos, abreviatura de mes). Solo actúa si la "
-                    "lectura principal y el OCR de respaldo no producen "
-                    "valor.",
+                    "(dígitos, abreviatura de mes). Verifica siempre la "
+                    "lectura global cuando la retícula está disponible.",
+    )
+    date_dynamic_geometry: bool = Field(
+        default=True,
+        description="Ajuste dinámico por página de las casillas de fecha: "
+                    "detecta la retícula impresa (bordes y separadores) en "
+                    "la ventana de la plantilla y alinea el peine esperado "
+                    "con una traslación/escala pequeñas. Si la retícula no "
+                    "encaja, se conserva la geometría de plantilla.",
     )
     vlm_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Verificador VLM local (llama-server + modelo GGUF): "
-                    "arbitra solo los casos inciertos (firmas 'unclear', "
-                    "campos críticos sin resolver) y no toca las lecturas "
-                    "de alta confianza. Si el modelo o el binario no están "
-                    "presentes, el pipeline funciona igual que sin él.",
+                    "procesa todas las fechas y arbitra firmas inciertas y "
+                    "campos críticos sin resolver. Si el modelo o el "
+                    "binario no están presentes, el pipeline conserva el "
+                    "fallback OCR.",
+    )
+    vlm_model: Optional[Path] = Field(
+        default=None,
+        description="Ruta explícita al GGUF del modelo VLM. Si es None, "
+                    "se usa BITS_LLAMA_MODEL o Qwen3-VL por defecto.",
+    )
+    vlm_mmproj: Optional[Path] = Field(
+        default=None,
+        description="Ruta explícita al proyector multimodal GGUF. Si es "
+                    "None, se usa BITS_LLAMA_MMPROJ o el mmproj compatible.",
     )
     vlm_max_crops: int = Field(
-        default=40, ge=0,
+        default=120, ge=0,
         description="Límite de recortes evaluados por el verificador VLM "
                     "en una corrida (cada consulta cuesta ~1-4 s en CPU).",
     )
@@ -94,6 +111,9 @@ class AppConfig(BaseModel):
     )
     ocr_engine: str = "paddle"
     ocr_lang: str = "en"
+    date_engine_name: str = ""
+    date_dpi: int = Field(default=600, ge=72, le=600,
+                          description="DPI del renderizado para regiones de fecha")
     ocr_rec_model: Optional[str] = Field(
         default=None,
         description="Modelo de reconocimiento de PaddleOCR para forzar "

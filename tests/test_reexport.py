@@ -15,7 +15,7 @@ from app.templates.manager import TemplateManager
 INPUT = Path(__file__).resolve().parents[1] / "input"
 TEMPLATE = (
     Path(__file__).resolve().parents[1]
-    / "app" / "templates" / "examples" / "aircraft_log.json"
+    / "template" / "aircraft_log.json"
 )
 
 

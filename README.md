@@ -16,8 +16,8 @@ Aplicación profesional para automatizar la **validación de bitácoras aeronáu
 | **Reportes** | CSV + JSON consolidado (mismo nombre que el CSV) en `datos/`, por página, campo, valor, confianza, estado, comentario |
 | **PDFs ordenados** | Reordenamiento de los escaneos por avión y/o mes (combinables), en orden de libro y logpage, listos para indexar |
 | **Estadísticas** | `stats.json` con totales, conteo por matrícula y por mes, discrepancias, páginas sin fecha/matrícula y verificación de que ninguna bitácora queda por fuera |
-| **Discrepancias de firma** | `discrepancias.pdf` con las páginas de firmas faltantes/inciertas, anotadas y ordenadas por avión y logpage |
-| **Modo debug** | PDF combinado con los bounding boxes de los campos sobre las bitácoras, coloreados por estado |
+| **Discrepancias de firma** | `discrepancias.pdf` con las páginas de firmas faltantes/inciertas, sin anotaciones, ordenadas por avión y logpage |
+| **PDFs fuente** | Todas las salidas PDF conservan las páginas originales; solo se agregan separadores independientes cuando se solicitan |
 | **Carpeta por corrida** | Todos los outputs (datos/, stats.json, logs, debug) se generan en `output/<nombre del CSV>/` |
 | **GUI moderna** | PySide6 con barra de progreso, vista previa y lista de errores |
 | **Logs** | Loguru con rotación diaria |
@@ -34,6 +34,7 @@ BITS/
 ├── requirements.txt         # Solo referencia (todo ya está instalado en portable)
 ├── README.md
 ├── input/                   # PDFs escaneados a procesar (test.pdf, test5.tif)
+├── template/                # Plantillas JSON (aircraft_log.json)
 ├── output/                  # Reportes CSV/JSON, logs, imágenes de verificación
 ├── assets/                  # Iconos de la app (icon.png, icon.ico, icon.svg)
 ├── tools/
@@ -60,9 +61,7 @@ BITS/
     │   └── checkbox.py      # Detección de checkbox
     ├── templates/
     │   ├── schema.py        # Esquemas pydantic de plantilla
-    │   ├── manager.py       # Carga/guarda/lista plantillas
-    │   └── examples/
-    │       └── aircraft_log.json
+    │   └── manager.py       # Carga/guarda/lista plantillas
     ├── validation/
     │   ├── rules.py         # Reglas por campo
     │   └── validator.py     # Orquestador de validación
@@ -71,7 +70,7 @@ BITS/
     │   ├── csv_reporter.py
     │   ├── organize.py      # PDFs ordenados por matrícula/mes, discrepancias
     │   ├── stats.py         # stats.json de la corrida
-    │   └── debug_pdf.py     # PDF con bounding boxes de los campos (modo debug)
+     │   └── debug_pdf.py     # Exportación PDF de páginas originales (modo debug)
     ├── gui/
     │   ├── worker.py        # QThread del pipeline
     │   ├── main_window.py   # Ventana principal
@@ -202,12 +201,12 @@ Opciones principales:
 | Flag | Default | Descripción |
 |---|---|---|
 | `--pdf` | — | PDF a procesar |
-| `--template` | `app/templates/examples/aircraft_log.json` | Plantilla JSON |
+| `--template` | `template/aircraft_log.json` | Plantilla JSON |
 | `--output-dir` | `output/` | Carpeta de resultados |
 | `--dpi` | 200 | Resolución de renderizado |
 | `--max-pages` | — | Procesar solo las primeras N páginas (pruebas) |
 | `--limit-books` | — | Procesar solo las primeras N bitácoras (PDFs ordenados de la carpeta de entrada) |
-| `--debug` | — | Generar `debug.pdf` con los bounding boxes de los campos sobre las bitácoras |
+| `--debug` | — | Generar `debug.pdf` con las páginas originales, sin anotaciones |
 | `--reference-page` | 1 | Página usada como referencia de alineación |
 | `--engine` | `paddle` | Motor OCR (`paddle` o `tesseract`) |
 | `--lang` | `en` | Idioma del motor OCR |
@@ -215,7 +214,7 @@ Opciones principales:
 | `--no-deskew` | — | Desactivar corrección de inclinación |
 | `--no-align` | — | Desactivar alineación |
 | `--separar-por avion\|mes` | — | Separar las bitácoras en PDFs independientes (repetible y combinable: solo avión, solo mes, o ambos) |
-| `--discrepancias` | — | Generar `discrepancias.pdf` con las páginas de firmas faltantes/inciertas (no van a los PDFs por avión/mes) |
+| `--discrepancias` | — | Generar `discrepancias.pdf` con las páginas de firmas faltantes/inciertas, sin anotaciones (no van a los PDFs por avión/mes) |
 | `--recortes-firmas` | — | Volcar los recortes de las regiones de firma a `recortes_firmas/` para auditar bounding boxes |
 
 > **Salida**: todos los outputs de la corrida se generan dentro de una
@@ -265,10 +264,16 @@ portable\python312\tools\python.exe run_cli.py --separar-por avion --separar-por
   al final en su orden original. Matrícula ilegible → grupo
   `sin_matricula`; fecha ilegible → `sf`. Las páginas en blanco no se
   incluyen. Así, **ninguna bitácora queda por fuera** de los PDFs.
-- Con `--discrepancias` se genera `discrepancias.pdf`: páginas con firmas
-  faltantes o inciertas, anotadas con la razón y ordenadas por avión y
-  `log_number`. Estas páginas **no** se incluyen en los PDFs por
-  avión/mes.
+- La inferencia de fechas usa el `log_number` para establecer la secuencia,
+  nunca el orden del PDF, pero el valor siempre proviene de lecturas directas
+  confiables. Si hay lecturas compatibles a ambos lados, se pueden inferir
+  mes y año de las bitácoras intermedias. Warnings, errores y valores ya
+  inferidos no sirven como anclas. El día no se infiere: si no se lee, la
+  fecha completa queda vacía y la página se marca para revisión. Los
+  componentes inferidos conservan su origen y método en JSON y CSV.
+- Con `--discrepancias` se genera `discrepancias.pdf`: páginas originales con
+  firmas faltantes o inciertas, ordenadas por avión y `log_number`, sin
+  anotaciones. Estas páginas **no** se incluyen en los PDFs por avión/mes.
 
 Además, siempre se genera `stats.json` en la carpeta de la corrida con
 las estadísticas de la corrida:
@@ -322,12 +327,13 @@ portable\python312\tools\python.exe run_gui.py
    procesamiento completo.
 5. Salidas: casillas "Matrícula" y "Mes" para separar los PDFs por esos
    criterios (con ambas, separado por matrícula y mes), "Discrepancia"
-   (`discrepancias.pdf`) y "Visualizar campos" (las bitácoras con sus
-   bounding boxes en `debug.pdf`).
-6. Opciones avanzadas (colapsable): hilos totales del procesador y página de
-   referencia. La aplicación detecta los hilos disponibles, selecciona todos
-   por defecto y distribuye automáticamente el trabajo entre workers e hilos
-   internos. Solo se puede cambiar el total de hilos.
+   (`discrepancias.pdf`) y "Visualizar campos" (los bounding boxes se muestran
+   solo en la vista previa; los PDFs no reciben marcas).
+ 6. Opciones avanzadas (colapsable): hilos totales del procesador, página de
+    referencia y OCR de respaldo/ranuras. Las fechas se procesan con
+    Qwen3-VL-8B-Instruct automáticamente cuando el runtime está instalado.
+    La aplicación detecta los hilos disponibles, selecciona todos por defecto
+    y distribuye automáticamente el trabajo entre workers e hilos internos.
 7. Procesar → barra de progreso con tiempo transcurrido, restante estimado
    (medido en vivo según el ritmo real de cada bitácora) y, al terminar,
    el tiempo por bitácora. El resultado OCR queda disponible en memoria para
@@ -430,20 +436,13 @@ El postprocesador `matricula` normaliza cualquier formato a `HP-XXXXCMP`:
 | `WARNING` | Campo opcional vacío, confianza baja, página en blanco o firma incierta (`unclear`) |
 | `ERROR` | Campo obligatorio vacío o no cumple reglas |
 
-## Modo debug (bounding boxes)
+## Modo debug
 
-Con `--debug` (CLI) o la casilla "Debug" (GUI) se genera `debug.pdf` dentro
-de la carpeta de la corrida: un PDF combinado con una página por página
-procesada de todas las bitácoras, donde se dibujan los rectángulos de la
-plantilla sobre el escaneo:
-
-- **Color del borde** por estado del campo: verde `OK`, naranja `WARNING`,
-  rojo `ERROR`, gris si no hay resultado.
-- **Relleno translúcido**: el interior del rectángulo es semi-transparente,
-  por lo que el contenido escaneado de la bitácora sigue viéndose detrás.
-- **Etiqueta** en cada rectángulo: `id:valor` (y confianza en campos OCR).
-- Las páginas de bitácora conservan el escaneo sin una banda superior añadida.
-- Primera página con la leyenda de colores.
+Con `--debug` (CLI) o la casilla "Visualizar campos" (GUI) se genera
+`debug.pdf` dentro de la carpeta de la corrida. El PDF contiene únicamente
+las páginas originales procesadas, sin leyendas, textos, bandas ni
+recuadros. Los bounding boxes siguen disponibles en la vista previa y la
+información de validación permanece en CSV, JSON y logs.
 
 ## Fiabilidad de la fase de detección
 
@@ -457,6 +456,11 @@ campo: dígitos / letras de meses / alfanumérico-guion para matrícula).
 Cubre día/mes/año, matrícula y `log_number`. Se puede desactivar con
 `--no-date-ocr-fallback`.
 
+**Procedencia de resultados.** Cada campo conserva su estado, comentario y
+origen (`ocr`, `ocr_fallback`, `vision`, `vlm` o `inferred`). Esto permite
+distinguir una lectura directa de un mes/año inferido por intervalo de
+`log_number`.
+
 **Firma por color de tinta.** Además de la textura en gris, el detector
 mide píxeles saturados oscuros de bolígrafo (azul, etc.): evita marcar
 "ausente"/"incierta" una firma azul clara que el canal gris aplana.
@@ -466,21 +470,23 @@ página ya no se fuerza a "vuelo" (discrepancia falsa a favor del capitán/
 licencia) ni a "mantenimiento": se marca como tipo **incierto** y solo se
 acusan anomalías robustas (firma de piloto + la propia licencia ilegible).
 
-## Verificador VLM local (Fase 1, opcional)
+## Verificador VLM local
 
-Los detectores algorítmicos dejan casos genuinamente ambiguos (firmas
-`unclear`, campos críticos vacíos). Si la carpeta `portable/llama/`
-contiene un `llama-server` y los GGUF correctos (SmolVLM2: texto + 
-proyector), el pipeline arbitra esos casos por cada recorte de campo:
+Las fechas se envían al VLM **Qwen3-VL-8B-Instruct** por defecto, incluso si
+el OCR previo produjo un valor plausible. También se revisan firmas inciertas
+y campos críticos vacíos. Si la carpeta `portable/llama/` contiene un
+`llama-server` y los GGUF correspondientes, el pipeline procesa cada recorte:
 
 - Respuestas solo terminantes: `PRESENTE`/`AUSENTE` para firmas, o un
-  texto que pasa el postprocesado del campo (matrícula/`log_number`).
-- Presupuesto `vlm_max_crops` por corrida (default 40) y timeout por
+  texto que pasa el postprocesado del campo (matrícula, `log_number` o fecha).
+- Para fechas, el VLM recibe prompts específicos para `DAY`, `MONTH` y `YR`,
+  y se le pide ignorar los separadores verticales impresos.
+- Presupuesto `vlm_max_crops` por corrida (default 120) y timeout por
   consulta (`vlm_timeout`, default 60 s).
 - Fallback total: si falta el binario/modelo, el servidor no arranca o
   la consulta falla, el resultado previo se conserva intacto.
 
-Para dejar los modelos listos (una vez, con internet):
+Para dejar Qwen3-VL listo (una vez, con internet):
 
     portable\python312\tools\python.exe tools\precache_vlm.py
 
@@ -489,6 +495,12 @@ Rutas automáticas y variables (sobre la carpeta portable):
 `portable/llama/models/*.gguf` (modelo de texto, sin `mmproj`) y
 `portable/llama/models/*mmproj*.gguf` (proyector). Variables opcionales:
 `BITS_LLAMA_BIN`, `BITS_LLAMA_MODEL`, `BITS_LLAMA_MMPROJ`.
+
+El descargador acepta explícitamente el preset alternativo SmolVLM2:
+
+    python tools/precache_vlm.py --preset smolvlm2
+
+También se pueden pasar URLs propias con `--model-url` y `--mmproj-url`.
 
 En `stats.json` de cada corrida se añade el bloque `vlm` (crops
 consultados, firmas/campos resueltos, o el motivo de desactivación).

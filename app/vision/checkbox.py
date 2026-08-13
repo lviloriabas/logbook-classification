@@ -44,6 +44,7 @@ def detect_checkbox(
         page_number=page_number,
         field_id=field.id,
         field_type=field.type.value,
+        source="vision",
         value=value,
         confidence=confidence,
         status=status,

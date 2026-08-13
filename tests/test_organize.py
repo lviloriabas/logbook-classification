@@ -6,6 +6,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.reports.organize import (
@@ -210,6 +211,24 @@ class TestPdfsOrdenados(unittest.TestCase):
         self.assertEqual(len(rutas), 1)
         self.assertEqual(rutas[0].name, "HP-1534CMP.pdf")
         self.assertGreater(rutas[0].stat().st_size, 0)
+        import pymupdf as fitz
+
+        with fitz.open(str(INPUT / "test.pdf")) as source, \
+                fitz.open(str(rutas[0])) as output:
+            self.assertEqual(output[0].rect, source[0].rect)
+            self.assertEqual(output[0].get_text(), source[0].get_text())
+
+    def test_exportacion_no_renderiza_las_paginas(self):
+        reporte = ValidationReport(
+            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pages=[_page(1, "2147300", "HP-1534CMP")],
+        )
+        run_dir = Path(tempfile.mkdtemp())
+        with patch("app.reports.organize.render_page",
+                   side_effect=AssertionError("no debe rasterizar")):
+            rutas = generar_pdfs([reporte], run_dir, ["avion"], None,
+                                 dpi=100)
+        self.assertEqual(len(rutas), 1)
 
     def test_combinado_crea_carpeta_por_matricula(self):
         reporte = ValidationReport(

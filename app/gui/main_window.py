@@ -36,6 +36,7 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -287,6 +288,26 @@ class PreviewLoader(QObject):
             self.previewReady.emit(page_number, pdf_path, None)
 
 
+class ZoomableScrollArea(QScrollArea):
+    """QScrollArea con zoom por Ctrl + rueda del ratón."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._zoom_callback = None
+
+    def set_zoom_callback(self, callback) -> None:
+        self._zoom_callback = callback
+
+    def wheelEvent(self, event) -> None:
+        if (event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                and self._zoom_callback is not None):
+            delta = event.angleDelta().y()
+            self._zoom_callback(1.25 if delta > 0 else 0.8)
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+
 class MainWindow(QMainWindow):
     """Ventana principal de la aplicación."""
 
@@ -363,6 +384,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._attach_logger()
         self._refresh_templates()
+        self._install_zoom_shortcuts()
 
     def load_initial_data(self) -> None:
         """Carga los datos del disco después de mostrar la ventana."""
@@ -469,6 +491,16 @@ class MainWindow(QMainWindow):
         self.engine_combo.setToolTip("Motor de reconocimiento de texto")
         row.addWidget(self.engine_combo)
 
+        row.addWidget(QLabel("Motor fechas:"))
+        self.date_engine_combo = QComboBox()
+        self.date_engine_combo.addItem("(usar mismo)", "")
+        self.date_engine_combo.addItem("PaddleOCR", "paddle")
+        self.date_engine_combo.addItem("Tesseract", "tesseract")
+        self.date_engine_combo.setToolTip(
+            "Motor específico para campos de fecha (day/month/year)"
+        )
+        row.addWidget(self.date_engine_combo)
+
         row.addWidget(QLabel("Archivos:"))
         self.limit_spin = QSpinBox()
         self.limit_spin.setRange(0, 9999)
@@ -574,9 +606,8 @@ class MainWindow(QMainWindow):
         info_row.addSpacing(8)
         self.fields_check = QCheckBox("Visualizar campos")
         self.fields_check.setToolTip(
-            "Mostrar los bounding boxes de los campos en la vista previa y "
-            "exportar los archivos seleccionados con ellos resaltados "
-            "(debug.pdf)"
+            "Mostrar los bounding boxes de los campos únicamente en la vista "
+            "previa. Los PDFs exportados conservan las bitácoras sin marcas."
         )
         self.fields_check.toggled.connect(self._on_fields_toggled)
         info_row.addWidget(self.fields_check)
@@ -669,25 +700,18 @@ class MainWindow(QMainWindow):
         self.date_slot_check.setToolTip(
             "Para las fechas: detecta las celdas entre las líneas verticales "
             "impresas y lee carácter por carácter (dígitos y mes) con "
-            "restricciones, cuando la lectura principal y el respaldo "
-            "fallan."
+            "restricciones. La lectura por posiciones verifica siempre el "
+            "OCR global cuando la retícula está disponible."
         )
         check_row.addWidget(self.date_slot_check)
         check_row.addStretch()
         adv.addLayout(check_row)
 
-        vlm_row = QHBoxLayout()
-        self.vlm_check = QCheckBox("Verificador VLM local (casos inciertos)")
-        self.vlm_check.setChecked(True)
-        self.vlm_check.setToolTip(
-            "Arbitra solo los casos inciertos (firmas 'unclear', campos "
-            "críticos vacíos) con un modelo multimodal local (SmolVLM2 GGUF) "
-            "vía portable/llama/. Si el binario o el modelo no están, el "
-            "pipeline funciona igual que sin él."
+        date_info = QLabel(
+            "Fechas manuscritas: lectura DD|MMM|AA por retícula, sin VLM."
         )
-        vlm_row.addWidget(self.vlm_check)
-        vlm_row.addStretch()
-        adv.addLayout(vlm_row)
+        date_info.setStyleSheet("color: #57606a;")
+        adv.addWidget(date_info)
 
         layout.addWidget(self.advanced_panel)
         return panel
@@ -839,7 +863,8 @@ class MainWindow(QMainWindow):
         )
         self.preview_label.setAccessibleName("Vista previa de la página")
 
-        self.preview_scroll = QScrollArea()
+        self.preview_scroll = ZoomableScrollArea()
+        self.preview_scroll.set_zoom_callback(self._zoom_preview)
         self.preview_scroll.setWidgetResizable(False)
         self.preview_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_scroll.setMinimumSize(300, 220)
@@ -884,26 +909,6 @@ class MainWindow(QMainWindow):
         zoom_title.setFixedWidth(28)
         zoom_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         zoom_panel.addWidget(zoom_title, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.btn_zoom_out = QToolButton()
-        self.btn_zoom_out.setObjectName("zoomControl")
-        self.btn_zoom_out.setIcon(_load_zoom_icon("out"))
-        self.btn_zoom_out.setToolTip("Alejar la vista previa")
-        self.btn_zoom_out.setAccessibleName("Alejar vista previa")
-        self.btn_zoom_out.setIconSize(QSize(14, 14))
-        self.btn_zoom_out.setFixedSize(28, 28)
-        self.btn_zoom_out.clicked.connect(lambda: self._zoom_preview(0.8))
-        zoom_panel.addWidget(self.btn_zoom_out, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.btn_zoom_fit = QToolButton()
-        self.btn_zoom_fit.setObjectName("zoomControl")
-        self.btn_zoom_fit.setIcon(_load_zoom_icon("fit"))
-        self.btn_zoom_fit.setToolTip(
-            "Ajustar la página a la ventana"
-        )
-        self.btn_zoom_fit.setAccessibleName("Ajustar página a la ventana")
-        self.btn_zoom_fit.setIconSize(QSize(14, 14))
-        self.btn_zoom_fit.setFixedSize(28, 28)
-        self.btn_zoom_fit.clicked.connect(self._fit_preview_vertical)
-        zoom_panel.addWidget(self.btn_zoom_fit, 0, Qt.AlignmentFlag.AlignHCenter)
         self.btn_zoom_in = QToolButton()
         self.btn_zoom_in.setObjectName("zoomControl")
         self.btn_zoom_in.setIcon(_load_zoom_icon("in"))
@@ -913,6 +918,26 @@ class MainWindow(QMainWindow):
         self.btn_zoom_in.setFixedSize(28, 28)
         self.btn_zoom_in.clicked.connect(lambda: self._zoom_preview(1.25))
         zoom_panel.addWidget(self.btn_zoom_in, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.btn_zoom_fit = QToolButton()
+        self.btn_zoom_fit.setObjectName("zoomControl")
+        self.btn_zoom_fit.setIcon(_load_zoom_icon("fit"))
+        self.btn_zoom_fit.setToolTip(
+            "Ajustar la vista previa a la altura de la ventana"
+        )
+        self.btn_zoom_fit.setAccessibleName("Ajustar página a la ventana")
+        self.btn_zoom_fit.setIconSize(QSize(14, 14))
+        self.btn_zoom_fit.setFixedSize(28, 28)
+        self.btn_zoom_fit.clicked.connect(self._fit_preview_vertical)
+        zoom_panel.addWidget(self.btn_zoom_fit, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.btn_zoom_out = QToolButton()
+        self.btn_zoom_out.setObjectName("zoomControl")
+        self.btn_zoom_out.setIcon(_load_zoom_icon("out"))
+        self.btn_zoom_out.setToolTip("Alejar la vista previa")
+        self.btn_zoom_out.setAccessibleName("Alejar vista previa")
+        self.btn_zoom_out.setIconSize(QSize(14, 14))
+        self.btn_zoom_out.setFixedSize(28, 28)
+        self.btn_zoom_out.clicked.connect(lambda: self._zoom_preview(0.8))
+        zoom_panel.addWidget(self.btn_zoom_out, 0, Qt.AlignmentFlag.AlignHCenter)
         self.zoom_label = QLabel("100%")
         self.zoom_label.setObjectName("zoomValue")
         self.zoom_label.setFixedWidth(28)
@@ -1196,7 +1221,7 @@ class MainWindow(QMainWindow):
 
     def _browse_pdfs(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Seleccionar archivos", str(SCRIPT_DIR), "PDF (*.pdf)"
+            self, "Seleccionar archivos", str(SCRIPT_DIR / "input"), "PDF (*.pdf)"
         )
         if paths:
             self._set_input_paths([Path(p) for p in paths])
@@ -1204,7 +1229,8 @@ class MainWindow(QMainWindow):
 
     def _browse_template(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Seleccionar plantilla", str(SCRIPT_DIR), "JSON (*.json)"
+            self, "Seleccionar plantilla", str(SCRIPT_DIR / "template"),
+            "JSON (*.json)"
         )
         if path:
             self._template_path = Path(path)
@@ -1360,17 +1386,19 @@ class MainWindow(QMainWindow):
     def _current_processing_config(self) -> AppConfig:
         """Captura las opciones compartidas por preprocesamiento y OCR."""
         engine = self.engine_combo.currentData() or "paddle"
+        date_engine_name = self.date_engine_combo.currentData() or ""
         return AppConfig(
             dpi=self._detected_dpi,
             deskew=self.deskew_check.isChecked(),
             align=self.align_check.isChecked(),
             ocr_engine=engine,
             ocr_lang="eng" if engine == "tesseract" else "en",
+            date_engine_name=date_engine_name,
             remove_printed=self.remove_printed_check.isChecked(),
             crop_preprocess=self.crop_preprocess_check.isChecked(),
             date_ocr_fallback=self.date_fallback_check.isChecked(),
             date_slot_ocr=self.date_slot_check.isChecked(),
-            vlm_enabled=self.vlm_check.isChecked(),
+            vlm_enabled=False,
         )
 
     def _start_preprocessing(self) -> None:
@@ -2189,6 +2217,30 @@ class MainWindow(QMainWindow):
         """Aplica zoom relativo; las barras de desplazamiento permiten mover la página."""
         self._preview_zoom = min(4.0, max(0.4, self._preview_zoom * factor))
         self._render_preview_pixmap()
+
+    def keyPressEvent(self, event) -> None:
+        """Ctrl++ / Ctrl+- para hacer zoom sobre la vista previa."""
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            key = event.key()
+            if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self._zoom_preview(1.25)
+                event.accept()
+                return
+            if key in (Qt.Key.Key_Minus,):
+                self._zoom_preview(0.8)
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def _install_zoom_shortcuts(self) -> None:
+        """Atajos Ctrl++ / Ctrl+- independientes del widget con foco."""
+        for seq, factor in (
+            (QKeySequence("Ctrl++"), 1.25),
+            (QKeySequence("Ctrl+="), 1.25),
+            (QKeySequence("Ctrl+-"), 0.8),
+        ):
+            QShortcut(seq, self,
+                      activated=lambda f=factor: self._zoom_preview(f))
 
     def resizeEvent(self, event) -> None:
         """Reajusta la vista también cuando cambia el tamaño de la ventana."""

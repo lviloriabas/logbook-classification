@@ -29,7 +29,12 @@ def validate_page(page: PageResult, template: Template,
         apply_rules(field_result, field_template, config)
 
     order = {Status.OK: 0, Status.WARNING: 1, Status.ERROR: 2}
-    worst = max((f.status for f in page.fields),
+    non_char = [
+        f for f in page.fields
+        if template.field(f.field_id) is None
+        or template.field(f.field_id).postprocess != "char"
+    ]
+    worst = max((f.status for f in non_char),
                 key=order.get, default=Status.OK)
     page.status = worst
     return page

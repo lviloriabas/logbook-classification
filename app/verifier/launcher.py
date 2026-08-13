@@ -9,7 +9,9 @@ tesseract/paddlex):
 - Proyector multimodal: ``portable/llama/models/*mmproj*.gguf``.
 
 Se pueden sobreescribir las rutas con las variables de entorno
-``BITS_LLAMA_BIN``, ``BITS_LLAMA_MODEL`` y ``BITS_LLAMA_MMPROJ``.
+``BITS_LLAMA_BIN``, ``BITS_LLAMA_MODEL`` y ``BITS_LLAMA_MMPROJ``, o con las
+rutas explícitas de ``AppConfig`` para comparar, por ejemplo, SmolVLM2 y
+Qwen3-VL sin depender del orden de los archivos.
 
 El servidor es un subproceso local en ``127.0.0.1`` con un puerto
 efímero: se levanta una sola vez por proceso y se apaga al salir.
@@ -44,7 +46,14 @@ class VlmPaths:
 
     @property
     def complete(self) -> bool:
-        return bool(self.binary and self.model and self.mmproj)
+        return bool(
+            self.binary
+            and self.model
+            and self.mmproj
+            and Path(self.binary).is_file()
+            and self.model.is_file()
+            and self.mmproj.is_file()
+        )
 
 
 def _models_dir() -> Path:
@@ -52,28 +61,77 @@ def _models_dir() -> Path:
 
 
 def _pick_model() -> Optional[Path]:
-    """Modelo GGUF de texto: el primer ``*.gguf`` que no sea proyector."""
+    """Elige el modelo por defecto sin depender del orden de instalación.
+
+    Qwen3-VL-8B-Instruct es el modelo por defecto. Si no está instalado,
+    se usa SmolVLM2 como respaldo y luego el primer modelo disponible; otro
+    modelo se selecciona de forma inequívoca mediante ``vlm_model`` o
+    ``BITS_LLAMA_MODEL``.
+    """
     folder = _models_dir()
     if not folder.is_dir():
         return None
-    for path in sorted(folder.glob("*.gguf")):
-        if "mmproj" not in path.name.lower():
-            return path
+    candidates = [
+        path for path in sorted(folder.glob("*.gguf"))
+        if "mmproj" not in path.name.lower()
+    ]
+    preferred = [
+        path for path in candidates
+        if "qwen3-vl" in path.name.lower()
+    ]
+    if preferred:
+        return preferred[0]
+    preferred = [
+        path for path in candidates
+        if "smolvlm" in path.name.lower()
+    ]
+    if preferred:
+        return preferred[0]
+    if candidates:
+        return candidates[0]
     return None
 
 
-def _pick_mmproj() -> Optional[Path]:
+def _pick_mmproj(model: Optional[Path | str] = None) -> Optional[Path]:
     folder = _models_dir()
     if not folder.is_dir():
         return None
-    for path in sorted(folder.glob("*.gguf")):
-        if "mmproj" in path.name.lower():
-            return path
+    candidates = [
+        path for path in sorted(folder.glob("*.gguf"))
+        if "mmproj" in path.name.lower()
+    ]
+    model_name = Path(model).name.lower() if model is not None else ""
+    if "qwen" in model_name or not model_name:
+        # Qwen's standard projector names are generic (mmproj-F16/F32), so
+        # match every non-Smol projector instead of requiring "qwen" in the
+        # filename.
+        preferred = [
+            path for path in candidates
+            if "smolvlm" not in path.name.lower()
+        ]
+    else:
+        preferred = [
+            path for path in candidates
+            if "smolvlm" in path.name.lower()
+        ]
+    if preferred:
+        return preferred[0]
+    if candidates:
+        return candidates[0]
     return None
 
 
-def resolve_paths() -> VlmPaths:
-    """Localiza binario y modelos (env vars primero, luego portable/PATH)."""
+def resolve_paths(
+    model: Optional[Path | str] = None,
+    mmproj: Optional[Path | str] = None,
+) -> VlmPaths:
+    """Localiza binario y modelos.
+
+    Las variables de entorno conservan prioridad para permitir configurar el
+    paquete portable sin tocar la aplicación. Los argumentos explícitos se
+    usan antes de la autodetección y permiten comparar dos modelos instalados
+    en la misma carpeta sin depender del orden alfabético de los GGUF.
+    """
     binary = os.environ.get("BITS_LLAMA_BIN")
     if not binary:
         base = app_root() / "portable" / "llama" / "bin"
@@ -82,17 +140,19 @@ def resolve_paths() -> VlmPaths:
             binary = str(exe)
         else:
             binary = shutil.which("llama-server")
-    model: Optional[Path] = None
-    mmproj: Optional[Path] = None
     if os.environ.get("BITS_LLAMA_MODEL"):
-        model = Path(os.environ["BITS_LLAMA_MODEL"])
+        model_path = Path(os.environ["BITS_LLAMA_MODEL"])
+    elif model is not None:
+        model_path = Path(model)
     else:
-        model = _pick_model()
+        model_path = _pick_model()
     if os.environ.get("BITS_LLAMA_MMPROJ"):
-        mmproj = Path(os.environ["BITS_LLAMA_MMPROJ"])
+        mmproj_path = Path(os.environ["BITS_LLAMA_MMPROJ"])
+    elif mmproj is not None:
+        mmproj_path = Path(mmproj)
     else:
-        mmproj = _pick_mmproj()
-    return VlmPaths(binary=binary, model=model, mmproj=mmproj)
+        mmproj_path = _pick_mmproj(model_path)
+    return VlmPaths(binary=binary, model=model_path, mmproj=mmproj_path)
 
 
 def _free_port() -> int:
@@ -112,8 +172,13 @@ class LlamaServer:
         server.stop()
     """
 
-    def __init__(self, threads: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        threads: Optional[int] = None,
+        paths: Optional[VlmPaths] = None,
+    ) -> None:
         self.threads = threads
+        self.paths = paths
         self._proc: Optional[subprocess.Popen] = None
         self.base_url: Optional[str] = None
         self.ready = False
@@ -124,7 +189,7 @@ class LlamaServer:
         Returns:
             True si quedó listo; en cualquier fallo False (nunca lanza).
         """
-        paths = resolve_paths()
+        paths = self.paths or resolve_paths()
         if not paths.complete:
             logger.info(
                 "[VLM] Sin llama-server o modelos GGUF "

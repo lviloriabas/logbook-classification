@@ -1,4 +1,4 @@
-"""Agrupación de páginas en "libros" (un avión por libro, 50 páginas).
+"""Agrupación de páginas en libros usando el número de bitácora.
 
 Cada libro físico contiene 50 páginas de bitácora. El ``log_number``
 (7 dígitos) termina en el "logpage": los últimos 2 dígitos indican la
@@ -6,15 +6,17 @@ página del libro (00-49 o 50-99). Dos páginas pertenecen al mismo libro
 cuando comparten los primeros 5 dígitos del ``log_number`` (la serie del
 libro) y los últimos 2 dígitos caen en la misma mitad (00-49 o 50-99).
 
-El logpage está impreso a máquina, así que casi siempre es legible; solo
-una página rota (número incompleto) deja la página sin ``log_number``.
-Esas páginas se asignan al libro en curso.
+La agrupación se hace sobre todas las páginas de todos los PDFs y después
+se ordena por ``log_number``. El orden físico del PDF no es una señal de
+secuencia. Las páginas sin número legible se conservan, pero no pueden
+participar en inferencias que dependan de la posición.
 """
 
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Tuple
+from collections import defaultdict
+from typing import Dict, List, Optional, Tuple
 
 from app.models.schemas import PageResult, ValidationReport
 
@@ -52,39 +54,42 @@ def log_number(page: PageResult) -> Optional[int]:
 
 
 def group_books(reports: List[ValidationReport]) -> List[List[PageResult]]:
-    """Agrupa las páginas de todos los reportes en libros.
+    """Agrupa y ordena las páginas por clave de libro.
 
-    Un libro es un bloque de páginas con la misma clave (serie, mitad).
-    Cuando la clave cambia se cierra el libro en curso. Las páginas sin
-    ``log_number`` legible se asignan al libro en curso; si no hay libro
-    en curso todavía, se acumulan y se adhieren al primer libro que
-    comience.
+    A diferencia de la implementación anterior, una clave no se cierra al
+    cambiar de PDF o al aparecer otra clave en medio. Esto evita dividir un
+    libro cuando sus páginas están repartidas entre archivos o llegan fuera
+    de orden.
+
+    Las páginas sin ``log_number`` se agregan al único libro conocido cuando
+    solo existe uno. Si hay varios libros posibles, se mantienen en un grupo
+    separado para no asignarlas arbitrariamente a partir del orden del PDF.
     """
-    books: List[List[PageResult]] = []
-    current: List[PageResult] = []
-    current_key: Optional[Tuple[str, str]] = None
-    pending: List[PageResult] = []
-
-    def close() -> None:
-        nonlocal current, current_key
-        if current or pending:
-            books.append(pending + current)
-        current = []
-        current_key = None
-        pending.clear()
+    grouped: Dict[Tuple[str, str], List[PageResult]] = defaultdict(list)
+    unknown: List[PageResult] = []
 
     for report in reports:
         for page in report.pages:
             key = book_key(page)
             if key is None:
-                if current_key is None:
-                    pending.append(page)
-                else:
-                    current.append(page)
-                continue
-            if key != current_key:
-                close()
-                current_key = key
-            current.append(page)
-    close()
+                unknown.append(page)
+            else:
+                grouped[key].append(page)
+
+    books: List[List[PageResult]] = []
+    for key in sorted(grouped):
+        pages = grouped[key]
+        pages.sort(key=lambda page: (
+            log_number(page) if log_number(page) is not None else 1 << 30,
+            page.page_number,
+        ))
+        books.append(pages)
+
+    if unknown:
+        if len(books) == 1:
+            books[0].extend(unknown)
+        else:
+            # No se inventa una pertenencia ni un orden para estas páginas.
+            books.append(list(unknown))
+
     return books

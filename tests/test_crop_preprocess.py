@@ -14,7 +14,7 @@ from app.core.pipeline import process_page_image
 from app.models.schemas import OcrResult
 from app.ocr import date_ocr as date_ocr_mod
 from app.ocr.date_ocr import read_date_slots
-from app.ocr.regional import ocr_regions
+from app.ocr.regional import _preprocess_date_region, ocr_regions
 from app.templates.schema import FieldTemplate, Template
 from app.vision.ink_extent import strip_date_label
 
@@ -73,6 +73,45 @@ def test_ocr_regions_upscales_when_preprocess_on():
     # tinta: 22 -> ~66 (antes se forzaba a 800px exactos).
     assert best_side >= 60
     assert best_side < 800
+
+
+def test_date_preprocess_keeps_dark_ink_on_light_background():
+    region = np.full((60, 120, 3), 230, dtype=np.uint8)
+    region[:, :3] = 20
+    region[:, -3:] = 20
+    region[20:45, 50:58] = 30
+
+    processed = _preprocess_date_region(region)
+
+    assert processed[30, 54, 0] < processed[10, 30, 0]
+
+
+def test_ocr_regions_preserves_field_order_with_separate_date_engine():
+    class TaggedEngine:
+        def __init__(self, prefix):
+            self.prefix = prefix
+
+        def recognize_batch(self, images):
+            return [
+                [OcrResult(text=f"{self.prefix}{index}", confidence=0.9)]
+                for index, _image in enumerate(images)
+            ]
+
+    fields = [
+        FieldTemplate(id="general_a", x=0.0, y=0.0, w=0.2, h=0.2),
+        FieldTemplate(id="day", x=0.3, y=0.0, w=0.2, h=0.2,
+                      postprocess="day"),
+        FieldTemplate(id="general_b", x=0.6, y=0.0, w=0.2, h=0.2),
+    ]
+
+    results = ocr_regions(
+        TaggedEngine("main"), _page(100, 100), fields,
+        preprocess=False, date_engine=TaggedEngine("date"),
+    )
+
+    assert [text for text, _confidence in results] == [
+        "main0", "date0", "main1",
+    ]
 
 
 def test_slots_raw_when_preprocess_off(monkeypatch):

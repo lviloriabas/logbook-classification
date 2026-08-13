@@ -6,7 +6,7 @@ import re
 from enum import Enum
 from typing import List, Optional, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class FieldType(str, Enum):
@@ -72,8 +72,27 @@ class FieldTemplate(BaseModel):
     sig_absent_conf: float = Field(
         default=0.55, ge=0.0, le=1.0,
         description="confianza mínima para confiar en que una firma está ausente "
-                    "(región limpia); por debajo se trata como incierta",
+                     "(región limpia); por debajo se trata como incierta",
     )
+
+    @model_validator(mode="after")
+    def _validate_geometry(self) -> "FieldTemplate":
+        """Evita que un campo salga del lienzo de la plantilla."""
+        if self.x + self.w > 1.0:
+            raise ValueError(
+                f"campo '{self.id}' excede el ancho de la página "
+                f"(x + w = {self.x + self.w:.6f})"
+            )
+        if self.y + self.h > 1.0:
+            raise ValueError(
+                f"campo '{self.id}' excede el alto de la página "
+                f"(y + h = {self.y + self.h:.6f})"
+            )
+        if self.type is FieldType.SIGNATURE and self.zone_bottom <= self.zone_top:
+            raise ValueError(
+                f"campo '{self.id}' tiene una banda de firma inválida"
+            )
+        return self
 
     @field_validator("regex")
     @classmethod
@@ -101,6 +120,20 @@ class Template(BaseModel):
     version: str = "1.0"
     page_size: List[int] = Field(default_factory=lambda: [2480, 3508])
     fields: List[FieldTemplate] = Field(default_factory=list)
+
+    @field_validator("fields")
+    @classmethod
+    def _validate_unique_field_ids(
+        cls, fields: List[FieldTemplate]
+    ) -> List[FieldTemplate]:
+        """Los IDs son claves de resultado y no pueden sobrescribirse."""
+        ids = [field.id for field in fields]
+        duplicates = sorted({field_id for field_id in ids if ids.count(field_id) > 1})
+        if duplicates:
+            raise ValueError(
+                "IDs de campo duplicados: " + ", ".join(duplicates)
+            )
+        return fields
 
     def field(self, field_id: str) -> Optional[FieldTemplate]:
         """Devuelve un campo por su id, o None si no existe."""

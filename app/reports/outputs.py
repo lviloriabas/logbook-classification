@@ -152,13 +152,15 @@ def write_outputs(
         )
 
     separar = list(options.separar_por) or None
-    if options.discrepancias and not skip_pdfs:
+    if options.discrepancias and entradas and not skip_pdfs:
         stage("Generando discrepancias.pdf…", 45)
         from app.reports.organize import escribir_pdf_discrepancias
 
         escribir_pdf_discrepancias(
             entradas, template, run_dir, dpi=options.dpi
         )
+    elif options.discrepancias and not skip_pdfs:
+        logger.info("No hay discrepancias; no se genera discrepancias.pdf")
 
     if skip_pdfs:
         pdf_paths: list[Path] = []

@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
         "--template",
         default=str(
             Path(__file__).resolve().parent
-            / "app/templates/examples/aircraft_log.json"
+            / "template/aircraft_log.json"
         ),
         help="Plantilla JSON (default: aircraft_log.json)",
     )
@@ -87,8 +87,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--debug", action="store_true",
-        help="Generar debug.pdf con los bounding boxes de los campos "
-             "sobre los archivos",
+        help="Generar debug.pdf con las páginas originales, sin anotaciones",
     )
     parser.add_argument(
         "--reference-page", type=int, default=1,
@@ -96,7 +95,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--engine", default="paddle", choices=["paddle", "tesseract"],
-        help="Motor OCR",
+        help="Motor OCR principal (matrícula, logpage y campos generales)",
+    )
+    parser.add_argument(
+        "--date-engine", default=None, choices=["paddle", "tesseract"],
+        help="Motor OCR para fechas (day/month/year). Por defecto usa el "
+             "mismo que --engine.",
     )
     parser.add_argument("--lang", default="en", help="Idioma del motor OCR")
     parser.add_argument(
@@ -145,13 +149,6 @@ def parse_args() -> argparse.Namespace:
              "para day/month/year.",
     )
     parser.add_argument(
-        "--no-vlm", action="store_true",
-        help="Desactivar el verificador VLM local (arbitraje de casos "
-             "inciertos: firmas 'unclear' y campos críticos vacíos). "
-             "Por defecto actúa solo si portable/llama/ tiene el binario y "
-             "los modelos GGUF; si no, el pipeline no cambia.",
-    )
-    parser.add_argument(
         "--separar-por", action="append", choices=["avion", "mes"],
         default=None,
         help="Separar los archivos en PDFs independientes. Repetible: "
@@ -169,8 +166,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--discrepancias", action="store_true",
         help="Generar discrepancias.pdf con las páginas que tienen firmas "
-             "faltantes o inciertas. Estas páginas NO se incluyen en los "
-             "PDFs por avión/mes.",
+             "faltantes o inciertas, sin anotaciones. Estas páginas NO se "
+             "incluyen en los PDFs por avión/mes.",
     )
     parser.add_argument(
         "--recortes-firmas", action="store_true",
@@ -182,7 +179,7 @@ def parse_args() -> argparse.Namespace:
         "--errores", action="store_true",
         help="Generar errores.pdf con las páginas cuyos campos OCR "
              "(matrícula, fechas, log_number) quedaron sin resolver tras "
-             "los correctores, para indexación manual.",
+             "los correctores, sin anotaciones.",
     )
     parser.add_argument("--verbose", action="store_true", help="Logs detallados")
     return parser.parse_args()
@@ -247,7 +244,7 @@ def _run(args: argparse.Namespace) -> int:
         ocr_det_model=args.det_model,
         date_ocr_fallback=not args.no_date_ocr_fallback,
         date_slot_ocr=not args.no_date_slot_ocr,
-        vlm_enabled=not args.no_vlm,
+        vlm_enabled=False,
     )
 
     if args.max_pages is not None and args.max_pages < 1:
@@ -296,6 +293,12 @@ def _run(args: argparse.Namespace) -> int:
     engine = create_engine(
         config.ocr_engine, lang=config.ocr_lang, **engine_kwargs
     )
+    date_engine = None
+    if args.date_engine:
+        date_engine = create_engine(
+            args.date_engine, lang=config.ocr_lang, **engine_kwargs
+        )
+        print(f"  Motor de fechas: {args.date_engine}")
     print(
         f"Hilos seleccionados: {selected_threads} | "
         f"distribución automática: {workers} worker(s) x "
@@ -311,7 +314,8 @@ def _run(args: argparse.Namespace) -> int:
                  if args.max_pages else ""))
 
         pipeline = Pipeline(config, engine, template, on_progress=on_progress,
-                            workers=workers, cpu_threads=cpu_threads)
+                            workers=workers, cpu_threads=cpu_threads,
+                            date_engine=date_engine)
         if args.reference_page:
             from app.vision.pdf_loader import render_page
 
@@ -334,6 +338,7 @@ def _run(args: argparse.Namespace) -> int:
                 f"  VLM: {vlm.get('crops', 0)} recorte(s), "
                 f"{vlm.get('signatures_resolved', 0)} firma(s) y "
                 f"{vlm.get('fields_resolved', 0)} campo(s) resueltos"
+                + (f" [{vlm.get('model')}]" if vlm.get("model") else "")
             )
 
         summary = report.summary
@@ -406,7 +411,7 @@ def _run(args: argparse.Namespace) -> int:
         )
         print(f"  Recortes de firmas: {recortes_dir}")
 
-    if args.discrepancias:
+    if args.discrepancias and entradas:
         from app.reports.organize import escribir_pdf_discrepancias
 
         discrepancias_path = escribir_pdf_discrepancias(
@@ -418,6 +423,8 @@ def _run(args: argparse.Namespace) -> int:
         print(f"  Discrepancias: {discrepancias_path} "
               f"({len(entradas)} página(s): {faltantes} faltante(s), "
               f"{inciertas} para revisar)")
+    elif args.discrepancias:
+        print("  Discrepancias: no hay páginas para exportar")
 
     if args.un_solo_pdf:
         from app.reports.organize import escribir_pdf_unico

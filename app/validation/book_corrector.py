@@ -21,6 +21,7 @@ corrector:
 from __future__ import annotations
 
 from collections import Counter
+import re
 from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -108,6 +109,8 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
         field.value = winner
         field.confidence = winner_confidence
         field.status = Status.OK
+        field.source = "book_correction"
+        field.inference_method = "book_majority"
         if original:
             field.comment = (
                 f"Corrected from {original!r} by book majority "
@@ -133,7 +136,13 @@ def _recompute_page_status(page: PageResult) -> None:
     """Recalcula el estado de una página a partir de sus campos."""
     if not page.fields or page.blank:
         return
-    worst = max((f.status for f in page.fields), key=_ORDER.get,
+    # Las siete lecturas de celda son evidencia auxiliar. Su ausencia o baja
+    # confianza no degrada la página si day/month/year ya quedaron resueltos.
+    decisive = [
+        field for field in page.fields
+        if not re.fullmatch(r"(?:day|month|year)_\d", field.field_id)
+    ]
+    worst = max((f.status for f in decisive), key=_ORDER.get,
                 default=Status.OK)
     page.status = worst
 

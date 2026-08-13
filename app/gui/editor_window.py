@@ -1,7 +1,7 @@
 """Editor visual de plantillas para Logbook Classification.
 
-Los campos que se muestran son los definidos en el ejemplo usado por el
-pipeline (app/templates/examples/aircraft_log.json). No se pueden renombrar
+Los campos que se muestran son los definidos en la plantilla usada por el
+pipeline (template/aircraft_log.json). No se pueden renombrar
 ni cambiar sus reglas: solo se selecciona un campo y se dibuja el
 rectángulo sobre la página para asignarle su posición.
 
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from loguru import logger
-from PySide6.QtCore import QPointF, QRectF, QSizeF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, QSizeF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -33,12 +33,14 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QGridLayout,
     QInputDialog,
     QLabel,
     QListWidget,
@@ -47,17 +49,18 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QSplitter,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from app.templates.manager import EXAMPLES_DIR, TemplateManager
+from app.templates.manager import TEMPLATES_DIR, TemplateManager
 from app.templates.schema import FieldTemplate, FieldType, Template
 
 _HANDLE_SIZE = 12.0
 _MIN_SIZE = 8.0
 
-# Respaldo por si el JSON de ejemplo no existe (idéntico a aircraft_log.json).
+# Respaldo por si el JSON de plantilla no existe (idéntico a aircraft_log.json).
 _FALLBACK_PRESETS: Dict[str, dict] = {
     "log_number": {
         "type": "ocr", "required": True, "regex": "^\\d{7}$",
@@ -120,6 +123,13 @@ def _load_icon() -> QIcon:
         if path.is_file():
             return QIcon(str(path))
     return QIcon()
+
+
+def _load_zoom_icon(name: str) -> QIcon:
+    """Icono de zoom local para que el editor sea consistente en Windows."""
+    assets = Path(__file__).resolve().parents[2] / "assets"
+    path = assets / f"zoom_{name}.svg"
+    return QIcon(str(path)) if path.is_file() else QIcon.fromTheme(f"zoom-{name}")
 
 
 class ResizableRectItem(QGraphicsRectItem):
@@ -226,6 +236,26 @@ class ResizableRectItem(QGraphicsRectItem):
                 painter.drawRect(rect)
 
 
+class ZoomableGraphicsView(QGraphicsView):
+    """QGraphicsView con zoom por Ctrl + rueda del ratón."""
+
+    def __init__(self, scene, parent=None) -> None:
+        super().__init__(scene, parent)
+        self._zoom_callback = None
+
+    def set_zoom_callback(self, callback) -> None:
+        self._zoom_callback = callback
+
+    def wheelEvent(self, event) -> None:
+        if (event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                and self._zoom_callback is not None):
+            delta = event.angleDelta().y()
+            self._zoom_callback(1.25 if delta > 0 else 0.8)
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+
 class EditorScene(QGraphicsScene):
     """Escena que crea rectángulos al arrastrar sobre el fondo."""
 
@@ -289,18 +319,20 @@ class EditorWindow(QMainWindow):
         self._image_size = (0, 0)  # (ancho, alto) en píxeles
         self._items: Dict[str, ResizableRectItem] = {}  # campo → rectángulo
         self._selected_id: Optional[str] = None
+        self._editor_zoom = 1.0  # 1.0 = ajustado a la ventana
 
         self._presets: Dict[str, dict] = self._load_presets()
 
         self._build_ui()
         self._connect_signals()
         self._rebuild_field_list()
+        self._install_zoom_shortcuts()
 
     # ── Campos fijos (usados en el código) ──────────────────────────────
 
     def _load_presets(self) -> Dict[str, dict]:
-        """Campos del ejemplo usado por el pipeline (aircraft_log.json)."""
-        path = EXAMPLES_DIR / "aircraft_log.json"
+        """Campos de la plantilla usada por el pipeline (aircraft_log.json)."""
+        path = TEMPLATES_DIR / "aircraft_log.json"
         try:
             template = TemplateManager().load(path)
         except Exception as exc:  # noqa: BLE001
@@ -373,11 +405,112 @@ class EditorWindow(QMainWindow):
         self.setCentralWidget(splitter)
 
         self.scene = EditorScene(self)
-        self.view = QGraphicsView(self.scene)
+        self.view = ZoomableGraphicsView(self.scene)
+        self.view.set_zoom_callback(self._zoom_editor)
         self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.view.setRenderHints(QPainter.RenderHint.Antialiasing)
         self.view.setMinimumWidth(600)
-        splitter.addWidget(self.view)
+        view_container = QWidget()
+        view_layout = QGridLayout(view_container)
+        view_layout.setContentsMargins(0, 0, 0, 0)
+        view_layout.addWidget(self.view, 0, 0)
+
+        self.setStyleSheet(
+            "#zoomOverlay {"
+            "  background-color: rgb(49, 49, 49);"
+            "  border: 1px solid rgb(49, 49, 49);"
+            "  border-radius: 8px;"
+            "}"
+            "#zoomOverlay QLabel {"
+            "  border: 0; background: transparent; color: #ffffff;"
+            "  font-size: 10px; font-weight: 600;"
+            "}"
+            "#zoomOverlay QToolButton#zoomControl {"
+            "  min-width: 28px; max-width: 28px;"
+            "  min-height: 28px; max-height: 28px;"
+            "  padding: 0; border: 1px solid transparent;"
+            "  border-radius: 6px; background-color: rgb(49, 49, 49);"
+            "}"
+            "#zoomOverlay QToolButton#zoomControl:hover {"
+            "  background-color: rgb(64, 64, 64);"
+            "  border-color: rgb(102, 102, 102);"
+            "}"
+            "#zoomOverlay QToolButton#zoomControl:pressed {"
+            "  background-color: rgb(38, 38, 38);"
+            "  border-color: rgb(102, 102, 102);"
+            "}"
+            "#zoomOverlay QToolButton#zoomControl:disabled {"
+            "  background-color: rgb(49, 49, 49);"
+            "}"
+            "#zoomOverlay QLabel#zoomCaption,"
+            "#zoomOverlay QLabel#zoomValue {"
+            "  min-width: 28px; max-width: 28px; padding: 0;"
+            "  color: #ffffff; font-size: 10px; font-weight: 600;"
+            "}"
+        )
+
+        zoom_overlay = QFrame(view_container)
+        zoom_overlay.setObjectName("zoomOverlay")
+        zoom_overlay.setFixedWidth(42)
+        zoom_panel = QVBoxLayout(zoom_overlay)
+        zoom_panel.setContentsMargins(5, 6, 5, 6)
+        zoom_panel.setSpacing(2)
+        zoom_title = QLabel("Zoom")
+        zoom_title.setObjectName("zoomCaption")
+        zoom_title.setFixedWidth(28)
+        zoom_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_panel.addWidget(zoom_title, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.btn_zoom_in = QToolButton()
+        self.btn_zoom_in.setObjectName("zoomControl")
+        self.btn_zoom_in.setIcon(_load_zoom_icon("in"))
+        self.btn_zoom_in.setToolTip("Acercar el lienzo")
+        self.btn_zoom_in.setAccessibleName("Acercar lienzo")
+        self.btn_zoom_in.setIconSize(QSize(14, 14))
+        self.btn_zoom_in.setFixedSize(28, 28)
+        self.btn_zoom_in.clicked.connect(lambda: self._zoom_editor(1.25))
+        zoom_panel.addWidget(self.btn_zoom_in, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.btn_zoom_fit = QToolButton()
+        self.btn_zoom_fit.setObjectName("zoomControl")
+        self.btn_zoom_fit.setIcon(_load_zoom_icon("fit"))
+        self.btn_zoom_fit.setToolTip("Ajustar la página a la ventana")
+        self.btn_zoom_fit.setAccessibleName("Ajustar página a la ventana")
+        self.btn_zoom_fit.setIconSize(QSize(14, 14))
+        self.btn_zoom_fit.setFixedSize(28, 28)
+        self.btn_zoom_fit.clicked.connect(self._fit_editor)
+        zoom_panel.addWidget(self.btn_zoom_fit, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.btn_zoom_out = QToolButton()
+        self.btn_zoom_out.setObjectName("zoomControl")
+        self.btn_zoom_out.setIcon(_load_zoom_icon("out"))
+        self.btn_zoom_out.setToolTip("Alejar el lienzo")
+        self.btn_zoom_out.setAccessibleName("Alejar lienzo")
+        self.btn_zoom_out.setIconSize(QSize(14, 14))
+        self.btn_zoom_out.setFixedSize(28, 28)
+        self.btn_zoom_out.clicked.connect(lambda: self._zoom_editor(0.8))
+        zoom_panel.addWidget(self.btn_zoom_out, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setObjectName("zoomValue")
+        self.zoom_label.setFixedWidth(28)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_panel.addWidget(self.zoom_label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        zoom_holder = QWidget(view_container)
+        zoom_holder_layout = QVBoxLayout(zoom_holder)
+        zoom_holder_layout.setContentsMargins(8, 8, 8, 8)
+        zoom_holder_layout.addWidget(zoom_overlay)
+        view_layout.addWidget(
+            zoom_holder,
+            0,
+            0,
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
+        )
+        zoom_holder.raise_()
+        self._update_zoom_editor_controls()
+
+        splitter.addWidget(view_container)
 
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -417,10 +550,6 @@ class EditorWindow(QMainWindow):
         self.scene.field_created.connect(self._add_field_rect)
         self.scene.selectionChanged.connect(self._on_scene_selection)
 
-        QShortcut(
-            QKeySequence.StandardKey.Delete, self, self._delete_selected
-        )
-
     # ── Lista de campos ────────────────────────────────────────────────
 
     def _rebuild_field_list(self) -> None:
@@ -458,8 +587,9 @@ class EditorWindow(QMainWindow):
     # ── Acciones ────────────────────────────────────────────────────────
 
     def _open_pdf(self) -> None:
+        _input_dir = Path(__file__).resolve().parents[2] / "input"
         path, _ = QFileDialog.getOpenFileName(
-            self, "Abrir PDF", str(Path.home()), "PDF (*.pdf)"
+            self, "Abrir PDF", str(_input_dir), "PDF (*.pdf)"
         )
         if not path:
             return
@@ -496,6 +626,8 @@ class EditorWindow(QMainWindow):
             self.scene.setSceneRect(QRectF(0, 0, w, h))
             self.view.fitInView(self.scene.sceneRect(),
                                 Qt.AspectRatioMode.KeepAspectRatio)
+            self._editor_zoom = 1.0
+            self._update_zoom_editor_controls()
             self.page_label.setText(
                 f"Página {self._current_page}/{self._total_pages}"
             )
@@ -511,6 +643,59 @@ class EditorWindow(QMainWindow):
         self.btn_next.setEnabled(
             has_pdf and self._current_page < self._total_pages
         )
+
+    # ── Zoom ────────────────────────────────────────────────────────────
+
+    def _update_zoom_editor_controls(self) -> None:
+        """Sincroniza los controles de zoom con la página abierta."""
+        has_image = self._pdf_path is not None and self._image_size != (0, 0)
+        self.btn_zoom_in.setEnabled(has_image and self._editor_zoom < 4.0)
+        self.btn_zoom_fit.setEnabled(has_image)
+        self.btn_zoom_out.setEnabled(has_image and self._editor_zoom > 0.4)
+        self.zoom_label.setText(f"{round(self._editor_zoom * 100)}%")
+
+    def _zoom_editor(self, factor: float) -> None:
+        """Aplica zoom relativo alrededor del centro del lienzo."""
+        new_zoom = min(4.0, max(0.4, self._editor_zoom * factor))
+        if new_zoom == self._editor_zoom:
+            return
+        self.view.scale(new_zoom / self._editor_zoom,
+                        new_zoom / self._editor_zoom)
+        self._editor_zoom = new_zoom
+        self._update_zoom_editor_controls()
+
+    def keyPressEvent(self, event) -> None:
+        """Ctrl++ / Ctrl+- para hacer zoom sobre el lienzo."""
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            key = event.key()
+            if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self._zoom_editor(1.25)
+                event.accept()
+                return
+            if key in (Qt.Key.Key_Minus,):
+                self._zoom_editor(0.8)
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def _install_zoom_shortcuts(self) -> None:
+        """Atajos Ctrl++ / Ctrl+- independientes del widget con foco."""
+        for seq, factor in (
+            (QKeySequence("Ctrl++"), 1.25),
+            (QKeySequence("Ctrl+="), 1.25),
+            (QKeySequence("Ctrl+-"), 0.8),
+        ):
+            QShortcut(seq, self,
+                      activated=lambda f=factor: self._zoom_editor(f))
+
+    def _fit_editor(self) -> None:
+        """Ajusta la página completa a la ventana."""
+        if self._pdf_path is None or self._image_size == (0, 0):
+            return
+        self.view.fitInView(self.scene.sceneRect(),
+                            Qt.AspectRatioMode.KeepAspectRatio)
+        self._editor_zoom = 1.0
+        self._update_zoom_editor_controls()
 
     def _prev_page(self) -> None:
         if self._pdf_path and self._current_page > 1:
@@ -676,7 +861,7 @@ class EditorWindow(QMainWindow):
         if not ok or not name.strip():
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Guardar plantilla", str(Path.home()),
+            self, "Guardar plantilla", str(TEMPLATES_DIR),
             "JSON (*.json)"
         )
         if not path:
@@ -694,7 +879,7 @@ class EditorWindow(QMainWindow):
 
     def _load_template(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Cargar plantilla", str(Path.home()), "JSON (*.json)"
+            self, "Cargar plantilla", str(TEMPLATES_DIR), "JSON (*.json)"
         )
         if not path:
             return
@@ -733,7 +918,6 @@ class EditorWindow(QMainWindow):
                 "max_ink_ratio": extra.max_ink_ratio,
                 "min_components": extra.min_components,
             }
-            self._add_list_item(extra.id)
             logger.info(f"Campo extra cargado: {extra.id}")
 
         for field in template.fields:
@@ -743,6 +927,7 @@ class EditorWindow(QMainWindow):
             self.scene.addItem(item)
             self._items[field.id] = item
 
+        self._rebuild_field_list()
         for field_id in self._presets:
             self._set_placed_marker(field_id)
         self._selected_id = None

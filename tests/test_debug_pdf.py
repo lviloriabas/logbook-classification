@@ -1,4 +1,4 @@
-"""Pruebas del PDF de debug con bounding boxes de los campos."""
+"""Pruebas del PDF de debug con páginas fuente sin anotaciones."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class TestDebugPdf(unittest.TestCase):
                          "requiere input/test.pdf")
     def test_generates_combined_pdf(self):
         template = TemplateManager().load(
-            self.root / "app/templates/examples/aircraft_log.json"
+            self.root / "template/aircraft_log.json"
         )
         report = _make_report(INPUT / "test.pdf",
                               [f.id for f in template.fields])
@@ -58,15 +58,21 @@ class TestDebugPdf(unittest.TestCase):
         self.assertEqual(result, out)
         self.assertTrue(out.exists())
         self.assertGreater(out.stat().st_size, 0)
-        with fitz.open(str(out)) as doc:
-            # sin leyenda por defecto: solo la página de la bitácora
+        with fitz.open(str(INPUT / "test.pdf")) as source, \
+                fitz.open(str(out)) as doc:
             self.assertEqual(len(doc), 1)
+            self.assertEqual(doc[0].rect, source[0].rect)
+            self.assertEqual(doc[0].get_text(), source[0].get_text())
+            self.assertEqual(
+                len(doc[0].get_images(full=True)),
+                len(source[0].get_images(full=True)),
+            )
 
     @unittest.skipUnless(INPUT.joinpath("test.pdf").exists(),
                          "requiere input/test.pdf")
     def test_blank_page_included(self):
         template = TemplateManager().load(
-            self.root / "app/templates/examples/aircraft_log.json"
+            self.root / "template/aircraft_log.json"
         )
         report = _make_report(INPUT / "test.pdf",
                               [f.id for f in template.fields])

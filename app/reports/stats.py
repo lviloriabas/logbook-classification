@@ -97,6 +97,7 @@ def _stats_discrepancias(entradas: Sequence[Discrepancia]) -> dict:
 def _stats_vlm(vlm_stats: Sequence[dict]) -> dict:
     """Bloque del verificador VLM: cuántos casos resolvió la corrida."""
     activos = [v for v in vlm_stats if v.get("enabled")]
+    modelos = sorted({v["model"] for v in activos if v.get("model")})
     desactivado = next(
         (v.get("disabled") for v in vlm_stats if v.get("disabled")),
         None,
@@ -104,6 +105,11 @@ def _stats_vlm(vlm_stats: Sequence[dict]) -> dict:
     return {
         "activo": bool(activos),
         "bitacoras_con_vlm": len(activos),
+        "modelos": modelos,
+        "date_targets": sum(v.get("date_targets", 0) for v in activos),
+        "date_fields_resueltos": sum(
+            v.get("date_fields_resolved", 0) for v in activos
+        ),
         "crops_consultados": sum(v.get("crops", 0) for v in activos),
         "firmas_resueltas": sum(
             v.get("signatures_resolved", 0) for v in activos

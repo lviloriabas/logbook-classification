@@ -10,13 +10,13 @@ from loguru import logger
 
 from app.templates.schema import Template
 
-EXAMPLES_DIR = Path(__file__).resolve().parent / "examples"
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "template"
 
 
 class TemplateManager:
     """Carga y guarda plantillas JSON validadas con pydantic."""
 
-    def __init__(self, templates_dir: Path = EXAMPLES_DIR) -> None:
+    def __init__(self, templates_dir: Path = TEMPLATES_DIR) -> None:
         self.templates_dir = templates_dir
 
     def load(self, path: Path) -> Template:
@@ -48,11 +48,11 @@ class TemplateManager:
         return sorted(self.templates_dir.glob("*.json"))
 
     def list_templates_with_fallback(self) -> List[Path]:
-        """Lista plantillas del directorio; si está vacío usa los ejemplos."""
+        """Lista plantillas del directorio; si está vacío usa el directorio base."""
         paths = self.list_templates()
-        return paths if paths else sorted(EXAMPLES_DIR.glob("*.json"))
+        return paths if paths else sorted(TEMPLATES_DIR.glob("*.json"))
 
     def load_example(self, name: str) -> Optional[Template]:
-        """Carga una plantilla de ejemplo por nombre."""
-        path = EXAMPLES_DIR / name
+        """Carga una plantilla por nombre desde el directorio de plantillas."""
+        path = TEMPLATES_DIR / name
         return self.load(path) if path.exists() else None

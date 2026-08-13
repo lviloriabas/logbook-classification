@@ -100,16 +100,35 @@ class TestComputeSlotMap(unittest.TestCase):
 
     def test_build_slot_maps_includes_date_fields(self):
         mask = np.zeros((PAGE_H, PAGE_W), bool)
-        for field, index in ((_day_field(), 1), (_month_field(), 1),
-                             (_year_field(), 1)):
+        for field, expected in ((_day_field(), 2), (_month_field(), 3),
+                                (_year_field(), 2)):
             left, top, right, bottom = field.rect_pixels(PAGE_W, PAGE_H)
-            sep = left + (right - left) * index // 2
-            _draw_vline(mask, sep, top + 1, bottom - 1)
+            for index in range(1, expected):
+                sep = left + (right - left) * index // expected
+                _draw_vline(mask, sep, top + 1, bottom - 1)
         maps = build_slot_maps(mask, _template())
         self.assertEqual(set(maps), {"day", "month", "year"})
+        self.assertEqual(maps["day"]["slots"], 2)
+        self.assertEqual(maps["month"]["slots"], 3)
+        self.assertEqual(maps["year"]["slots"], 2)
         for spec in maps.values():
-            self.assertEqual(spec["slots"], 2)
-            self.assertEqual(len(spec["boundaries"]), 3)
+            self.assertEqual(len(spec["boundaries"]), spec["slots"] + 1)
+
+    def test_ignores_outer_box_borders(self):
+        field = _day_field()
+        left, top, right, bottom = _band(field)
+        mask = np.zeros((PAGE_H, PAGE_W), bool)
+        _draw_vline(mask, left, top, bottom)
+        _draw_vline(mask, (left + right) // 2, top, bottom)
+        _draw_vline(mask, right - 1, top, bottom)
+
+        spec = compute_slot_map(mask, field)
+
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec["slots"], 2)
+        self.assertTrue(
+            abs(spec["boundaries"][1] - (left + right) // 2) <= 2
+        )
 
     def test_build_slot_maps_uniform_fallback(self):
         mask = np.zeros((PAGE_H, PAGE_W), bool)
@@ -151,14 +170,22 @@ class TestDecodeSlots(unittest.TestCase):
         self.assertEqual(decode_slots("day", [("2", 0.9), ("0", 0.8)]),
                          ("20", 0.85))
 
-    def test_day_single_slot(self):
+    def test_day_first_slot_without_second_is_ambiguous(self):
         self.assertEqual(decode_slots("day", [("7", 0.7), ("", 0.0)]),
+                         ("", 0.0))
+
+    def test_day_right_aligned_single_digit_is_valid(self):
+        self.assertEqual(decode_slots("day", [("", 0.0), ("7", 0.7)]),
                          ("7", 0.7))
 
     def test_year_four_slots(self):
         self.assertEqual(decode_slots("year", [("2", 0.9), ("0", 0.9),
                                                ("2", 0.8), ("6", 0.9)]),
                          ("2026", 0.875))
+
+    def test_incomplete_year_is_rejected(self):
+        self.assertEqual(decode_slots("year", [("2", 0.9), ("", 0.0)]),
+                         ("", 0.0))
 
     def test_empty_readings_rejected(self):
         text, conf = decode_slots("month", [("", 0.0), ("", 0.0), ("", 0.0)])
@@ -170,16 +197,28 @@ class TestDecodeSlots(unittest.TestCase):
         self.assertEqual(text, "JUL")
         self.assertAlmostEqual(conf, 0.8)
 
-    def test_month_with_empty_slot(self):
-        # Con una ranura vacía, JUN y JUL empatan (ambigüedad intrínseca);
-        # el decodificador devuelve cualquiera de los dos, nunca basura.
+    def test_month_with_ambiguous_empty_slot_is_rejected(self):
         text, _ = decode_slots("month", [("J", 0.9), ("U", 0.8), ("", 0.0)])
-        self.assertIn(text, {"JUN", "JUL"})
+        self.assertEqual(text, "")
+
+    def test_month_single_observed_slot_is_rejected(self):
+        text, conf = decode_slots("month", [("J", 0.9), ("", 0.0), ("", 0.0)])
+        self.assertEqual((text, conf), ("", 0.0))
 
     def test_month_misread_letter(self):
         # 'GUL' (G = confusión típica de J) se resuelve a JUL por restricción.
         text, _ = decode_slots("month", [("G", 0.7), ("U", 0.8), ("L", 0.7)])
         self.assertEqual(text, "JUL")
+
+    def test_month_common_handwriting_confusions(self):
+        text, _ = decode_slots("month", [("J", 0.7), ("0", 0.8), ("L", 0.7)])
+        self.assertEqual(text, "JUL")
+        text, _ = decode_slots("month", [("3", 0.7), ("0", 0.8), ("C", 0.7)])
+        self.assertEqual(text, "JUL")
+
+    def test_month_equivalences_do_not_break_october(self):
+        text, _ = decode_slots("month", [("O", 0.7), ("C", 0.8), ("T", 0.7)])
+        self.assertEqual(text, "OCT")
 
     def test_month_english_word(self):
         text, _ = decode_slots("month", [("D", 0.9), ("E", 0.8), ("C", 0.9)])

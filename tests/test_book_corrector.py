@@ -59,10 +59,11 @@ class TestGroupBooks(unittest.TestCase):
             _page(5, "2147314", "HP-1534CMP"),  # 21473-A de nuevo (fuera de orden)
         ]
         books = group_books([_report(*pages)])
-        self.assertEqual(len(books), 3)
-        self.assertEqual([p.page_number for p in books[0]], [1, 2])
+        self.assertEqual(len(books), 2)
+        # El mismo libro se reúne aunque reaparezca después de otro y se
+        # ordena por log_number, no por el orden del PDF.
+        self.assertEqual([p.page_number for p in books[0]], [5, 1, 2])
         self.assertEqual([p.page_number for p in books[1]], [3, 4])
-        self.assertEqual([p.page_number for p in books[2]], [5])
 
     def test_unreadable_logpage_joins_current_book(self):
         pages = [
@@ -72,7 +73,9 @@ class TestGroupBooks(unittest.TestCase):
         ]
         books = group_books([_report(*pages)])
         self.assertEqual(len(books), 1)
-        self.assertEqual([p.page_number for p in books[0]], [1, 2, 3])
+        # La página sin log_number se conserva, pero no se coloca
+        # artificialmente en medio de la secuencia.
+        self.assertEqual([p.page_number for p in books[0]], [1, 3, 2])
 
 
 class TestAggressiveCorrection(unittest.TestCase):

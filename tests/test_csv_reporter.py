@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.reports.csv_reporter import CsvReporter
+from app.templates.schema import FieldTemplate, Template
 
 
 def _field(fid: str, value, conf=0.9) -> FieldResult:
@@ -75,6 +76,31 @@ class TestCsvGates(unittest.TestCase):
         self.assertEqual(row["day"], "23")
         self.assertEqual(row["month"], "JUL")
         self.assertEqual(row["year"], "2026")
+
+    def test_signature_columns_omit_status_and_comment(self):
+        template = Template(
+            name="fixture",
+            fields=[
+                FieldTemplate(id="pilot_signature", type="signature",
+                              x=0.1, y=0.1, w=0.2, h=0.1),
+                FieldTemplate(id="matricula", x=0.1, y=0.2, w=0.2, h=0.1),
+            ],
+        )
+        page = PageResult(page_number=1)
+        page.add_field(_field("pilot_signature", "presente", 0.8))
+        page.add_field(_field("matricula", "HP-1534CMP"))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            CsvReporter().write(_report(page), path, template)
+            with open(path, encoding="utf-8-sig", newline="") as fh:
+                row = list(csv.DictReader(fh))[0]
+        self.assertNotIn("pilot_signature_status", row)
+        self.assertNotIn("pilot_signature_comment", row)
+        self.assertEqual(row["pilot_signature"], "presente")
+        self.assertEqual(row["pilot_signature_conf"], "0.8")
+        self.assertEqual(row["pilot_signature_source"], "direct")
+        self.assertIn("matricula_status", row)
+        self.assertIn("matricula_comment", row)
 
 
 if __name__ == "__main__":

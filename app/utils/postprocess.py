@@ -3,7 +3,7 @@
 El pipeline aplica el postprocesador cuyo nombre indique la plantilla
 (campo ``postprocess``), manteniendo las reglas fuera del código.
 
-Registrados: matricula, date, digits, day, month, year.
+Registrados: matricula, date, digits, day, month, year, char.
 """
 
 from __future__ import annotations
@@ -63,6 +63,7 @@ WWP_ONLY = {"1990", "1522"}
 WEAK_MATRICULA_NOTE = (
     "registration: digits inferred from scattered OCR (low confidence)"
 )
+NUMERIC_MONTH_NOTE = "numeric handwritten month"
 
 
 def _levenshtein(a: str, b: str) -> int:
@@ -84,6 +85,21 @@ def _levenshtein(a: str, b: str) -> int:
             ))
         prev = cur
     return prev[-1]
+
+
+def _lcs_length(a: str, b: str) -> int:
+    """Longitud de la subsecuencia común más larga para cadenas cortas."""
+    row = [0] * (len(b) + 1)
+    for ca in a:
+        previous = 0
+        for index, cb in enumerate(b, start=1):
+            saved = row[index]
+            if ca == cb:
+                row[index] = previous + 1
+            else:
+                row[index] = max(row[index], row[index - 1])
+            previous = saved
+    return row[-1]
 
 
 def _parse_month(value: str) -> Optional[int]:
@@ -108,15 +124,36 @@ def _parse_month(value: str) -> Optional[int]:
     letters = re.sub(r"[^A-Za-z]", "", raw.upper().translate(_MESES_CHAR_MAP))
     if len(letters) < 2:
         return None
+    original_letters = re.sub(r"[^A-Za-z]", "", raw)
+    # Si el OCR mezcló varios dígitos con una sola letra no existe evidencia
+    # suficiente de un mes manuscrito (``50c`` no debe convertirse en OCT).
+    if re.search(r"\d", raw) and len(original_letters) < 2:
+        return None
     # Subcadena exacta de un mes dentro de texto impreso ('JULMONTH').
     for nombre, numero in _MESES_LETRAS.items():
         if nombre in letters:
             return numero
+    # Fuzzy match conservador. Para un campo manuscrito de tres casillas, una
+    # sustitución solo es aceptable si al menos dos letras siguen iguales en
+    # la misma posición. Esto evita convertir ruido como ``50c`` en OCT/DIC.
     candidatos = [
         (numero, nombre)
         for nombre, numero in _MESES_LETRAS.items()
         if _levenshtein(letters, nombre) < 2
+        and sum(a == b for a, b in zip(letters, nombre)) >= 2
     ]
+    # Si no hay candidatos y la cadena parece contener un mes
+    # (3+ letras, probablemente distorsionado por OCR), se reintenta
+    # con un umbral más permisivo: artefactos como "JTUIC", "J011",
+    # "UUC" donde los separadores de casilla o el ruido añaden
+    # caracteres.
+    if not candidatos and 3 <= len(letters) <= 5:
+        candidatos = [
+            (numero, nombre)
+            for nombre, numero in _MESES_LETRAS.items()
+            if _levenshtein(letters, nombre) < 3
+            and _lcs_length(letters, nombre) >= 2
+        ]
     if not candidatos:
         return None
     best_dist = min(_levenshtein(letters, nombre) for _, nombre in candidatos)
@@ -190,22 +227,29 @@ def _canonical_month(mes: int) -> str:
 
 
 def _month(value: str) -> Tuple[str, str]:
-    """Mes: 1-2 dígitos o 3 letras con fuzzy match.
+    """Mes manuscrito: normalmente ``MMM``, excepcionalmente numérico.
 
-    Normaliza a las letras canónicas (JUL) si el valor tenía letras, o
-    al dígito si era numérico. Nota de "fuzzy" solo si la coincidencia
-    vino de la distancia de Levenshtein (no de un nombre exacto).
+    La bitácora usa físicamente ``MMM``, pero algunos registros escasos usan
+    ``1``-``12``. El número se acepta solo cuando todo el recorte es ese
+    token; se anota para que no actúe como ancla de inferencia del libro.
     """
     raw = value.strip().upper()
+    if not re.search(r"[A-Za-z]", raw):
+        if not re.fullmatch(r"\d{1,2}", raw):
+            return "", f"invalid month: {value}"
+        numeric = int(raw)
+        if not 1 <= numeric <= 12:
+            return "", f"invalid month: {value}"
+        return str(numeric), f"{NUMERIC_MONTH_NOTE}: {raw}"
     mes = _parse_month(raw)
     if mes is None:
         return "", f"invalid month: {value}"
-    had_letters = bool(re.search(r"[A-Za-z]", raw))
-    if not had_letters:
-        return str(mes), ""
     letters = re.sub(r"[^A-Za-z]", "", raw.upper().translate(_OCR_CHAR_MAP))
     exact = any(nombre in letters for nombre in _MESES_LETRAS)
-    note = "" if exact else f"month fuzzy: {value}"
+    # Una sustitución aislada de tres caracteres conserva dos posiciones y
+    # es determinista. Cadenas de longitud distinta (p. ej. JUIL) siguen
+    # marcándose como aproximación para no convertirse en anclas del libro.
+    note = "" if exact or len(letters) == 3 else f"month fuzzy: {value}"
     return _canonical_month(mes), note
 
 
@@ -337,6 +381,25 @@ def _digits(value: str) -> Tuple[str, str]:
     return (digits, "") if digits else (value, "no digits")
 
 
+def _char(value: str) -> Tuple[str, str]:
+    """Un solo carácter (dígito o letra) de una celda de casilla.
+
+    Cada celda de la banda de fecha (day_1..year_2) contiene un único
+    carácter manuscrito; el OCR global puede devolver ruido alrededor
+    (separadores, rótulos), así que se conserva solo el primer carácter
+    alfanumérico y las letras se pasan a mayúscula para unificar las
+    celdas de mes. La unión de las celdas en día/mes/año la hace el
+    pipeline (``_join_char_fields``).
+    """
+    text = value.strip()
+    if not text:
+        return "", "empty char cell"
+    ch = text[0].upper()
+    if not (ch.isascii() and (ch.isalpha() or ch.isdigit())):
+        return "", f"invalid char: {value}"
+    return ch, ""
+
+
 def combine_date(day_value: Optional[str], month_value: Optional[str],
                  year_value: Optional[str]) -> Tuple[str, str]:
     """Combina día/mes/año OCR separados en una fecha YYYY/MM/dd.
@@ -380,6 +443,7 @@ POSTPROCESSORS: Dict[str, Callable[[str], Tuple[str, str]]] = {
     "day": _day,
     "month": _month,
     "year": _year,
+    "char": _char,
 }
 
 

@@ -1,11 +1,11 @@
-"""Generación de PDFs de bitácoras ordenados y PDF de discrepancias.
+"""Generación de PDFs de bitácoras ordenados y separados.
 
 - **PDFs ordenados**: reordenan los escaneos tal cual (sin encabezados ni
   anotaciones, listos para subir a la plataforma de indexado), agrupados
   por avión (matrícula corregida) y/o mes (``page.date`` -> YYYY-MM), con
   las páginas en orden de libro (``log_number``) y logpage.
 - **PDF de discrepancias**: las páginas con firmas faltantes o inciertas,
-  anotadas con las razones, ordenadas por avión y logpage.
+  sin anotaciones, ordenadas por avión y logpage.
 - **Recortes de firmas**: volcado de las regiones de firma para auditar
   visualmente los bounding boxes.
 
@@ -15,7 +15,7 @@ Convenciones de nombres (rutas relativas a la carpeta de la corrida):
                                      carpeta de la corrida, sin separadores si
                                      no se eligen condiciones, o con páginas
                                      en blanco de matrícula/mes en grande como
-                                     separadores entre grupos
+                                      separadores independientes entre grupos
 - ``HP-XXXXCMP.pdf``                 solo por avión (PDFs sueltos, sin carpetas)
 - ``2026-JUL.pdf`` / ``sf.pdf``      solo por mes (``sf`` = sin fecha)
 - ``HP-XXXXCMP/2026-JUL.pdf``        por avión y mes: una carpeta por
@@ -30,7 +30,6 @@ que ninguna bitácora queda por fuera de los PDFs generados.
 
 from __future__ import annotations
 
-import io
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +38,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import pymupdf as fitz  # PyMuPDF
 import numpy as np
 from loguru import logger
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 from app.models.schemas import (
     FieldResult,
@@ -50,11 +49,10 @@ from app.models.schemas import (
 from app.templates.schema import FieldType, Template
 from app.utils.io import sanitize_filename
 from app.validation.discrepancias import (
-    Categoria,
     Discrepancia,
 )
 from app.validation.grouping import log_number
-from app.vision.pdf_loader import render_page
+from app.vision.pdf_loader import PdfDocumentCache, copy_pdf_pages, render_page
 
 _DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(CMP|WWP)$")
@@ -62,12 +60,6 @@ _MONTHS = (
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 )
-
-COLOR_MISSING = (207, 34, 46)     # rojo
-COLOR_UNCERTAIN = (154, 103, 0)   # naranja
-COLOR_HEADER_BG = (30, 40, 60)
-COLOR_HEADER_FG = (255, 255, 255)
-
 
 @dataclass(frozen=True)
 class PaginaRef:
@@ -195,57 +187,24 @@ def ruta_pdf(
     return Path(f"{sanitize_filename(nombre_mes(clave[0]))}.pdf")
 
 
-def _load_font(size: int) -> ImageFont.ImageFont:
-    """Fuente TrueType de Pillow con fallback a la fuente por defecto."""
-    for name in ("arial.ttf", "DejaVuSans.ttf", "DejaVuSans-Bold.ttf"):
-        try:
-            return ImageFont.truetype(name, size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
+def escribir_pdf_paginas(
+    refs: Sequence[PaginaRef],
+    output_path: Path,
+    dpi: int,
+    sources: Optional[PdfDocumentCache] = None,
+) -> Path:
+    """Escribe un PDF copiando los escaneos originales, sin anotaciones.
 
-
-def _render_pagina(pdf_path: str, page_number: int, dpi: int) -> Image.Image:
-    """Renderiza una página del escaneo como imagen RGB de Pillow."""
-    image_bgr = render_page(Path(pdf_path), page_number, dpi)
-    return Image.fromarray(
-        np.ascontiguousarray(image_bgr[:, :, ::-1])
-    ).convert("RGB")
-
-
-def _insertar_pagina(doc: fitz.Document, imagen: Image.Image,
-                     dpi: int) -> None:
-    """Inserta una imagen completa como página del PDF.
-
-    Se codifica como JPEG (calidad alta) en vez de PNG: el stream dentro
-    del documento pesa ~5-8 veces menos, reduciendo la memoria y el tiempo
-    de generación de PDFs con cientos de páginas.
+    ``dpi`` se conserva en la firma por compatibilidad con el CLI y la GUI,
+    pero ya no se usa: exportar debe conservar la página fuente sin
+    rasterizarla ni recomprimirla.
     """
-    buffer = io.BytesIO()
-    imagen.save(buffer, format="JPEG", quality=90, optimize=True)
-    scale = dpi / 72.0
-    page = doc.new_page(
-        width=round(imagen.width * scale),
-        height=round(imagen.height * scale),
+    del dpi
+    copy_pdf_pages(
+        ((ref.pdf_path, ref.page.page_number) for ref in refs),
+        output_path,
+        sources=sources,
     )
-    page.insert_image(
-        fitz.Rect(0, 0, round(imagen.width * scale),
-                  round(imagen.height * scale)),
-        stream=buffer.getvalue(),
-    )
-
-
-def escribir_pdf_paginas(refs: Sequence[PaginaRef], output_path: Path,
-                         dpi: int) -> Path:
-    """Escribe un PDF con los escaneos tal cual (sin anotaciones)."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    doc = fitz.open()
-    for ref in refs:
-        imagen = _render_pagina(ref.pdf_path, ref.page.page_number, dpi)
-        _insertar_pagina(doc, imagen, dpi)
-    doc.save(str(output_path), deflate=True)
-    doc.close()
     logger.info(f"[Organize] PDF generado: {output_path} "
                 f"({len(refs)} páginas)")
     return output_path
@@ -261,13 +220,16 @@ def generar_pdfs(
     """Genera los PDFs ordenados (uno por grupo) y devuelve sus rutas."""
     grupos = agrupar_paginas(reports, separar_por, excluidas)
     rutas: List[Path] = []
-    for clave in sorted(grupos):
-        ruta = escribir_pdf_paginas(
-            grupos[clave],
-            Path(run_dir) / ruta_pdf(clave, separar_por, run_dir),
-            dpi,
-        )
-        rutas.append(ruta)
+    refs = [ref for grupo in grupos.values() for ref in grupo]
+    with PdfDocumentCache(ref.pdf_path for ref in refs) as sources:
+        for clave in sorted(grupos):
+            ruta = escribir_pdf_paginas(
+                grupos[clave],
+                Path(run_dir) / ruta_pdf(clave, separar_por, run_dir),
+                dpi,
+                sources=sources,
+            )
+            rutas.append(ruta)
     return rutas
 
 
@@ -339,123 +301,51 @@ def escribir_pdf_unico(
     run_dir.mkdir(parents=True, exist_ok=True)
     output_path = run_dir / f"{run_dir.name}.pdf"
 
-    doc = fitz.open()
     criterios = list(separar_por or [])
-
-    def _escribir(refs: Sequence[PaginaRef]) -> None:
-        for ref in refs:
-            imagen = _render_pagina(ref.pdf_path, ref.page.page_number, dpi)
-            _insertar_pagina(doc, imagen, dpi)
-
-    if not criterios:
-        _escribir(_preparar_paginas(reports, excluidas))
-    else:
+    refs = _preparar_paginas(reports, excluidas) if not criterios else []
+    grupos: Dict[Tuple[str, ...], List[PaginaRef]] = {}
+    if criterios:
         grupos = agrupar_paginas(reports, criterios, excluidas)
-        clave_previa: Optional[Tuple[str, ...]] = None
-        for clave in sorted(grupos):
-            if clave_previa is not None:
-                for i, condicion in enumerate(criterios):
-                    if clave[i] != clave_previa[i]:
-                        _pagina_divisoria(
-                            doc,
-                            _etiqueta_separador(condicion, clave[i]),
-                        )
-                        break
-            clave_previa = clave
-            _escribir(grupos[clave])
+        refs = [ref for grupo in grupos.values() for ref in grupo]
 
-    doc.save(str(output_path), deflate=True)
-    doc.close()
+    if not refs:
+        output_path.unlink(missing_ok=True)
+        logger.info(f"[Organize] No hay páginas para exportar: {output_path}")
+        return output_path
+
+    doc = fitz.open()
+    try:
+        with PdfDocumentCache(ref.pdf_path for ref in refs) as sources:
+            if not criterios:
+                for ref in refs:
+                    doc.insert_pdf(
+                        sources.get(ref.pdf_path),
+                        from_page=ref.page.page_number - 1,
+                        to_page=ref.page.page_number - 1,
+                    )
+            else:
+                clave_previa: Optional[Tuple[str, ...]] = None
+                for clave in sorted(grupos):
+                    if clave_previa is not None:
+                        for i, condicion in enumerate(criterios):
+                            if clave[i] != clave_previa[i]:
+                                _pagina_divisoria(
+                                    doc,
+                                    _etiqueta_separador(condicion, clave[i]),
+                                )
+                                break
+                    clave_previa = clave
+                    for ref in grupos[clave]:
+                        doc.insert_pdf(
+                            sources.get(ref.pdf_path),
+                            from_page=ref.page.page_number - 1,
+                            to_page=ref.page.page_number - 1,
+                        )
+        doc.save(str(output_path), deflate=True)
+    finally:
+        doc.close()
     logger.info(f"[Organize] PDF único generado: {output_path}")
     return output_path
-
-
-# ── PDF de discrepancias ───────────────────────────────────────────────
-
-def _dibujar_banda(image: Image.Image, texto: str, razones: List[str]
-                   ) -> Image.Image:
-    """Banda superior con identificación de la página y sus razones."""
-    draw = ImageDraw.Draw(image)
-    font_titulo = _load_font(max(16, image.height // 90))
-    font_razon = _load_font(max(13, image.height // 110))
-    linea1 = draw.textbbox((0, 0), texto, font=font_titulo)
-    alto_titulo = linea1[3] - linea1[1] + 10
-    lineas = razones or ["Sin razones detalladas"]
-    alto_razones = sum(
-        draw.textbbox((0, 0), linea, font=font_razon)[3]
-        - draw.textbbox((0, 0), linea, font=font_razon)[1]
-        + 4
-        for linea in lineas
-    )
-    alto_total = alto_titulo + alto_razones + 14
-    draw.rectangle((0, 0, image.width, alto_total), fill=COLOR_HEADER_BG)
-    draw.text((10, 6), texto, fill=COLOR_HEADER_FG, font=font_titulo)
-    y = 6 + alto_titulo
-    for linea in lineas:
-        draw.text((14, y), "• " + linea, fill=(255, 210, 120), font=font_razon)
-        y += draw.textbbox((0, 0), linea, font=font_razon)[3] \
-            - draw.textbbox((0, 0), linea, font=font_razon)[1] + 4
-    draw.rectangle((0, alto_total, image.width, alto_total + 3),
-                   fill=COLOR_HEADER_BG)
-    return image
-
-
-def _marcar_campo(image: Image.Image, field_template, color: Tuple[int, ...]
-                  ) -> Image.Image:
-    """Dibuja un rectángulo translúcido sobre la región del campo."""
-    width, height = image.size
-    left, top, right, bottom = field_template.rect_pixels(width, height)
-    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    draw.rectangle((left, top, right, bottom), fill=color + (60,),
-                   outline=color + (255,), width=4)
-    return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
-
-
-def _pagina_resumen(entradas: List[Discrepancia]) -> Image.Image:
-    """Página inicial con resumen por avión y leyenda de colores."""
-    width, height = 1240, 1600
-    imagen = Image.new("RGB", (width, height), (255, 255, 255))
-    draw = ImageDraw.Draw(imagen)
-    font_titulo = _load_font(30)
-    font_parrafo = _load_font(20)
-
-    draw.text((40, 30), "Páginas con discrepancias de firma",
-              fill=(20, 20, 20), font=font_titulo)
-    draw.text((40, 80),
-              "Las páginas listadas no se incluyen en los PDFs por avión "
-              "y deben corregirse o revisarse.",
-              fill=(60, 60, 60), font=font_parrafo)
-
-    draw.rectangle((40, 130, 130, 160), fill=COLOR_MISSING + (255,))
-    draw.text((150, 130), "Firma faltante (confirmada)",
-              fill=(20, 20, 20), font=font_parrafo)
-    draw.rectangle((40, 170, 130, 200), fill=COLOR_UNCERTAIN + (255,))
-    draw.text((150, 170), "Firma incierta (revisar)",
-              fill=(20, 20, 20), font=font_parrafo)
-
-    y = 240
-    por_avion: Dict[str, List[Discrepancia]] = {}
-    for entrada in entradas:
-        por_avion.setdefault(entrada.matricula or "sin matrícula",
-                             []).append(entrada)
-
-    draw.text((40, y), f"Resumen ({len(entradas)} página(s), "
-              f"{len(por_avion)} avión(es)):",
-              fill=(20, 20, 20), font=font_parrafo)
-    y += 36
-    for avion in sorted(por_avion):
-        grupo = por_avion[avion]
-        faltantes = sum(1 for e in grupo if e.categoria is Categoria.MISSING)
-        inciertas = sum(1 for e in grupo if e.categoria is Categoria.UNCERTAIN)
-        draw.text((60, y),
-                  f"{avion}: {len(grupo)} página(s) "
-                  f"({faltantes} faltante(s), {inciertas} para revisar)",
-                  fill=(20, 20, 20), font=font_parrafo)
-        y += 30
-        if y > height - 60:
-            break
-    return imagen
 
 
 def escribir_pdf_discrepancias(
@@ -464,39 +354,20 @@ def escribir_pdf_discrepancias(
     run_dir: Path,
     dpi: int = 150,
 ) -> Path:
-    """Genera discrepancias.pdf con las páginas afectadas anotadas.
+    """Genera discrepancias.pdf con las páginas fuente sin anotaciones.
 
-    Orden (ya aplicado por clasificar_lote): avión, luego log_number.
+    El orden ya viene aplicado por ``clasificar_lote``. ``template`` y
+    ``dpi`` se conservan en la firma para compatibilidad, pero la salida no
+    dibuja información sobre las bitácoras.
     """
+    del template, dpi
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     output_path = run_dir / "discrepancias.pdf"
-    doc = fitz.open()
-
-    # Siempre con página de resumen (aunque no haya entradas), para no
-    # guardar un PDF vacío.
-    _insertar_pagina(doc, _pagina_resumen(entradas), dpi=150)
-
-    for entrada in entradas:
-        imagen = _render_pagina(entrada.pdf_path, entrada.page_number, dpi)
-        titulo = (
-            f"{entrada.matricula or 'SIN MATRÍCULA'} | "
-            f"Log {entrada.log_number if entrada.log_number is not None else '???'} | "
-            f"{entrada.tipo.value.upper()} | "
-            f"{entrada.categoria.value.upper()}"
-        )
-        imagen = _dibujar_banda(imagen, titulo, entrada.razones())
-        for campo in entrada.campos:
-            field_template = template.field(campo.field_id)
-            if field_template is None:
-                continue
-            color = (COLOR_MISSING if campo.categoria is Categoria.MISSING
-                     else COLOR_UNCERTAIN)
-            imagen = _marcar_campo(imagen, field_template, color)
-        _insertar_pagina(doc, imagen, dpi)
-
-    doc.save(str(output_path), deflate=True)
-    doc.close()
+    copy_pdf_pages(
+        ((entrada.pdf_path, entrada.page_number) for entrada in entradas),
+        output_path,
+    )
     logger.info(f"[Discrepancias] PDF generado: {output_path} "
                 f"({len(entradas)} páginas)")
     return output_path
@@ -524,63 +395,22 @@ def _campos_sin_resolver(page: PageResult) -> List[FieldResult]:
     return pendientes
 
 
-def _pagina_resumen_errores(
-    pendientes: Sequence[Tuple[PaginaRef, List[FieldResult]]],
-) -> Image.Image:
-    """Página inicial con el resumen de páginas pendientes de indexar."""
-    width, height = 1240, 1600
-    imagen = Image.new("RGB", (width, height), (255, 255, 255))
-    draw = ImageDraw.Draw(imagen)
-    font_titulo = _load_font(30)
-    font_parrafo = _load_font(20)
-
-    draw.text((40, 30), "Páginas con campos sin resolver",
-              fill=(20, 20, 20), font=font_titulo)
-    draw.text((40, 80),
-              "El OCR no pudo leer (o los correctores no pudieron inferir) "
-              "los campos marcados. Estas páginas deben indexarse "
-              "manualmente.",
-              fill=(60, 60, 60), font=font_parrafo)
-
-    draw.rectangle((40, 140, 130, 170), fill=COLOR_MISSING + (255,))
-    draw.text((150, 140), "Campo sin valor legible / error tras corrección",
-              fill=(20, 20, 20), font=font_parrafo)
-
-    y = 220
-    draw.text((40, y), f"Resumen ({len(pendientes)} página(s)):",
-              fill=(20, 20, 20), font=font_parrafo)
-    y += 36
-    for ref, campos in pendientes:
-        nombres = ", ".join(c.field_id for c in campos)
-        numero = log_number(ref.page)
-        draw.text(
-            (60, y),
-            f"P{ref.page.page_number:02d} [{Path(ref.pdf_path).stem}] "
-            f"log={numero if numero is not None else '???'} -> {nombres}",
-            fill=(20, 20, 20), font=font_parrafo,
-        )
-        y += 30
-        if y > height - 60:
-            break
-    return imagen
-
-
 def escribir_pdf_errores(
     reports: Sequence[ValidationReport],
     template: Template,
     run_dir: Path,
     dpi: int = 150,
 ) -> Path:
-    """Genera errores.pdf con las páginas pendientes de indexación manual.
+    """Genera errores.pdf con las páginas fuente pendientes de indexación.
 
     Incluye solo las páginas que, después de los correctores por libro,
     tienen campos OCR (matrícula, día/mes/año, log_number) sin valor o en
-    estado ERROR. Cada página se anota con el nombre de la bitácora y los
-    campos pendientes, y se marcan los recuadros correspondientes.
+    estado ERROR. Las páginas se conservan sin anotaciones.
 
     Returns:
         Ruta del PDF generado (run_dir/errores.pdf).
     """
+    del template, dpi
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     output_path = run_dir / "errores.pdf"
@@ -593,35 +423,10 @@ def escribir_pdf_errores(
         if campos:
             pendientes.append((ref, campos))
 
-    doc = fitz.open()
-    # Siempre con página de resumen (aunque no haya pendientes), para no
-    # guardar un PDF vacío.
-    _insertar_pagina(doc, _pagina_resumen_errores(pendientes), dpi=150)
-
-    for ref, campos in pendientes:
-        imagen = _render_pagina(ref.pdf_path, ref.page.page_number, dpi)
-        numero = log_number(ref.page)
-        razones = [
-            f"{c.field_id}: "
-            + (f"sin valor" if not c.value else f"{c.value!r} -> {c.status.value}")
-            + (f" ({c.comment})" if c.comment else "")
-            for c in campos
-        ]
-        titulo = (
-            f"{Path(ref.pdf_path).stem} | Página {ref.page.page_number:02d} | "
-            f"Log {numero if numero is not None else '???'} | "
-            f"{clave_avion(ref.page)}"
-        )
-        imagen = _dibujar_banda(imagen, titulo, razones)
-        for campo in campos:
-            field_template = template.field(campo.field_id)
-            if field_template is None:
-                continue
-            imagen = _marcar_campo(imagen, field_template, COLOR_MISSING)
-        _insertar_pagina(doc, imagen, dpi)
-
-    doc.save(str(output_path), deflate=True)
-    doc.close()
+    copy_pdf_pages(
+        ((ref.pdf_path, ref.page.page_number) for ref, _ in pendientes),
+        output_path,
+    )
     logger.info(f"[Errores] PDF generado: {output_path} "
                 f"({len(pendientes)} página(s))")
     return output_path
@@ -656,7 +461,10 @@ def escribir_recortes_firmas(
         if ref.page.blank:
             continue
         try:
-            imagen = _render_pagina(ref.pdf_path, ref.page.page_number, dpi)
+            image_bgr = render_page(Path(ref.pdf_path), ref.page.page_number, dpi)
+            imagen = Image.fromarray(
+                np.ascontiguousarray(image_bgr[:, :, ::-1])
+            ).convert("RGB")
         except Exception as exc:  # noqa: BLE001 - página no renderizable
             logger.warning(f"[Recortes] Página {ref.page.page_number} "
                            f"no renderizable: {exc}")

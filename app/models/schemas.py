@@ -44,6 +44,9 @@ class FieldResult(BaseModel):
     confidence: float = 0.0
     status: Status = Status.OK
     comment: str = ""
+    source: str = "direct"
+    inference_method: Optional[str] = None
+    alternatives: List[str] = Field(default_factory=list)
 
 
 class PageResult(BaseModel):

@@ -57,8 +57,15 @@ class TestDay(unittest.TestCase):
 
 class TestMonth(unittest.TestCase):
     def test_digits(self):
-        self.assertEqual(apply_postprocess("x", "month", "07"), ("7", ""))
-        self.assertEqual(apply_postprocess("x", "month", "001"), ("1", ""))
+        value, note = apply_postprocess("x", "month", "07")
+        self.assertEqual(value, "7")
+        self.assertIn("numeric handwritten month", note)
+        value, note = apply_postprocess("x", "month", "001")
+        self.assertEqual(value, "")
+        self.assertIn("invalid month", note)
+        value, note = apply_postprocess("x", "month", "13")
+        self.assertEqual(value, "")
+        self.assertIn("invalid month", note)
 
     def test_letters_exact(self):
         self.assertEqual(apply_postprocess("x", "month", "JUL"), ("JUL", ""))
@@ -71,16 +78,16 @@ class TestMonth(unittest.TestCase):
         self.assertIn("fuzzy", note)
         value, note = apply_postprocess("x", "month", "GUL")
         self.assertEqual(value, "JUL")
-        self.assertIn("fuzzy", note)
+        self.assertEqual(note, "")
 
     def test_digit_misread_as_letter(self):
         # '1' del separador de casilla leído como dígito -> letra 'i'.
         value, note = apply_postprocess("x", "month", "JU1")
         self.assertEqual(value, "JUL")
-        self.assertIn("fuzzy", note)
+        self.assertEqual(note, "")
         value, note = apply_postprocess("x", "month", "JUI")
         self.assertEqual(value, "JUL")
-        self.assertIn("fuzzy", note)
+        self.assertEqual(note, "")
 
     def test_split_by_cell_separator(self):
         # Separador vertical impreso: el OCR devuelve letras partidas.
@@ -104,6 +111,9 @@ class TestMonth(unittest.TestCase):
         self.assertEqual(value, "")
         self.assertIn("invalid month", note)
         value, note = apply_postprocess("x", "month", "51012")
+        self.assertEqual(value, "")
+        self.assertIn("invalid month", note)
+        value, note = apply_postprocess("x", "month", "50c")
         self.assertEqual(value, "")
         self.assertIn("invalid month", note)
 

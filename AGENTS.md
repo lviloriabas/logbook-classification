@@ -1,0 +1,1 @@
+El output del reporte CSV no se debe modificar sin antes preguntar al usuario o sin que él lo pida.

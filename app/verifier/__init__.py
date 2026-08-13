@@ -1,11 +1,8 @@
 """Verificador VLM local (llama-server + modelo multimodal GGUF).
 
-Fase 1 del refuerzo de confiabilidad: cuando los detectores algorítmicos
-(Fase 0) no llegan a una decisión —firmas ``unclear``, campos críticos
-vacíos— un pequeño VLM local (SmolVLM2 GGUF) arbitra sobre los recortes
-de los campos. El verificador es un complemento opcional: si el binario o
-el modelo no están presentes, o el servidor inicia, el pipeline funciona
-exactamente igual que sin él.
+El VLM local Qwen3-VL procesa las fechas y arbitra firmas o campos críticos
+inciertos sobre recortes de la página. Si el binario o el modelo no están
+presentes, el pipeline conserva el fallback OCR.
 """
 
 from app.verifier.verifier import VlmVerifier
