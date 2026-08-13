@@ -1398,6 +1398,7 @@ class MainWindow(QMainWindow):
             crop_preprocess=self.crop_preprocess_check.isChecked(),
             date_ocr_fallback=self.date_fallback_check.isChecked(),
             date_slot_ocr=self.date_slot_check.isChecked(),
+            date_dynamic_geometry=True,
             vlm_enabled=False,
         )
 
