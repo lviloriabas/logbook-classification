@@ -1,0 +1,16 @@
+{
+  "schema": "BITS date image ground truth v1",
+  "format": "YYYY/MM/DD",
+  "samples": [
+    {"file": "0001_p064.png", "log_number": "2271668", "date": "2020/07/25"},
+    {"file": "0001_p107.png", "log_number": "2287579", "date": "2026/07/24"},
+    {"file": "0001_p150.png", "log_number": "2218856", "date": "2026/07/27"},
+    {"file": "0001_p249.png", "log_number": "2258220", "date": "2026/07/28"},
+    {"file": "0001_p251.png", "log_number": "2258222", "date": "2026/07/28"},
+    {"file": "0001_p324.png", "log_number": "2191693", "date": "2026/07/29"},
+    {"file": "0001_p373.png", "log_number": "2260218", "date": "2026/07/25"},
+    {"file": "0001_p375.png", "log_number": "2260220", "date": "2026/07/25"},
+    {"file": "0001_p377.png", "log_number": "2309675", "date": "2026/07/25"},
+    {"file": "0001_p381.png", "log_number": "2309679", "date": "2026/07/26"}
+  ]
+}
