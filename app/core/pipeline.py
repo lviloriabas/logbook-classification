@@ -35,11 +35,12 @@ from app.models.schemas import (
     ValidationReport,
 )
 from app.ocr.engine import OcrEngine
-from app.ocr.date_ocr import ocr_fallback, read_date_slots
+from app.ocr.date_ocr import decode_slots, ocr_fallback, read_date_slots
 from app.ocr.regional import ocr_regions
 from app.templates.schema import FieldType, Template
 from app.utils.postprocess import (
     _OCR_LETTER_TO_DIGIT_DICT,
+    MONTH_WORDS,
     NUMERIC_MONTH_NOTE,
     WEAK_MATRICULA_NOTE,
     apply_postprocess,
@@ -628,16 +629,54 @@ def _join_char_fields(page: PageResult) -> None:
             cells.append(cell)
         if not cells:
             continue
+        numeric_ranked: List[Tuple[float, str]] = []
         if component in ("day", "year"):
+            per_cell = [
+                _numeric_cell_candidates(cell, component, index)
+                for index, cell in enumerate(cells)
+            ]
+            if all(per_cell):
+                numeric_ranked = sorted(
+                    (
+                        (round((left_score + right_score) / 2.0, 3), left + right)
+                        for left, left_score in per_cell[0].items()
+                        for right, right_score in per_cell[1].items()
+                        if component == "year" or 1 <= int(left + right) <= 31
+                    ),
+                    reverse=True,
+                )
             aligned = [
-                _numeric_cell(cell.value)
-                for cell in cells
+                max(options, key=options.get) if options else ""
+                for options in per_cell
             ]
         else:
             aligned = [
-                _month_cell(cell.value, index)
+                _month_cell(_date_cell_observation(cell), index)
                 for index, cell in enumerate(cells)
             ]
+            # El recorte completo suele conservar una letra que la celda
+            # pierde (o viceversa). Se fusionan por posición antes de elegir
+            # entre las 12 abreviaturas válidas.
+            global_month = re.sub(
+                r"[^A-Za-z0-9/]", "", target.raw_value or ""
+            )
+            global_aligned = (
+                [
+                    _month_cell(character, index)
+                    for index, character in enumerate(global_month)
+                ]
+                if len(global_month) == 3 else ["", "", ""]
+            )
+            month_scores: List[float] = []
+            for index in range(3):
+                if not aligned[index] and global_aligned[index]:
+                    aligned[index] = global_aligned[index]
+                scores = []
+                if _month_cell(_date_cell_observation(cells[index]), index):
+                    scores.append(cells[index].confidence)
+                if global_aligned[index] == aligned[index]:
+                    scores.append(target.confidence)
+                month_scores.append(max(scores, default=0.0))
 
         # Evidencia estructurada completa. Para día también se acepta un solo
         # dígito únicamente si está en la segunda ranura (alineado a la
@@ -655,9 +694,28 @@ def _join_char_fields(page: PageResult) -> None:
             else:
                 raw = ""
         elif not all(aligned):
-            raw = _numeric_month_cells(cells) if component == "month" else ""
+            if component == "month":
+                readings = [
+                    (_date_cell_observation(cell), cell.confidence)
+                    for cell in cells
+                ]
+                partial = decode_slots("month", readings)
+                if partial[0]:
+                    raw = partial[0]
+                else:
+                    raw = _numeric_month_cells(cells)
+            else:
+                raw = ""
         else:
             raw = "".join(aligned)
+        if numeric_ranked:
+            structured_confidence, raw = numeric_ranked[0]
+            for _score, candidate_value in numeric_ranked[1:]:
+                if (
+                    candidate_value != raw
+                    and candidate_value not in target.alternatives
+                ):
+                    target.alternatives.append(candidate_value)
         if not raw:
             if not target.value and any(cell.raw_value or cell.value for cell in cells):
                 target.value = None
@@ -674,12 +732,25 @@ def _join_char_fields(page: PageResult) -> None:
             global_numeric = re.sub(r"\D", "", target.value or "")
             if global_numeric and int(global_numeric) != int(candidate):
                 continue
-        confidences = [cell.confidence for cell in cells if cell.value]
-        structured_confidence = (
-            round(sum(confidences) / len(confidences), 3)
-            if confidences else 0.0
+        if not numeric_ranked:
+            confidences = (
+                [score for score in month_scores if score > 0]
+                if component == "month" else
+                [
+                    cell.confidence for cell in cells
+                    if _date_cell_observation(cell)
+                ]
+            )
+            structured_confidence = (
+                round(sum(confidences) / len(confidences), 3)
+                if confidences else 0.0
+            )
+        minimum_structured_confidence = (
+            0.18 if component == "month" and raw in {
+                word for word, _number in MONTH_WORDS
+            } else 0.35
         )
-        if structured_confidence < 0.35:
+        if structured_confidence < minimum_structured_confidence:
             continue
         # Una lectura completa por posiciones vence una lectura global
         # discrepante. La confianza de los motores no es comparable entre
@@ -691,11 +762,12 @@ def _join_char_fields(page: PageResult) -> None:
         ):
             continue
         previous = target.value
+        conflict_threshold = 0.55 if component == "month" else 0.65
         if (
             previous
             and previous != candidate
             and target.status is not Status.ERROR
-            and structured_confidence < 0.65
+            and structured_confidence < conflict_threshold
         ):
             if candidate not in target.alternatives:
                 target.alternatives.append(candidate)
@@ -749,14 +821,56 @@ def _numeric_cell(value: Optional[str]) -> str:
     return _OCR_LETTER_TO_DIGIT_DICT.get(value, "")
 
 
+def _date_cell_observation(cell: FieldResult) -> str:
+    """Conserva la evidencia cruda de una celda aunque no sea ASCII."""
+    return (cell.raw_value or cell.value or "").strip()
+
+
+def _numeric_cell_candidates(
+    cell: FieldResult, component: str, position: int,
+) -> dict[str, float]:
+    """Candidatos de un dígito manuscrito con peso visual.
+
+    PP-OCRv5 es multilingüe y algunos ``2`` manuscritos se decodifican como
+    ideogramas simples; ``C/B`` aparecen a menudo para un ``6`` abierto. Se
+    conservan ambas interpretaciones cuando son realmente ambiguas, en vez
+    de reemplazar globalmente un carácter.
+    """
+    observed = _date_cell_observation(cell)
+    if not observed:
+        return {}
+    weights: dict[str, float] = {}
+    base_confidence = max(0.05, float(cell.confidence))
+    ambiguous = {
+        "O": (("0", .90),), "Q": (("0", .80),),
+        "I": (("1", .85),), "L": (("1", .70),),
+        "Z": (("2", .90),), "乙": (("2", .85),), "二": (("2", .80),),
+        "S": (("5", .85),),
+        "G": (("6", .85),), "C": (("6", .72), ("0", .40)),
+        "B": (("8", .82), ("6", .68)),
+    }
+    for character in observed.upper():
+        if character.isascii() and character.isdigit():
+            possibilities = ((character, 1.0),)
+            # Un cero muy abierto puede ser leído como 4 en el año.
+            if component == "year" and position == 1 and character == "4":
+                possibilities += (("0", .35),)
+        else:
+            possibilities = ambiguous.get(character, ())
+        for digit, visual_weight in possibilities:
+            score = base_confidence * visual_weight
+            weights[digit] = max(weights.get(digit, 0.0), score)
+    return weights
+
+
 def _month_cell(value: Optional[str], position: int) -> str:
     """Normaliza confusiones visuales de una ranura de mes."""
     if not value or len(value) != 1:
         return ""
     mappings = (
-        {"3": "J"},
+        {"3": "J", "I": "J", "/": "J"},
         {"0": "U", "V": "U"},
-        {"1": "L", "I": "L", "C": "L"},
+        {"1": "L", "I": "L", "C": "L", "2": "L"},
     )
     mapping = mappings[position] if 0 <= position < len(mappings) else {}
     normalized = mapping.get(value.upper(), value.upper())

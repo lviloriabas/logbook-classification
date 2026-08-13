@@ -206,6 +206,53 @@ def test_join_normalizes_handwritten_cell_confusions():
     assert by_id["year"].value == "26"
 
 
+def test_join_recovers_multilingual_shapes_as_numeric_candidates():
+    page = _page_result(
+        _char_field("day", ""),
+        _char_field("day_1", "乙", 0.7),
+        _char_field("day_2", "5", 0.9),
+        _char_field("year", ""),
+        _char_field("year_1", "2", 0.9),
+        _char_field("year_2", "C", 0.7),
+    )
+
+    _join_char_fields(page)
+
+    by_id = {f.field_id: f for f in page.fields}
+    assert by_id["day"].value == "25"
+    assert by_id["year"].value == "26"
+    assert "20" in by_id["year"].alternatives
+
+
+def test_join_month_from_two_unambiguous_slots():
+    page = _page_result(
+        _char_field("month", ""),
+        _char_field("month_1", "J", 0.6),
+        _char_field("month_2", "", 0.0),
+        _char_field("month_3", "L", 0.8),
+    )
+
+    _join_char_fields(page)
+
+    month = next(f for f in page.fields if f.field_id == "month")
+    assert month.value == "JUL"
+
+
+def test_join_month_fuses_global_and_positional_evidence():
+    month = _char_field("month", "", 0.62)
+    month.raw_value = "I0L"
+    page = _page_result(
+        month,
+        _char_field("month_1", "", 0.0),
+        _char_field("month_2", "0", 0.64),
+        _char_field("month_3", "2", 0.97),
+    )
+
+    _join_char_fields(page)
+
+    assert month.value == "JUL"
+
+
 def test_join_accepts_rare_numeric_month_only_from_cells():
     page = _page_result(
         _char_field("month", "7", 0.9),
