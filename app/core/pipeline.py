@@ -855,6 +855,11 @@ def _numeric_cell_candidates(
             # Un cero muy abierto puede ser leído como 4 en el año.
             if component == "year" and position == 1 and character == "4":
                 possibilities += (("0", .35),)
+            # En estas bitácoras el 9 manuscrito suele quedar abierto y el
+            # reconocedor lo confunde con 7. Se conserva como alternativa;
+            # nunca vence localmente, solo puede resolverla la secuencia.
+            if component == "day" and position == 1 and character == "7":
+                possibilities += (("9", .35),)
         else:
             possibilities = ambiguous.get(character, ())
         for digit, visual_weight in possibilities:

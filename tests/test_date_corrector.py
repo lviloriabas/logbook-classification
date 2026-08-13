@@ -198,6 +198,49 @@ class TestDayPolicy(unittest.TestCase):
         self.assertIsNone(day.value)
         self.assertIs(day.status, Status.WARNING)
         self.assertIsNone(missing_day.date)
+
+
+class TestSequenceCandidates(unittest.TestCase):
+    def test_chooses_ocr_alternatives_only_to_remove_regression(self):
+        first = _page(1, "2147301", "28", "JUL", "26")
+        ambiguous = _page(2, "2147302", "27", "JUL", "28")
+        last = _page(3, "2147303", "30", "JUL", "26")
+        _field_of(ambiguous, "day").alternatives = ["29"]
+        _field_of(ambiguous, "year").alternatives = ["26"]
+
+        stats = correct_dates_by_book([_report(first, ambiguous, last)])
+
+        self.assertEqual(ambiguous.date, "2026/07/29")
+        self.assertEqual(_field_of(ambiguous, "day").value, "29")
+        self.assertEqual(_field_of(ambiguous, "year").value, "26")
+        self.assertEqual(stats["sequence_candidates"], 2)
+        self.assertEqual(
+            _field_of(ambiguous, "year").inference_method,
+            "log_number_sequence_candidate",
+        )
+
+    def test_does_not_change_nondecreasing_readings(self):
+        first = _page(1, "2147301", "25", "JUL", "26")
+        second = _page(2, "2147302", "26", "JUL", "26")
+        _field_of(second, "day").alternatives = ["28"]
+
+        stats = correct_dates_by_book([_report(first, second)])
+
+        self.assertEqual(second.date, "2026/07/26")
+        self.assertEqual(_field_of(second, "day").value, "26")
+        self.assertEqual(stats["sequence_candidates"], 0)
+
+    def test_never_uses_an_alternative_from_another_book(self):
+        late = _page(1, "2147301", "30", "JUL", "26")
+        earlier_other_book = _page(2, "2147351", "20", "JUL", "26")
+        _field_of(earlier_other_book, "day").alternatives = ["31"]
+
+        stats = correct_dates_by_book([
+            _report(late, earlier_other_book)
+        ])
+
+        self.assertEqual(earlier_other_book.date, "2026/07/20")
+        self.assertEqual(stats["sequence_candidates"], 0)
         self.assertEqual(stats["days_filled"], 0)
 
     def test_missing_day_does_not_block_inferred_month_and_year(self):

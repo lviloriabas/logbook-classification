@@ -19,6 +19,8 @@ nunca se presenta como una lectura OCR directa en estado OK.
 from __future__ import annotations
 
 import re
+from datetime import date
+from itertools import product
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
@@ -109,6 +111,146 @@ def _format_component(field_id: str, value: str) -> str:
     if field_id == YEAR_FIELD_ID:
         return f"{int(value):02d}"
     return value
+
+
+def _component_candidates(
+    field: Optional[FieldResult], normalize: Normalizer,
+) -> List[str]:
+    """Valores canónicos: lectura elegida primero y luego alternativas."""
+    if field is None:
+        return []
+    candidates: List[str] = []
+    for raw in [field.value, *field.alternatives]:
+        value = normalize(raw)
+        if value is not None and value not in candidates:
+            candidates.append(value)
+    return candidates
+
+
+def _date_candidates(page: PageResult) -> List[Tuple[date, Tuple[str, str, str]]]:
+    """Fechas calendario posibles a partir de la evidencia OCR de la página."""
+    days = _component_candidates(_field(page, "day"), _day_normalize)
+    months = _component_candidates(_field(page, "month"), _month_number)
+    years = _component_candidates(_field(page, YEAR_FIELD_ID), _year_normalize)
+    candidates: List[Tuple[date, Tuple[str, str, str]]] = []
+    for day_value, month_value, year_value in product(days, months, years):
+        try:
+            parsed = date(
+                2000 + int(year_value), int(month_value), int(day_value)
+            )
+        except ValueError:
+            continue
+        candidates.append((parsed, (day_value, month_value, year_value)))
+    return candidates
+
+
+def _resolve_sequence_alternatives(book: Sequence[PageResult]) -> int:
+    """Elige alternativas OCR solo si reducen regresiones del mismo libro.
+
+    La búsqueda es dinámica para no explotar combinatoriamente. Cada estado
+    conserva el menor costo hasta una fecha candidata. La lectura actual vale
+    cero cambios; usar una alternativa cuesta una unidad por componente.
+    """
+    pages = sorted(
+        (page for page in book if log_number(page) is not None),
+        key=lambda page: (log_number(page), page.page_number),  # type: ignore[arg-type]
+    )
+    rows = [(page, _date_candidates(page)) for page in pages]
+    rows = [(page, candidates) for page, candidates in rows if candidates]
+    if len(rows) < 2:
+        return 0
+
+    def local_changes(page: PageResult, values: Tuple[str, str, str]) -> int:
+        day = _field(page, "day")
+        month = _field(page, "month")
+        year = _field(page, YEAR_FIELD_ID)
+        current = (
+            _day_normalize(day.value if day else None),
+            _month_number(month.value if month else None),
+            _year_normalize(year.value if year else None),
+        )
+        normalized = (values[0], int(values[1]), values[2])
+        return sum(left != right for left, right in zip(current, normalized))
+
+    # estado: candidato actual -> (regresiones, cambios, saltos, camino)
+    first_page, first_candidates = rows[0]
+    states = {
+        candidate[0]: (
+            0, local_changes(first_page, candidate[1]), 0, [candidate]
+        )
+        for candidate in first_candidates
+    }
+    for page, candidates in rows[1:]:
+        next_states = {}
+        for candidate in candidates:
+            parsed, values = candidate
+            best = None
+            for previous_date, state in states.items():
+                regressions, changes, jumps, path = state
+                score = (
+                    regressions + int(parsed < previous_date),
+                    changes + local_changes(page, values),
+                    jumps + abs((parsed - previous_date).days),
+                    [*path, candidate],
+                )
+                if best is None or score[:3] < best[:3]:
+                    best = score
+            existing = next_states.get(parsed)
+            if best is not None and (
+                existing is None or best[:3] < existing[:3]
+            ):
+                next_states[parsed] = best
+        states = next_states
+    if not states:
+        return 0
+    best = min(states.values(), key=lambda item: item[:3])
+
+    current_dates = [candidates[0] for _page, candidates in rows]
+    current_regressions = sum(
+        right[0] < left[0]
+        for left, right in zip(current_dates, current_dates[1:])
+    )
+    if best[0] >= current_regressions:
+        return 0
+
+    corrected = 0
+    for (page, _candidates), (_parsed, values) in zip(rows, best[3]):
+        for field_id, normalized, formatter in (
+            ("day", values[0], lambda value: str(int(value))),
+            ("month", values[1], _format_component),
+            (YEAR_FIELD_ID, values[2], lambda value: f"{int(value):02d}"),
+        ):
+            field = _field(page, field_id)
+            if field is None:
+                continue
+            formatted = (
+                _format_component("month", normalized)
+                if field_id == "month" else formatter(normalized)
+            )
+            current = (
+                _day_normalize(field.value) if field_id == "day" else
+                _month_number(field.value) if field_id == "month" else
+                _year_normalize(field.value)
+            )
+            expected = (
+                str(int(normalized)) if field_id == "month" else normalized
+            )
+            if str(current) == expected:
+                continue
+            previous = field.value
+            if previous and previous not in field.alternatives:
+                field.alternatives.append(previous)
+            field.value = formatted
+            field.status = Status.WARNING
+            field.source = "book_correction"
+            field.inference_method = "log_number_sequence_candidate"
+            field.comment = (
+                f"OCR alternative selected by nondecreasing book sequence: "
+                f"{previous!r} -> {formatted!r}"
+            )
+            corrected += 1
+        _recombine(page)
+    return corrected
 
 
 def _is_direct_anchor(field: Optional[FieldResult], value: Optional[str]) -> bool:
@@ -435,6 +577,7 @@ def correct_dates_by_book(
         "corrected": 0,
         "flagged": 0,
         "regressions": 0,
+        "sequence_candidates": 0,
         "months_filled": 0,
         "years_filled": 0,
         "days_filled": 0,
@@ -444,6 +587,8 @@ def correct_dates_by_book(
     for book in books:
         for page in book:
             _recombine(page)
+
+        stats["sequence_candidates"] += _resolve_sequence_alternatives(book)
 
         years, year_flags = _infer_between_anchors(
             book, YEAR_FIELD_ID, _year_normalize
