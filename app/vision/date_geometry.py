@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
 from loguru import logger
 
@@ -32,16 +33,21 @@ DATE_FIELD_IDS: Tuple[str, ...] = ("day", "month", "year")
 SLOT_COUNTS: Dict[str, int] = {"day": 2, "month": 3, "year": 2}
 
 # Margen de búsqueda alrededor de la unión de casillas (fracción de página).
-SEARCH_MARGIN_X = 0.01
+SEARCH_MARGIN_X = 0.04
 SEARCH_MARGIN_Y = 0.03
+# El margen de observación es amplio para no cortar líneas, pero el peine
+# completo no puede saltar a otra tabla vecina. La alineación de página deja
+# residuos locales pequeños; un desplazamiento mayor suele ser un falso peine.
+MAX_GRID_SHIFT_RATIO = 0.02
 # Cobertura mínima de una línea para considerarla parte de la retícula.
 HLINE_MIN_RATIO = 0.5
-VLINE_MIN_RATIO = 0.35
+VLINE_MIN_RATIO = 0.18
 # Tolerancia de encaje de una posición del peine (fracción del ancho).
 MATCH_TOLERANCE_RATIO = 0.004
-SCALE_CANDIDATES: Tuple[float, ...] = (1.0, 0.99, 1.01, 0.98, 1.02)
 # Fracción mínima del peine que debe encajar para aceptar el ajuste.
-MIN_MATCH_SCORE = 0.8
+MIN_MATCH_SCORE = 0.6
+# Deformación horizontal máxima admitida para la banda local.
+SCALE_RANGE = (0.94, 1.06)
 # La banda ajustada no puede diferir de la plantilla más que esto en alto.
 BAND_HEIGHT_RANGE = (0.6, 1.6)
 
@@ -122,30 +128,100 @@ def _match_comb(
 
     Returns:
         (score, dx, escala, {clave: posición}) del mejor encaje, o None.
-        Los bordes exteriores (day.left, year.right) deben encajar siempre.
+        El ajuste se estima por consenso y tolera líneas ausentes. Se prueban
+        hipótesis afines generadas por pares de posiciones del peine y líneas
+        observadas; gana la que explica más líneas con menor residuo.
     """
-    best: Optional[Tuple[tuple, float, float, Dict[Tuple[str, str], int]]] = None
-    for anchor in vlines:
-        dx = anchor - union_left
-        if abs(dx) > max_shift:
-            continue
-        for scale in SCALE_CANDIDATES:
-            matched: Dict[Tuple[str, str], int] = {}
-            for rel, field_id, kind in comb:
-                predicted = union_left + dx + scale * rel * union_width
-                nearest = min(vlines, key=lambda v: abs(v - predicted))
-                if abs(nearest - predicted) <= tolerance:
-                    matched[(field_id, kind)] = nearest
-            if ("day", "left") not in matched or ("year", "right") not in matched:
+    expected = [union_left + rel * union_width for rel, _fid, _kind in comb]
+    hypotheses: set[Tuple[float, float]] = {(0.0, 1.0)}
+    for expected_x in expected:
+        for observed_x in vlines:
+            shift = observed_x - expected_x
+            if abs(shift) <= max_shift:
+                hypotheses.add((round(float(shift), 3), 1.0))
+    for i, first_expected in enumerate(expected):
+        for k in range(i + 1, len(expected)):
+            expected_span = expected[k] - first_expected
+            if expected_span < union_width * 0.20:
                 continue
-            score = len(matched) / len(comb)
-            key = (score, -abs(dx), -abs(1.0 - scale))
-            if best is None or key > best[0]:
-                best = (key, float(dx), scale, matched)
+            for j, first_observed in enumerate(vlines):
+                for second_observed in vlines[j + 1:]:
+                    scale = (second_observed - first_observed) / expected_span
+                    if not SCALE_RANGE[0] <= scale <= SCALE_RANGE[1]:
+                        continue
+                    shift = first_observed - (
+                        union_left + scale * (first_expected - union_left)
+                    )
+                    if abs(shift) <= max_shift:
+                        hypotheses.add((round(float(shift), 3), round(float(scale), 5)))
+
+    best: Optional[Tuple[tuple, float, float, Dict[Tuple[str, str], int]]] = None
+    for dx, scale in hypotheses:
+        matched: Dict[Tuple[str, str], int] = {}
+        used: set[int] = set()
+        residual = 0.0
+        for rel, field_id, kind in comb:
+            predicted = union_left + dx + scale * rel * union_width
+            candidates = sorted(
+                ((abs(line - predicted), line) for line in vlines if line not in used),
+                key=lambda item: item[0],
+            )
+            if not candidates or candidates[0][0] > tolerance:
+                continue
+            distance, nearest = candidates[0]
+            matched[(field_id, kind)] = nearest
+            used.add(nearest)
+            residual += distance
+        score = len(matched) / len(comb)
+        # Debe existir evidencia distribuida por toda la banda, no seis
+        # líneas accidentales concentradas en un solo campo.
+        covered_fields = {
+            field_id for field_id, _kind in matched
+        }
+        if len(covered_fields) != len(DATE_FIELD_IDS):
+            continue
+        mean_residual = residual / max(1, len(matched))
+        key = (score, -mean_residual, -abs(dx), -abs(1.0 - scale))
+        if best is None or key > best[0]:
+            best = (key, float(dx), scale, matched)
     if best is None or best[0][0] < MIN_MATCH_SCORE:
         return None
     _key, dx, scale, matched = best
     return best[0][0], dx, scale, matched
+
+
+def _axis_lines(
+    gray: np.ndarray,
+    axis: str,
+    min_ratio: float,
+    max_width: int,
+) -> List[int]:
+    """Extrae líneas impresas largas mediante apertura morfológica.
+
+    A diferencia de contar píxeles oscuros en la columna completa, la
+    apertura elimina letras y trazos manuscritos cortos antes de calcular
+    cobertura. Esto mantiene líneas parcialmente borradas y rechaza sombras
+    anchas del escáner.
+    """
+    if gray.size == 0:
+        return []
+    block = min(51, max(15, (min(gray.shape[:2]) // 3) | 1))
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV, block, 10,
+    )
+    height, width = gray.shape[:2]
+    if axis == "vertical":
+        length = max(9, round(height * 0.24))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, length))
+        lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        ratios = (lines > 0).mean(axis=0)
+    else:
+        length = max(15, round(width * 0.35))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (length, 1))
+        lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        ratios = (lines > 0).mean(axis=1)
+    return _line_centers(ratios, min_ratio, max_width)
 
 
 def locate_date_grid(
@@ -193,14 +269,16 @@ def locate_date_grid(
     window = gray[wy0:wy1, wx0:wx1]
     if window.size == 0:
         return {}
-    dark = window < ink_threshold
+    del ink_threshold  # la binarización adaptativa absorbe cambios de fondo
 
     # Bordes horizontales de la banda (si no encajan, se conserva la y de
     # plantilla: el ajuste vertical es opcional, el horizontal es el que
     # separa dígitos de separadores).
     max_hline = max(4, round(height * 0.004))
-    row_ratio = dark.mean(axis=1)
-    hcenters = [c + wy0 for c in _line_centers(row_ratio, HLINE_MIN_RATIO, max_hline)]
+    hcenters = [
+        center + wy0
+        for center in _axis_lines(window, "horizontal", 0.35, max_hline)
+    ]
     top = bottom = None
     tops = [c for c in hcenters if abs(c - uy0) <= my]
     bottoms = [c for c in hcenters if abs(c - uy1) <= my]
@@ -213,18 +291,23 @@ def locate_date_grid(
     if top is None:
         top, bottom = uy0, uy1
 
-    band = dark[top - wy0:bottom - wy0, :]
+    band = window[top - wy0:bottom - wy0, :]
     if band.size == 0 or band.shape[0] < 4:
         return {}
     max_vline = max(4, round(width * 0.004))
-    col_ratio = band.mean(axis=0)
-    vlines = [c + wx0 for c in _line_centers(col_ratio, VLINE_MIN_RATIO, max_vline)]
+    vlines = [
+        center + wx0
+        for center in _axis_lines(band, "vertical", VLINE_MIN_RATIO, max_vline)
+    ]
     if len(vlines) < 6:
         return {}
 
     comb = _expected_comb(rects, ux0, union_width)
     tolerance = max(3.0, width * MATCH_TOLERANCE_RATIO)
-    match = _match_comb(comb, vlines, ux0, union_width, tolerance, mx)
+    max_shift = round(width * MAX_GRID_SHIFT_RATIO)
+    match = _match_comb(
+        comb, vlines, ux0, union_width, tolerance, max_shift
+    )
     if match is None:
         return {}
     score, dx, scale, matched = match
