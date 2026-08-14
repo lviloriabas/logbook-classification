@@ -170,6 +170,10 @@ class PipelineWorker(QThread):
                             break
             correct_matricula_by_book(reports)
             correct_dates_by_book(reports)
+            if self.config.verify_fleet:
+                from app.validation.fleet import verify_reports_against_fleet
+
+                verify_reports_against_fleet(reports, self.config.fleet_file)
             self.reports = reports
             self.succeeded.emit(reports)
         except Exception as exc:  # noqa: BLE001 - la GUI muestra el error

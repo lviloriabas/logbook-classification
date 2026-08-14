@@ -24,6 +24,7 @@ def _columns() -> list[str]:
         "file",
         "page",
         "log_number",
+        "dup",
         "log_number_conf",
         "log_number_status",
         "matricula",
@@ -48,6 +49,7 @@ def test_important_view_keeps_only_primary_values_and_run_columns():
         "file",
         "page",
         "log_number",
+        "dup",
         "matricula",
         "pilot_signature",
         "date",
@@ -58,6 +60,7 @@ def test_important_view_keeps_only_primary_values_and_run_columns():
 def test_complete_field_id_is_recovered_from_metadata_column():
     assert csv_field_id("log_number_status", _columns()) == "log_number"
     assert csv_field_id("pilot_signature", _columns()) == "pilot_signature"
+    assert csv_field_id("dup", _columns()) is None
     assert csv_field_id("date", _columns()) is None
 
 
@@ -65,6 +68,7 @@ def test_fallback_importance_includes_signatures_but_not_cell_fields():
     assert infer_important_field_ids(_columns()) == {
         "log_number",
         "matricula",
+        "captain_license",
         "pilot_signature",
     }
 
@@ -104,6 +108,17 @@ def test_column_mode_control_is_compact_icon_only():
     button.setChecked(False)
     app.processEvents()
     assert "CSV completo" in button.toolTip()
+
+
+def test_true_dup_uses_warning_color_convention():
+    app = QApplication.instance() or QApplication([])
+    viewer = CsvViewerWindow(Path("."))
+
+    assert viewer._status_for({"dup": "true"}, "dup") == "WARNING"
+    assert viewer._status_for({"dup": "false"}, "dup") is None
+
+    viewer.close()
+    app.processEvents()
 
 
 def test_column_control_is_hidden_until_a_csv_is_loaded(tmp_path: Path):

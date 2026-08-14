@@ -135,6 +135,14 @@ class AppConfig(BaseModel):
     )
     output_dir: Path = Field(default=Path("output"))
     log_dir: Path = Field(default=Path("output/logs"))
+    verify_fleet: bool = Field(
+        default=False,
+        description="Comparar las matrículas leídas contra fleet.json.",
+    )
+    fleet_file: Path = Field(
+        default=Path("fleet.json"),
+        description="Archivo portable con la lista de matrículas autorizadas.",
+    )
 
 
 def config_for_pdf(config: AppConfig, pdf_path: Path) -> AppConfig:

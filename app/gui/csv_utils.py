@@ -11,9 +11,13 @@ from app.templates.manager import TemplateManager
 
 
 _CSV_METADATA_SUFFIXES = ("_conf", "_status", "_comment", "_source")
-_ALWAYS_IMPORTANT_COLUMNS = frozenset({"file", "page", "date", "time_ms"})
+_ALWAYS_IMPORTANT_COLUMNS = frozenset(
+    {"file", "page", "dup", "date", "time_ms"}
+)
 _DATE_COMPONENT_FIELDS = frozenset({"day", "month", "year"})
-_FALLBACK_IMPORTANT_FIELDS = frozenset({"log_number", "matricula"})
+_FALLBACK_IMPORTANT_FIELDS = frozenset(
+    {"log_number", "matricula", "flight_number", "captain_license"}
+)
 
 
 def csv_field_id(column: str, columns: Iterable[str]) -> str | None:
@@ -131,5 +135,16 @@ def important_field_ids_for_csv(path: Path, columns: Iterable[str]) -> set[str]:
             except Exception:  # noqa: BLE001 - una plantilla ajena no bloquea el visor
                 continue
             if template.name == template_name:
-                return {field.id for field in template.fields if field.required}
+                important = {
+                    field.id for field in template.fields if field.required
+                }
+                important.update(
+                    field.id
+                    for field in template.fields
+                    if field.type.value == "signature"
+                )
+                important.update(
+                    {"captain_license", "flight_number"}.intersection(columns)
+                )
+                return important
     return infer_important_field_ids(columns)

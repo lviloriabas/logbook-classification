@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -16,11 +16,14 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
+    QScrollArea,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
+    QSplitter,
     QWidget,
 )
 
@@ -31,6 +34,7 @@ from app.gui.csv_utils import (
     important_field_ids_for_csv,
     read_csv_file,
 )
+from app.gui.field_selector import ImportantFieldsDialog
 
 
 _STATUS_COLORS = {
@@ -46,10 +50,15 @@ def apply_csv_column_visibility(
     columns: Iterable[str],
     important_field_ids: Iterable[str],
     important_only: bool,
+    selected_columns: Iterable[str] | None = None,
 ) -> None:
     """Aplica el modo resumido/completo ocultando columnas de la tabla."""
     column_list = list(columns)
-    visible = set(important_csv_columns(column_list, important_field_ids))
+    visible = set(
+        selected_columns
+        if selected_columns is not None
+        else important_csv_columns(column_list, important_field_ids)
+    )
     for index, column in enumerate(column_list):
         table.setColumnHidden(index, important_only and column not in visible)
 
@@ -81,6 +90,146 @@ class CsvColumnModeButton(QToolButton):
         self.setAccessibleDescription(self.toolTip())
 
 
+class ImportantFieldsButton(QToolButton):
+    """Botón compacto para abrir el selector de columnas importantes."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setText("☷")
+        self.setToolTip("Seleccionar campos importantes")
+        self.setAccessibleName("Seleccionar campos importantes")
+        self.setFixedSize(30, 30)
+        self.setAutoRaise(True)
+
+
+class EmbeddedPdfViewer(QWidget):
+    """Visor PDF liviano para la ventana de CSV ya procesados."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._paths: list[Path] = []
+        self._path: Path | None = None
+        self._page = 1
+        self._total = 0
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("PDF procesado:"))
+        self.pdf_combo = QComboBox()
+        self.pdf_combo.setEnabled(False)
+        self.pdf_combo.currentIndexChanged.connect(self._on_pdf_changed)
+        controls.addWidget(self.pdf_combo, 1)
+        self.prev = QPushButton("‹")
+        self.prev.setToolTip("Página anterior")
+        self.prev.clicked.connect(lambda: self.show_page(self._page - 1))
+        controls.addWidget(self.prev)
+        self.page_edit = QLineEdit()
+        self.page_edit.setPlaceholderText("Página")
+        self.page_edit.setFixedWidth(65)
+        self.page_edit.returnPressed.connect(self._jump)
+        controls.addWidget(self.page_edit)
+        go = QPushButton("Ir")
+        go.clicked.connect(self._jump)
+        controls.addWidget(go)
+        self.next = QPushButton("›")
+        self.next.setToolTip("Página siguiente")
+        self.next.clicked.connect(lambda: self.show_page(self._page + 1))
+        controls.addWidget(self.next)
+        layout.addLayout(controls)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(False)
+        self.image = QLabel("Seleccione un PDF")
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll.setWidget(self.image)
+        layout.addWidget(self.scroll, 1)
+        self.context = QLabel("PDF 0 de 0 · Página 0 de 0")
+        self.context.setStyleSheet("color: #57606a;")
+        layout.addWidget(self.context)
+        self._sync_controls()
+
+    def load_paths(self, paths: Iterable[Path]) -> None:
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for path in paths:
+            path = Path(path)
+            if not path.is_file() or path.suffix.lower() != ".pdf":
+                continue
+            key = str(path.resolve()).casefold()
+            if key not in seen:
+                seen.add(key)
+                unique.append(path)
+        self._paths = unique
+        self.pdf_combo.blockSignals(True)
+        self.pdf_combo.clear()
+        for path in self._paths:
+            self.pdf_combo.addItem(path.name, str(path))
+        self.pdf_combo.blockSignals(False)
+        self.pdf_combo.setEnabled(bool(self._paths))
+        if self._paths:
+            self.pdf_combo.setCurrentIndex(0)
+            self.show_page(1, self._paths[0])
+        else:
+            self._path = None
+            self.image.clear()
+            self.image.setText("No se encontraron PDFs procesados")
+            self._sync_controls()
+
+    def _on_pdf_changed(self, index: int) -> None:
+        if 0 <= index < len(self._paths):
+            self.show_page(1, self._paths[index])
+
+    def _jump(self) -> None:
+        try:
+            page = int(self.page_edit.text())
+        except ValueError:
+            return
+        self.show_page(page)
+
+    def show_page(self, page: int, path: Path | None = None) -> None:
+        path = Path(path) if path is not None else self._path
+        if path is None or not path.is_file():
+            return
+        try:
+            from app.vision.pdf_loader import page_count, render_page
+            import cv2
+
+            total = page_count(path)
+            page = max(1, min(int(page), total))
+            image = render_page(path, page, dpi=120)
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            height, width, channels = rgb.shape
+            qimage = QImage(
+                rgb.data, width, height, channels * width,
+                QImage.Format.Format_RGB888,
+            ).copy()
+        except Exception as exc:  # noqa: BLE001 - visor no crítico
+            self.image.clear()
+            self.image.setText(f"No se pudo mostrar el PDF: {exc}")
+            return
+        self._path = path
+        self._total = total
+        self._page = page
+        self.page_edit.setText(str(page))
+        self.image.setPixmap(QPixmap.fromImage(qimage))
+        index = next((i for i, item in enumerate(self._paths) if item == path), 0)
+        self.pdf_combo.blockSignals(True)
+        self.pdf_combo.setCurrentIndex(index)
+        self.pdf_combo.blockSignals(False)
+        self._sync_controls()
+
+    def _sync_controls(self) -> None:
+        index = self._paths.index(self._path) + 1 if self._path in self._paths else 0
+        self.context.setText(
+            f"PDF {index} de {len(self._paths)} · Página "
+            f"{self._page if self._path else 0} de {self._total if self._path else 0}"
+        )
+        self.prev.setEnabled(bool(self._path) and self._page > 1)
+        self.next.setEnabled(bool(self._path) and self._page < self._total)
+
+
 class CsvViewerWindow(QMainWindow):
     """Ventana independiente que visualiza CSV de corridas procesadas."""
 
@@ -91,6 +240,7 @@ class CsvViewerWindow(QMainWindow):
         self._columns: list[str] = []
         self._rows: list[dict[str, str]] = []
         self._important_field_ids: set[str] = set()
+        self._selected_important_columns: set[str] = set()
 
         self.setWindowTitle("Visor de CSV procesados")
         self.resize(1180, 720)
@@ -123,14 +273,28 @@ class CsvViewerWindow(QMainWindow):
         self.column_toggle.setVisible(False)
         self.column_toggle.toggled.connect(self._apply_column_mode)
         controls.addWidget(self.column_toggle)
+        self.important_fields_button = ImportantFieldsButton()
+        self.important_fields_button.setEnabled(False)
+        self.important_fields_button.setVisible(False)
+        self.important_fields_button.clicked.connect(self._open_field_selector)
+        controls.addWidget(self.important_fields_button)
         layout.addLayout(controls)
 
+        splitter = QSplitter(Qt.Orientation.Vertical)
         self.table = QTableWidget(0, 0)
         self.table.setAccessibleName("CSV procesado")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSortingEnabled(True)
         self.table.horizontalHeader().setStretchLastSection(True)
-        layout.addWidget(self.table, 1)
+        self.table.horizontalHeader().setSectionsMovable(False)
+        self.table.horizontalHeader().setFixedHeight(30)
+        splitter.addWidget(self.table)
+        self.pdf_viewer = EmbeddedPdfViewer()
+        splitter.addWidget(self.pdf_viewer)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        layout.addWidget(splitter, 1)
 
         self.status_label = QLabel("Seleccione una carpeta para visualizar su CSV.")
         self.status_label.setStyleSheet("color: #57606a;")
@@ -190,10 +354,16 @@ class CsvViewerWindow(QMainWindow):
         self._columns = columns
         self._rows = rows
         self._important_field_ids = important_field_ids_for_csv(path, columns)
+        self._selected_important_columns = set(
+            important_csv_columns(columns, self._important_field_ids)
+        )
         self._populate_table()
         self.column_toggle.setEnabled(True)
         self.column_toggle.setVisible(bool(columns))
+        self.important_fields_button.setEnabled(bool(columns))
+        self.important_fields_button.setVisible(bool(columns))
         self._apply_column_mode()
+        self._load_pdf_paths(path)
         self.setWindowTitle(f"Visor de CSV — {path.name}")
 
     def _populate_table(self) -> None:
@@ -220,8 +390,31 @@ class CsvViewerWindow(QMainWindow):
         finally:
             self.table.setUpdatesEnabled(True)
         self.table.resizeColumnsToContents()
+        self.table.setSortingEnabled(True)
+
+    def _load_pdf_paths(self, csv_path: Path) -> None:
+        paths = list(csv_path.parent.parent.rglob("*.pdf"))
+        paths.extend(csv_path.parent.rglob("*.pdf"))
+        for row in self._rows:
+            candidate = Path(row.get("file", ""))
+            if candidate.is_file():
+                paths.append(candidate)
+        self.pdf_viewer.load_paths(paths)
+
+    def _open_field_selector(self) -> None:
+        dialog = ImportantFieldsDialog(
+            self._columns, self._selected_important_columns, self
+        )
+        dialog.selectionChanged.connect(self._set_important_columns)
+        dialog.exec()
+
+    def _set_important_columns(self, columns: set[str]) -> None:
+        self._selected_important_columns = set(columns)
+        self._apply_column_mode()
 
     def _status_for(self, row: dict[str, str], column: str) -> str | None:
+        if column == "dup":
+            return "WARNING" if row.get(column, "").lower() == "true" else None
         field_id = csv_field_id(column, self._columns)
         if not field_id:
             return None
@@ -242,6 +435,7 @@ class CsvViewerWindow(QMainWindow):
             self._columns,
             self._important_field_ids,
             important_only,
+            self._selected_important_columns,
         )
         visible = (
             len(important_csv_columns(self._columns, self._important_field_ids))

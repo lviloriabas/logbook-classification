@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -70,14 +71,22 @@ from app.core.parallelism import available_cpu_threads, recommended_parallelism
 from app.gui.csv_viewer import (
     CsvColumnModeButton,
     CsvViewerWindow,
+    ImportantFieldsButton,
     apply_csv_column_visibility,
 )
+from app.gui.field_selector import ImportantFieldsDialog
+from app.gui.fleet_editor import FLEET_FILENAME, FleetEditorDialog, FleetStore
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
 from app.models.schemas import Status, ValidationReport
-from app.reports.csv_reporter import CsvReporter
+from app.reports.csv_reporter import (
+    CSV_DATE_MONTH_END,
+    CSV_DATE_SPECIFIC,
+    CsvReporter,
+)
 from app.templates.manager import TemplateManager
 from app.templates.schema import Template
 from app.utils.io import send_to_trash
+from app.validation.duplicates import DuplicateLogPage, detect_duplicate_log_pages
 
 SCRIPT_DIR = Path(__file__).resolve().parents[2]
 PERF_CACHE = SCRIPT_DIR / "output" / ".performance.json"
@@ -85,6 +94,7 @@ _DEFAULT_MS_PER_PAGE = 2500.0  # costo nominal antes de la primera corrida
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _TABLE_CHUNK = 400  # filas de la tabla por tick del QTimer
+_DUP_COLUMN = "dup"
 
 
 _COLORS = {
@@ -107,9 +117,18 @@ def _visible_preview_fields(template: Template, important_only: bool):
     return [field for field in template.fields if field.required]
 
 _QSS = """
+QMainWindow, QWidget {
+    font-family: "Segoe UI", "Noto Sans", sans-serif;
+    font-size: 10pt;
+}
+QWidget#previewContext, QLabel#previewContext {
+    color: #57606a;
+    font-weight: 600;
+    padding: 4px 2px;
+}
 QPushButton {
     min-height: 26px;
-    padding: 2px 10px;
+    padding: 4px 12px;
 }
 #primaryButton {
     background-color: rgb(49, 49, 49);
@@ -168,7 +187,7 @@ QToolButton { padding: 2px 6px; }
 QGroupBox {
     font-weight: 600;
     border: 1px solid #c9d1d9; border-radius: 6px;
-    margin-top: 8px; padding-top: 4px;
+    margin-top: 8px; padding: 8px 8px 6px 8px;
 }
 QGroupBox::title {
     subcontrol-origin: margin; left: 8px; padding: 0 4px;
@@ -179,6 +198,17 @@ QProgressBar {
 }
 QProgressBar::chunk { background-color: #2f81f7; border-radius: 4px; }
 QSpinBox, QComboBox, QLineEdit { padding: 3px; }
+QTableWidget {
+    gridline-color: #d8dee4;
+    alternate-background-color: #f6f8fa;
+}
+QHeaderView::section {
+    background-color: #eef2f6;
+    border: 0;
+    border-bottom: 1px solid #c9d1d9;
+    padding: 6px 8px;
+    font-weight: 600;
+}
 #timeBar { background-color: #e1e7ee; }
 #timeSummary {
     background-color: rgb(49, 49, 49);
@@ -365,9 +395,11 @@ class MainWindow(QMainWindow):
         self._outputs_context: str | None = None
         self._corrida_dir: Path | None = None
         self._pending_export = False
+        self._pending_csv_refresh = False
         self._preview_page = 1
         self._preview_total = 0
         self._preview_pdf: Path | None = None
+        self._preview_documents: list[Path] = []
         self._row_pdfs: list[Path] = []
         self._preview_source_pixmap: QPixmap | None = None
         self._preview_zoom = 1.0  # 1.0 = ajustado a la altura disponible
@@ -407,6 +439,7 @@ class MainWindow(QMainWindow):
         self._table_columns: list[str] = []
         self._table_pending: list = []
         self._table_important_field_ids: set[str] = set()
+        self._selected_important_columns: set[str] = set()
         self._csv_viewer: CsvViewerWindow | None = None
 
         self._preview_thread = QThread(self)
@@ -422,6 +455,7 @@ class MainWindow(QMainWindow):
         self._row_ms: dict[int, float] = {}
         self._row_started: dict[int, float] = {}
         self._current_file_index = 0
+        self._file_page_counts: list[int] = []
 
         self._build_ui()
         self._attach_logger()
@@ -494,6 +528,13 @@ class MainWindow(QMainWindow):
         btn_clear_input.clicked.connect(self._clear_input_folder)
         grid.addWidget(btn_clear_input, 0, 4)
 
+        self.btn_clear_output = QPushButton("Vaciar output")
+        self.btn_clear_output.setToolTip(
+            "Mover todas las corridas de output/ a la Papelera de reciclaje"
+        )
+        self.btn_clear_output.clicked.connect(self._clear_output_folder)
+        grid.addWidget(self.btn_clear_output, 0, 5)
+
         grid.addWidget(QLabel("Plantilla:"), 1, 0)
         self.template_combo = QComboBox()
         self.template_combo.setMinimumWidth(200)
@@ -525,7 +566,7 @@ class MainWindow(QMainWindow):
         self.estimate_label.setToolTip(
             "Estimación del tiempo total para procesar la entrada actual"
         )
-        grid.addWidget(self.estimate_label, 2, 0, 1, 5)
+        grid.addWidget(self.estimate_label, 2, 0, 1, 6)
         return group
 
     def _build_process_group(self) -> QGroupBox:
@@ -637,11 +678,36 @@ class MainWindow(QMainWindow):
 
         self.discrepancias_check = QCheckBox("Discrepancias")
         self.discrepancias_check.setToolTip(
-            "Generar discrepancias.pdf con firmas faltantes o inciertas"
+            "Un solo PDF: agrega al final una sección 'Posibles "
+            "discrepancias'. Varios PDF: genera discrepancias.pdf."
         )
         sep_row.addWidget(self.discrepancias_check)
         sep_row.addStretch()
         layout.addLayout(sep_row)
+
+        date_row = QHBoxLayout()
+        date_row.setSpacing(10)
+        date_label = QLabel("Fecha del CSV")
+        date_label.setStyleSheet("font-weight: 600;")
+        date_row.addWidget(date_label)
+        date_row.addSpacing(8)
+        self.csv_date_mode_combo = QComboBox()
+        self.csv_date_mode_combo.addItem(
+            "Día específico (si falta, fin de mes)", CSV_DATE_SPECIFIC
+        )
+        self.csv_date_mode_combo.addItem(
+            "Último día del mes", CSV_DATE_MONTH_END
+        )
+        self.csv_date_mode_combo.setToolTip(
+            "Cambia la fecha representada en el CSV sin volver a ejecutar OCR. "
+            "El resultado OCR original se conserva."
+        )
+        self.csv_date_mode_combo.currentIndexChanged.connect(
+            self._on_csv_date_mode_changed
+        )
+        date_row.addWidget(self.csv_date_mode_combo)
+        date_row.addStretch()
+        layout.addLayout(date_row)
 
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.HLine)
@@ -671,8 +737,34 @@ class MainWindow(QMainWindow):
             self.important_fields_check.setEnabled
         )
         info_row.addWidget(self.important_fields_check)
+        self.important_fields_button = ImportantFieldsButton()
+        self.important_fields_button.setToolTip("Seleccionar campos importantes")
+        self.important_fields_button.clicked.connect(self._open_important_fields)
+        info_row.addWidget(self.important_fields_button)
         info_row.addStretch()
         layout.addLayout(info_row)
+
+        fleet_row = QHBoxLayout()
+        fleet_label = QLabel("Flota")
+        fleet_label.setStyleSheet("font-weight: 600;")
+        fleet_row.addWidget(fleet_label)
+        self.fleet_check = QCheckBox("Verificar matrículas")
+        self.fleet_check.setToolTip(
+            "Marca para comparar las matrículas leídas contra fleet.json. "
+            "Las matrículas ausentes se señalan para revisión."
+        )
+        fleet_row.addWidget(self.fleet_check)
+        fleet_button = QPushButton("Editar lista…")
+        fleet_button.setToolTip(
+            f"Editar {FLEET_FILENAME}; manténgalo actualizado en la carpeta del programa."
+        )
+        fleet_button.clicked.connect(self._open_fleet_editor)
+        fleet_row.addWidget(fleet_button)
+        fleet_row.addWidget(
+            QLabel(f"Archivo: {FLEET_FILENAME} en la carpeta del programa")
+        )
+        fleet_row.addStretch()
+        layout.addLayout(fleet_row)
         return group
 
     def _build_advanced_panel(self) -> QWidget:
@@ -846,7 +938,7 @@ class MainWindow(QMainWindow):
         for key, caption in (
             ("elapsed", "TRANSCURRIDO"),
             ("remaining", "RESTANTE"),
-            ("total", "TOTAL ESTIMADO"),
+            ("total", "ESTIMADO"),
         ):
             metric = QVBoxLayout()
             metric.setSpacing(1)
@@ -914,6 +1006,7 @@ class MainWindow(QMainWindow):
 
         preview_widget = QWidget()
         preview_layout = QVBoxLayout(preview_widget)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
 
         self.preview_label = QLabel("Vista previa")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -947,9 +1040,28 @@ class MainWindow(QMainWindow):
         self.btn_next.clicked.connect(self._next_page)
         self.page_label = QLabel("Página 0/0")
         self.page_label.setMinimumWidth(90)
+        self.preview_pdf_combo = QComboBox()
+        self.preview_pdf_combo.setMinimumWidth(180)
+        self.preview_pdf_combo.setMaximumWidth(280)
+        self.preview_pdf_combo.setToolTip("PDF activo en la vista previa")
+        self.preview_pdf_combo.currentIndexChanged.connect(
+            self._on_preview_pdf_changed
+        )
+        self.page_edit = QLineEdit()
+        self.page_edit.setPlaceholderText("Página")
+        self.page_edit.setToolTip("Escriba un número de página y pulse Ir")
+        self.page_edit.setFixedWidth(70)
+        self.page_edit.returnPressed.connect(self._jump_to_page_number)
+        page_go = QPushButton("Ir")
+        page_go.setToolTip("Saltar a la página escrita")
+        page_go.clicked.connect(self._jump_to_page_number)
         nav.addStretch()
+        nav.addWidget(QLabel("PDF:"))
+        nav.addWidget(self.preview_pdf_combo)
         nav.addWidget(self.btn_prev)
         nav.addWidget(self.page_label)
+        nav.addWidget(self.page_edit)
+        nav.addWidget(page_go)
         nav.addWidget(self.btn_next)
         nav.addStretch()
 
@@ -1028,24 +1140,33 @@ class MainWindow(QMainWindow):
         self.table.setAccessibleName("Resultados de validación")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSortingEnabled(True)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionsClickable(True)
+        self.table.horizontalHeader().setHighlightSections(False)
+        self.table.horizontalHeader().setSectionsMovable(False)
+        self.table.horizontalHeader().setFixedHeight(30)
         self.table.cellDoubleClicked.connect(self._jump_to_page)
 
         table_panel = QWidget()
         table_layout = QVBoxLayout(table_panel)
         table_layout.setContentsMargins(0, 0, 0, 0)
-        table_toolbar = QHBoxLayout()
-        table_title = QLabel("Resultados CSV")
-        table_title.setStyleSheet("font-weight: 600;")
-        table_toolbar.addWidget(table_title)
-        table_toolbar.addStretch()
+        table_layout.addWidget(self.table, 1)
+        table_controls = QHBoxLayout()
+        self.duplicates_label = QLabel("Duplicados: 0")
+        self.duplicates_label.setAccessibleName("Resumen de duplicados")
+        self.duplicates_label.setToolTip(
+            "No hay log_number repetidos en el lote procesado."
+        )
+        self.duplicates_label.setStyleSheet("color: #57606a;")
+        table_controls.addWidget(self.duplicates_label)
+        table_controls.addStretch()
         self.csv_columns_toggle = CsvColumnModeButton()
         self.csv_columns_toggle.setEnabled(False)
         self.csv_columns_toggle.setVisible(False)
         self.csv_columns_toggle.toggled.connect(self._apply_csv_table_view)
-        table_toolbar.addWidget(self.csv_columns_toggle)
-        table_layout.addLayout(table_toolbar)
-        table_layout.addWidget(self.table, 1)
+        table_controls.addWidget(self.csv_columns_toggle)
+        table_layout.addLayout(table_controls)
 
         splitter.addWidget(preview_widget)
         splitter.addWidget(table_panel)
@@ -1068,9 +1189,14 @@ class MainWindow(QMainWindow):
         times = QWidget()
         times_layout = QVBoxLayout(times)
         times_layout.setSpacing(4)
-        title = QLabel("Tiempo por archivo")
+        title = QLabel("Avance por archivo")
         title.setStyleSheet("font-weight: bold;")
         times_layout.addWidget(title)
+
+        self.preview_context_label = QLabel("PDF 0 de 0 · Página 0 de 0")
+        self.preview_context_label.setObjectName("previewContext")
+        self.preview_context_label.setWordWrap(True)
+        times_layout.addWidget(self.preview_context_label)
 
         self.times_vbox = QVBoxLayout()
         self.times_vbox.setContentsMargins(0, 0, 0, 0)
@@ -1114,7 +1240,7 @@ class MainWindow(QMainWindow):
             bar.setMinimumWidth(120)
             bar.setRange(0, 100)
             bar.setValue(0)
-            bar.setTextVisible(False)
+            bar.setTextVisible(True)
             secs = QLabel("–")
             secs.setMinimumWidth(64)
             secs.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -1126,16 +1252,42 @@ class MainWindow(QMainWindow):
         self.times_vbox.addStretch()
 
     def _rescale_time_bars(self) -> None:
-        """Normaliza las barras ya completadas al máximo del lote."""
-        if not self._row_ms:
+        """Conservado por compatibilidad; el avance ya es porcentaje real."""
+        for index in self._row_ms:
+            row = self._file_rows.get(index)
+            if row is not None:
+                row["bar"].setRange(0, 100)
+                row["bar"].setValue(100)
+
+    def _set_file_page_counts(self, paths: list[Path]) -> None:
+        from app.vision.pdf_loader import page_count
+
+        limit = self.pages_spin.value()
+        self._file_page_counts = []
+        for path in paths:
+            try:
+                count = page_count(path)
+            except Exception:  # noqa: BLE001 - el pipeline reportará el PDF inválido
+                count = 0
+            self._file_page_counts.append(min(count, limit) if limit > 0 else count)
+
+    def _update_file_progress(self, done: int) -> None:
+        """Distribuye el contador global en porcentajes por PDF."""
+        if not self._file_page_counts or not self._file_rows:
             return
-        max_ms = max(self._row_ms.values()) or 1.0
-        for i, row in self._file_rows.items():
-            if i in self._row_ms:
-                row["bar"].setRange(0, int(max_ms))
-                row["bar"].setValue(int(self._row_ms[i]))
+        offset = 0
+        for index, total in enumerate(self._file_page_counts):
+            row = self._file_rows.get(index)
+            if row is None:
+                offset += total
+                continue
+            if total <= 0:
+                value = 100 if done >= offset else 0
             else:
-                row["bar"].setRange(0, 0)
+                value = round(max(0, min(total, done - offset)) * 100 / total)
+            row["bar"].setRange(0, 100)
+            row["bar"].setValue(value)
+            offset += total
 
     # ── Logging ─────────────────────────────────────────────────────────
 
@@ -1201,6 +1353,7 @@ class MainWindow(QMainWindow):
                 seen.add(key)
                 self._pdf_paths.append(p)
         self._refresh_input_summary()
+        self._set_preview_documents(self._pdf_paths)
         self._preview_selected_input()
         self._detect_dpi()
         self._refresh_estimate()
@@ -1219,6 +1372,7 @@ class MainWindow(QMainWindow):
             self._preview_page = 1
             self._preview_total = 0
             self._preview_source_pixmap = None
+            self._set_preview_documents([])
             self._preview_zoom = 1.0
             self.preview_label.clear()
             self.preview_label.setText("Vista previa")
@@ -1231,6 +1385,83 @@ class MainWindow(QMainWindow):
         self.preview_label.setText("Cargando vista previa…")
         self._update_preview_zoom_controls()
         self._show_preview_page(1, self._pdf_paths[0])
+
+    def _set_preview_documents(self, paths: list[Path]) -> None:
+        """Actualiza el selector de PDF sin perder el documento activo."""
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for path in paths:
+            path = Path(path)
+            key = str(path.resolve()).casefold()
+            if path.is_file() and path.suffix.lower() == ".pdf" and key not in seen:
+                seen.add(key)
+                unique.append(path)
+        current = str(self._preview_pdf.resolve()).casefold() if self._preview_pdf else ""
+        self._preview_documents = unique
+        self.preview_pdf_combo.blockSignals(True)
+        self.preview_pdf_combo.clear()
+        for path in unique:
+            self.preview_pdf_combo.addItem(path.name, str(path))
+        index = next(
+            (i for i, path in enumerate(unique)
+             if str(path.resolve()).casefold() == current),
+            0,
+        )
+        self.preview_pdf_combo.setCurrentIndex(index if unique else -1)
+        self.preview_pdf_combo.setEnabled(bool(unique))
+        self.preview_pdf_combo.blockSignals(False)
+        self._update_preview_nav()
+
+    def _on_preview_pdf_changed(self, index: int) -> None:
+        if 0 <= index < len(self._preview_documents):
+            self._preview_source_pixmap = None
+            self._preview_zoom = 1.0
+            self._show_preview_page(1, self._preview_documents[index])
+
+    def _jump_to_page_number(self) -> None:
+        if self._preview_pdf is None:
+            return
+        try:
+            page = int(self.page_edit.text())
+        except ValueError:
+            self.page_edit.setText(str(self._preview_page))
+            return
+        self._show_preview_page(page, self._preview_pdf)
+
+    def _open_fleet_editor(self) -> None:
+        dialog = FleetEditorDialog(FleetStore(SCRIPT_DIR / FLEET_FILENAME), self)
+        if dialog.exec():
+            logger.info(f"Lista de flota actualizada: {SCRIPT_DIR / FLEET_FILENAME}")
+
+    def _open_important_fields(self) -> None:
+        columns = self._table_columns
+        if not columns:
+            QMessageBox.information(
+                self,
+                "Campos importantes",
+                "Cargue o procese un CSV para seleccionar sus columnas.",
+            )
+            return
+        selected = self._selected_important_columns or set(
+            self._default_important_columns(columns)
+        )
+        dialog = ImportantFieldsDialog(columns, selected, self)
+        dialog.selectionChanged.connect(self._set_important_columns)
+        dialog.exec()
+
+    def _set_important_columns(self, columns: set[str]) -> None:
+        self._selected_important_columns = set(columns)
+        self._apply_csv_table_view()
+
+    def _default_important_columns(self, columns: list[str]) -> set[str]:
+        """Incluye los identificadores y campos críticos disponibles."""
+        important = {
+            "file", "page", "date", "time_ms", "dup", "log_number",
+            "matricula", "flight_number", "pilot_signature",
+            "captain_signature", "captain_license",
+        }
+        important.update(column for column in columns if column.endswith("_signature"))
+        return set(columns).intersection(important)
 
     def _detect_dpi(self) -> None:
         from app.vision.pdf_loader import detect_dpi
@@ -1380,6 +1611,76 @@ class MainWindow(QMainWindow):
                 f"{len(moved)} archivo(s) movido(s) a la Papelera de reciclaje.",
             )
 
+    def _clear_output_folder(self) -> None:
+        """Mueve todo el contenido de output/ a la Papelera tras confirmar."""
+        processing = self._worker is not None and self._worker.isRunning()
+        preprocessing = (
+            self._preprocess_worker is not None
+            and self._preprocess_worker.isRunning()
+        )
+        exporting = (
+            self._outputs_worker is not None and self._outputs_worker.isRunning()
+        )
+        if processing or preprocessing or exporting:
+            QMessageBox.warning(
+                self,
+                "Procesamiento en curso",
+                "No se puede vaciar output/ mientras se procesan archivos "
+                "o se generan salidas.",
+            )
+            return
+
+        folder = SCRIPT_DIR / "output"
+        if not folder.is_dir():
+            QMessageBox.information(
+                self, "Vaciar output", "La carpeta output/ no existe."
+            )
+            return
+
+        contents = sorted(folder.iterdir(), key=lambda path: path.name.lower())
+        if not contents:
+            QMessageBox.information(
+                self, "Vaciar output", "La carpeta output/ ya está vacía."
+            )
+            return
+
+        answer = QMessageBox.warning(
+            self,
+            "Confirmar vaciado",
+            f"Se moverán {len(contents)} elemento(s) de output/ a la "
+            "Papelera de reciclaje. Esto incluye todas las corridas "
+            "exportadas.\n\n¿Desea continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        moved, failed = send_to_trash(contents)
+        self._corrida_dir = None
+        logger.info(
+            f"Contenido de output enviado a la Papelera: {len(moved)}; "
+            f"fallidos: {len(failed)}"
+        )
+
+        if failed:
+            details = "\n".join(
+                f"- {path.name}: {error}" for path, error in failed
+            )
+            QMessageBox.warning(
+                self,
+                "Vaciado incompleto",
+                f"Se movieron {len(moved)} de {len(contents)} elemento(s).\n\n"
+                "No se pudieron mover:\n" + details,
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Vaciado completado",
+                f"{len(moved)} elemento(s) de output/ movido(s) a la "
+                "Papelera de reciclaje.",
+            )
+
     def _open_template_editor(self) -> None:
         """Abre el editor visual usando el mismo Python de la aplicación."""
         editor_script = SCRIPT_DIR / "run_editor.py"
@@ -1429,6 +1730,51 @@ class MainWindow(QMainWindow):
             separator.append("mes")
         return separator or None
 
+    def _csv_date_mode(self) -> str:
+        """Política reversible usada únicamente al representar el CSV."""
+        return self.csv_date_mode_combo.currentData() or CSV_DATE_SPECIFIC
+
+    def _on_csv_date_mode_changed(self, _index: int) -> None:
+        """Actualiza tabla y CSV existente sin reprocesar OCR ni PDFs."""
+        if not self._reports:
+            return
+        self._populate_table(self._reports)
+        if self._outputs_worker is not None and self._outputs_worker.isRunning():
+            self._pending_csv_refresh = True
+            self.status_label.setText(
+                "Cambio de fecha CSV en cola…"
+            )
+            return
+        self._rewrite_current_csv()
+
+    def _rewrite_current_csv(self) -> None:
+        """Reescribe solo el CSV de la corrida con la política seleccionada."""
+        if not self._reports or self._corrida_dir is None:
+            return
+        template = self._processed_template or self._load_template()
+        if template is None:
+            logger.warning("No se pudo actualizar el CSV: falta la plantilla")
+            return
+        run_dir = Path(self._corrida_dir)
+        csv_path = run_dir / "datos" / f"{run_dir.name}.CSV"
+        try:
+            CsvReporter().write(
+                self._reports,
+                csv_path,
+                template,
+                date_mode=self._csv_date_mode(),
+            )
+        except Exception as exc:  # noqa: BLE001 - actualización opcional
+            logger.error(f"No se pudo actualizar la fecha del CSV: {exc}")
+            self.status_label.setText("Error al actualizar la fecha del CSV.")
+            return
+        self.status_label.setText(
+            f"CSV actualizado: {self.csv_date_mode_combo.currentText()}"
+        )
+        logger.info(
+            f"CSV actualizado sin OCR ({self._csv_date_mode()}): {csv_path}"
+        )
+
     def _export_options(
         self,
         reuse_dir: bool = False,
@@ -1458,9 +1804,11 @@ class MainWindow(QMainWindow):
             separar_por=tuple(self._separator_value() or ()),
             un_solo_pdf=self.radio_unico.isChecked(),
             discrepancias=self.discrepancias_check.isChecked(),
-            debug=self.fields_check.isChecked(),
+            # "Visualizar campos" pertenece únicamente a la vista previa.
+            debug=False,
             run_dir=self._corrida_dir if reuse_dir else None,
             skip_pdfs=skip_pdfs,
+            csv_date_mode=self._csv_date_mode(),
         )
 
     def _load_template(self) -> Template | None:
@@ -1490,6 +1838,8 @@ class MainWindow(QMainWindow):
             date_slot_ocr=self.date_slot_check.isChecked(),
             date_dynamic_geometry=True,
             vlm_enabled=False,
+            verify_fleet=self.fleet_check.isChecked(),
+            fleet_file=SCRIPT_DIR / FLEET_FILENAME,
         )
 
     def _start_preprocessing(self) -> None:
@@ -1537,6 +1887,7 @@ class MainWindow(QMainWindow):
         self.btn_export.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         total = self._total_pages_for(resolved)
+        self._set_file_page_counts(resolved)
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(0)
         self._total_global = total
@@ -1581,6 +1932,7 @@ class MainWindow(QMainWindow):
         self._preview_results = {}
         self._corrida_dir = None
         self._pending_export = False
+        self._pending_csv_refresh = False
         self._last_run_cancelled = False
 
         max_pages = self.pages_spin.value() or None
@@ -1611,6 +1963,7 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.table.setRowCount(0)
         self.table.setColumnCount(0)
+        self._update_duplicate_summary([])
         self.csv_columns_toggle.setEnabled(False)
         self.csv_columns_toggle.setVisible(False)
         self._table_timer.stop()
@@ -1618,6 +1971,7 @@ class MainWindow(QMainWindow):
         self._clear_times()
 
         self._total_global = self._total_pages_for(resolved)
+        self._set_file_page_counts(resolved)
         self._done_global = 0
         self._page_deltas.clear()
         self._last_done = 0
@@ -1747,7 +2101,8 @@ class MainWindow(QMainWindow):
         font.setBold(True)
         row["name"].setFont(font)
         row["name"].setText(name)
-        row["bar"].setRange(0, 0)  # ocupado
+        row["bar"].setRange(0, 100)
+        row["bar"].setValue(0)
         row["secs"].setText("…")
         self._row_started[index - 1] = time.monotonic()
         self._current_file_index = index
@@ -1760,6 +2115,8 @@ class MainWindow(QMainWindow):
             font.setBold(False)
             row["name"].setFont(font)
             self._row_ms[index - 1] = report.processing_ms
+            row["bar"].setRange(0, 100)
+            row["bar"].setValue(100)
             row["secs"].setText(_format_clock(report.processing_ms / 1000.0))
             self._rescale_time_bars()
         self._current_file_index = 0
@@ -1813,6 +2170,7 @@ class MainWindow(QMainWindow):
                 self._last_page_at = now
                 self._last_done = done
             self._done_global = done
+            self._update_file_progress(done)
         self.status_label.setText(message)
 
     def _on_succeeded(self, reports: list[ValidationReport]) -> None:
@@ -1828,6 +2186,7 @@ class MainWindow(QMainWindow):
             for report in reports
             for page in report.pages
         }
+        self._set_preview_documents([Path(report.pdf_path) for report in reports])
         self._corrida_dir = None
         self._pending_export = False
         # El botón Exportar queda disponible en cuanto el OCR termina, sin
@@ -1936,14 +2295,16 @@ class MainWindow(QMainWindow):
         self.btn_preprocess.setEnabled(False)
         self.btn_export.setEnabled(False)
         self._spinner_active = True
-        self.progress.setRange(0, 0)  # modo ocupado durante las salidas
+        # La barra general representa siempre páginas del lote; la exportación
+        # no debe sustituir ese total por una barra indeterminada.
+        self.progress.setRange(0, max(1, self._total_global))
+        self.progress.setValue(self._done_global or self._total_global)
         worker.start()
 
     def _on_outputs_stage(self, message: str, percent: int) -> None:
         """Actualiza la barra y el estado con la fase de exportación."""
-        if percent > 0:
-            self.progress.setRange(0, 100)
-            self.progress.setValue(percent)
+        self.progress.setRange(0, max(1, self._total_global))
+        self.progress.setValue(self._done_global or self._total_global)
         self.status_label.setText(f"Generando salidas… {message}")
 
     def _on_outputs_written(self, output_dir: Path) -> None:
@@ -1995,9 +2356,15 @@ class MainWindow(QMainWindow):
         self.btn_export.setEnabled(bool(self._reports) and not self._last_run_cancelled)
         if self._pending_export and not self._last_run_cancelled:
             self._pending_export = False
+            # La reexportación ya escribirá el CSV con la selección más
+            # reciente; no se necesita una escritura paralela adicional.
+            self._pending_csv_refresh = False
             self._exportar()
         elif self._pending_export:
             self._pending_export = False
+        elif self._pending_csv_refresh:
+            self._pending_csv_refresh = False
+            self._rewrite_current_csv()
 
     def _update_performance(self, reports: list[ValidationReport]) -> None:
         """Aprende el costo por página de la corrida para futuras estimas."""
@@ -2062,15 +2429,37 @@ class MainWindow(QMainWindow):
             reporter = CsvReporter()
             fields = reporter.fields_for(reports, self._processed_template)
             columns = reporter.columns_for(reports, self._processed_template)
-            pending: list[tuple[int, dict[str, object], dict[str, object], Path]] = []
+            duplicates = detect_duplicate_log_pages(reports)
+            self._update_duplicate_summary(duplicates)
+            duplicate_iter = iter(duplicates)
+            pending: list[
+                tuple[
+                    int,
+                    dict[str, object],
+                    dict[str, object],
+                    DuplicateLogPage,
+                ]
+            ] = []
             for report in reports:
                 pdf_path = Path(report.pdf_path)
                 for page in report.pages:
+                    duplicate = next(duplicate_iter)
                     self._row_pdfs.append(pdf_path)
-                    row = reporter.row_for_page(report, page, fields)
+                    row = reporter.row_for_page(
+                        report,
+                        page,
+                        fields,
+                        date_mode=self._csv_date_mode(),
+                        duplicate=duplicate.duplicate,
+                    )
                     field_results = {field.field_id: field for field in page.fields}
                     pending.append(
-                        (len(self._row_pdfs) - 1, row, field_results, pdf_path)
+                        (
+                            len(self._row_pdfs) - 1,
+                            row,
+                            field_results,
+                            duplicate,
+                        )
                     )
 
             self.table.setColumnCount(len(columns))
@@ -2083,6 +2472,8 @@ class MainWindow(QMainWindow):
                               if self._processed_template is not None else [])
                 if field.required
             }
+            self._table_important_field_ids.add(_DUP_COLUMN)
+            self._selected_important_columns = self._default_important_columns(columns)
             self.csv_columns_toggle.setEnabled(bool(columns))
             self.csv_columns_toggle.setVisible(bool(columns))
             self._apply_csv_table_view()
@@ -2091,8 +2482,59 @@ class MainWindow(QMainWindow):
                 self.btn_prev.setEnabled(False)
                 self.btn_next.setEnabled(False)
                 self._table_timer.start()
+            else:
+                self.table.setSortingEnabled(True)
         finally:
             self.table.setUpdatesEnabled(True)
+
+    def _update_duplicate_summary(
+        self, duplicates: list[DuplicateLogPage]
+    ) -> None:
+        """Actualiza el contador compacto y su detalle por hover."""
+        repeated = [item for item in duplicates if item.duplicate]
+        groups: dict[int, list[DuplicateLogPage]] = {}
+        for item in duplicates:
+            if item.log_number is not None:
+                groups.setdefault(item.log_number, []).append(item)
+        groups = {
+            number: items for number, items in groups.items() if len(items) > 1
+        }
+
+        count = len(repeated)
+        self.duplicates_label.setText(f"Duplicados: {count}")
+        if not count:
+            self.duplicates_label.setStyleSheet("color: #57606a;")
+            self.duplicates_label.setToolTip(
+                "No hay log_number repetidos en el lote procesado."
+            )
+            return
+
+        self.duplicates_label.setStyleSheet(
+            f"color: {_COLORS[Status.WARNING]}; font-weight: 600;"
+        )
+        lines = [
+            f"{count} página(s) duplicada(s) en {len(groups)} log_number:",
+        ]
+        for number, items in sorted(groups.items()):
+            locations = ", ".join(
+                f"{Path(item.pdf_path).name} PDF p. {item.page_number}"
+                for item in items
+            )
+            lines.append(
+                f"{number:07d} (log page {number % 100:02d}): {locations}"
+            )
+        self.duplicates_label.setToolTip("\n".join(lines))
+
+    @staticmethod
+    def _duplicate_tooltip(duplicate: DuplicateLogPage) -> str:
+        if duplicate.log_number is None:
+            return "dup=false: log_number ausente o inválido."
+        if duplicate.duplicate:
+            return (
+                "dup=true: este log_number ya apareció antes en el lote "
+                "procesado."
+            )
+        return "dup=false: primera aparición de este log_number en el lote."
 
     def _apply_csv_table_view(self, _checked: bool | None = None) -> None:
         """Alterna la tabla entre valores principales y todas las columnas."""
@@ -2101,26 +2543,41 @@ class MainWindow(QMainWindow):
             self._table_columns,
             self._table_important_field_ids,
             self.csv_columns_toggle.isChecked(),
+            self._selected_important_columns,
         )
 
     def _on_table_chunk(self) -> None:
         if not self._table_pending:
             self._table_timer.stop()
-            self.status_label.setText("Generando salidas…")
+            if self._outputs_worker is not None and self._outputs_worker.isRunning():
+                self.status_label.setText("Generando salidas…")
             self._update_preview_nav()
             self.table.viewport().update()
             return
         batch = self._table_pending[:_TABLE_CHUNK]
         del self._table_pending[:_TABLE_CHUNK]
-        for row_index, values, field_results, pdf_path in batch:
+        for row_index, values, field_results, duplicate in batch:
             for col_index, column in enumerate(self._table_columns):
                 value = values.get(column, "")
                 item = QTableWidgetItem(str(value))
                 if column == "page":
                     item.setData(Qt.ItemDataRole.UserRole, int(value))
+                    item.setData(
+                        Qt.ItemDataRole.UserRole + 1,
+                        str(self._row_pdfs[row_index]),
+                    )
                 field_id = column.removesuffix("_conf")
                 field = field_results.get(field_id)
-                if field is not None:
+                if column == _DUP_COLUMN:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setToolTip(self._duplicate_tooltip(duplicate))
+                    if duplicate.duplicate:
+                        font = item.font()
+                        font.setBold(True)
+                        item.setFont(font)
+                        item.setForeground(Qt.GlobalColor.white)
+                        item.setBackground(_color_for(Status.WARNING))
+                elif field is not None:
                     item.setToolTip(
                         f"Estado: {field.status.value}"
                         + (f"\n{field.comment}" if field.comment else "")
@@ -2133,6 +2590,8 @@ class MainWindow(QMainWindow):
             done = len(batch)
             total = done + len(self._table_pending)
             self.status_label.setText(f"Construyendo tabla… {done}/{total}")
+        else:
+            self.table.setSortingEnabled(True)
 
     # ── Tiempo por archivo ──────────────────────────────────────────────
 
@@ -2156,7 +2615,6 @@ class MainWindow(QMainWindow):
         self.empty_times_label.setVisible(not bool(reports))
         if not reports:
             return
-        max_ms = max(r.processing_ms for r in reports) or 1
         for report in reports:
             row = QHBoxLayout()
             row.setSpacing(6)
@@ -2168,9 +2626,9 @@ class MainWindow(QMainWindow):
             bar.setObjectName("timeBar")
             bar.setFixedHeight(14)
             bar.setMinimumWidth(120)
-            bar.setRange(0, int(max_ms))
-            bar.setValue(int(report.processing_ms))
-            bar.setTextVisible(False)
+            bar.setRange(0, 100)
+            bar.setValue(100)
+            bar.setTextVisible(True)
             seconds = QLabel(_format_clock(report.processing_ms / 1000.0))
             seconds.setAlignment(Qt.AlignmentFlag.AlignRight)
             seconds.setMinimumWidth(64)
@@ -2194,11 +2652,16 @@ class MainWindow(QMainWindow):
     def _jump_to_page(self, row: int, _col: int) -> None:
         if self._table_pending:
             return  # la tabla aún se está construyendo
-        item = self.table.item(row, 1)
-        if item is not None and row < len(self._row_pdfs):
+        try:
+            page_column = self._table_columns.index("page")
+        except ValueError:
+            return
+        item = self.table.item(row, page_column)
+        pdf_value = item.data(Qt.ItemDataRole.UserRole + 1) if item else None
+        if item is not None and pdf_value:
             self._show_preview_page(
                 int(item.data(Qt.ItemDataRole.UserRole)),
-                self._row_pdfs[row],
+                Path(str(pdf_value)),
             )
 
     def _update_preview_nav(self) -> None:
@@ -2209,6 +2672,29 @@ class MainWindow(QMainWindow):
             has_pdf
             and self._preview_total > 0
             and self._preview_page < self._preview_total
+        )
+        self.page_edit.setText(str(self._preview_page) if has_pdf else "")
+        index = next(
+            (i for i, path in enumerate(self._preview_documents)
+             if self._preview_pdf is not None
+             and str(path.resolve()).casefold()
+             == str(self._preview_pdf.resolve()).casefold()),
+            -1,
+        )
+        self.preview_pdf_combo.blockSignals(True)
+        self.preview_pdf_combo.setCurrentIndex(index)
+        self.preview_pdf_combo.blockSignals(False)
+        pdf_text = self._preview_pdf.name if has_pdf else "Sin PDF"
+        pdf_position = f"PDF {index + 1} de {len(self._preview_documents)}"
+        context = (
+            f"{pdf_position} · {pdf_text} · Página "
+            f"{self._preview_page if has_pdf else 0} de "
+            f"{self._preview_total if has_pdf else 0}"
+        )
+        self.preview_context_label.setText(context)
+        self.page_label.setText(
+            f"Página {self._preview_page}/{self._preview_total or '?'}"
+            if has_pdf else "Página 0/0"
         )
 
     def _prev_page(self) -> None:
@@ -2294,10 +2780,10 @@ class MainWindow(QMainWindow):
                 self._preview_total = page_count(pdf_path)
             except Exception:  # noqa: BLE001 - no crítico
                 self._preview_total = 0
+        if self._preview_total:
+            page_number = max(1, min(page_number, self._preview_total))
         self._preview_page = page_number
         self._preview_pdf = pdf_path
-        total = self._preview_total or "?"
-        self.page_label.setText(f"{pdf_path.name} — Página {page_number}/{total}")
         self._update_preview_nav()
         self._preview_pending = (page_number, str(pdf_path))
         cached = self._preprocessed_images.get((str(pdf_path), page_number))
