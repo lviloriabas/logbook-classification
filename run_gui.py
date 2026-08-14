@@ -16,10 +16,14 @@ ensure_portable_env()
 os.chdir(_ROOT)
 
 from app.utils.logging import setup_logging
+from app.utils.app_identity import set_windows_app_user_model_id
 
 
 def main() -> int:
     setup_logging(Path("output") / "logs")
+    # El proceso visible es pythonw.exe, no el lanzador. Esta identidad evita
+    # que Windows muestre o agrupe la ventana con el icono genérico de Python.
+    set_windows_app_user_model_id()
     try:
         from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QApplication
@@ -38,6 +42,8 @@ def main() -> int:
         icon = root / "assets" / "icon.png"
     app = QApplication(sys.argv)
     app.setApplicationName("Logbook Classification")
+    app.setApplicationDisplayName("Logbook Classification")
+    app.setOrganizationName("BITS")
     app_icon = QIcon(str(icon))
     app.setWindowIcon(app_icon)
     window = MainWindow()

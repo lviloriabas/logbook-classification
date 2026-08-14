@@ -16,10 +16,12 @@ ensure_portable_env()
 os.chdir(_ROOT)
 
 from app.utils.logging import setup_logging
+from app.utils.app_identity import set_windows_app_user_model_id
 
 
 def main() -> int:
     setup_logging(Path("output") / "logs")
+    set_windows_app_user_model_id()
     try:
         from PySide6.QtWidgets import QApplication
         from app.gui.editor_window import EditorWindow
@@ -31,6 +33,10 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName("Logbook Classification - Editor de Plantillas")
+    app.setApplicationDisplayName(
+        "Logbook Classification - Editor de Plantillas"
+    )
+    app.setOrganizationName("BITS")
     root = Path(__file__).resolve().parent
     icon = root / "assets" / "icon.ico"
     if not icon.exists():
