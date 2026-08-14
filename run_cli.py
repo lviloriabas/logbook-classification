@@ -34,8 +34,8 @@ from app.utils.portable import ensure_portable_env
 ensure_portable_env()
 os.chdir(_ROOT)
 
-from app.core.config import AppConfig
-from app.core.pipeline import Pipeline
+from app.core.config import AppConfig, config_for_pdf
+from app.core.pipeline import OcrProcessPool, Pipeline
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
 from app.models.schemas import Status
 from app.ocr.engine import create_engine
@@ -307,26 +307,33 @@ def _run(args: argparse.Namespace) -> int:
 
     reports = []
     vlm_stats = []
+    process_pool = (
+        OcrProcessPool(
+            workers,
+            config,
+            config.ocr_engine,
+            config.ocr_lang,
+            cpu_threads,
+            args.date_engine,
+        )
+        if workers > 1 else None
+    )
     for pdf_path in pdfs:
+        file_config = config_for_pdf(config, pdf_path)
         logger.info(f"[CLI] Procesando: {pdf_path.name}")
         print(f"\n>>> {pdf_path.name}"
               + (f" (primeras {args.max_pages} páginas)"
                  if args.max_pages else ""))
+        print(
+            f"  Resolución: {file_config.dpi} DPI base / "
+            f"{file_config.date_dpi} DPI fecha"
+        )
 
-        pipeline = Pipeline(config, engine, template, on_progress=on_progress,
+        pipeline = Pipeline(file_config, engine, template, on_progress=on_progress,
                             workers=workers, cpu_threads=cpu_threads,
-                            date_engine=date_engine)
-        if args.reference_page:
-            from app.vision.pdf_loader import render_page
-
-            try:
-                pipeline.reference_image = render_page(
-                    pdf_path, args.reference_page, config.dpi
-                )
-            except Exception as exc:  # noqa: BLE001 - página inválida
-                print(f"ERROR: página de referencia inválida: {exc}",
-                      file=sys.stderr)
-                return 1
+                            date_engine=date_engine,
+                            process_pool=process_pool,
+                            reference_page=args.reference_page)
 
         report = pipeline.process(pdf_path, max_pages=args.max_pages)
         reports.append(report)
@@ -355,6 +362,9 @@ def _run(args: argparse.Namespace) -> int:
                               f"{field.field_id}: {field.status.value} "
                               f"({field.value!r})")
                         break
+
+    if process_pool is not None:
+        process_pool.close()
 
     # ── Corrector de matrículas por libro (un avión por libro) ──────────
     from app.validation.book_corrector import correct_matricula_by_book

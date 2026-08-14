@@ -5,8 +5,10 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from app.core.pipeline import _date_geometries_from_region
 from app.templates.schema import FieldTemplate, Template
 from app.vision.date_geometry import locate_date_grid
+from app.vision.pdf_loader import RenderedRegion
 
 
 def _template() -> Template:
@@ -61,3 +63,31 @@ def test_grid_does_not_jump_to_a_neighbouring_table():
     shifted[:, 40:] = page[:, :-40]
 
     assert locate_date_grid(shifted, _template()) == {}
+
+
+def test_regional_grid_matches_full_page_coordinates():
+    page = _page({1, 7})
+    rect = (0.10, 0.10, 0.80, 0.30)
+    height, width = page.shape[:2]
+    x0, y0 = round(rect[0] * width), round(rect[1] * height)
+    x1 = round((rect[0] + rect[2]) * width)
+    y1 = round((rect[1] + rect[3]) * height)
+    region = RenderedRegion(page[y0:y1, x0:x1], rect, dpi=200)
+    template = _template()
+    local_template = template.model_copy(update={
+        "fields": [region.local_field(field) for field in template.fields]
+    })
+
+    local = locate_date_grid(
+        region.image,
+        local_template,
+        coordinate_shape=page.shape[:2],
+    )
+    projected = _date_geometries_from_region(local, region, page.shape)
+    full = locate_date_grid(page, template)
+
+    assert set(projected) == set(full) == {"day", "month", "year"}
+    for field_id in full:
+        assert np.max(np.abs(
+            np.array(projected[field_id].rect) - np.array(full[field_id].rect)
+        )) <= 1

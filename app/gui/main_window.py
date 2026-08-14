@@ -374,6 +374,7 @@ class MainWindow(QMainWindow):
         self._last_run_cancelled = False
 
         self._detected_dpi = 200
+        self._detected_dpis: dict[str, int] = {}
         self._config: AppConfig | None = None
         self._ms_per_page = _load_ms_per_page()
 
@@ -1204,12 +1205,17 @@ class MainWindow(QMainWindow):
     def _detect_dpi(self) -> None:
         from app.vision.pdf_loader import detect_dpi
 
+        self._detected_dpis = {}
         for p in self._pdf_paths:
             try:
-                self._detected_dpi = detect_dpi(p, default=self._detected_dpi)
-                break
+                detected = detect_dpi(p, default=600)
+                self._detected_dpis[str(p.resolve())] = detected
             except Exception:  # noqa: BLE001 - PDF inválido, se sigue
                 continue
+        if self._pdf_paths:
+            self._detected_dpi = self._detected_dpis.get(
+                str(self._pdf_paths[0].resolve()), 200
+            )
 
     def _refresh_input_summary(self) -> None:
         n = len(self._pdf_paths)
@@ -1433,7 +1439,7 @@ class MainWindow(QMainWindow):
         engine = self.engine_combo.currentData() or "paddle"
         date_engine_name = self.date_engine_combo.currentData() or ""
         return AppConfig(
-            dpi=self._detected_dpi,
+            dpi=200,
             deskew=self.deskew_check.isChecked(),
             align=self.align_check.isChecked(),
             ocr_engine=engine,
@@ -1531,7 +1537,7 @@ class MainWindow(QMainWindow):
         # Asociar la plantilla y el DPI al resultado evita que una edición de
         # controles durante el procesamiento cambie la exportación posterior.
         self._processed_template = template
-        self._processed_dpi = self._detected_dpi
+        self._processed_dpi = self._config.dpi
         self._reports = None
         self._preview_results = {}
         self._corrida_dir = None
@@ -1583,7 +1589,8 @@ class MainWindow(QMainWindow):
 
         logger.info(
             f"Iniciando procesamiento: {len(resolved)} archivo(s), "
-            f"{self._total_global} página(s), {self._detected_dpi} DPI, "
+            f"{self._total_global} página(s), 200 DPI base / "
+            f"hasta 600 DPI en fechas por PDF, "
             f"{effective_threads} hilos efectivos "
             f"({workers} worker(s) x {threads})"
         )

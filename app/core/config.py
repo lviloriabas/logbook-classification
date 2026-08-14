@@ -135,3 +135,18 @@ class AppConfig(BaseModel):
     )
     output_dir: Path = Field(default=Path("output"))
     log_dir: Path = Field(default=Path("output/logs"))
+
+
+def config_for_pdf(config: AppConfig, pdf_path: Path) -> AppConfig:
+    """Ajusta resolución de trabajo y detalle al escaneo de cada PDF.
+
+    La página completa nunca se interpola por encima de ``config.dpi``. La
+    banda manuscrita sí aprovecha hasta ``date_dpi`` píxeles reales del PDF,
+    pero tampoco se sobreamplía si el documento fuente tiene menos detalle.
+    """
+    from app.vision.pdf_loader import detect_dpi
+
+    source_dpi = detect_dpi(Path(pdf_path), default=config.date_dpi)
+    base_dpi = max(72, min(config.dpi, source_dpi))
+    date_dpi = max(base_dpi, min(config.date_dpi, source_dpi))
+    return config.model_copy(update={"dpi": base_dpi, "date_dpi": date_dpi})

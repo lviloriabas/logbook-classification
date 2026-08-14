@@ -12,6 +12,7 @@ from app.models.schemas import OcrResult
 from app.ocr.engine import OcrEngine
 from app.templates.schema import FieldTemplate
 from app.vision.ink_extent import crop_to_ink, strip_date_label
+from app.vision.pdf_loader import RenderedRegion
 from app.vision.preprocessing import crop_region, upscale_for_ocr
 
 _DATE_FIELDS = frozenset({"day", "month", "year"})
@@ -44,6 +45,7 @@ def ocr_regions(
     dpi: Optional[int] = None,
     date_engine: Optional[OcrEngine] = None,
     date_image: Optional[np.ndarray] = None,
+    date_region: Optional[RenderedRegion] = None,
     overrides: Optional[dict[str, FieldTemplate]] = None,
 ) -> List[Tuple[str, float]]:
     """Aplica OCR a varias regiones en una sola llamada al motor.
@@ -57,8 +59,9 @@ def ocr_regions(
         dpi: DPI del render para escalar umbrales de localización.
         date_engine: Motor OCR para campos de fecha (day/month/year).
             Si es None, los campos de fecha usan ``engine``.
-        date_image: Página renderizada a mayor resolución (``date_dpi``)
-            para recortar campos de fecha. Si es None, se usa ``page``.
+        date_image: Página completa a mayor resolución (compatibilidad).
+        date_region: Banda alineada renderizada a mayor resolución. Tiene
+            prioridad sobre ``date_image`` y evita rasterizar la página entera.
         overrides: Geometría ajustada por página (``locate_date_grid``);
             solo afecta al recorte, no al ``id`` ni a las reglas del campo.
 
@@ -78,7 +81,15 @@ def ocr_regions(
                 field.postprocess in _DATE_FIELDS
                 or field.postprocess == "char"
             )
-            source = date_image if (is_date and date_image is not None) else page
+            if is_date and date_region is not None:
+                source = date_region.image
+                crop_field = date_region.local_field(crop_field)
+            else:
+                source = (
+                    date_image
+                    if is_date and date_image is not None
+                    else page
+                )
             field_padding = (
                 0.0 if field.postprocess == "char" else
                 0.024 if is_date else

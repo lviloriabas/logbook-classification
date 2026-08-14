@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Protocol
 
@@ -259,6 +260,22 @@ class TesseractOcrEngine:
 
     def recognize(self, image: np.ndarray,
                   config: Optional[str] = None) -> List[OcrResult]:
+        return self.recognize_batch([image], config=config)[0]
+
+    def recognize_batch(
+        self,
+        images: List[np.ndarray],
+        config: Optional[str] = None,
+    ) -> List[List[OcrResult]]:
+        """Procesa un lote en un único arranque de Tesseract.
+
+        Tesseract admite un ``imagelist`` como entrada y conserva el mismo
+        PSM, OEM y whitelist para todas sus páginas. Agrupando recortes con
+        configuración idéntica reducimos drásticamente el coste de procesos
+        sin ampliar el alfabeto permitido.
+        """
+        if not images:
+            return []
         try:
             import pytesseract
         except ImportError as exc:
@@ -271,25 +288,47 @@ class TesseractOcrEngine:
                 "portable/tesseract o añádalo al PATH."
             )
         pytesseract.pytesseract.tesseract_cmd = self._tesseract_cmd
+        import cv2
 
-        data = pytesseract.image_to_data(
-            image, lang=self.lang, config=config or "--psm 6 --oem 3",
-            output_type=pytesseract.Output.DICT,
-        )
-        results: List[OcrResult] = []
-        for i, text in enumerate(data["text"]):
-            text = str(text).strip()
+        with tempfile.TemporaryDirectory(prefix="bits_tess_") as folder:
+            root = Path(folder)
+            paths: List[Path] = []
+            for index, image in enumerate(images):
+                path = root / f"region_{index:04d}.png"
+                if not cv2.imwrite(str(path), image):
+                    raise RuntimeError(f"No se pudo preparar {path.name}")
+                paths.append(path)
+            listing = root / "images.txt"
+            listing.write_text(
+                "\n".join(str(path) for path in paths), encoding="utf-8"
+            )
+            data = pytesseract.image_to_data(
+                str(listing),
+                lang=self.lang,
+                config=config or "--psm 6 --oem 3",
+                output_type=pytesseract.Output.DICT,
+            )
+
+        results: List[List[OcrResult]] = [[] for _ in images]
+        page_numbers = data.get("page_num", [])
+        for i, raw_text in enumerate(data["text"]):
+            text = str(raw_text).strip()
             if not text:
+                continue
+            try:
+                page_index = int(page_numbers[i]) - 1
+            except (IndexError, TypeError, ValueError):
+                page_index = 0
+            if not 0 <= page_index < len(results):
                 continue
             try:
                 conf = float(data["conf"][i]) / 100.0
             except (ValueError, TypeError):
                 conf = 0.0
-            results.append(OcrResult(text=text, confidence=conf))
+            results[page_index].append(
+                OcrResult(text=text, confidence=conf)
+            )
         return results
-
-    def recognize_batch(self, images: List[np.ndarray]) -> List[List[OcrResult]]:
-        return [self.recognize(img) for img in images]
 
 
 def create_engine(name: str, lang: str = "en", **kwargs) -> OcrEngine:

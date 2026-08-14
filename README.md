@@ -203,7 +203,7 @@ Opciones principales:
 | `--pdf` | — | PDF a procesar |
 | `--template` | `template/aircraft_log.json` | Plantilla JSON |
 | `--output-dir` | `output/` | Carpeta de resultados |
-| `--dpi` | 200 | Resolución de renderizado |
+| `--dpi` | 200 | DPI máximo de la página completa; se ajusta al DPI nativo de cada PDF |
 | `--max-pages` | — | Procesar solo las primeras N páginas (pruebas) |
 | `--limit-books` | — | Procesar solo las primeras N bitácoras (PDFs ordenados de la carpeta de entrada) |
 | `--debug` | — | Generar `debug.pdf` con las páginas originales, sin anotaciones |
@@ -315,7 +315,9 @@ portable\python312\tools\python.exe run_gui.py
 
 1. Entrada: por defecto se cargan los PDFs de `input/`; se pueden elegir
    varios archivos con "Seleccionar archivos…" o restablecer con "Usar input/".
-   La resolución se detecta automáticamente (sin selector de DPI). El botón
+   La resolución se detecta por cada PDF (sin selector de DPI). La página
+   completa usa como máximo 200 DPI y la banda manuscrita de fecha conserva
+   hasta 600 DPI nativos mediante render regional. El botón
    "Vaciar input/" mueve todos los archivos de esa carpeta a la Papelera de
    reciclaje después de pedir confirmación.
 2. Seleccionar plantilla.
@@ -506,6 +508,12 @@ En `stats.json` de cada corrida se añade el bloque `vlm` (crops
 consultados, firmas/campos resueltos, o el motivo de desactivación).
 
 ## Escalabilidad (puntos de extensión)
+
+El perfil de rendimiento B mantiene un único pool OCR durante todo el lote,
+reutiliza el documento PDF abierto dentro de cada proceso y agrupa en una sola
+invocación los recortes de Tesseract que comparten PSM y whitelist. La retícula
+de fecha se detecta y lee sobre una banda regional de alta resolución; no se
+rasteriza la página completa a 600 DPI.
 
 - **Nuevo motor OCR / VL**: implementar el protocolo `OcrEngine` (p. ej. Qwen VL) y registrarlo en `create_engine()`.
 - **Nuevo tipo de campo**: añadir procesador en `core/pipeline.py` o registry.

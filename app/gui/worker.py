@@ -62,7 +62,10 @@ class PipelineWorker(QThread):
     def run(self) -> None:
         """Punto de entrada del hilo."""
         try:
-            from app.core.pipeline import Pipeline
+            from contextlib import nullcontext
+
+            from app.core.pipeline import OcrProcessPool, Pipeline
+            from app.core.config import config_for_pdf
             from app.ocr.engine import create_engine
 
             template = TemplateManager().load(self.template_path)
@@ -86,41 +89,54 @@ class PipelineWorker(QThread):
                     **engine_kwargs,
                 )
             reports: List[ValidationReport] = []
-            for index, pdf_path in enumerate(self.pdf_paths):
-                if self.isInterruptionRequested():
-                    break
-                self._current_file_index = index + 1
-                self.file_started.emit(index + 1, len(self.pdf_paths),
-                                       pdf_path.name)
-                pipeline = Pipeline(
+            pool_context = (
+                OcrProcessPool(
+                    self.workers,
                     self.config,
-                    engine,
-                    template,
-                    on_progress=self._on_progress,
-                    workers=self.workers,
-                    cpu_threads=self.cpu_threads,
-                    date_engine=date_engine,
+                    self.config.ocr_engine,
+                    self.config.ocr_lang,
+                    self.cpu_threads,
+                    self.config.date_engine_name or None,
                 )
-                if self.reference_page and self.config.align:
-                    from app.vision.pdf_loader import render_page
-
+                if self.workers > 1
+                else nullcontext(None)
+            )
+            with pool_context as process_pool:
+                for index, pdf_path in enumerate(self.pdf_paths):
+                    if self.isInterruptionRequested():
+                        break
+                    self._current_file_index = index + 1
+                    self.file_started.emit(
+                        index + 1, len(self.pdf_paths), pdf_path.name
+                    )
                     try:
-                        pipeline.reference_image = render_page(
-                            pdf_path, self.reference_page, self.config.dpi
-                        )
-                    except Exception:  # noqa: BLE001 - página inválida
-                        pipeline.reference_image = None
-                report: ValidationReport = pipeline.process(
-                    pdf_path,
-                    max_pages=self.max_pages,
-                    should_cancel=self.isInterruptionRequested,
-                )
-                reports.append(report)
-                self.vlm_stats.append(pipeline.vlm_stats)
-                self.reports = list(reports)
-                self.file_finished.emit(index + 1, report)
-                if report.cancelled:
-                    break
+                        file_config = config_for_pdf(self.config, pdf_path)
+                    except (FileNotFoundError, ValueError):
+                        # El Pipeline conserva el error autoritativo. Este
+                        # fallback también permite inyectar pipelines de prueba.
+                        file_config = self.config
+                    pipeline = Pipeline(
+                        file_config,
+                        engine,
+                        template,
+                        on_progress=self._on_progress,
+                        workers=self.workers,
+                        cpu_threads=self.cpu_threads,
+                        date_engine=date_engine,
+                        process_pool=process_pool,
+                        reference_page=self.reference_page,
+                    )
+                    report: ValidationReport = pipeline.process(
+                        pdf_path,
+                        max_pages=self.max_pages,
+                        should_cancel=self.isInterruptionRequested,
+                    )
+                    reports.append(report)
+                    self.vlm_stats.append(pipeline.vlm_stats)
+                    self.reports = list(reports)
+                    self.file_finished.emit(index + 1, report)
+                    if report.cancelled:
+                        break
             correct_matricula_by_book(reports)
             correct_dates_by_book(reports)
             self.reports = reports
@@ -178,7 +194,8 @@ class PreprocessWorker(QThread):
         """Renderiza, endereza y alinea las páginas para su revisión visual."""
         try:
             from app.vision.alignment import apply_transform, compute_similarity_transform
-            from app.vision.pdf_loader import page_count, render_page
+            from app.core.config import config_for_pdf
+            from app.vision.pdf_loader import PdfPageRenderer, page_count
             from app.vision.preprocessing import deskew
 
             total = 0
@@ -195,40 +212,42 @@ class PreprocessWorker(QThread):
                 if self.isInterruptionRequested():
                     break
 
-                reference = None
-                if self.config.align and count:
-                    reference = render_page(
-                        pdf_path,
-                        min(self.reference_page, count),
-                        self.config.dpi,
-                    )
-
-                for page_number in range(1, count + 1):
-                    if self.isInterruptionRequested():
-                        break
-                    self.progress.emit(
-                        done,
-                        total,
-                        f"Preprocesando {pdf_path.name}: "
-                        f"página {page_number}/{count}",
-                    )
-                    image = render_page(pdf_path, page_number, self.config.dpi)
-                    if self.config.deskew:
-                        image, _angle = deskew(image)
-                    if self.config.align and reference is not None:
-                        transform = compute_similarity_transform(
-                            image, reference, self.config
+                file_config = config_for_pdf(self.config, pdf_path)
+                with PdfPageRenderer(pdf_path) as renderer:
+                    reference = None
+                    if file_config.align and count:
+                        reference = renderer.render_page(
+                            min(self.reference_page, count), file_config.dpi
                         )
-                        if transform.reliable:
-                            image = apply_transform(image, transform)
-                    done += 1
-                    self.page_ready.emit(str(pdf_path), page_number, image)
-                    self.progress.emit(
-                        done,
-                        total,
-                        f"Preprocesando {pdf_path.name}: "
-                        f"página {page_number}/{count}",
-                    )
+
+                    for page_number in range(1, count + 1):
+                        if self.isInterruptionRequested():
+                            break
+                        self.progress.emit(
+                            done,
+                            total,
+                            f"Preprocesando {pdf_path.name}: "
+                            f"página {page_number}/{count}",
+                        )
+                        image = renderer.render_page(
+                            page_number, file_config.dpi
+                        )
+                        if file_config.deskew:
+                            image, _angle = deskew(image)
+                        if file_config.align and reference is not None:
+                            transform = compute_similarity_transform(
+                                image, reference, file_config
+                            )
+                            if transform.reliable:
+                                image = apply_transform(image, transform)
+                        done += 1
+                        self.page_ready.emit(str(pdf_path), page_number, image)
+                        self.progress.emit(
+                            done,
+                            total,
+                            f"Preprocesando {pdf_path.name}: "
+                            f"página {page_number}/{count}",
+                        )
             self.succeeded.emit(self.isInterruptionRequested())
         except Exception as exc:  # noqa: BLE001 - la GUI muestra el error
             self.failed.emit(f"{exc}\n{traceback.format_exc()}")

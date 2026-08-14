@@ -18,6 +18,8 @@ de cada motor (ajustar según la máquina: núcleos / workers).
 from __future__ import annotations
 
 import re
+import pickle
+import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -35,7 +37,12 @@ from app.models.schemas import (
     ValidationReport,
 )
 from app.ocr.engine import OcrEngine
-from app.ocr.date_ocr import decode_slots, ocr_fallback, read_date_slots
+from app.ocr.date_ocr import (
+    decode_slots,
+    ocr_fallback,
+    ocr_fallback_batch,
+    read_date_slots,
+)
 from app.ocr.regional import ocr_regions
 from app.templates.schema import FieldType, Template
 from app.utils.postprocess import (
@@ -57,7 +64,11 @@ from app.vision.alignment import (
 from app.vision.blank_detection import is_blank
 from app.vision.checkbox import detect_checkbox
 from app.vision.ink_extent import crop_to_ink, strip_date_label
-from app.vision.pdf_loader import page_count, render_page
+from app.vision.pdf_loader import (
+    PdfPageRenderer,
+    RenderedRegion,
+    render_page,
+)
 from app.vision.preprocessing import crop_region, deskew, rotate, upscale_for_ocr
 from app.vision.signature import UNCLEAR, detect_signature
 from app.vision.date_geometry import (
@@ -84,6 +95,113 @@ _SOFT_NOTES = (
 _WORKER_STATE: dict = {}
 
 
+def _engine_kwargs(config: AppConfig, cpu_threads: Optional[int]) -> dict:
+    """Parámetros estables de motor compartidos por todos los PDFs."""
+    kwargs = {}
+    if cpu_threads is not None:
+        kwargs["cpu_threads"] = cpu_threads
+    if config.ocr_rec_model:
+        kwargs["rec_model"] = config.ocr_rec_model
+    if config.ocr_det_model:
+        kwargs["det_model"] = config.ocr_det_model
+    return kwargs
+
+
+def _init_ocr_pool_worker(
+    config: AppConfig,
+    engine_name: str,
+    lang: str,
+    cpu_threads: Optional[int],
+    date_engine_name: Optional[str],
+) -> None:
+    """Carga los motores una sola vez para todo el lote de PDFs."""
+    from app.ocr.engine import create_engine
+
+    _WORKER_STATE.clear()
+    kwargs = _engine_kwargs(config, cpu_threads)
+    _WORKER_STATE["engine"] = create_engine(engine_name, lang=lang, **kwargs)
+    if date_engine_name and date_engine_name != engine_name:
+        _WORKER_STATE["date_engine"] = create_engine(
+            date_engine_name, lang=lang, **kwargs
+        )
+
+
+def _load_worker_job(state_path: str) -> None:
+    """Carga el estado de un PDF una vez en cada proceso persistente."""
+    if _WORKER_STATE.get("state_path") == state_path:
+        return
+    with open(state_path, "rb") as stream:
+        state = pickle.load(stream)
+    renderer = _WORKER_STATE.get("renderer")
+    if renderer is not None:
+        renderer.close()
+    engine = _WORKER_STATE["engine"]
+    date_engine = _WORKER_STATE.get("date_engine")
+    _WORKER_STATE.clear()
+    _WORKER_STATE.update(state)
+    _WORKER_STATE["engine"] = engine
+    if date_engine is not None:
+        _WORKER_STATE["date_engine"] = date_engine
+    _WORKER_STATE["renderer"] = PdfPageRenderer(_WORKER_STATE["pdf_path"])
+    _WORKER_STATE["state_path"] = state_path
+
+
+class OcrProcessPool:
+    """Pool de Paddle/Tesseract reutilizable durante un lote completo."""
+
+    def __init__(
+        self,
+        max_workers: int,
+        config: AppConfig,
+        engine_name: str,
+        lang: str,
+        cpu_threads: Optional[int],
+        date_engine_name: Optional[str] = None,
+    ) -> None:
+        self._temporary = tempfile.TemporaryDirectory(prefix="bits_ocr_")
+        self.executor = ProcessPoolExecutor(
+            max_workers=max_workers,
+            initializer=_init_ocr_pool_worker,
+            initargs=(
+                config, engine_name, lang, cpu_threads, date_engine_name,
+            ),
+        )
+        self._job_index = 0
+        self._closed = False
+
+    def prepare(self, state: dict) -> Path:
+        self._job_index += 1
+        path = Path(self._temporary.name) / f"pdf_{self._job_index}.pickle"
+        with path.open("wb") as stream:
+            pickle.dump(state, stream, protocol=pickle.HIGHEST_PROTOCOL)
+        return path
+
+    @staticmethod
+    def release(path: Path) -> None:
+        path.unlink(missing_ok=True)
+
+    def close(self, cancel_futures: bool = False) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.executor.shutdown(
+            wait=True, cancel_futures=cancel_futures
+        )
+        self._temporary.cleanup()
+
+    def __enter__(self) -> "OcrProcessPool":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close(cancel_futures=exc_type is not None)
+
+    def __del__(self) -> None:
+        try:
+            self.close(cancel_futures=True)
+        except Exception:
+            pass
+
+
 def _init_worker(config: AppConfig, template: Template, engine_name: str,
                  lang: str, cpu_threads: Optional[int],
                  reference: Optional[np.ndarray], pdf_path: Path,
@@ -100,20 +218,16 @@ def _init_worker(config: AppConfig, template: Template, engine_name: str,
     _WORKER_STATE["template"] = template
     _WORKER_STATE["reference"] = reference
     _WORKER_STATE["pdf_path"] = Path(pdf_path)
+    old_renderer = _WORKER_STATE.get("renderer")
+    if old_renderer is not None:
+        old_renderer.close()
+    _WORKER_STATE["renderer"] = PdfPageRenderer(pdf_path)
     _WORKER_STATE["transforms"] = list(transforms or [])
     _WORKER_STATE["own_reliability"] = list(own_reliability or [])
     _WORKER_STATE["slot_map"] = dict(slot_map or {})
     if printed_mask is not None:
         _WORKER_STATE["printed_mask"] = np.ascontiguousarray(printed_mask)
-    kwargs = {}
-    if cpu_threads is not None:
-        kwargs["cpu_threads"] = cpu_threads
-    rec_model = getattr(config, "ocr_rec_model", None)
-    if rec_model:
-        kwargs["rec_model"] = rec_model
-    det_model = getattr(config, "ocr_det_model", None)
-    if det_model:
-        kwargs["det_model"] = det_model
+    kwargs = _engine_kwargs(config, cpu_threads)
     _WORKER_STATE["engine"] = create_engine(engine_name, lang=lang, **kwargs)
     if date_engine_name and date_engine_name != engine_name:
         _WORKER_STATE["date_engine"] = create_engine(
@@ -121,8 +235,12 @@ def _init_worker(config: AppConfig, template: Template, engine_name: str,
         )
 
 
-def _process_page_worker(page_number: int) -> PageResult:
+def _process_page_worker(
+    page_number: int, state_path: Optional[str] = None
+) -> PageResult:
     """Procesa una página dentro de un proceso worker."""
+    if state_path is not None:
+        _load_worker_job(state_path)
     transforms = _WORKER_STATE.get("transforms") or []
     reliability = _WORKER_STATE.get("own_reliability") or []
     return process_page(
@@ -143,6 +261,7 @@ def _process_page_worker(page_number: int) -> PageResult:
         printed_mask=_WORKER_STATE.get("printed_mask"),
         slot_map=_WORKER_STATE.get("slot_map"),
         date_engine=_WORKER_STATE.get("date_engine"),
+        renderer=_WORKER_STATE.get("renderer"),
     )
 
 
@@ -158,16 +277,21 @@ def process_page(
     printed_mask: Optional[np.ndarray] = None,
     slot_map: Optional[dict] = None,
     date_engine: Optional[OcrEngine] = None,
+    renderer: Optional[PdfPageRenderer] = None,
 ) -> PageResult:
     """Renderiza y procesa una página del PDF (función de proceso worker)."""
-    image = render_page(pdf_path, page_number, config.dpi)
-    date_image: Optional[np.ndarray] = None
-    if config.date_dpi > config.dpi:
-        date_image = render_page(pdf_path, page_number, config.date_dpi)
+    if renderer is None:
+        with PdfPageRenderer(pdf_path) as opened:
+            return process_page(
+                pdf_path, page_number, config, engine, template, reference,
+                transform, transform_reliable, printed_mask, slot_map,
+                date_engine=date_engine, renderer=opened,
+            )
+    image = renderer.render_page(page_number, config.dpi)
     return process_page_image(image, page_number, config, engine, template,
                               reference, transform, transform_reliable,
                               printed_mask, slot_map, date_engine=date_engine,
-                              date_image=date_image)
+                              date_renderer=renderer)
 
 
 def process_page_image(
@@ -183,6 +307,7 @@ def process_page_image(
     slot_map: Optional[dict] = None,
     date_engine: Optional[OcrEngine] = None,
     date_image: Optional[np.ndarray] = None,
+    date_renderer: Optional[PdfPageRenderer] = None,
 ) -> PageResult:
     """Procesa una imagen de página completa contra la plantilla."""
     t_start = time.perf_counter()
@@ -268,29 +393,73 @@ def process_page_image(
         analysis_image = image.copy()
         analysis_image[mask] = 255
 
-    # 3.7) Geometría dinámica de la banda de fecha: ajusta las casillas a
-    # la retícula impresa de esta página (traslación/escala pequeñas). Si
-    # la retícula no encaja, queda vacío y se usa la plantilla.
+    # 3.7) Render regional de la fecha. Incluye el margen completo de búsqueda
+    # de la retícula: la geometría dinámica conserva así los 600 DPI nativos,
+    # pero PyMuPDF rasteriza solo ~5% de la hoja.
+    date_region: Optional[RenderedRegion] = None
+    if (
+        date_image is None
+        and date_renderer is not None
+        and config.date_dpi > config.dpi
+    ):
+        band_rect = _date_band_rect(
+            template, {}, margin_x=0.045, margin_y=0.035
+        )
+        if band_rect is not None:
+            date_region = date_renderer.render_aligned_region(
+                page_number,
+                config.date_dpi,
+                band_rect,
+                image.shape,
+                deskew_angle=deskew_angle,
+                alignment=alignment_transform,
+            )
+
+    # Geometría dinámica de la banda de fecha: ajusta las casillas a la
+    # retícula impresa de esta página. Si la retícula no encaja, se usa la
+    # plantilla. En el flujo B se detecta dentro del recorte de alta DPI y se
+    # proyecta de vuelta al sistema normalizado de la página completa.
     date_geometries: dict[str, DateFieldGeometry] = {}
     date_overrides: dict = {}
+    geom_shape = image.shape
     if config.date_dynamic_geometry:
-        geom_source = date_image if date_image is not None else image
-        date_geometries = locate_date_grid(
-            geom_source, template, config.printed_ink_threshold
-        )
+        if date_region is not None:
+            local_template = template.model_copy(update={
+                "fields": [
+                    date_region.local_field(field)
+                    for field in template.fields
+                ]
+            })
+            local_geometries = locate_date_grid(
+                date_region.image,
+                local_template,
+                config.printed_ink_threshold,
+                coordinate_shape=(
+                    round(date_region.image.shape[0] / date_region.rect[3]),
+                    round(date_region.image.shape[1] / date_region.rect[2]),
+                ),
+            )
+            date_geometries = _date_geometries_from_region(
+                local_geometries, date_region, image.shape
+            )
+        else:
+            geom_source = date_image if date_image is not None else image
+            geom_shape = geom_source.shape
+            date_geometries = locate_date_grid(
+                geom_source, template, config.printed_ink_threshold
+            )
         for field_id, geometry in date_geometries.items():
             base_field = template.field(field_id)
             if base_field is not None:
                 date_overrides[field_id] = field_override(
-                    geometry, base_field, geom_source.shape
+                    geometry, base_field, geom_shape
                 )
 
     # Las siete celdas manuscritas heredan la retícula encontrada. Así el
     # OCR por carácter no usa rectángulos estáticos que puedan incluir el
     # rótulo impreso o cortar un trazo cuando la página se desplazó.
     char_overrides = _date_cell_overrides(
-        template, date_geometries, geom_source.shape
-        if config.date_dynamic_geometry else image.shape,
+        template, date_geometries, geom_shape,
     )
     ocr_overrides = {**date_overrides, **char_overrides}
 
@@ -319,9 +488,57 @@ def process_page_image(
                               dpi=config.dpi,
                               date_engine=date_engine,
                               date_image=date_image,
+                              date_region=date_region,
                               overrides=ocr_overrides)
     by_id = {field.id: result
              for field, result in zip(ocr_fields, ocr_results)}
+
+    # Los fallbacks críticos comparten solo tres configuraciones de
+    # Tesseract. Se preparan juntos para que cada whitelist lance como máximo
+    # un proceso, conservando los mismos recortes y reglas de aceptación.
+    fallback_requests: List[Tuple[str, Optional[str], np.ndarray]] = []
+    fallback_fields: List[str] = []
+    if config.date_ocr_fallback:
+        for field in ocr_fields:
+            if field.postprocess not in _CRITICAL_POSTPROCESS:
+                continue
+            raw_text, _confidence = by_id.get(field.id, ("", 0.0))
+            processed = raw_text
+            if raw_text and field.postprocess:
+                processed, _note = apply_postprocess(
+                    field.id, field.postprocess, raw_text
+                )
+            if processed:
+                continue
+            is_date = field.postprocess in _DATE_FIELDS
+            source = (
+                date_region.image
+                if is_date and date_region is not None
+                else date_image
+                if is_date and date_image is not None
+                else image
+            )
+            crop_field = date_overrides.get(field.id, field) if is_date else field
+            if is_date and date_region is not None:
+                crop_field = date_region.local_field(crop_field)
+            field_dpi = config.date_dpi if is_date and (
+                date_region is not None or date_image is not None
+            ) else config.dpi
+            region = _critical_region(
+                crop_field,
+                source,
+                config.crop_padding,
+                preprocess=config.crop_preprocess,
+                dpi=field_dpi,
+            )
+            if region is not None:
+                fallback_fields.append(field.id)
+                fallback_requests.append(
+                    (field.id, field.postprocess, region)
+                )
+    fallback_by_id = dict(zip(
+        fallback_fields, ocr_fallback_batch(fallback_requests)
+    ))
 
     for field in template.fields:
         if field.type in (FieldType.SIGNATURE, FieldType.CHECKBOX):
@@ -346,13 +563,17 @@ def process_page_image(
             alternatives: List[str] = []
             is_date_field = field.postprocess in _DATE_FIELDS
             field_image = (
-                date_image
+                date_region.image
+                if is_date_field and date_region is not None
+                else date_image
                 if is_date_field and date_image is not None
                 else image
             )
             field_dpi = (
                 config.date_dpi
-                if is_date_field and date_image is not None
+                if is_date_field and (
+                    date_image is not None or date_region is not None
+                )
                 else config.dpi
             )
             # Geometría ajustada por la retícula impresa de esta página.
@@ -360,6 +581,8 @@ def process_page_image(
                 date_overrides.get(field.id, field)
                 if is_date_field else field
             )
+            if is_date_field and date_region is not None:
+                crop_field = date_region.local_field(crop_field)
             if raw_text and field.postprocess:
                 text, note = apply_postprocess(
                     field.id, field.postprocess, raw_text
@@ -375,11 +598,7 @@ def process_page_image(
                 and field.postprocess in _CRITICAL_POSTPROCESS
                 and not text
             ):
-                fb = _critical_ocr_fallback(
-                    crop_field, field_image, config.crop_padding,
-                    preprocess=config.crop_preprocess,
-                    dpi=field_dpi,
-                )
+                fb = fallback_by_id.get(field.id)
                 if fb is not None:
                     fb_text, fb_conf = fb
                     text, fb_note = apply_postprocess(
@@ -406,10 +625,14 @@ def process_page_image(
                 page_spec = geometry.slot_spec()
             elif slot_map is not None and field.id in slot_map:
                 page_spec = slot_map[field.id]
-                if field_image is not image:
+                if field_image is not image and date_region is None:
                     page_spec = scale_slot_map(
                         page_spec, image.shape, field_image.shape
                     )
+            if page_spec is not None and date_region is not None:
+                page_spec = _slot_map_for_region(
+                    page_spec, image.shape[1], date_region
+                )
             if (
                 config.date_slot_ocr
                 and is_date_field
@@ -506,6 +729,77 @@ _DATE_FIELDS = frozenset({"day", "month", "year"})
 _CHAR_COMPONENTS = (("day", 2), ("month", 3), ("year", 2))
 
 
+def _date_band_rect(
+    template: Template,
+    overrides: dict[str, "FieldTemplate"],
+    margin_x: float = 0.012,
+    margin_y: float = 0.012,
+) -> Optional[Tuple[float, float, float, float]]:
+    """Unión compacta de campos de fecha, con margen para interpolación."""
+    fields = []
+    for field in template.fields:
+        if field.postprocess not in _DATE_FIELDS and field.postprocess != "char":
+            continue
+        fields.append(overrides.get(field.id, field))
+    if not fields:
+        return None
+    left = max(0.0, min(field.x for field in fields) - margin_x)
+    top = max(0.0, min(field.y for field in fields) - margin_y)
+    right = min(1.0, max(field.x + field.w for field in fields) + margin_x)
+    bottom = min(1.0, max(field.y + field.h for field in fields) + margin_y)
+    if right <= left or bottom <= top:
+        return None
+    return left, top, right - left, bottom - top
+
+
+def _date_geometries_from_region(
+    geometries: dict[str, DateFieldGeometry],
+    region: RenderedRegion,
+    page_shape: Tuple[int, ...],
+) -> dict[str, DateFieldGeometry]:
+    """Proyecta una retícula regional al lienzo base alineado."""
+    page_height, page_width = page_shape[:2]
+    region_height, region_width = region.image.shape[:2]
+    region_x, region_y, width_ratio, height_ratio = region.rect
+
+    def global_x(local_x: int) -> int:
+        normalized = region_x + local_x / max(region_width, 1) * width_ratio
+        return int(round(normalized * page_width))
+
+    def global_y(local_y: int) -> int:
+        normalized = region_y + local_y / max(region_height, 1) * height_ratio
+        return int(round(normalized * page_height))
+
+    projected: dict[str, DateFieldGeometry] = {}
+    for field_id, geometry in geometries.items():
+        left, top, right, bottom = geometry.rect
+        projected[field_id] = DateFieldGeometry(
+            field_id=field_id,
+            rect=(
+                global_x(left), global_y(top),
+                global_x(right), global_y(bottom),
+            ),
+            separators=[global_x(value) for value in geometry.separators],
+            score=geometry.score,
+        )
+    return projected
+
+
+def _slot_map_for_region(
+    spec: dict,
+    base_width: int,
+    region: RenderedRegion,
+) -> dict:
+    """Convierte límites X del lienzo base al recorte regional de alta DPI."""
+    return {
+        "boundaries": [
+            region.local_x(float(x) / max(base_width, 1))
+            for x in spec["boundaries"]
+        ],
+        "slots": spec["slots"],
+    }
+
+
 def _date_cell_overrides(
     template: Template,
     geometries: dict[str, DateFieldGeometry],
@@ -580,6 +874,22 @@ def _critical_ocr_fallback(
     year) se leen sin localizar: se elimina solo la franja superior del
     rótulo impreso.
     """
+    region = _critical_region(
+        field, image, crop_padding, preprocess=preprocess, dpi=dpi
+    )
+    if region is None:
+        return None
+    return ocr_fallback(field.id, field.postprocess, region)
+
+
+def _critical_region(
+    field: "FieldTemplate",
+    image: np.ndarray,
+    crop_padding: float,
+    preprocess: bool = True,
+    dpi: Optional[int] = None,
+) -> Optional[np.ndarray]:
+    """Prepara el mismo recorte usado por el fallback restringido."""
     try:
         field_padding = (
             0.0 if field.postprocess in _TIGHT_CROP_POSTPROCESS
@@ -596,7 +906,7 @@ def _critical_ocr_fallback(
             if localized is not None:
                 region = localized
         region = upscale_for_ocr(region, min_side=600)
-    return ocr_fallback(field.id, field.postprocess, region)
+    return region
 
 
 def _slot_ocr_fallback(
@@ -972,6 +1282,8 @@ class Pipeline:
         workers: int = 1,
         cpu_threads: Optional[int] = None,
         date_engine: Optional[OcrEngine] = None,
+        process_pool: Optional[OcrProcessPool] = None,
+        reference_page: int = 1,
     ) -> None:
         self.config = config
         self.engine = engine
@@ -981,6 +1293,8 @@ class Pipeline:
         self.on_progress = on_progress
         self.workers = max(1, workers)
         self.cpu_threads = cpu_threads
+        self.process_pool = process_pool
+        self.reference_page = max(1, reference_page)
         self._printed_mask: Optional[np.ndarray] = None
         self._date_slot_map: dict = {}
         self._should_cancel: Optional[Callable[[], bool]] = None
@@ -1007,13 +1321,27 @@ class Pipeline:
             ValidationReport con el resumen y los resultados por página.
         """
         pdf_path = Path(pdf_path)
+        with PdfPageRenderer(pdf_path) as renderer:
+            return self._process_opened(
+                pdf_path, renderer, max_pages, should_cancel
+            )
+
+    def _process_opened(
+        self,
+        pdf_path: Path,
+        renderer: PdfPageRenderer,
+        max_pages: Optional[int],
+        should_cancel: Optional[Callable[[], bool]],
+    ) -> ValidationReport:
+        """Implementación con un único handle abierto para todo el PDF."""
         self._should_cancel = should_cancel
         t_start = time.perf_counter()
         logger.info(f"[Pipeline] Inicio: {pdf_path.name} "
                     f"(plantilla {self.template.name}, "
-                    f"workers={self.workers})")
+                    f"workers={self.workers}, dpi={self.config.dpi}, "
+                    f"date_dpi={self.config.date_dpi})")
 
-        total = page_count(pdf_path)
+        total = renderer.page_count()
         if max_pages is not None:
             total = min(total, max_pages)
         if total == 0:
@@ -1021,14 +1349,18 @@ class Pipeline:
 
         reference = self.reference_image
         if reference is None:
-            reference = render_page(pdf_path, 1, self.config.dpi)
+            reference = renderer.render_page(
+                min(self.reference_page, total), self.config.dpi
+            )
         logger.info(
             "[Pipeline] Referencia de alineación: "
             + ("imagen externa" if self.reference_image is not None
                else "página 1")
         )
 
-        own_transforms, anchors = self._calibrate(pdf_path, total, reference)
+        own_transforms, anchors = self._calibrate(
+            pdf_path, total, reference, renderer=renderer
+        )
 
         if self._is_cancelled():
             pages: List[PageResult] = []
@@ -1037,10 +1369,12 @@ class Pipeline:
                                            anchors, own_transforms)
         else:
             pages = self._process_sequential(pdf_path, total, reference,
-                                             anchors, own_transforms)
+                                             anchors, own_transforms,
+                                             renderer=renderer)
 
         pages = self._verify_pages(
-            pdf_path, pages, reference, anchors, own_transforms
+            pdf_path, pages, reference, anchors, own_transforms,
+            renderer=renderer,
         )
 
         self._notify(total, total, "Generando reporte")
@@ -1070,6 +1404,7 @@ class Pipeline:
             self, pdf_path: Path, total: int, reference: np.ndarray,
             anchors: Optional[List[TransformResult]] = None,
             own: Optional[List[TransformResult]] = None,
+            renderer: Optional[PdfPageRenderer] = None,
         ) -> List[PageResult]:
         pages: List[PageResult] = []
         for page_number in range(1, total + 1):
@@ -1077,10 +1412,11 @@ class Pipeline:
                 break
             self._notify(page_number - 1, total,
                          f"Procesando página {page_number}/{total}")
-            image = render_page(pdf_path, page_number, self.config.dpi)
-            date_image: Optional[np.ndarray] = None
-            if self.config.date_dpi > self.config.dpi:
-                date_image = render_page(pdf_path, page_number, self.config.date_dpi)
+            image = (
+                renderer.render_page(page_number, self.config.dpi)
+                if renderer is not None
+                else render_page(pdf_path, page_number, self.config.dpi)
+            )
             pages.append(process_page_image(
                 image, page_number, self.config, self.engine,
                 self.template, reference,
@@ -1093,7 +1429,7 @@ class Pipeline:
                 printed_mask=self._printed_mask,
                 slot_map=self._date_slot_map,
                 date_engine=self.date_engine,
-                date_image=date_image,
+                date_renderer=renderer,
             ))
         return pages
 
@@ -1103,22 +1439,42 @@ class Pipeline:
             own: Optional[List[TransformResult]] = None,
         ) -> List[PageResult]:
         pages: List[PageResult] = []
-        pool = ProcessPoolExecutor(
-            max_workers=self.workers,
-            initializer=_init_worker,
-            initargs=(
-                self.config, self.template, self.engine.name,
-                self.config.ocr_lang, self.cpu_threads, reference, pdf_path,
-                list(anchors) if anchors else None,
-                [t.reliable for t in own] if own else None,
-                self._printed_mask,
-                self._date_slot_map,
-                self.date_engine.name if self.date_engine else None,
-            ),
-        )
+        state_path: Optional[Path] = None
+        owns_pool = self.process_pool is None
+        if self.process_pool is not None:
+            state_path = self.process_pool.prepare({
+                "config": self.config,
+                "template": self.template,
+                "reference": reference,
+                "pdf_path": Path(pdf_path),
+                "transforms": list(anchors or []),
+                "own_reliability": [t.reliable for t in own or []],
+                "printed_mask": self._printed_mask,
+                "slot_map": dict(self._date_slot_map),
+            })
+            pool = self.process_pool.executor
+        else:
+            pool = ProcessPoolExecutor(
+                max_workers=self.workers,
+                initializer=_init_worker,
+                initargs=(
+                    self.config, self.template, self.engine.name,
+                    self.config.ocr_lang, self.cpu_threads, reference, pdf_path,
+                    list(anchors) if anchors else None,
+                    [t.reliable for t in own] if own else None,
+                    self._printed_mask,
+                    self._date_slot_map,
+                    self.date_engine.name if self.date_engine else None,
+                ),
+            )
+        futures: dict = {}
         try:
             futures = {
-                pool.submit(_process_page_worker, page_number): page_number
+                pool.submit(
+                    _process_page_worker,
+                    page_number,
+                    str(state_path) if state_path is not None else None,
+                ): page_number
                 for page_number in range(1, total + 1)
             }
             consumed: set = set()
@@ -1132,7 +1488,10 @@ class Pipeline:
                 self._notify(len(pages), total,
                              f"Procesando página {page_number}/{total}")
             if self._is_cancelled():
-                pool.shutdown(cancel_futures=True, wait=True)
+                for future in futures:
+                    future.cancel()
+                if owns_pool:
+                    pool.shutdown(cancel_futures=True, wait=True)
                 # Recupera las páginas ya completadas antes de cancelar.
                 for future, page_number in futures.items():
                     if (future not in consumed and future.done()
@@ -1142,7 +1501,18 @@ class Pipeline:
                         except Exception:  # noqa: BLE001 - parcial
                             continue
         finally:
-            pool.shutdown(wait=True)
+            if owns_pool:
+                pool.shutdown(wait=True)
+            elif state_path is not None:
+                # Los trabajos que ya estaban en vuelo deben soltar el pickle
+                # antes de eliminarlo, incluso durante una cancelación.
+                for future in futures:
+                    if not future.cancelled():
+                        try:
+                            future.result()
+                        except Exception:  # noqa: BLE001 - se propaga arriba
+                            pass
+                self.process_pool.release(state_path)
         pages.sort(key=lambda item: item[0])
         if self._is_cancelled():
             logger.warning(
@@ -1154,6 +1524,7 @@ class Pipeline:
 
     def _calibrate(
         self, pdf_path: Path, total: int, reference: np.ndarray,
+        renderer: Optional[PdfPageRenderer] = None,
     ) -> Tuple[Optional[List[TransformResult]], Optional[List[TransformResult]]]:
         """Paso 1: estima la transformación de cada página a baja resolución.
 
@@ -1165,7 +1536,9 @@ class Pipeline:
         """
         t_calib = time.perf_counter()
         try:
-            return self._calibrate_impl(pdf_path, total, reference)
+            return self._calibrate_impl(
+                pdf_path, total, reference, renderer=renderer
+            )
         finally:
             self.calibration_ms = round(
                 (time.perf_counter() - t_calib) * 1000, 1
@@ -1173,6 +1546,7 @@ class Pipeline:
 
     def _calibrate_impl(
         self, pdf_path: Path, total: int, reference: np.ndarray,
+        renderer: Optional[PdfPageRenderer] = None,
     ) -> Tuple[Optional[List[TransformResult]], Optional[List[TransformResult]]]:
         self._printed_mask = None
         self._date_slot_map = {}
@@ -1196,7 +1570,11 @@ class Pipeline:
                 0, total,
                 f"Calibrando alineación (página {page_number}/{total})",
             )
-            image = render_page(pdf_path, page_number, calib_dpi)
+            image = (
+                renderer.render_page(page_number, calib_dpi)
+                if renderer is not None
+                else render_page(pdf_path, page_number, calib_dpi)
+            )
             if self.config.deskew:
                 image, _ = deskew(image)
             tr = compute_similarity_transform(image, calib_ref, self.config)
@@ -1324,6 +1702,7 @@ class Pipeline:
         reference: Optional[np.ndarray],
         anchors: Optional[List[TransformResult]],
         own: Optional[List[TransformResult]],
+        renderer: Optional[PdfPageRenderer] = None,
     ) -> List[PageResult]:
         """Arbitra con el VLM los campos incitos de la corrida.
 
@@ -1369,7 +1748,11 @@ class Pipeline:
             if self._is_cancelled():
                 break
             page = pages[idx]
-            image = render_page(pdf_path, idx + 1, self.config.dpi)
+            image = (
+                renderer.render_page(idx + 1, self.config.dpi)
+                if renderer is not None
+                else render_page(pdf_path, idx + 1, self.config.dpi)
+            )
             image = self._aligned_image(
                 image, idx, reference, anchors=anchors, own=own
             )

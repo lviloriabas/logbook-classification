@@ -134,6 +134,55 @@ def ocr_fallback(
     return text, confidence
 
 
+def ocr_fallback_batch(
+    requests: List[Tuple[str, Optional[str], np.ndarray]],
+) -> List[Optional[Tuple[str, float]]]:
+    """Lee campos críticos agrupados por PSM/whitelist.
+
+    El orden de salida coincide con ``requests``. Cada configuración distinta
+    produce como máximo un arranque de Tesseract para toda la página.
+    """
+    engine = _fallback_engine()
+    results: List[Optional[Tuple[str, float]]] = [None] * len(requests)
+    if engine is None or not requests:
+        return results
+    groups: dict[str, List[Tuple[int, np.ndarray]]] = {}
+    for index, (field_id, postprocess, region) in enumerate(requests):
+        groups.setdefault(_config_for(field_id, postprocess), []).append(
+            (index, region)
+        )
+    for config, items in groups.items():
+        try:
+            recognize_batch = getattr(engine, "recognize_batch", None)
+            if recognize_batch is not None:
+                try:
+                    batches = recognize_batch(
+                        [region for _index, region in items], config=config
+                    )
+                except TypeError:
+                    batches = [
+                        engine.recognize(region, config=config)
+                        for _index, region in items
+                    ]
+            else:
+                batches = [
+                    engine.recognize(region, config=config)
+                    for _index, region in items
+                ]
+        except Exception as exc:  # noqa: BLE001 - respaldo no rompe pipeline
+            logger.debug(f"OCR de respaldo en lote falló: {exc}")
+            continue
+        for (index, _region), lines in zip(items, batches):
+            texts = [line.text.strip() for line in lines if line.text.strip()]
+            if not texts:
+                continue
+            confidence = round(
+                sum(line.confidence for line in lines) / len(lines), 3
+            )
+            results[index] = " ".join(texts), confidence
+    return results
+
+
 def date_ocr_fallback(
     field_id: str, region
 ) -> Optional[Tuple[str, float]]:
@@ -278,9 +327,36 @@ def read_date_slots(
             config = _SLOT_LETTER_CONFIG
         else:
             config = _MONTH_CONFIG
-        for slot in slots:
-            text, conf = _read_slot(fallback, slot, config, preprocess)
-            readings.append((text, conf))
+        regions = [
+            upscale_for_ocr(slot, min_side=80) if preprocess else slot
+            for slot in slots
+        ]
+        try:
+            recognize_batch = getattr(fallback, "recognize_batch", None)
+            if recognize_batch is not None:
+                try:
+                    batches = recognize_batch(regions, config=config)
+                except TypeError:
+                    batches = [
+                        fallback.recognize(region, config=config)
+                        for region in regions
+                    ]
+            else:
+                batches = [
+                    fallback.recognize(region, config=config)
+                    for region in regions
+                ]
+        except Exception as exc:  # noqa: BLE001 - respaldo no rompe pipeline
+            logger.debug(f"Lectura de ranuras en lote falló: {exc}")
+            batches = [[] for _region in regions]
+        for lines in batches:
+            best = max(lines, key=lambda line: line.confidence) if lines else None
+            if best is None or not best.text.strip():
+                readings.append(("", 0.0))
+                continue
+            readings.append((best.text.strip()[0], max(
+                0.0, min(1.0, float(best.confidence))
+            )))
     else:
         for slot in slots:
             text, conf = _read_slot_generic(engine, slot, rule, preprocess)

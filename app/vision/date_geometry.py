@@ -229,6 +229,7 @@ def locate_date_grid(
     template: Template,
     ink_threshold: int = 185,
     field_ids: Tuple[str, ...] = DATE_FIELD_IDS,
+    coordinate_shape: Optional[Tuple[int, int]] = None,
 ) -> Dict[str, DateFieldGeometry]:
     """Ajusta las casillas de fecha a la retícula impresa de ESTA página.
 
@@ -237,6 +238,9 @@ def locate_date_grid(
         template: Plantilla con los campos day/month/year.
         ink_threshold: Umbral de gris para considerar un píxel impreso.
         field_ids: Campos de fecha a localizar.
+        coordinate_shape: Alto/ancho del lienzo completo equivalente. Se usa
+            cuando ``image`` es una banda regional para conservar tolerancias
+            expresadas como fracción de página, no de recorte.
 
     Returns:
         {field_id: DateFieldGeometry} con rectángulos y separadores en
@@ -244,6 +248,7 @@ def locate_date_grid(
         la geometría de plantilla).
     """
     height, width = image.shape[:2]
+    metric_height, metric_width = coordinate_shape or (height, width)
     fields = {fid: template.field(fid) for fid in field_ids}
     if any(f is None for f in fields.values()):
         return {}
@@ -260,8 +265,8 @@ def locate_date_grid(
     if union_width < 20 or union_height < 6:
         return {}
 
-    mx = round(width * SEARCH_MARGIN_X)
-    my = round(height * SEARCH_MARGIN_Y)
+    mx = round(metric_width * SEARCH_MARGIN_X)
+    my = round(metric_height * SEARCH_MARGIN_Y)
     wx0, wx1 = max(0, ux0 - mx), min(width, ux1 + mx)
     wy0, wy1 = max(0, uy0 - my), min(height, uy1 + my)
 
@@ -274,7 +279,7 @@ def locate_date_grid(
     # Bordes horizontales de la banda (si no encajan, se conserva la y de
     # plantilla: el ajuste vertical es opcional, el horizontal es el que
     # separa dígitos de separadores).
-    max_hline = max(4, round(height * 0.004))
+    max_hline = max(4, round(metric_height * 0.004))
     hcenters = [
         center + wy0
         for center in _axis_lines(window, "horizontal", 0.35, max_hline)
@@ -294,7 +299,7 @@ def locate_date_grid(
     band = window[top - wy0:bottom - wy0, :]
     if band.size == 0 or band.shape[0] < 4:
         return {}
-    max_vline = max(4, round(width * 0.004))
+    max_vline = max(4, round(metric_width * 0.004))
     vlines = [
         center + wx0
         for center in _axis_lines(band, "vertical", VLINE_MIN_RATIO, max_vline)
@@ -303,8 +308,8 @@ def locate_date_grid(
         return {}
 
     comb = _expected_comb(rects, ux0, union_width)
-    tolerance = max(3.0, width * MATCH_TOLERANCE_RATIO)
-    max_shift = round(width * MAX_GRID_SHIFT_RATIO)
+    tolerance = max(3.0, metric_width * MATCH_TOLERANCE_RATIO)
+    max_shift = round(metric_width * MAX_GRID_SHIFT_RATIO)
     match = _match_comb(
         comb, vlines, ux0, union_width, tolerance, max_shift
     )
