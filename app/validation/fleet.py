@@ -6,8 +6,8 @@ from pathlib import Path
 
 from loguru import logger
 
-from app.gui.fleet_editor import FleetStore
 from app.models.schemas import Status, ValidationReport
+from app.utils.fleet import load_fleet
 
 
 def verify_reports_against_fleet(
@@ -18,7 +18,7 @@ def verify_reports_against_fleet(
     La comprobación es deliberadamente no destructiva: conserva el texto leído
     y solo añade ``WARNING`` y un comentario cuando existe una lista usable.
     """
-    allowed = set(FleetStore(Path(fleet_path)).load())
+    allowed = set(load_fleet(Path(fleet_path)))
     if not allowed:
         logger.warning(
             f"Verificación de flota activa pero la lista está vacía o no existe: {fleet_path}"

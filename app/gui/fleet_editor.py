@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -21,9 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-
-FLEET_FILENAME = "fleet.json"
-_MATRICULA_RE = re.compile(r"^HP-\d{4}(?:CMP|WWP)$", re.IGNORECASE)
+from app.utils.fleet import FLEET_FILENAME, load_fleet, normalise_matricula
 
 
 class FleetStore:
@@ -33,17 +30,7 @@ class FleetStore:
         self.path = Path(path)
 
     def load(self) -> list[str]:
-        if not self.path.is_file():
-            return []
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            return []
-        values = payload.get("matriculas", []) if isinstance(payload, dict) else payload
-        if not isinstance(values, list):
-            return []
-        result = {normalise_matricula(str(value)) for value in values}
-        return sorted(value for value in result if value)
+        return load_fleet(self.path)
 
     def save(self, matriculas: list[str]) -> None:
         values = sorted({normalise_matricula(value) for value in matriculas if value})
@@ -56,17 +43,6 @@ class FleetStore:
             + "\n",
             encoding="utf-8",
         )
-
-
-def normalise_matricula(value: str) -> str:
-    """Normaliza la matrícula a la representación canónica de la aplicación."""
-    value = str(value).strip().upper().replace(" ", "")
-    if value and not value.startswith("HP-") and value.isdigit():
-        value = f"HP-{value}CMP"
-    elif value.startswith("HP") and not value.startswith("HP-"):
-        value = "HP-" + value[2:]
-    return value if _MATRICULA_RE.fullmatch(value) else ""
-
 
 class FleetEditorDialog(QDialog):
     """Permite editar la lista sin abrir un editor de texto."""
