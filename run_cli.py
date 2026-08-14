@@ -94,16 +94,6 @@ def parse_args() -> argparse.Namespace:
         help="Página usada como referencia de alineación (default: 1)",
     )
     parser.add_argument(
-        "--engine", default="paddle", choices=["paddle", "tesseract"],
-        help="Motor OCR principal (matrícula, logpage y campos generales)",
-    )
-    parser.add_argument(
-        "--date-engine", default=None, choices=["paddle", "tesseract"],
-        help="Motor OCR para fechas (day/month/year). Por defecto usa el "
-             "mismo que --engine.",
-    )
-    parser.add_argument("--lang", default="en", help="Idioma del motor OCR")
-    parser.add_argument(
         "--threads", "--cpu-threads", dest="cpu_threads", type=int,
         default=None,
         help="Hilos totales del procesador (default: todos los disponibles)",
@@ -122,31 +112,6 @@ def parse_args() -> argparse.Namespace:
         help="Sin preprocesado de los recortes (escala + localización de "
              "tinta): se envía al OCR el recorte crudo. Útil para comparar "
              "motores con escritura a mano.",
-    )
-    parser.add_argument(
-        "--rec-model", default=None,
-        help="Modelo de reconocimiento de PaddleOCR (p. ej. "
-             "PP-OCRv5_mobile_rec, PP-OCRv6_medium_rec). Autodetecta: "
-             "manuscrito si está precargado en portable/paddlex.",
-    )
-    parser.add_argument(
-        "--det-model", default=None,
-        help="Modelo de detección de PaddleOCR (p. ej. "
-             "PP-OCRv6_medium_det, PP-OCRv6_tiny_det). El medium detecta "
-             "manuscrito pequeño que el tiny no capta. Autodetecta: "
-             "medium si está precargado en portable/paddlex.",
-    )
-    parser.add_argument(
-        "--no-date-ocr-fallback", action="store_true",
-        help="Desactivar la segunda pasada OCR (Tesseract restringido) para "
-             "los campos de fecha day/month/year cuando la lectura principal "
-             "falla.",
-    )
-    parser.add_argument(
-        "--no-date-slot-ocr", action="store_true",
-        help="Desactivar la lectura por ranuras de casilla (OCR por carácter "
-             "sobre las celdas que separan las líneas verticales impresas) "
-             "para day/month/year.",
     )
     parser.add_argument(
         "--separar-por", action="append", choices=["avion", "mes"],
@@ -266,14 +231,15 @@ def _run(args: argparse.Namespace) -> int:
         dpi=args.dpi,
         deskew=not args.no_deskew,
         align=not args.no_align,
-        ocr_engine=args.engine,
-        ocr_lang=args.lang,
+        ocr_engine="paddle",
+        ocr_lang="en",
         remove_printed=not args.no_remove_printed,
         crop_preprocess=not args.no_crop_preprocess,
-        ocr_rec_model=args.rec_model,
-        ocr_det_model=args.det_model,
-        date_ocr_fallback=not args.no_date_ocr_fallback,
-        date_slot_ocr=not args.no_date_slot_ocr,
+        ocr_rec_model="PP-OCRv5_mobile_rec",
+        ocr_det_model="PP-OCRv6_medium_det",
+        date_engine_name="",
+        date_ocr_fallback=False,
+        date_slot_ocr=False,
         vlm_enabled=False,
     )
 
@@ -324,11 +290,10 @@ def _run(args: argparse.Namespace) -> int:
         config.ocr_engine, lang=config.ocr_lang, **engine_kwargs
     )
     date_engine = None
-    if args.date_engine:
-        date_engine = create_engine(
-            args.date_engine, lang=config.ocr_lang, **engine_kwargs
-        )
-        print(f"  Motor de fechas: {args.date_engine}")
+    print(
+        "Motor OCR fijo: PaddleOCR "
+        "PP-OCRv6_medium_det + PP-OCRv5_mobile_rec"
+    )
     print(
         f"Hilos seleccionados: {selected_threads} | "
         f"distribución automática: {workers} worker(s) x "
@@ -344,7 +309,7 @@ def _run(args: argparse.Namespace) -> int:
             config.ocr_engine,
             config.ocr_lang,
             cpu_threads,
-            args.date_engine,
+            None,
         )
         if workers > 1 else None
     )
@@ -434,13 +399,19 @@ def _run(args: argparse.Namespace) -> int:
     corrida = Path(csv_name).stem
     datos_dir = run_dir / "datos"
     csv_path = datos_dir / csv_name
-    CsvReporter().write(reports, csv_path, template)
+    from app.reports.dual_csv import write_minimal_csv
+    from app.reports.outputs import complete_csv_path
+
+    full_csv_path = complete_csv_path(csv_path)
+    CsvReporter().write(reports, full_csv_path, template)
+    write_minimal_csv(full_csv_path, csv_path)
     json_path = datos_dir / f"{corrida}.json"
     JsonReporter().write_consolidated(reports, json_path, corrida=corrida)
 
     total_ms = sum(r.processing_ms for r in reports)
     print(f"\nReportes generados:")
-    print(f"  CSV : {csv_path}")
+    print(f"  CSV mínimo : {csv_path}")
+    print(f"  CSV completo: {full_csv_path}")
     print(f"  JSON: {json_path} ({len(reports)} archivo(s))")
 
     # ── Organización: PDFs por avión/mes y discrepancias ────────────────

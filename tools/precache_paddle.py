@@ -10,9 +10,8 @@ completo funciona sin conexión ni instalación.
 Los nombres de modelo son los usados por app/ocr/engine.py:
 el detector ``PP-OCRv6_medium_det`` (mejor con manuscrito pequeño) +
 el reconocedor ``PP-OCRv5_mobile_rec`` (mejor en escritura a mano).
-Ambos se usan automáticamente si están precargados. Como respaldo se
-incluyen el detector ``PP-OCRv6_tiny_det`` y el reconocedor general
-``PP-OCRv6_medium_rec``.
+Ambos son la configuración fija validada. No se precargan modelos alternativos
+porque la aplicación no encadena motores ni cambia de modelo en ejecución.
 """
 
 from __future__ import annotations
@@ -31,8 +30,6 @@ import numpy as np  # noqa: E402
 
 MODELS = [
     ("PP-OCRv6_medium_det", "PP-OCRv5_mobile_rec"),
-    ("PP-OCRv6_medium_det", "PP-OCRv6_medium_rec"),
-    ("PP-OCRv6_tiny_det", "PP-OCRv6_medium_rec"),
 ]
 
 
