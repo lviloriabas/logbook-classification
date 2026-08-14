@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Optional
@@ -64,7 +65,15 @@ def evaluate(truth: dict[str, dict], predictions: dict[str, Optional[str]]) -> d
     return {"counts": dict(counters), "details": details}
 
 
-def _run_reader(truth: dict[str, dict]) -> dict[str, Optional[str]]:
+def _run_reader(
+    truth: dict[str, dict],
+    *,
+    engine_name: str,
+    rec_model: Optional[str],
+    det_model: Optional[str],
+    fallback: bool,
+    slot_ocr: bool,
+) -> tuple[dict[str, Optional[str]], float]:
     import cv2
     from loguru import logger
 
@@ -85,9 +94,21 @@ def _run_reader(truth: dict[str, dict]) -> dict[str, Optional[str]]:
         align=False,
         remove_printed=False,
         vlm_enabled=False,
+        ocr_engine=engine_name,
+        ocr_lang="eng" if engine_name == "tesseract" else "en",
+        date_ocr_fallback=fallback,
+        date_slot_ocr=slot_ocr,
+        ocr_rec_model=rec_model,
+        ocr_det_model=det_model,
     )
-    engine = create_engine("paddle", lang="en", cpu_threads=4)
+    kwargs = {"cpu_threads": 4}
+    if rec_model:
+        kwargs["rec_model"] = rec_model
+    if det_model:
+        kwargs["det_model"] = det_model
+    engine = create_engine(engine_name, lang=config.ocr_lang, **kwargs)
     predictions: dict[str, Optional[str]] = {}
+    started = time.perf_counter()
     for page_number, name in enumerate(truth, start=1):
         image = cv2.imread(str(ROOT / "img" / name))
         if image is None:
@@ -98,16 +119,19 @@ def _run_reader(truth: dict[str, dict]) -> dict[str, Optional[str]]:
         )
         predictions[name] = page.date
         print(f"{name}: {page.date or 'SIN FECHA'}", flush=True)
-    return predictions
+    return predictions, time.perf_counter() - started
 
 
-def _print_report(report: dict) -> None:
+def _print_report(report: dict, elapsed: Optional[float] = None) -> None:
     counts = report["counts"]
     total = counts["total"]
     print("\nResultado")
     for key in ("date_detected", "date_exact", "day_exact", "month_exact", "year_exact"):
         count = counts.get(key, 0)
         print(f"  {key:14}: {count:>3}/{total} ({count / total:6.1%})")
+    if elapsed is not None:
+        print(f"  elapsed_s     : {elapsed:>7.2f}")
+        print(f"  seconds/image : {elapsed / max(total, 1):>7.2f}")
     print("\nErrores")
     for detail in report["details"]:
         if not detail["correct"]:
@@ -122,23 +146,44 @@ def main() -> int:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--run", action="store_true", help="ejecutar el lector actual")
     source.add_argument("--predictions", type=Path, help="JSON {archivo: fecha|null}")
+    parser.add_argument(
+        "--engine", choices=["paddle", "tesseract"], default="paddle",
+        help="motor que se desea comparar",
+    )
+    parser.add_argument("--rec-model", help="modelo Paddle de reconocimiento")
+    parser.add_argument("--det-model", help="modelo Paddle de detección")
+    parser.add_argument(
+        "--fallback", action=argparse.BooleanOptionalAction, default=False,
+        help="activar la segunda pasada Tesseract",
+    )
+    parser.add_argument(
+        "--slot-ocr", action=argparse.BooleanOptionalAction, default=False,
+        help="activar la lectura Tesseract por ranuras",
+    )
     parser.add_argument("--truth", type=Path, default=GROUND_TRUTH)
     parser.add_argument("--save", type=Path, help="guardar predicciones JSON")
     args = parser.parse_args()
 
     truth = _load_truth(args.truth)
-    predictions = (
-        _run_reader(truth)
-        if args.run
-        else json.loads(args.predictions.read_text(encoding="utf-8"))
-    )
+    elapsed = None
+    if args.run:
+        predictions, elapsed = _run_reader(
+            truth,
+            engine_name=args.engine,
+            rec_model=args.rec_model,
+            det_model=args.det_model,
+            fallback=args.fallback,
+            slot_ocr=args.slot_ocr,
+        )
+    else:
+        predictions = json.loads(args.predictions.read_text(encoding="utf-8"))
     if args.save:
         args.save.parent.mkdir(parents=True, exist_ok=True)
         args.save.write_text(
             json.dumps(predictions, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-    _print_report(evaluate(truth, predictions))
+    _print_report(evaluate(truth, predictions), elapsed)
     return 0
 
 
