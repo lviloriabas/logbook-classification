@@ -191,10 +191,11 @@ portable\python312\tools\python.exe tools\precache_paddle.py
 ### 1. CLI
 
 ```batch
-portable\python312\tools\python.exe run_cli.py --pdf input\test.pdf --engine tesseract --lang eng --output-dir output
+portable\python312\tools\python.exe run_cli.py --pdf input\test.pdf --output-dir output
 ```
 
-> Si se usa el motor `paddle` (por defecto) el `--lang` es `en`; el motor `tesseract` usa `--lang eng`.
+El motor se decide internamente: PaddleOCR con `PP-OCRv6_medium_det` y
+`PP-OCRv5_mobile_rec`. No hay selector de motor ni de modelo.
 
 Opciones principales:
 
@@ -208,8 +209,6 @@ Opciones principales:
 | `--limit-books` | — | Procesar solo las primeras N bitácoras (PDFs ordenados de la carpeta de entrada) |
 | `--debug` | — | Generar `debug.pdf` con las páginas originales, sin anotaciones |
 | `--reference-page` | 1 | Página usada como referencia de alineación |
-| `--engine` | `paddle` | Motor OCR (`paddle` o `tesseract`) |
-| `--lang` | `en` | Idioma del motor OCR |
 | `--threads` (`--cpu-threads`) | Todos los disponibles | Hilos totales del procesador; workers y hilos internos se distribuyen automáticamente |
 | `--no-deskew` | — | Desactivar corrección de inclinación |
 | `--no-align` | — | Desactivar alineación |
@@ -224,7 +223,8 @@ Opciones principales:
 > ```
 > BITS 03 AUG 2026 19 40/
 > ├── datos/
-> │   ├── BITS 03 AUG 2026 19 40.CSV     # CSV consolidado
+> │   ├── BITS 03 AUG 2026 19 40.CSV     # CSV mínimo (campos importantes)
+> │   ├── BITS 03 AUG 2026 19 40_completo.CSV # CSV referencial completo
 > │   └── BITS 03 AUG 2026 19 40.json    # JSON consolidado (mismo nombre)
 > ├── stats.json                         # estadísticas de la corrida
 > ├── discrepancias.pdf                  # (opcional, --discrepancias)
@@ -236,7 +236,7 @@ Opciones principales:
 Ejemplo con modo debug y límite de bitácoras:
 
 ```batch
-portable\python312\tools\python.exe run_cli.py --debug --limit-books 2 --engine tesseract --lang eng
+portable\python312\tools\python.exe run_cli.py --debug --limit-books 2
 ```
 
 ## Organización en PDFs y discrepancias de firma
@@ -330,8 +330,8 @@ portable\python312\tools\python.exe run_gui.py
    corridas exportadas; ambos piden confirmación y se bloquean mientras hay
    procesamiento o exportación en curso.
 2. Seleccionar plantilla.
-3. Procesamiento: motor OCR (`PaddleOCR` o `Tesseract`) con idioma
-   automático, "Bitácoras" (primeras N, 0 = todas), "Páginas" por bitácora,
+3. Procesamiento: motor PaddleOCR fijo, "Bitácoras" (primeras N, 0 = todas),
+   "Páginas" por bitácora,
    corrección de inclinación y alineación.
 4. Preprocesamiento: **Preprocesar** aplica corrección de inclinación y
    alineación sin ejecutar OCR, para revisar visualmente las páginas antes del
@@ -344,9 +344,8 @@ portable\python312\tools\python.exe run_gui.py
    **Fecha del CSV** alterna entre día específico y último día del mes; después
    de procesar, el cambio reescribe inmediatamente solo el CSV y actualiza la
    tabla, sin reprocesar ni regenerar los PDFs.
- 6. Opciones avanzadas (colapsable): hilos totales del procesador, página de
-    referencia y OCR de respaldo/ranuras. Las fechas se procesan con
-    Qwen3-VL-8B-Instruct automáticamente cuando el runtime está instalado.
+ 6. Opciones avanzadas (colapsable): hilos totales del procesador y página de
+    referencia. El motor OCR y los modelos no se exponen como opciones.
     La aplicación detecta los hilos disponibles, selecciona todos por defecto
     y distribuye automáticamente el trabajo entre workers e hilos internos.
 7. Procesar → barra de progreso con tiempo transcurrido, restante estimado
@@ -478,15 +477,9 @@ información de validación permanece en CSV, JSON y logs.
 
 ## Fiabilidad de la fase de detección
 
-Dos capas de robustez mejoran la lectura de firmas y campos críticos sin
-cambiar el resto del flujo:
-
-**Redundancia OCR (activada por defecto).** Si la lectura principal
-(PaddleOCR) de un campo crítico no produce un valor válido, se reintenta
-ese mismo recorte con Tesseract restringido (PSM 7 + whitelist según el
-campo: dígitos / letras de meses / alfanumérico-guion para matrícula).
-Cubre día/mes/año, matrícula y `log_number`. Se puede desactivar con
-`--no-date-ocr-fallback`.
+La lectura de producción usa una sola pasada PaddleOCR con los modelos
+validados. Tesseract no se encadena como fallback; las fechas incompletas se
+resuelven conservadoramente con el orden de `log_number` dentro del mismo libro.
 
 **Procedencia de resultados.** Cada campo conserva su estado, comentario y
 origen (`ocr`, `ocr_fallback`, `vision`, `vlm` o `inferred`). Esto permite

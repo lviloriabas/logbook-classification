@@ -28,3 +28,13 @@ def test_cli_uses_validated_fixed_ocr_configuration():
     assert "date_slot_ocr=False" in CLI_SOURCE
     assert "complete_csv_path(csv_path)" in CLI_SOURCE
     assert "write_minimal_csv(full_csv_path, csv_path)" in CLI_SOURCE
+
+
+def test_application_engine_has_no_alternative_model_fallback_names():
+    root = Path(__file__).resolve().parents[1]
+    application_source = "\n".join(
+        (root / path).read_text(encoding="utf-8")
+        for path in ("app/ocr/engine.py", "app/core/config.py")
+    )
+    assert "PP-OCRv6_medium_rec" not in application_source
+    assert "PP-OCRv6_tiny_det" not in application_source

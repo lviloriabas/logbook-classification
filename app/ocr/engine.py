@@ -56,21 +56,16 @@ class OcrEngine(Protocol):
 class PaddleOcrEngine:
     """Motor OCR basado en PaddleOCR (carga perezosa).
 
-    Por defecto usa det ``PP-OCRv6_tiny_det`` (rápido en CPU, mantiene los
-    recuadros del texto manuscrito). Para el reconocimiento se elige el
-    mejor modelo disponible en la caché portable (portable/paddlex/
-    official_models): ``PP-OCRv5_mobile_rec`` es la generación con mejor
-    rendimiento en escritura a mano (documentado por PaddleOCR) y se
-    prefiere si está precargada; si no, la general ``PP-OCRv6_medium_rec``.
-    Se puede forzar con ``rec_model`` (path local o nombre registrado).
+    La aplicación usa la pareja validada ``PP-OCRv6_medium_det`` y
+    ``PP-OCRv5_mobile_rec``. Los parámetros explícitos se conservan para las
+    herramientas diagnósticas, pero no existe selección automática de un
+    modelo alternativo en producción.
     """
 
     name = "paddle"
 
     _HANDWRITTEN_REC_MODEL = "PP-OCRv5_mobile_rec"
-    _DEFAULT_REC_MODEL = "PP-OCRv6_medium_rec"
     _HANDWRITTEN_DET_MODEL = "PP-OCRv6_medium_det"
-    _DEFAULT_DET_MODEL = "PP-OCRv6_tiny_det"
 
     def __init__(self, lang: str = "en", cpu_threads: Optional[int] = None,
                  det_model: Optional[str] = None,
@@ -84,34 +79,13 @@ class PaddleOcrEngine:
 
     @classmethod
     def _auto_rec_model(cls) -> str:
-        """Elige el modelo de reconocimiento según la caché portable.
-
-        Si el modelo v5 (mejor en escritura a mano) ya está precargado en
-        portable/paddlex/official_models se usa automáticamente; si no, la
-        general v6. Todo dentro de la carpeta del proyecto: portabilidad
-        total, sin descargas en tiempo de ejecución.
-        """
-        root = Path(__file__).resolve().parents[2]
-        cached = (
-            root / "portable" / "paddlex" / "official_models"
-            / cls._HANDWRITTEN_REC_MODEL
-        )
-        if cached.is_dir():
-            return cls._HANDWRITTEN_REC_MODEL
-        return cls._DEFAULT_REC_MODEL
+        """Modelo de reconocimiento fijo validado para escritura a mano."""
+        return cls._HANDWRITTEN_REC_MODEL
 
     @classmethod
     def _auto_det_model(cls) -> str:
-        """Detector: usa el medium (mejor con manuscrito pequeño) si está
-        precargado; si no, el tiny (más rápido). Todo portable."""
-        root = Path(__file__).resolve().parents[2]
-        cached = (
-            root / "portable" / "paddlex" / "official_models"
-            / cls._HANDWRITTEN_DET_MODEL
-        )
-        if cached.is_dir():
-            return cls._HANDWRITTEN_DET_MODEL
-        return cls._DEFAULT_DET_MODEL
+        """Detector fijo validado para manuscrito pequeño."""
+        return cls._HANDWRITTEN_DET_MODEL
 
     @classmethod
     def describe_models(cls) -> str:
