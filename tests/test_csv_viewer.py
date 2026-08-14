@@ -9,7 +9,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from app.gui.csv_viewer import CsvColumnModeButton, CsvViewerWindow
+from app.gui.csv_viewer import (
+    CsvColumnModeButton,
+    CsvViewerWindow,
+    source_pdf_paths_for_rows,
+)
 from app.gui.csv_utils import (
     csv_field_id,
     find_csv_files,
@@ -136,3 +140,51 @@ def test_column_control_is_hidden_until_a_csv_is_loaded(tmp_path: Path):
     assert viewer.load_folder(run) is True
     app.processEvents()
     assert not viewer.column_toggle.isHidden()
+
+
+def test_companion_json_resolves_source_pdf_per_csv_row(tmp_path: Path):
+    source_a = tmp_path / "source-a" / "same.pdf"
+    source_b = tmp_path / "source-b" / "same.pdf"
+    data = tmp_path / "run" / "datos"
+    data.mkdir(parents=True)
+    csv_path = data / "run.csv"
+    csv_path.write_text("file,page,log_number\nsame.pdf,1,1234500\nsame.pdf,1,2234500\n")
+    csv_path.with_suffix(".json").write_text(
+        __import__("json").dumps(
+            {
+                "reportes": [
+                    {"pdf_path": str(source_a), "pages": [{"page_number": 1}]},
+                    {"pdf_path": str(source_b), "pages": [{"page_number": 1}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rows = [
+        {"file": "same.pdf", "page": "1", "log_number": "1234500"},
+        {"file": "same.pdf", "page": "1", "log_number": "2234500"},
+    ]
+    assert source_pdf_paths_for_rows(csv_path, rows) == [source_a, source_b]
+
+
+def test_log_search_selects_exact_seven_digit_match(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    run = tmp_path / "run"
+    data = run / "datos"
+    data.mkdir(parents=True)
+    (data / "run.csv").write_text(
+        "file,page,log_number\na.pdf,3,1234500\nb.pdf,7,1234501\n",
+        encoding="utf-8",
+    )
+    viewer = CsvViewerWindow(tmp_path)
+    assert viewer.load_folder(run)
+
+    viewer.log_search.setText("1234501")
+    viewer._find_log_number()
+
+    assert viewer._search_matches == [1]
+    assert viewer.table.currentRow() == 1
+    assert "b.pdf, página 7" in viewer.search_context.text()
+    viewer.close()
+    app.processEvents()

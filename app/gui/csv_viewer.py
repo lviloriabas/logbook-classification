@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 from typing import Iterable
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
+from PySide6.QtCore import QRegularExpression, QSize, Qt
+from PySide6.QtGui import (
+    QColor,
+    QIcon,
+    QImage,
+    QPixmap,
+    QRegularExpressionValidator,
+)
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -43,6 +50,51 @@ _STATUS_COLORS = {
     "ERROR": "#cf222e",
 }
 _ASSETS = Path(__file__).resolve().parents[2] / "assets"
+
+
+def source_pdf_paths_for_rows(
+    csv_path: Path, rows: Iterable[dict[str, str]]
+) -> list[Path | None]:
+    """Resuelve el PDF fuente de cada fila usando el JSON consolidado.
+
+    El CSV guarda solo el nombre del archivo. El JSON compañero conserva la
+    ruta completa y el orden exacto reporte/página, por lo que también evita
+    ambigüedad cuando se procesaron varios PDF con el mismo nombre.
+    """
+    row_list = list(rows)
+    companion = Path(csv_path).with_suffix(".json")
+    flattened: list[tuple[str, str, Path]] = []
+    try:
+        payload = json.loads(companion.read_text(encoding="utf-8"))
+        reports = payload.get("reportes", [])
+        for report in reports:
+            pdf_path = Path(str(report.get("pdf_path", "")))
+            filename = pdf_path.name.casefold()
+            for page in report.get("pages", []):
+                flattened.append(
+                    (filename, str(page.get("page_number", "")), pdf_path)
+                )
+    except (OSError, ValueError, TypeError, AttributeError):
+        flattened = []
+
+    # La escritura consolidada recorre reportes y páginas en este mismo orden.
+    if len(flattened) == len(row_list) and all(
+        source_name == row.get("file", "").casefold()
+        and source_page == row.get("page", "")
+        for row, (source_name, source_page, _path) in zip(row_list, flattened)
+    ):
+        return [entry[2] for entry in flattened]
+
+    by_key: dict[tuple[str, str], list[Path]] = {}
+    for filename, page, pdf_path in flattened:
+        by_key.setdefault((filename, page), []).append(pdf_path)
+    resolved: list[Path | None] = []
+    for row in row_list:
+        candidates = by_key.get(
+            (row.get("file", "").casefold(), row.get("page", "")), []
+        )
+        resolved.append(candidates[0] if len(candidates) == 1 else None)
+    return resolved
 
 
 def apply_csv_column_visibility(
@@ -241,6 +293,9 @@ class CsvViewerWindow(QMainWindow):
         self._rows: list[dict[str, str]] = []
         self._important_field_ids: set[str] = set()
         self._selected_important_columns: set[str] = set()
+        self._row_pdf_paths: list[Path | None] = []
+        self._search_matches: list[int] = []
+        self._search_position = -1
 
         self.setWindowTitle("Visor de CSV procesados")
         self.resize(1180, 720)
@@ -285,6 +340,32 @@ class CsvViewerWindow(QMainWindow):
         self.important_fields_button.clicked.connect(self._open_field_selector)
         controls.addWidget(self.important_fields_button)
         layout.addLayout(controls)
+
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("Número de bitácora:"))
+        self.log_search = QLineEdit()
+        self.log_search.setPlaceholderText("7 dígitos")
+        self.log_search.setMaxLength(7)
+        self.log_search.setValidator(
+            QRegularExpressionValidator(QRegularExpression(r"\d{0,7}"), self)
+        )
+        self.log_search.returnPressed.connect(self._find_log_number)
+        search_row.addWidget(self.log_search)
+        search = QPushButton("Buscar")
+        search.clicked.connect(self._find_log_number)
+        search_row.addWidget(search)
+        self.search_prev = QPushButton("‹")
+        self.search_prev.setToolTip("Coincidencia anterior")
+        self.search_prev.clicked.connect(lambda: self._move_search(-1))
+        search_row.addWidget(self.search_prev)
+        self.search_next = QPushButton("›")
+        self.search_next.setToolTip("Coincidencia siguiente")
+        self.search_next.clicked.connect(lambda: self._move_search(1))
+        search_row.addWidget(self.search_next)
+        self.search_context = QLabel("Ingrese exactamente 7 dígitos.")
+        self.search_context.setStyleSheet("color: #57606a;")
+        search_row.addWidget(self.search_context, 1)
+        layout.addLayout(search_row)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.table = QTableWidget(0, 0)
@@ -370,6 +451,9 @@ class CsvViewerWindow(QMainWindow):
         self.important_fields_button.setVisible(bool(columns))
         self._apply_column_mode()
         self._load_pdf_paths(path)
+        self._search_matches = []
+        self._search_position = -1
+        self._sync_search_controls()
         self.setWindowTitle(f"Visor de CSV — {path.name}")
 
     def _populate_table(self) -> None:
@@ -383,6 +467,7 @@ class CsvViewerWindow(QMainWindow):
             for row_index, row in enumerate(self._rows):
                 for column_index, column in enumerate(self._columns):
                     item = QTableWidgetItem(row.get(column, ""))
+                    item.setData(Qt.ItemDataRole.UserRole, row_index)
                     status = self._status_for(row, column)
                     if status:
                         comment = row.get(f"{csv_field_id(column, self._columns)}_comment")
@@ -399,13 +484,87 @@ class CsvViewerWindow(QMainWindow):
         self.table.setSortingEnabled(True)
 
     def _load_pdf_paths(self, csv_path: Path) -> None:
+        self._row_pdf_paths = source_pdf_paths_for_rows(csv_path, self._rows)
         paths = list(csv_path.parent.parent.rglob("*.pdf"))
         paths.extend(csv_path.parent.rglob("*.pdf"))
+        paths.extend(path for path in self._row_pdf_paths if path is not None)
         for row in self._rows:
             candidate = Path(row.get("file", ""))
             if candidate.is_file():
                 paths.append(candidate)
         self.pdf_viewer.load_paths(paths)
+
+    def _find_log_number(self) -> None:
+        value = self.log_search.text().strip()
+        if len(value) != 7 or not value.isdigit():
+            self._search_matches = []
+            self._search_position = -1
+            self.search_context.setText("La bitácora debe tener exactamente 7 dígitos.")
+            self._sync_search_controls()
+            return
+        self._search_matches = [
+            index
+            for index, row in enumerate(self._rows)
+            if row.get("log_number", "").strip() == value
+        ]
+        self._search_position = 0 if self._search_matches else -1
+        if not self._search_matches:
+            self.search_context.setText(f"Bitácora {value}: sin coincidencias.")
+            self._sync_search_controls()
+            return
+        self._show_search_match()
+
+    def _move_search(self, offset: int) -> None:
+        if not self._search_matches:
+            return
+        self._search_position = (
+            self._search_position + offset
+        ) % len(self._search_matches)
+        self._show_search_match()
+
+    def _show_search_match(self) -> None:
+        source_row = self._search_matches[self._search_position]
+        display_row = next(
+            (
+                row
+                for row in range(self.table.rowCount())
+                if self.table.item(row, 0)
+                and self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+                == source_row
+            ),
+            -1,
+        )
+        log_column = self._columns.index("log_number")
+        if display_row >= 0:
+            self.table.selectRow(display_row)
+            self.table.setCurrentCell(display_row, log_column)
+            self.table.scrollToItem(self.table.item(display_row, log_column))
+
+        row = self._rows[source_row]
+        try:
+            page = int(row.get("page", ""))
+        except ValueError:
+            page = 0
+        path = (
+            self._row_pdf_paths[source_row]
+            if source_row < len(self._row_pdf_paths)
+            else None
+        )
+        if path is not None and page > 0 and path.is_file():
+            self.pdf_viewer.show_page(page, path)
+            location = f"{path.name}, página {page}"
+        else:
+            location = f"{row.get('file', 'PDF desconocido')}, página {page or '?'}"
+        self.search_context.setText(
+            f"Coincidencia {self._search_position + 1} de "
+            f"{len(self._search_matches)} · {location}"
+        )
+        self._sync_search_controls()
+
+    def _sync_search_controls(self) -> None:
+        multiple = len(self._search_matches) > 1
+        self.search_prev.setEnabled(multiple)
+        self.search_next.setEnabled(multiple)
 
     def _open_field_selector(self) -> None:
         dialog = ImportantFieldsDialog(
