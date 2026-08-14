@@ -43,14 +43,14 @@ class AppConfig(BaseModel):
                     "comparar motores/resultados (escritura a mano).",
     )
     date_ocr_fallback: bool = Field(
-        default=True,
+        default=False,
         description="Segunda pasada OCR (Tesseract restringido) para los "
                     "campos de fecha day/month/year y los campos críticos "
                     "(matricula, log_number) cuando la lectura principal de "
                     "PaddleOCR no produce un valor válido.",
     )
     date_slot_ocr: bool = Field(
-        default=True,
+        default=False,
         description="Lectura estructurada para day/month/year: segmentación de la "
                     "casilla en ranuras (según los separadores verticales "
                     "impresos) y OCR por carácter con restricciones "
@@ -115,14 +115,14 @@ class AppConfig(BaseModel):
     date_dpi: int = Field(default=600, ge=72, le=600,
                           description="DPI del renderizado para regiones de fecha")
     ocr_rec_model: Optional[str] = Field(
-        default=None,
+        default="PP-OCRv5_mobile_rec",
         description="Modelo de reconocimiento de PaddleOCR para forzar "
                     "(p. ej. PP-OCRv5_mobile_rec o PP-OCRv6_medium_rec). "
                     "None = automático: se usa el manuscrito si está "
                     "precargado en portable/paddlex, si no el general.",
     )
     ocr_det_model: Optional[str] = Field(
-        default=None,
+        default="PP-OCRv6_medium_det",
         description="Modelo de detección de PaddleOCR (None = automático: "
                     "PP-OCRv6_medium_det si está precargado en "
                     "portable/paddlex, si no PP-OCRv6_tiny_det). El "

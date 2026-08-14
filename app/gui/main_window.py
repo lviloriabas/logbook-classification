@@ -583,22 +583,12 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(group)
         row.setSpacing(10)
 
-        row.addWidget(QLabel("Motor:"))
-        self.engine_combo = QComboBox()
-        self.engine_combo.addItem("PaddleOCR (recomendado)", "paddle")
-        self.engine_combo.addItem("Tesseract", "tesseract")
-        self.engine_combo.setToolTip("Motor de reconocimiento de texto")
-        row.addWidget(self.engine_combo)
-
-        row.addWidget(QLabel("Motor fechas:"))
-        self.date_engine_combo = QComboBox()
-        self.date_engine_combo.addItem("(usar mismo)", "")
-        self.date_engine_combo.addItem("PaddleOCR", "paddle")
-        self.date_engine_combo.addItem("Tesseract", "tesseract")
-        self.date_engine_combo.setToolTip(
-            "Motor específico para campos de fecha (day/month/year)"
+        engine_label = QLabel("OCR: Paddle v5 (automático)")
+        engine_label.setToolTip(
+            "Motor fijado internamente tras la evaluación de precisión; no "
+            "requiere configuración del usuario."
         )
-        row.addWidget(self.date_engine_combo)
+        row.addWidget(engine_label)
 
         row.addWidget(QLabel("Archivos:"))
         self.limit_spin = QSpinBox()
@@ -848,28 +838,12 @@ class MainWindow(QMainWindow):
             "repetida."
         )
         check_row.addWidget(self.remove_printed_check)
-        self.date_fallback_check = QCheckBox("OCR de respaldo para fechas")
-        self.date_fallback_check.setChecked(True)
-        self.date_fallback_check.setToolTip(
-            "Reintenta la lectura de día/mes/año, matrícula y log_number con "
-            "Tesseract restringido cuando la lectura principal de PaddleOCR "
-            "no produce un valor válido."
-        )
-        check_row.addWidget(self.date_fallback_check)
-        self.date_slot_check = QCheckBox("OCR por ranuras de casilla")
-        self.date_slot_check.setChecked(True)
-        self.date_slot_check.setToolTip(
-            "Para las fechas: detecta las celdas entre las líneas verticales "
-            "impresas y lee carácter por carácter (dígitos y mes) con "
-            "restricciones. La lectura por posiciones verifica siempre el "
-            "OCR global cuando la retícula está disponible."
-        )
-        check_row.addWidget(self.date_slot_check)
         check_row.addStretch()
         adv.addLayout(check_row)
 
         date_info = QLabel(
-            "Fechas manuscritas: lectura DD|MMM|AA por retícula, sin VLM."
+            "OCR fijo: Paddle PP-OCRv5 mobile + detector v6 medium, sin "
+            "cadena de motores de respaldo ni VLM."
         )
         date_info.setStyleSheet("color: #57606a;")
         adv.addWidget(date_info)
@@ -1847,19 +1821,19 @@ class MainWindow(QMainWindow):
 
     def _current_processing_config(self) -> AppConfig:
         """Captura las opciones compartidas por preprocesamiento y OCR."""
-        engine = self.engine_combo.currentData() or "paddle"
-        date_engine_name = self.date_engine_combo.currentData() or ""
         return AppConfig(
             dpi=200,
             deskew=self.deskew_check.isChecked(),
             align=self.align_check.isChecked(),
-            ocr_engine=engine,
-            ocr_lang="eng" if engine == "tesseract" else "en",
-            date_engine_name=date_engine_name,
+            ocr_engine="paddle",
+            ocr_lang="en",
+            date_engine_name="",
+            ocr_rec_model="PP-OCRv5_mobile_rec",
+            ocr_det_model="PP-OCRv6_medium_det",
             remove_printed=self.remove_printed_check.isChecked(),
             crop_preprocess=self.crop_preprocess_check.isChecked(),
-            date_ocr_fallback=self.date_fallback_check.isChecked(),
-            date_slot_ocr=self.date_slot_check.isChecked(),
+            date_ocr_fallback=False,
+            date_slot_ocr=False,
             date_dynamic_geometry=True,
             vlm_enabled=False,
             verify_fleet=self.fleet_check.isChecked(),
