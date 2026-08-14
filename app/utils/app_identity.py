@@ -16,6 +16,8 @@ SM_CXICON = 11
 SM_CYICON = 12
 SM_CXSMICON = 49
 SM_CYSMICON = 50
+GCLP_HICON = -14
+GCLP_HICONSM = -34
 
 
 def set_windows_taskbar_icon(
@@ -61,6 +63,13 @@ def set_windows_taskbar_icon(
             return False
         user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, big)
         user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small)
+        # Windows 11 puede consultar el icono de la clase en lugar de enviar
+        # WM_GETICON cuando crea o reagrupa el botón de la barra de tareas.
+        # Se actualizan ambos orígenes con los mismos handles.
+        set_class_icon = user32.SetClassLongPtrW
+        set_class_icon.restype = ctypes.c_void_p
+        set_class_icon(hwnd, GCLP_HICON, big)
+        set_class_icon(hwnd, GCLP_HICONSM, small)
         # Los HICON deben permanecer válidos durante toda la vida del HWND.
         # El proceso los libera al cerrarse; dos handles por ventana son
         # preferibles a destruirlos mientras Windows aún puede consultarlos.

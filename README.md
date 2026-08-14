@@ -158,7 +158,7 @@ Una vez reconstruida `portable/`, regenere el launcher:
 
 ```batch
 portable\python312\tools\python.exe -m pip install pyinstaller
-portable\python312\tools\python.exe -m PyInstaller --onefile --noconsole --name LogbookClassification --icon assets\icon.ico --distpath . --workpath build --specpath build launcher_gui.py
+portable\python312\tools\python.exe tools\build_launcher.py
 ```
 
 ## Uso
@@ -178,7 +178,7 @@ Si se quiere regenerar el launcher o el cache de modelos en otra máquina:
 
 ```batch
 portable\python312\tools\python.exe -m pip install pyinstaller
-portable\python312\tools\python.exe -m PyInstaller --onefile --noconsole --name LogbookClassification --icon assets\icon.ico --distpath . --workpath build --specpath build launcher_gui.py
+portable\python312\tools\python.exe tools\build_launcher.py
 
 portable\python312\tools\python.exe tools\make_icon.py     # (re)genera assets\icon.png e icon.ico
 portable\python312\tools\python.exe tools\precache_paddle.py

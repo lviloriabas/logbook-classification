@@ -67,6 +67,11 @@ from PySide6.QtWidgets import (
 
 from app.core.config import AppConfig
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
+from app.gui.csv_viewer import (
+    CsvColumnModeButton,
+    CsvViewerWindow,
+    apply_csv_column_visibility,
+)
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
 from app.models.schemas import Status, ValidationReport
 from app.reports.csv_reporter import CsvReporter
@@ -401,6 +406,8 @@ class MainWindow(QMainWindow):
         self._table_timer.timeout.connect(self._on_table_chunk)
         self._table_columns: list[str] = []
         self._table_pending: list = []
+        self._table_important_field_ids: set[str] = set()
+        self._csv_viewer: CsvViewerWindow | None = None
 
         self._preview_thread = QThread(self)
         self._preview_loader = PreviewLoader()
@@ -505,6 +512,13 @@ class MainWindow(QMainWindow):
         self.btn_editor.setAccessibleName("Abrir editor de plantillas")
         self.btn_editor.clicked.connect(self._open_template_editor)
         grid.addWidget(self.btn_editor, 1, 3)
+
+        self.btn_csv_viewer = QPushButton("Visor de CSV…")
+        self.btn_csv_viewer.setToolTip(
+            "Abrir una ventana independiente para consultar una corrida procesada"
+        )
+        self.btn_csv_viewer.clicked.connect(self._open_csv_viewer)
+        grid.addWidget(self.btn_csv_viewer, 1, 4)
 
         self.estimate_label = QLabel("")
         self.estimate_label.setStyleSheet("color: #667085;")
@@ -1017,8 +1031,24 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.cellDoubleClicked.connect(self._jump_to_page)
 
+        table_panel = QWidget()
+        table_layout = QVBoxLayout(table_panel)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_toolbar = QHBoxLayout()
+        table_title = QLabel("Resultados CSV")
+        table_title.setStyleSheet("font-weight: 600;")
+        table_toolbar.addWidget(table_title)
+        table_toolbar.addStretch()
+        self.csv_columns_toggle = CsvColumnModeButton()
+        self.csv_columns_toggle.setEnabled(False)
+        self.csv_columns_toggle.setVisible(False)
+        self.csv_columns_toggle.toggled.connect(self._apply_csv_table_view)
+        table_toolbar.addWidget(self.csv_columns_toggle)
+        table_layout.addLayout(table_toolbar)
+        table_layout.addWidget(self.table, 1)
+
         splitter.addWidget(preview_widget)
-        splitter.addWidget(self.table)
+        splitter.addWidget(table_panel)
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
         return splitter
@@ -1381,6 +1411,15 @@ class MainWindow(QMainWindow):
             return
         logger.info("Editor de plantillas abierto")
 
+    def _open_csv_viewer(self) -> None:
+        """Abre el visor de corridas como una ventana independiente."""
+        if self._csv_viewer is None:
+            self._csv_viewer = CsvViewerWindow(SCRIPT_DIR / "output", self)
+            self._csv_viewer.setWindowIcon(self.windowIcon())
+        self._csv_viewer.show()
+        self._csv_viewer.raise_()
+        self._csv_viewer.activateWindow()
+
     def _separator_value(self) -> list[str] | None:
         """Devuelve las claves para generar_pdfs según las casillas."""
         separator = []
@@ -1571,6 +1610,9 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, max(1, self._total_pages_for(resolved)))
         self.progress.setValue(0)
         self.table.setRowCount(0)
+        self.table.setColumnCount(0)
+        self.csv_columns_toggle.setEnabled(False)
+        self.csv_columns_toggle.setVisible(False)
         self._table_timer.stop()
         self._table_pending = []
         self._clear_times()
@@ -2035,6 +2077,15 @@ class MainWindow(QMainWindow):
             self.table.setHorizontalHeaderLabels(columns)
             self.table.setRowCount(len(pending))
             self._table_columns = columns
+            self._table_important_field_ids = {
+                field.id
+                for field in (self._processed_template.fields
+                              if self._processed_template is not None else [])
+                if field.required
+            }
+            self.csv_columns_toggle.setEnabled(bool(columns))
+            self.csv_columns_toggle.setVisible(bool(columns))
+            self._apply_csv_table_view()
             self._table_pending = pending
             if pending:
                 self.btn_prev.setEnabled(False)
@@ -2042,6 +2093,15 @@ class MainWindow(QMainWindow):
                 self._table_timer.start()
         finally:
             self.table.setUpdatesEnabled(True)
+
+    def _apply_csv_table_view(self, _checked: bool | None = None) -> None:
+        """Alterna la tabla entre valores principales y todas las columnas."""
+        apply_csv_column_visibility(
+            self.table,
+            self._table_columns,
+            self._table_important_field_ids,
+            self.csv_columns_toggle.isChecked(),
+        )
 
     def _on_table_chunk(self) -> None:
         if not self._table_pending:

@@ -19,31 +19,33 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "assets"
 
+BACKGROUND = (22, 52, 93)    # #16345d
 PAPER = (255, 255, 255)      # #ffffff
-OUTLINE = (184, 201, 224)    # #b8c9e0
-FOLD = (211, 226, 245)       # #d3e2f5
-LINE = (198, 215, 236)       # #c6d7ec
+FOLD = (102, 185, 242)       # #66b9f2
+LINE = (138, 168, 199)       # #8aa8c7
+CHECK = (45, 190, 115)       # #2dbe73
 
 
 def draw_icon(size: int) -> Image.Image:
-    """Dibuja el icono a un tamaño dado (solo el papel, sin fondo)."""
+    """Dibuja un icono de bitácora legible incluso a 16 px."""
     s = size / 512.0
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    # Papel plano con contorno sutil.
-    d.rounded_rectangle([64 * s, 56 * s, 448 * s, 456 * s],
-                        radius=max(2, int(20 * s)),
-                        fill=PAPER, outline=OUTLINE,
-                        width=max(1, int(10 * s)))
+    # Fondo oscuro: evita que la hoja desaparezca sobre la taskbar clara.
+    d.rounded_rectangle([20 * s, 20 * s, 492 * s, 492 * s],
+                        radius=max(2, int(92 * s)), fill=BACKGROUND)
+    d.rounded_rectangle([105 * s, 65 * s, 407 * s, 447 * s],
+                        radius=max(2, int(28 * s)), fill=PAPER)
     # Esquina doblada.
-    d.polygon([(348 * s, 56 * s), (448 * s, 56 * s),
-               (448 * s, 166 * s), (348 * s, 146 * s)], fill=FOLD)
+    d.polygon([(312 * s, 65 * s), (407 * s, 65 * s),
+               (407 * s, 165 * s), (312 * s, 145 * s)], fill=FOLD)
     # Líneas de texto.
-    for x, y, w in ((104, 160, 180), (104, 212, 280),
-                    (104, 264, 240), (104, 316, 150)):
+    for x, y, w in ((145, 185, 210), (145, 235, 165)):
         d.rounded_rectangle([x * s, y * s, (x + w) * s, (y + 20) * s],
                             radius=max(1, int(10 * s)), fill=LINE)
+    d.line([(145 * s, 350 * s), (195 * s, 400 * s), (295 * s, 290 * s)],
+           fill=CHECK, width=max(2, int(30 * s)), joint="curve")
     return img
 
 

@@ -3,6 +3,8 @@
 from unittest.mock import call, patch
 
 from app.utils.app_identity import (
+    GCLP_HICON,
+    GCLP_HICONSM,
     ICON_BIG,
     ICON_SMALL,
     WM_SETICON,
@@ -33,6 +35,10 @@ def test_installs_big_and_small_icons_on_the_native_window(tmp_path):
     assert user32.SendMessageW.call_args_list == [
         call(12345, WM_SETICON, ICON_BIG, 1001),
         call(12345, WM_SETICON, ICON_SMALL, 1002),
+    ]
+    assert user32.SetClassLongPtrW.call_args_list == [
+        call(12345, GCLP_HICON, 1001),
+        call(12345, GCLP_HICONSM, 1002),
     ]
 
 
