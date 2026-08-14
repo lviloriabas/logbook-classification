@@ -16,14 +16,11 @@ ensure_portable_env()
 os.chdir(_ROOT)
 
 from app.utils.logging import setup_logging
-from app.utils.app_identity import set_windows_app_user_model_id
+from app.utils.app_identity import set_windows_taskbar_icon
 
 
 def main() -> int:
     setup_logging(Path("output") / "logs")
-    # El proceso visible es pythonw.exe, no el lanzador. Esta identidad evita
-    # que Windows muestre o agrupe la ventana con el icono genérico de Python.
-    set_windows_app_user_model_id()
     try:
         from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QApplication
@@ -49,6 +46,7 @@ def main() -> int:
     window = MainWindow()
     window.setWindowIcon(app_icon)
     window.show()
+    set_windows_taskbar_icon(window, icon)
     # Detectar PDFs y calcular la estimación puede tocar archivos grandes.
     # Se difiere para que la ventana sea visible inmediatamente.
     QTimer.singleShot(0, window.load_initial_data)

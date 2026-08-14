@@ -1,31 +1,70 @@
-"""Identidad estable de la aplicación para el shell de Windows."""
+"""Integración de la ventana de la aplicación con el shell de Windows."""
 
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+from typing import Any
 
 
-APP_USER_MODEL_ID = "BITS.LogbookClassification"
+WM_SETICON = 0x0080
+ICON_SMALL = 0
+ICON_BIG = 1
+IMAGE_ICON = 1
+LR_LOADFROMFILE = 0x0010
+SM_CXICON = 11
+SM_CYICON = 12
+SM_CXSMICON = 49
+SM_CYSMICON = 50
 
 
-def set_windows_app_user_model_id(
-    app_id: str = APP_USER_MODEL_ID,
+def set_windows_taskbar_icon(
+    window: Any,
+    icon_path: Path | str,
 ) -> bool:
-    """Asocia el proceso actual con el ejecutable BITS en la barra de tareas.
+    """Instala el ICO en la ventana nativa que consulta la barra de tareas.
 
-    La distribución usa un ``.exe`` lanzador que inicia ``pythonw.exe``. Sin
-    un AppUserModelID explícito, Windows puede identificar la ventana como
-    Python y sustituir su icono por el genérico. Debe llamarse antes de crear
-    ``QApplication``.
+    ``QApplication.setWindowIcon`` sigue siendo el mecanismo portable. Este
+    refuerzo se ejecuta después de ``show()`` y envía ``WM_SETICON`` con ambos
+    tamaños al HWND real. No se fija un AppUserModelID personalizado: Windows
+    exige registrar un acceso directo para esos IDs y, si no existe, puede
+    sustituir el icono de la ventana por uno genérico.
     """
-    if sys.platform != "win32":
+    path = Path(icon_path)
+    if sys.platform != "win32" or path.suffix.lower() != ".ico":
+        return False
+    if not path.is_file():
         return False
     try:
         import ctypes
 
-        result = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            app_id
-        )
-    except (AttributeError, OSError):
+        user32 = ctypes.windll.user32
+        load_image = user32.LoadImageW
+        load_image.restype = ctypes.c_void_p
+        hwnd = int(window.winId())
+
+        def load(metric_x: int, metric_y: int) -> int:
+            width = user32.GetSystemMetrics(metric_x)
+            height = user32.GetSystemMetrics(metric_y)
+            return int(load_image(
+                None,
+                str(path.resolve()),
+                IMAGE_ICON,
+                width,
+                height,
+                LR_LOADFROMFILE,
+            ) or 0)
+
+        big = load(SM_CXICON, SM_CYICON)
+        small = load(SM_CXSMICON, SM_CYSMICON)
+        if not big or not small:
+            return False
+        user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, big)
+        user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small)
+        # Los HICON deben permanecer válidos durante toda la vida del HWND.
+        # El proceso los libera al cerrarse; dos handles por ventana son
+        # preferibles a destruirlos mientras Windows aún puede consultarlos.
+        window._bits_native_icon_handles = (big, small)
+    except (AttributeError, OSError, TypeError, ValueError):
         return False
-    return result == 0
+    return True

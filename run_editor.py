@@ -16,12 +16,11 @@ ensure_portable_env()
 os.chdir(_ROOT)
 
 from app.utils.logging import setup_logging
-from app.utils.app_identity import set_windows_app_user_model_id
+from app.utils.app_identity import set_windows_taskbar_icon
 
 
 def main() -> int:
     setup_logging(Path("output") / "logs")
-    set_windows_app_user_model_id()
     try:
         from PySide6.QtWidgets import QApplication
         from app.gui.editor_window import EditorWindow
@@ -48,6 +47,7 @@ def main() -> int:
     window = EditorWindow()
     window.setWindowIcon(app_icon)
     window.show()
+    set_windows_taskbar_icon(window, icon)
     return app.exec()
 
 
