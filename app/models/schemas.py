@@ -62,6 +62,14 @@ class PageResult(BaseModel):
     date: Optional[str] = None
     fields: List[FieldResult] = Field(default_factory=list)
     comment: str = ""
+    # Metadatos efímeros del visor. Viajan desde los workers hasta la GUI,
+    # pero no forman parte del JSON ni de ningún reporte persistente.
+    preview_alignment: Optional[Dict[str, float]] = Field(
+        default=None, exclude=True, repr=False
+    )
+    preview_boxes: Dict[str, List[float]] = Field(
+        default_factory=dict, exclude=True, repr=False
+    )
 
     def add_field(self, field: FieldResult) -> None:
         """Agrega un campo y recalcula el estado de la página."""

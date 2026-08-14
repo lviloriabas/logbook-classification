@@ -240,6 +240,18 @@ def process_page_image(
         if quality != "ok":
             logger.warning(f"[Página {page_number}] Alineación: {quality}")
 
+    # El visor carga una miniatura de la página original. Guardamos la
+    # transformación aplicada en coordenadas relativas para poder reproducir
+    # exactamente deskew + alineación a cualquier resolución de vista previa.
+    if alignment_transform is not None:
+        height, width = image.shape[:2]
+        page.preview_alignment = {
+            "rot": float(alignment_transform.rot),
+            "tx_ratio": float(alignment_transform.tx) / max(width, 1),
+            "ty_ratio": float(alignment_transform.ty) / max(height, 1),
+            "scale": float(alignment_transform.scale),
+        }
+
     # 3.5) Preparar una copia sin fondo impreso para firmas y casillas.
     # No se usa para OCR: si varias páginas repiten la misma escritura, el
     # consenso del fondo también la clasifica como impresa.
@@ -281,6 +293,20 @@ def process_page_image(
         if config.date_dynamic_geometry else image.shape,
     )
     ocr_overrides = {**date_overrides, **char_overrides}
+
+    # Rectángulos efectivos usados por esta página. Incluyen tanto la
+    # geometría dinámica DD|MMM|AA como sus siete celdas individuales.
+    # Los campos sin ajuste conservan su geometría de plantilla.
+    page.preview_boxes = {
+        field.id: [
+            float(effective.x),
+            float(effective.y),
+            float(effective.w),
+            float(effective.h),
+        ]
+        for field in template.fields
+        for effective in (ocr_overrides.get(field.id, field),)
+    }
 
     # 4-7) Campos: recorte → OCR (en lote)/firma/checkbox → postproceso
     ocr_fields = [

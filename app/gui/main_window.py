@@ -88,6 +88,19 @@ _COLORS = {
     Status.ERROR: "#cf222e",
 }
 
+
+def _visible_preview_fields(template: Template, important_only: bool):
+    """Campos que debe pintar el visor.
+
+    La plantilla ya expresa la importancia mediante ``required``. Esto
+    conserva matrícula, log_number, fecha y firmas obligatorias, y oculta
+    las celdas auxiliares y licencias opcionales cuando se pide una vista
+    simplificada.
+    """
+    if not important_only:
+        return list(template.fields)
+    return [field for field in template.fields if field.required]
+
 _QSS = """
 QPushButton {
     min-height: 26px;
@@ -267,16 +280,36 @@ class PreviewLoader(QObject):
     ``previewReady`` sin bloquear el hilo de interfaz.
     """
 
-    requested = Signal(int, str)
+    requested = Signal(int, str, object)
     previewReady = Signal(int, str, object)
 
-    def run(self, page_number: int, pdf_path: str) -> None:
+    def run(
+        self, page_number: int, pdf_path: str, geometry: dict | None = None
+    ) -> None:
         import cv2
 
+        from app.vision.alignment import TransformResult, apply_transform
         from app.vision.pdf_loader import render_page
+        from app.vision.preprocessing import rotate
 
         try:
             image = render_page(Path(pdf_path), page_number, dpi=150)
+            if geometry:
+                skew_angle = float(geometry.get("skew_angle", 0.0))
+                if abs(skew_angle) > 0.0:
+                    image = rotate(image, skew_angle)
+                alignment = geometry.get("alignment")
+                if alignment:
+                    height, width = image.shape[:2]
+                    image = apply_transform(
+                        image,
+                        TransformResult(
+                            rot=float(alignment.get("rot", 0.0)),
+                            tx=float(alignment.get("tx_ratio", 0.0)) * width,
+                            ty=float(alignment.get("ty_ratio", 0.0)) * height,
+                            scale=float(alignment.get("scale", 1.0)),
+                        ),
+                    )
             rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
             qimage = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
@@ -375,6 +408,7 @@ class MainWindow(QMainWindow):
         self._preview_loader.previewReady.connect(self._on_preview_ready)
         self._preview_thread.start()
         self._preview_pending: tuple[int, str] | None = None
+        self._preview_results: dict[tuple[str, int], object] = {}
 
         self._file_rows: dict[int, dict] = {}
         self._row_ms: dict[int, float] = {}
@@ -611,6 +645,17 @@ class MainWindow(QMainWindow):
         )
         self.fields_check.toggled.connect(self._on_fields_toggled)
         info_row.addWidget(self.fields_check)
+        self.important_fields_check = QCheckBox("Solo importantes")
+        self.important_fields_check.setEnabled(False)
+        self.important_fields_check.setToolTip(
+            "Mostrar únicamente matrícula, log_number, fecha y firmas "
+            "obligatorias; oculta celdas auxiliares y campos opcionales."
+        )
+        self.important_fields_check.toggled.connect(self._on_fields_toggled)
+        self.fields_check.toggled.connect(
+            self.important_fields_check.setEnabled
+        )
+        info_row.addWidget(self.important_fields_check)
         info_row.addStretch()
         layout.addLayout(info_row)
         return group
@@ -1488,6 +1533,7 @@ class MainWindow(QMainWindow):
         self._processed_template = template
         self._processed_dpi = self._detected_dpi
         self._reports = None
+        self._preview_results = {}
         self._corrida_dir = None
         self._pending_export = False
         self._last_run_cancelled = False
@@ -1728,6 +1774,11 @@ class MainWindow(QMainWindow):
         )
         self._timer.stop()
         self._reports = reports
+        self._preview_results = {
+            (str(Path(report.pdf_path).resolve()), page.page_number): page
+            for report in reports
+            for page in report.pages
+        }
         self._corrida_dir = None
         self._pending_export = False
         # El botón Exportar queda disponible en cuanto el OCR termina, sin
@@ -2105,8 +2156,15 @@ class MainWindow(QMainWindow):
         ):
             self._show_preview_page(self._preview_page + 1, self._preview_pdf)
 
-    def _draw_template_boxes(self, pixmap: QPixmap, template, w: int, h: int) -> None:
-        """Dibuja sobre la vista previa los rectángulos de la plantilla."""
+    def _draw_template_boxes(
+        self,
+        pixmap: QPixmap,
+        template,
+        w: int,
+        h: int,
+        boxes: dict[str, list[float]] | None = None,
+    ) -> None:
+        """Dibuja los rectángulos efectivos sobre la página alineada."""
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pen = QPen(QColor(0, 120, 215), 2)
@@ -2114,8 +2172,13 @@ class MainWindow(QMainWindow):
         font.setPointSize(9)
         font.setBold(True)
         painter.setFont(font)
-        for field in template.fields:
-            rect = QRectF(field.x * w, field.y * h, field.w * w, field.h * h)
+        important_only = self.important_fields_check.isChecked()
+        for field in _visible_preview_fields(template, important_only):
+            coords = (boxes or {}).get(field.id)
+            if coords is None or len(coords) != 4:
+                coords = (field.x, field.y, field.w, field.h)
+            x, y, width, height = coords
+            rect = QRectF(x * w, y * h, width * w, height * h)
             painter.setBrush(QColor(0, 140, 220, 30))
             painter.setPen(pen)
             painter.drawRect(rect)
@@ -2127,6 +2190,23 @@ class MainWindow(QMainWindow):
                 field.id,
             )
         painter.end()
+
+    def _current_preview_result(self):
+        """Resultado de la página visible, si ya fue procesada."""
+        if self._preview_pdf is None:
+            return None
+        key = (str(Path(self._preview_pdf).resolve()), self._preview_page)
+        return self._preview_results.get(key)
+
+    def _current_preview_geometry(self) -> dict | None:
+        """Transformación que convierte la miniatura cruda en la procesada."""
+        page = self._current_preview_result()
+        if page is None:
+            return None
+        return {
+            "skew_angle": float(page.skew_angle),
+            "alignment": page.preview_alignment,
+        }
 
     def _show_preview_page(
         self, page_number: int, pdf_path: Path | None = None
@@ -2154,10 +2234,20 @@ class MainWindow(QMainWindow):
         self._update_preview_nav()
         self._preview_pending = (page_number, str(pdf_path))
         cached = self._preprocessed_images.get((str(pdf_path), page_number))
-        if self._preprocessed_active and cached is not None:
+        # Tras procesar, la geometría guardada en PageResult refleja exactamente
+        # la alineación (incluido el anclaje por lote) usada por el OCR. Una
+        # imagen preprocesada con anterioridad puede haber usado otro anclaje,
+        # así que solo reutilizamos esa caché mientras aún no hay resultado.
+        if (
+            self._preprocessed_active
+            and cached is not None
+            and self._current_preview_result() is None
+        ):
             self._set_preview_qimage(cached)
             return
-        self._preview_loader.requested.emit(page_number, str(pdf_path))
+        self._preview_loader.requested.emit(
+            page_number, str(pdf_path), self._current_preview_geometry()
+        )
 
     def _on_preview_ready(
         self, page_number: int, pdf_path: str, qimage: QImage | None
@@ -2173,10 +2263,15 @@ class MainWindow(QMainWindow):
         """Carga una imagen fuente y le aplica el overlay actual."""
         pixmap = QPixmap.fromImage(qimage)
         if self.fields_check.isChecked():
-            template = self._load_template()
+            template = self._processed_template or self._load_template()
             if template is not None:
+                page = self._current_preview_result()
                 self._draw_template_boxes(
-                    pixmap, template, qimage.width(), qimage.height()
+                    pixmap,
+                    template,
+                    qimage.width(),
+                    qimage.height(),
+                    boxes=page.preview_boxes if page is not None else None,
                 )
         self._preview_source_pixmap = pixmap
         self._render_preview_pixmap()
