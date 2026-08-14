@@ -21,7 +21,11 @@ import re
 import pickle
 import tempfile
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    wait,
+)
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
@@ -29,7 +33,7 @@ import cv2
 import numpy as np
 from loguru import logger
 
-from app.core.config import AppConfig
+from app.core.config import AppConfig, config_for_pdf
 from app.models.schemas import (
     FieldResult,
     PageResult,
@@ -158,9 +162,10 @@ class OcrProcessPool:
         cpu_threads: Optional[int],
         date_engine_name: Optional[str] = None,
     ) -> None:
+        self.max_workers = max(1, max_workers)
         self._temporary = tempfile.TemporaryDirectory(prefix="bits_ocr_")
         self.executor = ProcessPoolExecutor(
-            max_workers=max_workers,
+            max_workers=self.max_workers,
             initializer=_init_ocr_pool_worker,
             initargs=(
                 config, engine_name, lang, cpu_threads, date_engine_name,
@@ -179,6 +184,10 @@ class OcrProcessPool:
     @staticmethod
     def release(path: Path) -> None:
         path.unlink(missing_ok=True)
+
+    def temporary_path(self, name: str) -> Path:
+        """Ruta privada del pool para señales/estado efímero del lote."""
+        return Path(self._temporary.name) / name
 
     def close(self, cancel_futures: bool = False) -> None:
         if self._closed:
@@ -1468,51 +1477,68 @@ class Pipeline:
                 ),
             )
         futures: dict = {}
+        cancelled_pending: dict = {}
         try:
-            futures = {
-                pool.submit(
-                    _process_page_worker,
-                    page_number,
-                    str(state_path) if state_path is not None else None,
-                ): page_number
-                for page_number in range(1, total + 1)
-            }
-            consumed: set = set()
-            for future in as_completed(futures):
+            next_page = 1
+            max_in_flight = max(self.workers, self.workers * 3)
+
+            def submit_available() -> None:
+                nonlocal next_page
+                while next_page <= total and len(futures) < max_in_flight:
+                    future = pool.submit(
+                        _process_page_worker,
+                        next_page,
+                        str(state_path) if state_path is not None else None,
+                    )
+                    futures[future] = next_page
+                    next_page += 1
+
+            submit_available()
+            while futures:
+                done, _pending = wait(
+                    tuple(futures), timeout=0.20,
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in done:
+                    page_number = futures.pop(future)
+                    page = future.result()
+                    pages.append((page_number, page))
+                    self._notify(
+                        len(pages), total,
+                        f"Procesando página {page_number}/{total}",
+                    )
                 if self._is_cancelled():
+                    cancelled_pending = dict(futures)
+                    for future in cancelled_pending:
+                        future.cancel()
+                    futures.clear()
                     break
-                consumed.add(future)
-                page_number = futures[future]
-                page = future.result()
-                pages.append((page_number, page))
-                self._notify(len(pages), total,
-                             f"Procesando página {page_number}/{total}")
-            if self._is_cancelled():
-                for future in futures:
-                    future.cancel()
-                if owns_pool:
-                    pool.shutdown(cancel_futures=True, wait=True)
-                # Recupera las páginas ya completadas antes de cancelar.
-                for future, page_number in futures.items():
-                    if (future not in consumed and future.done()
-                            and not future.cancelled()):
-                        try:
-                            pages.append((page_number, future.result()))
-                        except Exception:  # noqa: BLE001 - parcial
-                            continue
+                submit_available()
         finally:
             if owns_pool:
-                pool.shutdown(wait=True)
+                pool.shutdown(
+                    wait=True, cancel_futures=self._is_cancelled()
+                )
             elif state_path is not None:
                 # Los trabajos que ya estaban en vuelo deben soltar el pickle
                 # antes de eliminarlo, incluso durante una cancelación.
-                for future in futures:
+                for future in (*futures, *cancelled_pending):
                     if not future.cancelled():
                         try:
                             future.result()
                         except Exception:  # noqa: BLE001 - se propaga arriba
                             pass
                 self.process_pool.release(state_path)
+        if self._is_cancelled():
+            # Conserva también las páginas que ya estaban ejecutándose cuando
+            # se pulsó cancelar; no se pierde trabajo terminado.
+            for future, page_number in cancelled_pending.items():
+                if future.cancelled() or not future.done():
+                    continue
+                try:
+                    pages.append((page_number, future.result()))
+                except Exception:  # noqa: BLE001 - reporte parcial
+                    continue
         pages.sort(key=lambda item: item[0])
         if self._is_cancelled():
             logger.warning(
@@ -1584,9 +1610,10 @@ class Pipeline:
 
             # Guardamos las imágenes ya deskewed. La máscara se construye
             # después de estabilizar las anclas, para que use exactamente el
-            # mismo marco que la fase de OCR.
+            # mismo marco que la fase de OCR. Un solo canal conserva toda la
+            # evidencia que usa la máscara y reduce este buffer a un tercio.
             if self.config.remove_printed and total >= 3:
-                calib_images.append(image)
+                calib_images.append(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))
 
         anchors = self._stabilize_anchors(own)
         reliable = sum(1 for t in own if t.reliable)
@@ -1605,9 +1632,7 @@ class Pipeline:
                 warped = warp_with_transform(
                     image, calib_tr, (calib_ref.shape[1], calib_ref.shape[0])
                 )
-                dark = cv2.cvtColor(
-                    warped, cv2.COLOR_BGR2GRAY
-                ) < self.config.printed_ink_threshold
+                dark = warped < self.config.printed_ink_threshold
                 if accum is None:
                     accum = np.zeros_like(dark, dtype=np.float32)
                 accum += dark.astype(np.float32)
@@ -1919,3 +1944,258 @@ class Pipeline:
             if not note or note in _SOFT_NOTES
             else Status.ERROR
         )
+
+
+def _process_pdf_worker(
+    pdf_path: Path,
+    base_config: AppConfig,
+    template: Template,
+    max_pages: Optional[int],
+    reference_page: int,
+    cancel_path: str,
+) -> Tuple[ValidationReport, dict]:
+    """Procesa un PDF completo dentro de un worker OCR persistente."""
+    # Un estado de página del perfil B puede haber dejado un documento abierto
+    # en este proceso. El Pipeline del archivo mantiene su propio handle único.
+    previous_renderer = _WORKER_STATE.pop("renderer", None)
+    if previous_renderer is not None:
+        previous_renderer.close()
+    file_config = config_for_pdf(base_config, Path(pdf_path))
+    pipeline = Pipeline(
+        file_config,
+        _WORKER_STATE["engine"],
+        template,
+        workers=1,
+        cpu_threads=None,
+        date_engine=_WORKER_STATE.get("date_engine"),
+        reference_page=reference_page,
+    )
+    cancellation_flag = Path(cancel_path)
+    report = pipeline.process(
+        Path(pdf_path),
+        max_pages=max_pages,
+        should_cancel=cancellation_flag.exists,
+    )
+    return report, pipeline.vlm_stats
+
+
+def process_pdf_batch(
+    pdf_paths: List[Path],
+    base_config: AppConfig,
+    template: Template,
+    process_pool: OcrProcessPool,
+    fallback_engine: OcrEngine,
+    date_engine: Optional[OcrEngine] = None,
+    max_pages: Optional[int] = None,
+    reference_page: int = 1,
+    should_cancel: Optional[Callable[[], bool]] = None,
+    on_file_started: Optional[Callable[[int, int, str], None]] = None,
+    on_file_finished: Optional[Callable[[int, ValidationReport], None]] = None,
+    on_progress: Optional[ProgressCallback] = None,
+) -> Tuple[List[ValidationReport], List[dict]]:
+    """Procesa un lote con el perfil C siempre activo y cola acotada.
+
+    El planificador elige la granularidad sin cambiar el algoritmo OCR: reparte
+    PDFs completos cuando hay suficientes archivos para ocupar el pool y, en
+    lotes menores, reparte las páginas para no dejar procesos ociosos. En ambos
+    casos el pool OCR persiste y las colas permanecen acotadas.
+    """
+    paths = [Path(path) for path in pdf_paths]
+    if not paths:
+        return [], []
+
+    counts: List[int] = []
+    for path in paths:
+        with PdfPageRenderer(path) as renderer:
+            count = renderer.page_count()
+        counts.append(min(count, max_pages) if max_pages is not None else count)
+    total_pages = sum(counts)
+    done_pages = 0
+    total_files = len(paths)
+
+    # Perfil C no es un modo reservado a lotes grandes. Para pocos archivos,
+    # paralelizar páginas utiliza mejor el mismo pool; para muchos, cada worker
+    # recibe archivos completos y elimina las barreras entre PDFs.
+    parallel_by_file = (
+        not base_config.vlm_enabled
+        and total_files >= process_pool.max_workers
+    )
+    strategy = "archivos" if parallel_by_file else "páginas"
+    logger.info(
+        f"[Perfil C] activo | estrategia={strategy} | "
+        f"workers={process_pool.max_workers} | archivos={total_files}"
+    )
+    if on_progress is not None:
+        on_progress(
+            0,
+            total_pages,
+            f"Perfil C activo — paralelismo por {strategy}",
+        )
+
+    if not parallel_by_file:
+        sequential_reports: List[ValidationReport] = []
+        sequential_stats: List[dict] = []
+        for index, (path, count) in enumerate(zip(paths, counts)):
+            if should_cancel is not None and should_cancel():
+                break
+            if on_file_started is not None:
+                on_file_started(index + 1, total_files, path.name)
+            file_config = config_for_pdf(base_config, path)
+            pipeline = Pipeline(
+                file_config,
+                fallback_engine,
+                template,
+                workers=process_pool.max_workers,
+                date_engine=date_engine,
+                process_pool=process_pool,
+                reference_page=reference_page,
+            )
+            offset = done_pages
+
+            def page_progress(
+                done: int,
+                _total: int,
+                message: str,
+                *,
+                _offset: int = offset,
+            ) -> None:
+                if on_progress is not None:
+                    on_progress(_offset + done, total_pages, message)
+
+            pipeline.on_progress = page_progress
+            report = pipeline.process(
+                path,
+                max_pages=max_pages,
+                should_cancel=should_cancel,
+            )
+            sequential_reports.append(report)
+            sequential_stats.append(pipeline.vlm_stats)
+            done_pages += len(report.pages)
+            if on_file_finished is not None:
+                on_file_finished(index + 1, report)
+            if report.cancelled:
+                break
+            # En un PDF sin páginas procesables el callback del Pipeline no
+            # puede avanzar por sí mismo; conserva el total global coherente.
+            if on_progress is not None and count == 0:
+                on_progress(done_pages, total_pages, f"Procesado {path.name}")
+        logger.info(
+            f"[Perfil C] {len(sequential_reports)}/{total_files} archivos | "
+            f"estrategia=páginas | páginas={done_pages}"
+        )
+        return sequential_reports, sequential_stats
+
+    reports: List[Optional[ValidationReport]] = [None] * total_files
+    statistics: List[Optional[dict]] = [None] * total_files
+    retry: List[Tuple[int, Exception]] = []
+    pending: dict = {}
+    next_index = 0
+    cancelled = False
+    cancel_flag = process_pool.temporary_path("cancel_mass_batch.flag")
+    cancel_flag.unlink(missing_ok=True)
+
+    def cancellation_requested() -> bool:
+        return should_cancel is not None and should_cancel()
+
+    def submit_available() -> None:
+        nonlocal next_index
+        while (
+            not cancelled
+            and next_index < total_files
+            and len(pending) < process_pool.max_workers
+        ):
+            index = next_index
+            path = paths[index]
+            if on_file_started is not None:
+                on_file_started(index + 1, total_files, path.name)
+            future = process_pool.executor.submit(
+                _process_pdf_worker,
+                path,
+                base_config,
+                template,
+                max_pages,
+                reference_page,
+                str(cancel_flag),
+            )
+            pending[future] = index
+            next_index += 1
+
+    submit_available()
+    while pending:
+        finished, _waiting = wait(
+            tuple(pending), timeout=0.20, return_when=FIRST_COMPLETED
+        )
+        if cancellation_requested() and not cancelled:
+            cancelled = True
+            cancel_flag.touch()
+            for future in pending:
+                future.cancel()
+        for future in finished:
+            index = pending.pop(future)
+            if future.cancelled():
+                continue
+            try:
+                report, vlm_stats = future.result()
+            except Exception as exc:  # noqa: BLE001 - fallback perfil B
+                retry.append((index, exc))
+                continue
+            reports[index] = report
+            statistics[index] = vlm_stats
+            done_pages += len(report.pages)
+            if on_file_finished is not None:
+                on_file_finished(index + 1, report)
+            if on_progress is not None:
+                on_progress(
+                    done_pages,
+                    total_pages,
+                    f"Procesados {sum(r is not None for r in reports)}/"
+                    f"{total_files} archivos",
+                )
+        submit_available()
+
+    cancel_flag.unlink(missing_ok=True)
+    if retry and not cancelled:
+        logger.warning(
+            f"[Perfil C] {len(retry)} archivo(s) reintentarán con perfil B"
+        )
+        for index, first_error in retry:
+            path = paths[index]
+            try:
+                file_config = config_for_pdf(base_config, path)
+                pipeline = Pipeline(
+                    file_config,
+                    fallback_engine,
+                    template,
+                    workers=process_pool.max_workers,
+                    date_engine=date_engine,
+                    process_pool=process_pool,
+                    reference_page=reference_page,
+                )
+                report = pipeline.process(path, max_pages=max_pages)
+            except Exception as retry_error:
+                raise RuntimeError(
+                    f"Falló {path.name} en perfiles C y B: "
+                    f"C={first_error}; B={retry_error}"
+                ) from retry_error
+            reports[index] = report
+            statistics[index] = pipeline.vlm_stats
+            done_pages += len(report.pages)
+            if on_file_finished is not None:
+                on_file_finished(index + 1, report)
+            if on_progress is not None:
+                on_progress(
+                    done_pages, total_pages,
+                    f"Reintento B completado: {path.name}",
+                )
+
+    ordered_reports = [report for report in reports if report is not None]
+    ordered_stats = [
+        stats if stats is not None else {"enabled": False}
+        for report, stats in zip(reports, statistics)
+        if report is not None
+    ]
+    logger.info(
+        f"[Perfil C] {len(ordered_reports)}/{total_files} archivos | "
+        f"cola máxima={process_pool.max_workers} | páginas={done_pages}"
+    )
+    return ordered_reports, ordered_stats

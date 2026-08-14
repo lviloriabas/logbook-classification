@@ -35,7 +35,7 @@ ensure_portable_env()
 os.chdir(_ROOT)
 
 from app.core.config import AppConfig, config_for_pdf
-from app.core.pipeline import OcrProcessPool, Pipeline
+from app.core.pipeline import OcrProcessPool, Pipeline, process_pdf_batch
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
 from app.models.schemas import Status
 from app.ocr.engine import create_engine
@@ -228,6 +228,36 @@ def _csv_name() -> str:
     return f"BITS {stamp}.CSV"
 
 
+def _print_pdf_result(
+    pdf_path: Path, report, vlm_stats: dict, max_pages: int | None
+) -> None:
+    print(f"\n>>> {pdf_path.name}"
+          + (f" (primeras {max_pages} páginas)" if max_pages else ""))
+    if vlm_stats.get("enabled"):
+        print(
+            f"  VLM: {vlm_stats.get('crops', 0)} recorte(s), "
+            f"{vlm_stats.get('signatures_resolved', 0)} firma(s) y "
+            f"{vlm_stats.get('fields_resolved', 0)} campo(s) resueltos"
+            + (f" [{vlm_stats.get('model')}]"
+               if vlm_stats.get("model") else "")
+        )
+    summary = report.summary
+    print(f"  Resumen {pdf_path.name}: {summary.get('total_pages', 0)} "
+          f"páginas | OK: {summary.get('ok_pages', 0)} "
+          f"| WARNING: {summary.get('warning_pages', 0)} "
+          f"| ERROR: {summary.get('error_pages', 0)} "
+          f"| {report.processing_ms / 1000:.2f} s")
+    for page in report.pages:
+        if page.status is Status.OK:
+            continue
+        for field in page.fields:
+            if field.status is not Status.OK:
+                print(f"    P{page.page_number:02d} "
+                      f"{field.field_id}: {field.status.value} "
+                      f"({field.value!r})")
+                break
+
+
 def _run(args: argparse.Namespace) -> int:
     from loguru import logger
 
@@ -318,50 +348,51 @@ def _run(args: argparse.Namespace) -> int:
         )
         if workers > 1 else None
     )
-    for pdf_path in pdfs:
-        file_config = config_for_pdf(config, pdf_path)
-        logger.info(f"[CLI] Procesando: {pdf_path.name}")
-        print(f"\n>>> {pdf_path.name}"
-              + (f" (primeras {args.max_pages} páginas)"
-                 if args.max_pages else ""))
+    if process_pool is not None:
         print(
-            f"  Resolución: {file_config.dpi} DPI base / "
-            f"{file_config.date_dpi} DPI fecha"
+            f"Perfil C activo: {workers} workers persistentes, "
+            f"planificación adaptativa y colas acotadas"
         )
-
-        pipeline = Pipeline(file_config, engine, template, on_progress=on_progress,
-                            workers=workers, cpu_threads=cpu_threads,
-                            date_engine=date_engine,
-                            process_pool=process_pool,
-                            reference_page=args.reference_page)
-
-        report = pipeline.process(pdf_path, max_pages=args.max_pages)
-        reports.append(report)
-        vlm_stats.append(pipeline.vlm_stats)
-
-        if pipeline.vlm_stats.get("enabled"):
-            vlm = pipeline.vlm_stats
+        reports, vlm_stats = process_pdf_batch(
+            pdfs,
+            config,
+            template,
+            process_pool,
+            engine,
+            date_engine=date_engine,
+            max_pages=args.max_pages,
+            reference_page=args.reference_page,
+            on_progress=on_progress,
+        )
+        for pdf_path, report, stats in zip(pdfs, reports, vlm_stats):
+            _print_pdf_result(pdf_path, report, stats, args.max_pages)
+    else:
+        print("Perfil C activo: ejecución secuencial con un worker")
+        for pdf_path in pdfs:
+            file_config = config_for_pdf(config, pdf_path)
+            logger.info(f"[CLI] Procesando: {pdf_path.name}")
             print(
-                f"  VLM: {vlm.get('crops', 0)} recorte(s), "
-                f"{vlm.get('signatures_resolved', 0)} firma(s) y "
-                f"{vlm.get('fields_resolved', 0)} campo(s) resueltos"
-                + (f" [{vlm.get('model')}]" if vlm.get("model") else "")
+                f"\nProcesando {pdf_path.name}: "
+                f"{file_config.dpi} DPI base / "
+                f"{file_config.date_dpi} DPI fecha"
             )
-
-        summary = report.summary
-        print(f"\n  Resumen {pdf_path.name}: {summary.get('total_pages', 0)} "
-              f"páginas | OK: {summary.get('ok_pages', 0)} "
-              f"| WARNING: {summary.get('warning_pages', 0)} "
-              f"| ERROR: {summary.get('error_pages', 0)} "
-              f"| {report.processing_ms / 1000:.2f} s")
-        for page in report.pages:
-            if page.status is not Status.OK:
-                for field in page.fields:
-                    if field.status is not Status.OK:
-                        print(f"    P{page.page_number:02d} "
-                              f"{field.field_id}: {field.status.value} "
-                              f"({field.value!r})")
-                        break
+            pipeline = Pipeline(
+                file_config,
+                engine,
+                template,
+                on_progress=on_progress,
+                workers=workers,
+                cpu_threads=cpu_threads,
+                date_engine=date_engine,
+                process_pool=process_pool,
+                reference_page=args.reference_page,
+            )
+            report = pipeline.process(pdf_path, max_pages=args.max_pages)
+            reports.append(report)
+            vlm_stats.append(pipeline.vlm_stats)
+            _print_pdf_result(
+                pdf_path, report, pipeline.vlm_stats, args.max_pages
+            )
 
     if process_pool is not None:
         process_pool.close()

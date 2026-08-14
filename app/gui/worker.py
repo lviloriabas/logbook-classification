@@ -6,6 +6,7 @@ import traceback
 from pathlib import Path
 from typing import List, Union
 
+from loguru import logger
 from PySide6.QtCore import QThread, Signal
 
 from app.core.config import AppConfig
@@ -64,7 +65,11 @@ class PipelineWorker(QThread):
         try:
             from contextlib import nullcontext
 
-            from app.core.pipeline import OcrProcessPool, Pipeline
+            from app.core.pipeline import (
+                OcrProcessPool,
+                Pipeline,
+                process_pdf_batch,
+            )
             from app.core.config import config_for_pdf
             from app.ocr.engine import create_engine
 
@@ -102,41 +107,67 @@ class PipelineWorker(QThread):
                 else nullcontext(None)
             )
             with pool_context as process_pool:
-                for index, pdf_path in enumerate(self.pdf_paths):
-                    if self.isInterruptionRequested():
-                        break
-                    self._current_file_index = index + 1
-                    self.file_started.emit(
-                        index + 1, len(self.pdf_paths), pdf_path.name
-                    )
-                    try:
-                        file_config = config_for_pdf(self.config, pdf_path)
-                    except (FileNotFoundError, ValueError):
-                        # El Pipeline conserva el error autoritativo. Este
-                        # fallback también permite inyectar pipelines de prueba.
-                        file_config = self.config
-                    pipeline = Pipeline(
-                        file_config,
-                        engine,
+                if process_pool is not None:
+                    reports, self.vlm_stats = process_pdf_batch(
+                        self.pdf_paths,
+                        self.config,
                         template,
-                        on_progress=self._on_progress,
-                        workers=self.workers,
-                        cpu_threads=self.cpu_threads,
+                        process_pool,
+                        engine,
                         date_engine=date_engine,
-                        process_pool=process_pool,
-                        reference_page=self.reference_page,
-                    )
-                    report: ValidationReport = pipeline.process(
-                        pdf_path,
                         max_pages=self.max_pages,
+                        reference_page=self.reference_page,
                         should_cancel=self.isInterruptionRequested,
+                        on_file_started=lambda index, total, name: (
+                            self.file_started.emit(index, total, name)
+                        ),
+                        on_file_finished=lambda index, report: (
+                            self.file_finished.emit(index, report)
+                        ),
+                        on_progress=lambda done, total, message: (
+                            self.progress.emit(done, total, message)
+                        ),
                     )
-                    reports.append(report)
-                    self.vlm_stats.append(pipeline.vlm_stats)
                     self.reports = list(reports)
-                    self.file_finished.emit(index + 1, report)
-                    if report.cancelled:
-                        break
+                else:
+                    logger.info(
+                        "[Perfil C] activo | estrategia=secuencial | workers=1"
+                    )
+                    for index, pdf_path in enumerate(self.pdf_paths):
+                        if self.isInterruptionRequested():
+                            break
+                        self._current_file_index = index + 1
+                        self.file_started.emit(
+                            index + 1, len(self.pdf_paths), pdf_path.name
+                        )
+                        try:
+                            file_config = config_for_pdf(self.config, pdf_path)
+                        except (FileNotFoundError, ValueError):
+                            # El Pipeline conserva el error autoritativo. Este
+                            # fallback permite inyectar pipelines de prueba.
+                            file_config = self.config
+                        pipeline = Pipeline(
+                            file_config,
+                            engine,
+                            template,
+                            on_progress=self._on_progress,
+                            workers=self.workers,
+                            cpu_threads=self.cpu_threads,
+                            date_engine=date_engine,
+                            process_pool=process_pool,
+                            reference_page=self.reference_page,
+                        )
+                        report: ValidationReport = pipeline.process(
+                            pdf_path,
+                            max_pages=self.max_pages,
+                            should_cancel=self.isInterruptionRequested,
+                        )
+                        reports.append(report)
+                        self.vlm_stats.append(pipeline.vlm_stats)
+                        self.reports = list(reports)
+                        self.file_finished.emit(index + 1, report)
+                        if report.cancelled:
+                            break
             correct_matricula_by_book(reports)
             correct_dates_by_book(reports)
             self.reports = reports

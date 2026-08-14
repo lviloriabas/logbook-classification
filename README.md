@@ -515,6 +515,15 @@ invocación los recortes de Tesseract que comparten PSM y whitelist. La retícul
 de fecha se detecta y lee sobre una banda regional de alta resolución; no se
 rasteriza la página completa a 600 DPI.
 
+El perfil C está activo automáticamente en todo procesamiento, sin depender del
+tamaño del lote. Con varios workers, el planificador reparte PDFs completos
+cuando hay suficientes para ocupar el pool y reparte páginas cuando el lote es
+pequeño; con un worker se degrada de forma natural a ejecución secuencial. Las
+colas están acotadas (un PDF por worker o hasta tres páginas por worker), el
+buffer de calibración usa un solo canal y cualquier PDF que falle en la ruta
+por archivo se reintenta con el perfil B. El orden final de los reportes y las
+correcciones por libro se mantienen sin cambios.
+
 - **Nuevo motor OCR / VL**: implementar el protocolo `OcrEngine` (p. ej. Qwen VL) y registrarlo en `create_engine()`.
 - **Nuevo tipo de campo**: añadir procesador en `core/pipeline.py` o registry.
 - **AirVault API**: consumir `ValidationReport` (pydantic) desde un cliente HTTP.
