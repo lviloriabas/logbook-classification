@@ -20,6 +20,7 @@ portable/
 # Outputs generados (se regeneran al correr la app)
 output/
 recortes_firmas/
+build/
 
 # Directorio de entrada (PDFs escaneados, descargables por separado)
 input/*
