@@ -35,3 +35,4 @@ def test_unknown_fleet_registration_is_warning(tmp_path: Path):
     verify_reports_against_fleet([report], store.path)
     assert page.fields[0].status is Status.WARNING
     assert "lista de flota" in page.fields[0].comment
+    assert report.summary["warning_pages"] == 1

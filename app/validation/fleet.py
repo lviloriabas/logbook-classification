@@ -41,3 +41,16 @@ def verify_reports_against_fleet(
                 key={Status.OK: 0, Status.WARNING: 1, Status.ERROR: 2}.get,
                 default=page.status,
             )
+        counts = {"ok_pages": 0, "warning_pages": 0, "error_pages": 0}
+        for page in report.pages:
+            if page.status is Status.OK:
+                counts["ok_pages"] += 1
+            elif page.status is Status.WARNING:
+                counts["warning_pages"] += 1
+            else:
+                counts["error_pages"] += 1
+        report.summary.update(
+            total_pages=len(report.pages),
+            blank_pages=sum(1 for page in report.pages if page.blank),
+            **counts,
+        )
