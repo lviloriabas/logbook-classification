@@ -199,6 +199,17 @@ class TestDayPolicy(unittest.TestCase):
         self.assertIs(day.status, Status.WARNING)
         self.assertIsNone(missing_day.date)
 
+    def test_missing_day_does_not_block_inferred_month_and_year(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        missing_day = _page(2, "2147302", None, None, None)
+        last = _page(3, "2147303", "20", "JUL", "26")
+
+        correct_dates_by_book([_report(first, missing_day, last)])
+
+        self.assertEqual(_field_of(missing_day, "month").value, "JUL")
+        self.assertEqual(_field_of(missing_day, "year").value, "26")
+        self.assertIsNone(missing_day.date)
+
 
 class TestSequenceCandidates(unittest.TestCase):
     def test_chooses_ocr_alternatives_only_to_remove_regression(self):
@@ -213,9 +224,14 @@ class TestSequenceCandidates(unittest.TestCase):
         self.assertEqual(ambiguous.date, "2026/07/29")
         self.assertEqual(_field_of(ambiguous, "day").value, "29")
         self.assertEqual(_field_of(ambiguous, "year").value, "26")
-        self.assertEqual(stats["sequence_candidates"], 2)
+        self.assertEqual(stats["sequence_candidates"], 1)
+        self.assertEqual(stats["years_consensus"], 1)
         self.assertEqual(
             _field_of(ambiguous, "year").inference_method,
+            "log_number_year_consensus",
+        )
+        self.assertEqual(
+            _field_of(ambiguous, "day").inference_method,
             "log_number_sequence_candidate",
         )
 
@@ -243,17 +259,64 @@ class TestSequenceCandidates(unittest.TestCase):
         self.assertEqual(stats["sequence_candidates"], 0)
         self.assertEqual(stats["days_filled"], 0)
 
-    def test_missing_day_does_not_block_inferred_month_and_year(self):
+
+class TestYearConsensus(unittest.TestCase):
+    def test_corrects_nonadjacent_year_outliers_to_book_majority(self):
+        pages = [
+            _page(1, "2147301", "20", "JUL", "26"),
+            _page(2, "2147302", "20", "JUL", "24"),
+            _page(3, "2147303", "21", "JUL", "26"),
+            _page(4, "2147304", "21", "JUL", "21"),
+            _page(5, "2147305", "22", "JUL", "26"),
+        ]
+
+        stats = correct_dates_by_book([_report(*pages)])
+
+        self.assertEqual(_field_of(pages[1], "year").value, "26")
+        self.assertEqual(_field_of(pages[3], "year").value, "26")
+        self.assertEqual(pages[1].date, "2026/07/20")
+        self.assertEqual(stats["years_consensus"], 2)
+        self.assertEqual(
+            _field_of(pages[1], "year").inference_method,
+            "log_number_year_consensus",
+        )
+
+    def test_preserves_real_adjacent_year_rollover_at_book_edge(self):
+        previous_year = _page(1, "2147301", "31", "DIC", "25")
+        new_year = _page(2, "2147302", "01", "ENE", "26")
+        later = _page(3, "2147303", "02", "ENE", "26")
+
+        stats = correct_dates_by_book([
+            _report(previous_year, new_year, later)
+        ])
+
+        self.assertEqual(previous_year.date, "2025/12/31")
+        self.assertEqual(new_year.date, "2026/01/01")
+        self.assertEqual(stats["years_consensus"], 0)
+
+    def test_corrects_adjacent_year_when_it_is_inside_majority_block(self):
         first = _page(1, "2147301", "20", "JUL", "26")
-        missing_day = _page(2, "2147302", None, None, None)
-        last = _page(3, "2147303", "20", "JUL", "26")
+        outlier = _page(2, "2147302", "21", "JUL", "27")
+        last = _page(3, "2147303", "22", "JUL", "26")
 
-        correct_dates_by_book([_report(first, missing_day, last)])
+        stats = correct_dates_by_book([_report(first, outlier, last)])
 
-        self.assertEqual(_field_of(missing_day, "month").value, "JUL")
-        self.assertEqual(_field_of(missing_day, "year").value, "26")
-        self.assertIsNone(missing_day.date)
+        self.assertEqual(_field_of(outlier, "year").value, "26")
+        self.assertEqual(stats["years_consensus"], 1)
 
+    def test_does_not_force_a_year_without_clear_majority(self):
+        pages = [
+            _page(1, "2147301", "20", "JUL", "25"),
+            _page(2, "2147302", "21", "JUL", "25"),
+            _page(3, "2147303", "22", "JUL", "26"),
+            _page(4, "2147304", "23", "JUL", "26"),
+        ]
+
+        stats = correct_dates_by_book([_report(*pages)])
+
+        self.assertEqual([_field_of(page, "year").value for page in pages],
+                         ["25", "25", "26", "26"])
+        self.assertEqual(stats["years_consensus"], 0)
 
 class TestSafetyBoundaries(unittest.TestCase):
     def test_unreadable_log_number_is_not_positionally_inferred(self):

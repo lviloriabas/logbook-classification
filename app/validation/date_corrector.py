@@ -19,6 +19,7 @@ nunca se presenta como una lectura OCR directa en estado OK.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from datetime import date
 from itertools import product
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
@@ -41,6 +42,10 @@ MIN_DIRECT_CONFIDENCE = 0.5
 MIN_ANCHORS = 2
 # La extrapolacion a un extremo es mas arriesgada que un intervalo cerrado.
 MAX_EDGE_LOG_SPAN = 10
+# El consenso solo se activa con evidencia suficiente y una mayoría clara.
+MIN_YEAR_CONSENSUS_READINGS = 3
+MIN_YEAR_CONSENSUS_COUNT = 2
+MIN_YEAR_CONSENSUS_RATIO = 0.60
 
 def _field(page: PageResult, field_id: str) -> Optional[FieldResult]:
     for field in page.fields:
@@ -250,6 +255,73 @@ def _resolve_sequence_alternatives(book: Sequence[PageResult]) -> int:
             )
             corrected += 1
         _recombine(page)
+    return corrected
+
+
+def _correct_year_by_book_consensus(book: Sequence[PageResult]) -> int:
+    """Corrige años OCR aislados usando mayoría y posición en el libro.
+
+    Un año no adyacente al mayoritario (p. ej. 21/24 frente a 26) no puede
+    ser una transición anual real y se corrige. Un año adyacente se conserva
+    únicamente cuando forma el prefijo o sufijo cronológico esperado, para
+    permitir libros que cruzan de diciembre a enero.
+    """
+    pages = sorted(
+        (page for page in book if log_number(page) is not None and not page.blank),
+        key=lambda page: (log_number(page), page.page_number),  # type: ignore[arg-type]
+    )
+    observed: List[Tuple[int, PageResult, FieldResult, str]] = []
+    for index, page in enumerate(pages):
+        field = _field(page, YEAR_FIELD_ID)
+        value = _year_normalize(field.value if field else None)
+        if field is not None and value is not None:
+            observed.append((index, page, field, value))
+    if len(observed) < MIN_YEAR_CONSENSUS_READINGS:
+        return 0
+
+    counts = Counter(value for _index, _page, _field_result, value in observed)
+    ranked = counts.most_common()
+    majority_year, majority_count = ranked[0]
+    runner_count = ranked[1][1] if len(ranked) > 1 else 0
+    ratio = majority_count / len(observed)
+    if (
+        majority_count < MIN_YEAR_CONSENSUS_COUNT
+        or majority_count <= runner_count
+        or ratio < MIN_YEAR_CONSENSUS_RATIO
+    ):
+        return 0
+
+    majority_positions = [
+        index for index, _page, _field_result, value in observed
+        if value == majority_year
+    ]
+    first_majority = min(majority_positions)
+    last_majority = max(majority_positions)
+    majority_number = int(majority_year)
+    corrected = 0
+    for index, page, field, value in observed:
+        if value == majority_year:
+            continue
+        delta = int(value) - majority_number
+        plausible_previous_prefix = delta == -1 and index < first_majority
+        plausible_next_suffix = delta == 1 and index > last_majority
+        if plausible_previous_prefix or plausible_next_suffix:
+            continue
+
+        previous = field.value
+        if previous and previous not in field.alternatives:
+            field.alternatives.append(previous)
+        field.value = majority_year
+        field.confidence = round(min(0.95, 0.55 + ratio * 0.40), 3)
+        field.status = Status.WARNING
+        field.source = "book_correction"
+        field.inference_method = "log_number_year_consensus"
+        field.comment = (
+            f"Year corrected by book majority ({majority_count}/"
+            f"{len(observed)}): {previous!r} -> {majority_year!r}"
+        )
+        _recombine(page)
+        corrected += 1
     return corrected
 
 
@@ -567,7 +639,8 @@ def correct_dates_by_book(
 ) -> Dict[str, int]:
     """Completa mes y ano por intervalos de ``log_number``.
 
-    El resultado ``corrected`` cuenta componentes inferidos, no paginas.
+    El resultado ``corrected`` cuenta componentes inferidos o corregidos,
+    no paginas.
     ``days_filled`` se conserva en cero como garantia explicita de que este
     corrector nunca inventa el dia.
     """
@@ -578,6 +651,7 @@ def correct_dates_by_book(
         "flagged": 0,
         "regressions": 0,
         "sequence_candidates": 0,
+        "years_consensus": 0,
         "months_filled": 0,
         "years_filled": 0,
         "days_filled": 0,
@@ -588,7 +662,10 @@ def correct_dates_by_book(
         for page in book:
             _recombine(page)
 
-        stats["sequence_candidates"] += _resolve_sequence_alternatives(book)
+        year_consensus = _correct_year_by_book_consensus(book)
+        stats["years_consensus"] += year_consensus
+        sequence_candidates = _resolve_sequence_alternatives(book)
+        stats["sequence_candidates"] += sequence_candidates
 
         years, year_flags = _infer_between_anchors(
             book, YEAR_FIELD_ID, _year_normalize
@@ -606,7 +683,9 @@ def correct_dates_by_book(
 
         stats["years_filled"] += years
         stats["months_filled"] += months
-        stats["corrected"] += years + months
+        stats["corrected"] += (
+            years + months + year_consensus + sequence_candidates
+        )
         stats["flagged"] += year_flags + month_flags
         stats["regressions"] += regressions
         stats["unresolved"] += unresolved
