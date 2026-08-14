@@ -16,9 +16,9 @@ Aplicación profesional para automatizar la **validación de bitácoras aeronáu
 | **Reportes** | CSV + JSON consolidado (mismo nombre que el CSV) en `datos/`, por página, campo, valor, confianza, estado, comentario |
 | **PDFs ordenados** | Reordenamiento de los escaneos por avión y/o mes (combinables), en orden de libro y logpage, listos para indexar |
 | **Estadísticas** | `stats.json` con totales, conteo por matrícula y por mes, discrepancias, páginas sin fecha/matrícula y verificación de que ninguna bitácora queda por fuera |
-| **Discrepancias de firma** | `discrepancias.pdf` con las páginas de firmas faltantes/inciertas, sin anotaciones, ordenadas por avión y logpage |
-| **PDFs fuente** | Todas las salidas PDF conservan las páginas originales; solo se agregan separadores independientes cuando se solicitan |
-| **Carpeta por corrida** | Todos los outputs (datos/, stats.json, logs, debug) se generan en `output/<nombre del CSV>/` |
+| **Discrepancias de firma** | Sección final `POSIBLES DISCREPANCIAS` en el PDF único, o `discrepancias.pdf` al generar varios archivos; siempre sin subdivisiones y en orden de logpage |
+| **PDFs fuente** | Todas las salidas PDF conservan las páginas originales; los separadores solicitados son páginas blancas horizontales como las bitácoras |
+| **Carpeta por corrida** | Todos los outputs (`datos/`, `stats.json`, logs y PDFs) se generan en `output/<nombre del CSV>/` |
 | **GUI moderna** | PySide6 con barra de progreso, vista previa y lista de errores |
 | **Logs** | Loguru con rotación diaria |
 
@@ -43,7 +43,7 @@ BITS/
 │   ├── python312/tools/python.exe   # Python 3.12.10 (requerido: paddle no soporta 3.14)
 │   ├── tesseract/                   # Tesseract 5.4.0 + eng (auto-detectado)
 │   ├── paddlex/                     # Modelos PaddleOCR precargados (offline)
-│   └── poppler/                     # No usado (el render es con PyMuPDF); se puede borrar
+│   └── poppler/                     # Eliminado: el render usa PyMuPDF
 └── app/
     ├── core/
     │   ├── config.py        # Configuración (pydantic)
@@ -214,7 +214,7 @@ Opciones principales:
 | `--no-deskew` | — | Desactivar corrección de inclinación |
 | `--no-align` | — | Desactivar alineación |
 | `--separar-por avion\|mes` | — | Separar las bitácoras en PDFs independientes (repetible y combinable: solo avión, solo mes, o ambos) |
-| `--discrepancias` | — | Generar `discrepancias.pdf` con las páginas de firmas faltantes/inciertas, sin anotaciones (no van a los PDFs por avión/mes) |
+| `--discrepancias` | — | Separar las posibles discrepancias: sección final en el PDF único o `discrepancias.pdf` al generar varios archivos |
 | `--recortes-firmas` | — | Volcar los recortes de las regiones de firma a `recortes_firmas/` para auditar bounding boxes |
 
 > **Salida**: todos los outputs de la corrida se generan dentro de una
@@ -252,28 +252,36 @@ portable\python312\tools\python.exe run_cli.py --separar-por avion --separar-por
   corrida (`HP-XXXXCMP.pdf`; `sin_matricula.pdf` si no se pudo leer).
 - `--separar-por mes`: un PDF por mes detectado (`2026-JUL.pdf`;
   `sf.pdf` para las páginas sin fecha legible).
-- Ambos: una **carpeta por matrícula** y dentro un PDF por mes
-  (`HP-XXXXCMP/2026-JUL.pdf`, `HP-XXXXCMP/sf.pdf`); las divisiones por
-  mes no son carpetas sino PDFs.
+- Ambos: un PDF cuyo nombre contiene matrícula y mes
+  (`HP-XXXXCMP_2026-JUL.pdf`; `HP-XXXXCMP_sf.pdf` si no hay fecha legible).
+  Todos quedan directamente en la carpeta de la corrida.
 - Sin la opción: un único PDF con el mismo nombre que la carpeta de la
-  corrida, con todas las páginas agrupadas por matrícula (ordenadas por libro
-  y logpage), con una página divisoria con la matrícula en grande entre grupo
-  y grupo.
+  corrida y todas las páginas en orden de `log_number`, sin separadores.
+- Con `--un-solo-pdf` y criterios de separación, cada sección comienza con
+  una página blanca horizontal cuyo texto grande y centrado indica el mes, la
+  matrícula, o ambos valores juntos cuando se seleccionan ambos criterios.
+  Las secciones se ordenan por matrícula ascendente y, dentro de ella, por
+  fecha cronológica; `sin_fecha` y `sin_matricula` quedan después de los
+  valores determinados. Las posibles discrepancias permanecen al final.
 - Dentro de cada PDF las páginas van en orden de **libro** (serie del
   `log_number`) y **logpage**; las páginas con `log_number` ilegible van
   al final en su orden original. Matrícula ilegible → grupo
   `sin_matricula`; fecha ilegible → `sf`. Las páginas en blanco no se
   incluyen. Así, **ninguna bitácora queda por fuera** de los PDFs.
 - La inferencia de fechas usa el `log_number` para establecer la secuencia,
-  nunca el orden del PDF, pero el valor siempre proviene de lecturas directas
-  confiables. Si hay lecturas compatibles a ambos lados, se pueden inferir
-  mes y año de las bitácoras intermedias. Warnings, errores y valores ya
-  inferidos no sirven como anclas. El día no se infiere: si no se lee, la
-  fecha completa queda vacía y la página se marca para revisión. Los
-  componentes inferidos conservan su origen y método en JSON y CSV.
-- Con `--discrepancias` se genera `discrepancias.pdf`: páginas originales con
-  firmas faltantes o inciertas, ordenadas por avión y `log_number`, sin
-  anotaciones. Estas páginas **no** se incluyen en los PDFs por avión/mes.
+  nunca el orden del PDF. Si hay lecturas compatibles a ambos lados, se pueden
+  inferir mes y año de las bitácoras intermedias; una lectura mensual exacta
+  reconstruida desde las casillas puede servir de ancla aunque tenga confianza
+  aislada baja. El día OCR no se cambia por ambigüedades `4/7`. La política
+  **Fecha del CSV** decide de forma reversible si se conserva el día específico
+  (usando fin de mes solo cuando falta) o si todas las fechas se representan
+  con el último día calendario del mes. Esta elección no modifica el JSON ni
+  vuelve a ejecutar OCR.
+- Con `--discrepancias`, esas páginas se excluyen de las secciones normales y
+  se ordenan globalmente por `log_number`, sin subdividirlas por mes ni
+  matrícula. En un PDF único aparecen al final, después de una hoja blanca
+  titulada `POSIBLES DISCREPANCIAS`; al generar varios archivos se escriben en
+  `discrepancias.pdf` con la misma portada y el mismo orden.
 
 Además, siempre se genera `stats.json` en la carpeta de la corrida con
 las estadísticas de la corrida:
@@ -317,9 +325,10 @@ portable\python312\tools\python.exe run_gui.py
    varios archivos con "Seleccionar archivos…" o restablecer con "Usar input/".
    La resolución se detecta por cada PDF (sin selector de DPI). La página
    completa usa como máximo 200 DPI y la banda manuscrita de fecha conserva
-   hasta 600 DPI nativos mediante render regional. El botón
-   "Vaciar input/" mueve todos los archivos de esa carpeta a la Papelera de
-   reciclaje después de pedir confirmación.
+   hasta 600 DPI nativos mediante render regional. **Vaciar input** mueve sus
+   archivos a la Papelera de reciclaje y **Vaciar output** mueve todas las
+   corridas exportadas; ambos piden confirmación y se bloquean mientras hay
+   procesamiento o exportación en curso.
 2. Seleccionar plantilla.
 3. Procesamiento: motor OCR (`PaddleOCR` o `Tesseract`) con idioma
    automático, "Bitácoras" (primeras N, 0 = todas), "Páginas" por bitácora,
@@ -328,9 +337,13 @@ portable\python312\tools\python.exe run_gui.py
    alineación sin ejecutar OCR, para revisar visualmente las páginas antes del
    procesamiento completo.
 5. Salidas: casillas "Matrícula" y "Mes" para separar los PDFs por esos
-   criterios (con ambas, separado por matrícula y mes), "Discrepancia"
-   (`discrepancias.pdf`) y "Visualizar campos" (los bounding boxes se muestran
-   solo en la vista previa; los PDFs no reciben marcas).
+   criterios (con ambas, separado por matrícula y mes), "Discrepancias"
+   (sección final en el PDF único o archivo propio en modo varios) y
+   "Visualizar campos" (los bounding boxes se muestran solo en la vista
+   previa; no genera `debug.pdf` ni modifica los PDFs exportados). El selector
+   **Fecha del CSV** alterna entre día específico y último día del mes; después
+   de procesar, el cambio reescribe inmediatamente solo el CSV y actualiza la
+   tabla, sin reprocesar ni regenerar los PDFs.
  6. Opciones avanzadas (colapsable): hilos totales del procesador, página de
     referencia y OCR de respaldo/ranuras. Las fechas se procesan con
     Qwen3-VL-8B-Instruct automáticamente cuando el runtime está instalado.
@@ -340,15 +353,26 @@ portable\python312\tools\python.exe run_gui.py
    (medido en vivo según el ritmo real de cada bitácora) y, al terminar,
    el tiempo por bitácora. El resultado OCR queda disponible en memoria para
    exportarlo varias veces.
-8. La vista previa carga la primera página del PDF seleccionado inmediatamente,
+ 8. La vista previa permite cambiar entre todos los PDFs seleccionados, saltar
+    a una página escrita y muestra el PDF/página actual y sus totales. Carga la
+    primera página del PDF seleccionado inmediatamente,
    antes del procesamiento, para revisar los bounding boxes cuando
    "Visualizar campos" está marcado (solo dibujo, sin costo extra). Al terminar
    el OCR, se actualiza con la versión de la corrida. Se reajusta al área de la
    ventana cuando esta cambia de tamaño; los controles de zoom permiten ampliar
    y desplazarse por la página. La tabla de resultados usa las mismas columnas
-   del CSV y muestra una sola línea por página.
-9. Los outputs (CSV y JSON consolidado en `datos/`, `stats.json`, PDFs
-    por matrícula/mes, `discrepancias.pdf`, `debug.pdf`) se exportan
+   del CSV y muestra una sola línea por página. Su botón de vista alterna entre
+   los campos importantes y el CSV completo, sin modificar el reporte guardado.
+    El botón **Visor de CSV** abre una ventana independiente donde se selecciona
+    una carpeta ya procesada y se consulta su CSV con el mismo selector de vista;
+    allí también se muestran los PDFs procesados. Las tablas permiten ordenar
+    por encabezado, que permanece visible durante el scroll. El selector de
+    campos importantes solo cambia la vista y se puede abrir en cualquier estado.
+    La lista de flota se edita desde **Editar lista…** y se guarda en
+    `fleet.json`; **Verificar matrículas** la activa de forma opcional y señala
+    como WARNING las matrículas válidas que no estén en la lista.
+9. Los outputs (CSV y JSON consolidado en `datos/`, `stats.json` y PDFs
+    organizados por la selección actual) se exportan
     automáticamente en `output/<nombre del CSV>/` según las casillas
     marcadas. Después de procesar se pueden cambiar las opciones de
     separación y pulsar **Exportar** para generar otra salida con la
@@ -429,6 +453,12 @@ El postprocesador `matricula` normaliza cualquier formato a `HP-XXXXCMP`:
 | `HP-9904CMP` | `HP-9904CMP` |
 | `HP-1990WWP` | `HP-1990WWP` |
 | `HP-1522WWP` | `HP-1522WWP` |
+
+El corrector por libro también usa la evidencia cruda del recorte manuscrito
+para resolver el caso repetido `HP-1414CMP` frente a `HP-1717CMP` cuando otra
+página del mismo libro conserva una forma completa como `HP-1F17CMP`. Esta
+regla se limita a matrículas, exige dos o más confusiones `4→7` y no se aplica a
+fechas ni a matrículas con una sola diferencia.
 
 ## Estados de validación
 

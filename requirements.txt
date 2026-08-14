@@ -1,3 +1,4 @@
+# Dependencias directas de ejecución (el portable no necesita Poppler ni pypdfium2)
 # Visión por computador
 opencv-python>=4.9.0
 numpy>=1.26.0
