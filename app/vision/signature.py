@@ -99,6 +99,44 @@ def _textured_ink(band: np.ndarray, thr: float) -> float:
     return float(np.mean(dark & (mag > 30.0)))
 
 
+def _suppress_printed_horizontal_line(
+    band: np.ndarray, thr: float
+) -> tuple[np.ndarray, float]:
+    """Elimina líneas impresas largas antes de puntuar la escritura.
+
+    Los campos de firma/licencia contienen una línea horizontal de base. Una
+    apertura con un kernel proporcional al ancho conserva únicamente trazos
+    casi horizontales y largos; después se blanquea una banda estrecha a su
+    alrededor. Los trazos manuscritos verticales, curvas y rúbricas cortas se
+    mantienen y siguen aportando evidencia.
+
+    Devuelve la banda limpia y la fracción de píxeles identificada como línea
+    impresa, útil para explicar la decisión en el reporte.
+    """
+    if band.size == 0:
+        return band, 0.0
+    binary = np.uint8(band < thr) * 255
+    width = binary.shape[1]
+    kernel_width = max(15, int(round(width * 0.35)))
+    horizontal = cv2.morphologyEx(
+        binary,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_width, 1)),
+    )
+    # La impresión puede ocupar 2-3 píxeles por el antialiasing/escaneo.
+    horizontal = cv2.dilate(
+        horizontal,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
+        iterations=1,
+    )
+    mask = horizontal > 0
+    if not mask.any():
+        return band, 0.0
+    cleaned = band.copy()
+    cleaned[mask] = 255
+    return cleaned, float(np.mean(mask))
+
+
 def _pen_ink(band_color: np.ndarray, thr_gray: float) -> float:
     """Fracción de tinta de bolígrafo (color) dentro de la banda.
 
@@ -192,10 +230,15 @@ def detect_signature(
             ),
         )
 
-    textured = _textured_ink(band, thr)
+    analysis_band, printed_line_ratio = _suppress_printed_horizontal_line(
+        band, thr
+    )
+    textured = _textured_ink(analysis_band, thr)
     pen = _pen_ink(_colored_band(region, field), thr)
     ink_evidence = max(textured, pen)
-    strokes, max_area = _significant_strokes(band, field.min_component_area)
+    strokes, max_area = _significant_strokes(
+        analysis_band, field.min_component_area
+    )
 
     strong = ink_evidence >= field.min_texture_ink
     strokes_ok = strokes >= field.min_components
@@ -225,7 +268,8 @@ def detect_signature(
             comment=(
                 f"Firma detectada: {strokes} trazo(s) (mayor de {max_area:.0f} px), "
                 f"tinta texturizada={textured:.4f} y/o pluma(color)="
-                f"{pen:.4f} >= {field.min_texture_ink:.3f}"
+                f"{pen:.4f} >= {field.min_texture_ink:.3f}; línea impresa "
+                f"suprimida={printed_line_ratio:.4f}"
             ),
         )
 
@@ -248,7 +292,8 @@ def detect_signature(
             comment=(
                 f"Firma incierta: evidencia parcial (tinta texturizada="
                 f"{textured:.4f}, pluma={pen:.4f}, trazos={strokes}); "
-                f"revisar manualmente"
+                f"línea impresa suprimida={printed_line_ratio:.4f}; revisar "
+                f"manualmente"
             ),
         )
 
@@ -274,7 +319,8 @@ def detect_signature(
         comment=(
             f"Firma ausente: el campo está vacío, no se detectaron trazos "
             f"de escritura (tinta texturizada={textured:.4f} < "
-            f"{field.min_texture_ink:.3f}, pluma={pen:.4f}, trazos={strokes})"
+            f"{field.min_texture_ink:.3f}, pluma={pen:.4f}, trazos={strokes}, "
+            f"línea impresa suprimida={printed_line_ratio:.4f})"
         ),
     )
 

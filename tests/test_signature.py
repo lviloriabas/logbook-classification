@@ -81,6 +81,22 @@ def _parcial() -> np.ndarray:
     return img
 
 
+def _linea_impresa() -> np.ndarray:
+    """Campo vacío cuya única tinta es la línea preimpresa para firmar."""
+    img = _blanca()
+    cv2.line(img, (8, ALTO // 2), (ANCHO - 8, ALTO // 2), (65, 65, 65), 2)
+    return img
+
+
+def _firma_sobre_linea() -> np.ndarray:
+    """Firma real que cruza la línea preimpresa del recuadro."""
+    img = _linea_impresa()
+    cv2.ellipse(img, (100, ALTO // 2), (55, 18), -12, 0, 310,
+                (20, 20, 20), 5)
+    cv2.line(img, (65, 58), (180, 22), (20, 20, 20), 4)
+    return img
+
+
 class TestDetectSignature(unittest.TestCase):
     def test_region_limpia_ausente(self):
         campo = _campo()
@@ -156,6 +172,17 @@ class TestDetectSignature(unittest.TestCase):
         resultado = detect_signature(_parcial(), campo, 1)
         self.assertEqual(resultado.value, UNCLEAR)
         self.assertEqual(resultado.status.value, "WARNING")
+
+    def test_linea_impresa_sola_no_es_firma(self):
+        resultado = detect_signature(_linea_impresa(), _campo(), 1)
+        self.assertEqual(resultado.value, "false")
+        self.assertGreaterEqual(resultado.confidence, 0.5)
+        self.assertIn("línea impresa suprimida", resultado.comment)
+
+    def test_firma_superpuesta_a_linea_impresa_sigue_presente(self):
+        resultado = detect_signature(_firma_sobre_linea(), _campo(), 1)
+        self.assertEqual(resultado.value, "true")
+        self.assertGreaterEqual(resultado.confidence, 0.45)
 
     def test_ausente_requerido_error(self):
         resultado = detect_signature(_blanca(), _campo(required=True), 1)
