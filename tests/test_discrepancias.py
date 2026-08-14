@@ -129,15 +129,33 @@ class TestClasificacion(unittest.TestCase):
         )
 
     def test_mantenimiento_no_requiere_firmas_de_capitan(self):
-        pagina = _page(
-            1,
-            "2147337",
-            "HP-1534CMP",
-            pilot_signature=("true", PRESENTE),
-            technician_signature=("true", PRESENTE),
-            technician_license=("true", PRESENTE),
-        )
+        pagina = _mant_ok()
         self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
+
+    def test_mantenimiento_con_firma_de_capitan_es_discrepancia(self):
+        pagina = _mant_ok(captain_signature=("true", PRESENTE))
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        self.assertEqual(len(entradas), 1)
+        self.assertIn(
+            "Firma de capitán presente en entrada de mantenimiento",
+            entradas[0].razones(),
+        )
+
+    def test_mantenimiento_con_licencia_de_capitan_es_discrepancia(self):
+        pagina = _mant_ok(captain_license=("true", PRESENTE))
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        self.assertEqual(len(entradas), 1)
+        self.assertIn(
+            "Licencia de capitán presente en entrada de mantenimiento",
+            entradas[0].razones(),
+        )
+
+    def test_mantenimiento_con_capitan_dudoso_requiere_revision(self):
+        pagina = _mant_ok(captain_signature=("false", DUDOSA))
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        self.assertEqual(len(entradas), 1)
+        self.assertIs(entradas[0].categoria, Categoria.UNCERTAIN)
+        self.assertIn("no se pudo confirmar", entradas[0].razones()[0].lower())
 
     def test_licencia_de_tecnico_dudosa_hace_tipo_incierto(self):
         # Una licencia de técnico con confianza baja no identifica
