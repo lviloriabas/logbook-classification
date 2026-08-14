@@ -16,6 +16,7 @@ from loguru import logger
 
 from app.models.schemas import ValidationReport
 from app.reports.csv_reporter import CsvReporter
+from app.reports.dual_csv import write_minimal_csv
 from app.reports.debug_pdf import write_debug_pdf
 from app.reports.json_reporter import JsonReporter
 from app.templates.schema import Template
@@ -41,6 +42,13 @@ class OutputOptions:
     debug: bool = False
     run_dir: Path | None = None
     skip_pdfs: bool = False
+    important_csv_columns: tuple[str, ...] = ()
+
+
+def complete_csv_path(csv_path: Path) -> Path:
+    """Nombre estable del CSV referencial con todas las columnas."""
+    csv_path = Path(csv_path)
+    return csv_path.with_name(f"{csv_path.stem}_completo{csv_path.suffix}")
 
 
 def run_csv_name() -> str:
@@ -134,9 +142,13 @@ def write_outputs(
             for entrada in entradas
         }
 
-    stage("Escribiendo CSV…", 10)
+    stage("Escribiendo CSV mínimo y completo…", 10)
     csv_path = datos_dir / csv_name
-    CsvReporter().write(reports, csv_path, template)
+    full_csv_path = complete_csv_path(csv_path)
+    CsvReporter().write(reports, full_csv_path, template)
+    write_minimal_csv(
+        full_csv_path, csv_path, options.important_csv_columns
+    )
     stage("Escribiendo JSON…", 20)
     json_path = datos_dir / f"{corrida}.json"
     JsonReporter().write_consolidated(reports, json_path, corrida=corrida)

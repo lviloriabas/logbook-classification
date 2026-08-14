@@ -62,7 +62,12 @@ def source_pdf_paths_for_rows(
     ambigüedad cuando se procesaron varios PDF con el mismo nombre.
     """
     row_list = list(rows)
-    companion = Path(csv_path).with_suffix(".json")
+    csv_path = Path(csv_path)
+    companion = csv_path.with_suffix(".json")
+    if not companion.is_file() and csv_path.stem.casefold().endswith("_completo"):
+        companion = csv_path.with_name(
+            f"{csv_path.stem[:-len('_completo')]}.json"
+        )
     flattened: list[tuple[str, str, Path]] = []
     try:
         payload = json.loads(companion.read_text(encoding="utf-8"))

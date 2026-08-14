@@ -1753,11 +1753,20 @@ class MainWindow(QMainWindow):
         run_dir = Path(self._corrida_dir)
         csv_path = run_dir / "datos" / f"{run_dir.name}.CSV"
         try:
+            from app.reports.dual_csv import write_minimal_csv
+            from app.reports.outputs import complete_csv_path
+
+            full_csv_path = complete_csv_path(csv_path)
             CsvReporter().write(
                 self._reports,
-                csv_path,
+                full_csv_path,
                 template,
                 date_mode=self._csv_date_mode(),
+            )
+            write_minimal_csv(
+                full_csv_path,
+                csv_path,
+                self._important_columns_for_export(template),
             )
         except Exception as exc:  # noqa: BLE001 - actualización opcional
             logger.error(f"No se pudo actualizar la fecha del CSV: {exc}")
@@ -1804,7 +1813,27 @@ class MainWindow(QMainWindow):
             run_dir=self._corrida_dir if reuse_dir else None,
             skip_pdfs=skip_pdfs,
             csv_date_mode=self._csv_date_mode(),
+            important_csv_columns=tuple(
+                self._important_columns_for_export(template)
+            ),
         )
+
+    def _important_columns_for_export(self, template: Template) -> list[str]:
+        """Columnas del CSV mínimo, independientes del dataset completo."""
+        columns = CsvReporter.columns_for_fields(
+            [field.id for field in template.fields],
+            skip_ids=frozenset(
+                field.id
+                for field in template.fields
+                if field.type.value == "signature"
+            ),
+        )
+        selected = (
+            self._selected_important_columns
+            if self._important_fields_user_selected
+            else self._default_important_columns(columns)
+        )
+        return [column for column in columns if column in selected]
 
     def _load_template(self) -> Template | None:
         selected = self.template_combo.currentData()
