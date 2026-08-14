@@ -440,6 +440,7 @@ class MainWindow(QMainWindow):
         self._table_pending: list = []
         self._table_important_field_ids: set[str] = set()
         self._selected_important_columns: set[str] = set()
+        self._important_fields_user_selected = False
         self._csv_viewer: CsvViewerWindow | None = None
 
         self._preview_thread = QThread(self)
@@ -474,10 +475,18 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
 
         controls = self._build_controls()
-        # Los controles se muestran siempre completos, sin barra de scroll:
-        # la ventana no se deja encoger por debajo de su altura mínima y el
-        # espacio sobrante lo absorbe la tabla, no esta zona superior.
-        root.addWidget(controls)
+        control_scroll = QScrollArea()
+        control_scroll.setObjectName("controlScroll")
+        control_scroll.setWidgetResizable(True)
+        control_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        control_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        control_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        control_scroll.setWidget(controls)
+        root.addWidget(control_scroll, 0)
 
         root.addLayout(self._build_progress_row())
         root.addWidget(self._build_splitter(), stretch=1)
@@ -1434,7 +1443,7 @@ class MainWindow(QMainWindow):
             logger.info(f"Lista de flota actualizada: {SCRIPT_DIR / FLEET_FILENAME}")
 
     def _open_important_fields(self) -> None:
-        columns = self._table_columns
+        columns = self._table_columns or self._columns_for_template_preview()
         if not columns:
             QMessageBox.information(
                 self,
@@ -1442,16 +1451,31 @@ class MainWindow(QMainWindow):
                 "Cargue o procese un CSV para seleccionar sus columnas.",
             )
             return
-        selected = self._selected_important_columns or set(
-            self._default_important_columns(columns)
+        selected = (
+            self._selected_important_columns
+            if self._important_fields_user_selected
+            else self._default_important_columns(columns)
         )
         dialog = ImportantFieldsDialog(columns, selected, self)
         dialog.selectionChanged.connect(self._set_important_columns)
         dialog.exec()
 
     def _set_important_columns(self, columns: set[str]) -> None:
+        self._important_fields_user_selected = True
         self._selected_important_columns = set(columns)
         self._apply_csv_table_view()
+
+    def _columns_for_template_preview(self) -> list[str]:
+        template = self._processed_template or self._load_template()
+        if template is None:
+            return []
+        signature_ids = {
+            field.id for field in template.fields if field.type.value == "signature"
+        }
+        return CsvReporter.columns_for_fields(
+            [field.id for field in template.fields],
+            skip_ids=frozenset(signature_ids),
+        )
 
     def _default_important_columns(self, columns: list[str]) -> set[str]:
         """Incluye los identificadores y campos críticos disponibles."""
@@ -2473,7 +2497,10 @@ class MainWindow(QMainWindow):
                 if field.required
             }
             self._table_important_field_ids.add(_DUP_COLUMN)
-            self._selected_important_columns = self._default_important_columns(columns)
+            if not self._important_fields_user_selected:
+                self._selected_important_columns = self._default_important_columns(columns)
+            else:
+                self._selected_important_columns.intersection_update(columns)
             self.csv_columns_toggle.setEnabled(bool(columns))
             self.csv_columns_toggle.setVisible(bool(columns))
             self._apply_csv_table_view()

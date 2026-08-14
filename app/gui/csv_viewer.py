@@ -244,6 +244,12 @@ class CsvViewerWindow(QMainWindow):
 
         self.setWindowTitle("Visor de CSV procesados")
         self.resize(1180, 720)
+        self.setStyleSheet(
+            "QMainWindow, QWidget { font-family: 'Segoe UI', sans-serif; font-size: 10pt; }"
+            "QHeaderView::section { background: #eef2f6; padding: 6px 8px;"
+            " font-weight: 600; border: 0; border-bottom: 1px solid #c9d1d9; }"
+            "QTableWidget { alternate-background-color: #f6f8fa; }"
+        )
         self._build_ui()
 
     def _build_ui(self) -> None:
