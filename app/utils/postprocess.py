@@ -331,6 +331,28 @@ def _matricula(value: str) -> Tuple[str, str]:
     return f"HP-{numero}{sufijo}", note
 
 
+def _flight_number(value: str) -> Tuple[str, str]:
+    """Normaliza el número de vuelo manuscrito junto a la matrícula.
+
+    El formulario mezcla códigos cortos (``CM``, ``C``), prefijos con
+    números (``A123``, ``C03``) y vuelos puramente numéricos. Se eliminan
+    separadores y las etiquetas impresas conocidas, pero no se inventan
+    letras o dígitos cuando el OCR no aporta una lectura inequívoca.
+    """
+    raw = value.upper().strip()
+    raw = re.sub(r"\b(?:FLT|FLIGHT|NO|CHECK)\b", " ", raw)
+    compact = re.sub(r"[^A-Z0-9]", "", raw)
+    if not compact:
+        return "", "empty flight number"
+    if len(compact) > 7:
+        return "", f"invalid flight number: {value}"
+    if re.fullmatch(r"\d{1,4}", compact):
+        return compact, ""
+    if re.fullmatch(r"[A-Z]{1,3}\d{0,4}", compact):
+        return compact, ""
+    return "", f"invalid flight number: {value}"
+
+
 def _date(value: str) -> Tuple[str, str]:
     """Parsea fechas en múltiples formatos a YYYY/MM/dd.
 
@@ -438,6 +460,7 @@ def combine_date(day_value: Optional[str], month_value: Optional[str],
 
 POSTPROCESSORS: Dict[str, Callable[[str], Tuple[str, str]]] = {
     "matricula": _matricula,
+    "flight_number": _flight_number,
     "date": _date,
     "digits": _digits,
     "day": _day,

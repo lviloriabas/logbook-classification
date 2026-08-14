@@ -193,6 +193,37 @@ class TestMatricula(unittest.TestCase):
             self.assertIn("registration without 4-digit number", note)
 
 
+class TestFlightNumber(unittest.TestCase):
+    def test_formatos_manuscritos_admitidos(self):
+        for value, expected in (
+            ("CM", "CM"),
+            ("A + 123", "A123"),
+            ("C", "C"),
+            ("C03", "C03"),
+            ("C-04", "C04"),
+            ("802", "802"),
+        ):
+            self.assertEqual(
+                apply_postprocess("flight_number", "flight_number", value),
+                (expected, ""),
+            )
+
+    def test_descarta_etiqueta_impresa(self):
+        self.assertEqual(
+            apply_postprocess(
+                "flight_number", "flight_number", "FLT. NO / CHECK C03"
+            ),
+            ("C03", ""),
+        )
+
+    def test_texto_largo_no_llega_al_csv(self):
+        value, note = apply_postprocess(
+            "flight_number", "flight_number", "FLEET INTERCHANGE"
+        )
+        self.assertEqual(value, "")
+        self.assertIn("invalid flight number", note)
+
+
 class TestCombineDate(unittest.TestCase):
     def test_valid(self):
         self.assertEqual(combine_date("4", "JUL", "26"),

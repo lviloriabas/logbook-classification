@@ -16,7 +16,9 @@ from app.vision.pdf_loader import RenderedRegion
 from app.vision.preprocessing import crop_region, upscale_for_ocr
 
 _DATE_FIELDS = frozenset({"day", "month", "year"})
-_TIGHT_FIELDS = frozenset({"day", "month", "year", "matricula", "digits"})
+_TIGHT_FIELDS = frozenset(
+    {"day", "month", "year", "matricula", "flight_number", "digits"}
+)
 
 _CLAHE = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
 
