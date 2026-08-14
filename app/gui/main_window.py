@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import sys
 import time
-from collections import deque
 from pathlib import Path
-from statistics import median
 
 from loguru import logger
 from PySide6.QtCore import (
@@ -74,6 +72,7 @@ from app.gui.csv_viewer import (
     ImportantFieldsButton,
     apply_csv_column_visibility,
 )
+from app.gui.eta import estimate_remaining_seconds, wall_ms_per_page
 from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.fleet_editor import FLEET_FILENAME, FleetEditorDialog, FleetStore
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
@@ -421,9 +420,7 @@ class MainWindow(QMainWindow):
         self._run_started: float | None = None
         self._done_global = 0
         self._total_global = 0
-        self._page_deltas: deque[float] = deque(maxlen=8)
         self._last_done = 0
-        self._last_page_at: float | None = None
         self._spinner_idx = 0
         self._spinner_active = False
 
@@ -1971,9 +1968,7 @@ class MainWindow(QMainWindow):
         self._total_global = self._total_pages_for(resolved)
         self._set_file_page_counts(resolved)
         self._done_global = 0
-        self._page_deltas.clear()
         self._last_done = 0
-        self._last_page_at = None
         self._run_started = time.monotonic()
         self._spinner_active = True
         self._timer.start()
@@ -2130,20 +2125,13 @@ class MainWindow(QMainWindow):
         elapsed = time.monotonic() - self._run_started
         remaining = None
         total = None
-        # Estimación en vivo: ritmo = mezcla de lo aprendido (última corrida,
-        # ya incluye calibración + VLM) con la mediana de los deltas reales
-        # entre páginas completadas. La mediana ignora páginas lentas atípicas
-        # y el total converge al mismo número que reporta el log final.
         if self._total_global > 0:
-            pending = self._total_global - self._done_global
-            remaining = max(0.0, pending * self._ms_per_page / 1000.0)
-            if pending > 0:
-                rate = self._ms_per_page
-                if self._page_deltas:
-                    live = median(self._page_deltas)
-                    weight = min(1.0, self._done_global / 8.0)
-                    rate = (1.0 - weight) * rate + weight * live
-                remaining = max(0.0, pending * rate / 1000.0)
+            remaining = estimate_remaining_seconds(
+                total_pages=self._total_global,
+                completed_pages=self._done_global,
+                elapsed_seconds=elapsed,
+                cached_ms_per_page=self._ms_per_page,
+            )
             total = elapsed + remaining
         self._set_time_summary(elapsed, remaining, total)
         # Reloj en vivo de la fila del archivo en curso.
@@ -2158,14 +2146,7 @@ class MainWindow(QMainWindow):
             if self.progress.maximum() != total:
                 self.progress.setRange(0, total)
             self.progress.setValue(done)
-            # Cada incremento de ``done`` es una página real completada (la
-            # calibración anuncia etapas con done=0 y no cuenta). Los deltas
-            # entre eventos alimentan el ritmo medido del estimador.
             if done > self._last_done:
-                now = time.monotonic()
-                if self._last_done > 0 and self._last_page_at is not None:
-                    self._page_deltas.append((now - self._last_page_at) * 1000.0)
-                self._last_page_at = now
                 self._last_done = done
             self._done_global = done
             self._update_file_progress(done)
@@ -2194,7 +2175,7 @@ class MainWindow(QMainWindow):
         self.btn_preprocess.setEnabled(False)
         self.btn_export.setEnabled(True)
         self.btn_cancel.setEnabled(False)
-        self._update_performance(reports)
+        self._update_performance(reports, elapsed)
         self._refresh_estimate()
 
         cancelled_any = any(getattr(r, "cancelled", False) for r in reports)
@@ -2364,11 +2345,14 @@ class MainWindow(QMainWindow):
             self._pending_csv_refresh = False
             self._rewrite_current_csv()
 
-    def _update_performance(self, reports: list[ValidationReport]) -> None:
-        """Aprende el costo por página de la corrida para futuras estimas."""
+    def _update_performance(
+        self, reports: list[ValidationReport], elapsed_seconds: float | None
+    ) -> None:
+        """Aprende throughput de pared; no suma tiempos de workers paralelos."""
         pages = sum(len(r.pages) for r in reports)
-        if pages > 0:
-            self._ms_per_page = max(1.0, sum(r.processing_ms for r in reports) / pages)
+        measured = wall_ms_per_page(elapsed_seconds or 0.0, pages)
+        if measured is not None:
+            self._ms_per_page = max(1.0, measured)
             _save_ms_per_page(self._ms_per_page)
 
     def _exportar(self) -> None:
