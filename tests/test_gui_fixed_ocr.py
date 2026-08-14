@@ -6,7 +6,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QScrollArea
 
 from app.core.config import AppConfig
 from app.gui.main_window import MainWindow
@@ -36,6 +36,16 @@ def test_gui_has_no_engine_selectors_and_uses_validated_models():
         assert config.ocr_det_model == "PP-OCRv6_medium_det"
         assert config.date_ocr_fallback is False
         assert config.date_slot_ocr is False
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_configuration_panel_is_not_wrapped_in_a_scroll_area():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    try:
+        assert window.findChild(QScrollArea, "controlScroll") is None
     finally:
         window.close()
         app.processEvents()

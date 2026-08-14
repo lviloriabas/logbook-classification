@@ -470,20 +470,11 @@ class MainWindow(QMainWindow):
         central = QWidget(self)
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(5)
 
         controls = self._build_controls()
-        control_scroll = QScrollArea()
-        control_scroll.setObjectName("controlScroll")
-        control_scroll.setWidgetResizable(True)
-        control_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        control_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-        control_scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-        control_scroll.setWidget(controls)
-        root.addWidget(control_scroll, 0)
+        root.addWidget(controls, 0)
 
         root.addLayout(self._build_progress_row())
         root.addWidget(self._build_splitter(), stretch=1)
@@ -496,6 +487,7 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         layout.addWidget(self._build_input_group())
         layout.addWidget(self._build_process_group())
         layout.addWidget(self._build_options_group())
@@ -505,6 +497,7 @@ class MainWindow(QMainWindow):
     def _build_input_group(self) -> QGroupBox:
         group = QGroupBox("Entrada")
         grid = QGridLayout(group)
+        grid.setContentsMargins(8, 5, 8, 5)
         grid.setColumnStretch(1, 1)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
@@ -578,7 +571,8 @@ class MainWindow(QMainWindow):
     def _build_process_group(self) -> QGroupBox:
         group = QGroupBox("Procesamiento")
         row = QHBoxLayout(group)
-        row.setSpacing(10)
+        row.setContentsMargins(8, 5, 8, 5)
+        row.setSpacing(8)
 
         engine_label = QLabel("OCR: Paddle v5 (automático)")
         engine_label.setToolTip(
@@ -630,6 +624,8 @@ class MainWindow(QMainWindow):
     def _build_options_group(self) -> QGroupBox:
         group = QGroupBox("Salidas")
         layout = QVBoxLayout(group)
+        layout.setContentsMargins(8, 5, 8, 5)
+        layout.setSpacing(4)
 
         formato_row = QHBoxLayout()
         formato_row.setSpacing(10)

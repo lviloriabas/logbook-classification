@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication
 from app.gui.csv_viewer import (
     CsvColumnModeButton,
     CsvViewerWindow,
+    EmbeddedPdfViewer,
     source_pdf_paths_for_rows,
 )
 from app.gui.csv_utils import (
@@ -140,6 +141,10 @@ def test_column_control_is_hidden_until_a_csv_is_loaded(tmp_path: Path):
     assert viewer.load_folder(run) is True
     app.processEvents()
     assert not viewer.column_toggle.isHidden()
+    viewer.show()
+    app.processEvents()
+    csv_height, pdf_height = viewer.content_splitter.sizes()
+    assert abs(csv_height - pdf_height) <= 2
 
 
 def test_companion_json_resolves_source_pdf_per_csv_row(tmp_path: Path):
@@ -186,5 +191,38 @@ def test_log_search_selects_exact_seven_digit_match(tmp_path: Path):
     assert viewer._search_matches == [1]
     assert viewer.table.currentRow() == 1
     assert "b.pdf, página 7" in viewer.search_context.text()
+    viewer.close()
+    app.processEvents()
+
+
+def test_pdf_page_is_text_field_without_selector_or_go_button(
+    tmp_path: Path, monkeypatch
+):
+    import numpy as np
+    from PySide6.QtWidgets import QPushButton
+    from app.vision import pdf_loader
+
+    app = QApplication.instance() or QApplication([])
+    pdf_path = tmp_path / "book.pdf"
+    pdf_path.touch()
+    monkeypatch.setattr(pdf_loader, "page_count", lambda _path: 12)
+    monkeypatch.setattr(
+        pdf_loader,
+        "render_page",
+        lambda _path, _page, dpi=120: np.zeros((20, 30, 3), dtype=np.uint8),
+    )
+    viewer = EmbeddedPdfViewer()
+
+    viewer.load_paths([pdf_path])
+    viewer.page_edit.setText("7")
+    viewer.page_edit.editingFinished.emit()
+
+    assert not hasattr(viewer, "pdf_combo")
+    assert viewer.pdf_name.text() == "book.pdf"
+    assert viewer._page == 7
+    assert viewer.total_pages.text() == "de 12"
+    assert "Ir" not in {
+        button.text() for button in viewer.findChildren(QPushButton)
+    }
     viewer.close()
     app.processEvents()

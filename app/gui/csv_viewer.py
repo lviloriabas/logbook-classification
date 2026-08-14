@@ -7,17 +7,19 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from PySide6.QtCore import QRegularExpression, QSize, Qt
+from PySide6.QtCore import QRegularExpression, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
     QIcon,
     QImage,
+    QIntValidator,
     QPixmap,
     QRegularExpressionValidator,
 )
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -159,11 +161,13 @@ class ImportantFieldsButton(QToolButton):
         self.setAutoRaise(True)
 
 
-class EmbeddedPdfViewer(QWidget):
+class EmbeddedPdfViewer(QFrame):
     """Visor PDF liviano para la ventana de CSV ya procesados."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("embeddedPdfPane")
+        self.setFrameShape(QFrame.Shape.StyledPanel)
         self._paths: list[Path] = []
         self._path: Path | None = None
         self._page = 1
@@ -173,23 +177,24 @@ class EmbeddedPdfViewer(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         controls = QHBoxLayout()
-        controls.addWidget(QLabel("PDF procesado:"))
-        self.pdf_combo = QComboBox()
-        self.pdf_combo.setEnabled(False)
-        self.pdf_combo.currentIndexChanged.connect(self._on_pdf_changed)
-        controls.addWidget(self.pdf_combo, 1)
+        controls.addWidget(QLabel("PDF:"))
+        self.pdf_name = QLabel("Ninguno")
+        self.pdf_name.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        controls.addWidget(self.pdf_name, 1)
         self.prev = QPushButton("‹")
         self.prev.setToolTip("Página anterior")
         self.prev.clicked.connect(lambda: self.show_page(self._page - 1))
         controls.addWidget(self.prev)
+        controls.addWidget(QLabel("Página"))
         self.page_edit = QLineEdit()
-        self.page_edit.setPlaceholderText("Página")
+        self.page_edit.setValidator(QIntValidator(1, 1, self.page_edit))
         self.page_edit.setFixedWidth(65)
-        self.page_edit.returnPressed.connect(self._jump)
+        self.page_edit.editingFinished.connect(self._jump)
         controls.addWidget(self.page_edit)
-        go = QPushButton("Ir")
-        go.clicked.connect(self._jump)
-        controls.addWidget(go)
+        self.total_pages = QLabel("de 0")
+        controls.addWidget(self.total_pages)
         self.next = QPushButton("›")
         self.next.setToolTip("Página siguiente")
         self.next.clicked.connect(lambda: self.show_page(self._page + 1))
@@ -197,14 +202,12 @@ class EmbeddedPdfViewer(QWidget):
         layout.addLayout(controls)
 
         self.scroll = QScrollArea()
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setWidgetResizable(False)
         self.image = QLabel("Seleccione un PDF")
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scroll.setWidget(self.image)
         layout.addWidget(self.scroll, 1)
-        self.context = QLabel("PDF 0 de 0 · Página 0 de 0")
-        self.context.setStyleSheet("color: #57606a;")
-        layout.addWidget(self.context)
         self._sync_controls()
 
     def load_paths(self, paths: Iterable[Path]) -> None:
@@ -219,24 +222,15 @@ class EmbeddedPdfViewer(QWidget):
                 seen.add(key)
                 unique.append(path)
         self._paths = unique
-        self.pdf_combo.blockSignals(True)
-        self.pdf_combo.clear()
-        for path in self._paths:
-            self.pdf_combo.addItem(path.name, str(path))
-        self.pdf_combo.blockSignals(False)
-        self.pdf_combo.setEnabled(bool(self._paths))
         if self._paths:
-            self.pdf_combo.setCurrentIndex(0)
             self.show_page(1, self._paths[0])
         else:
             self._path = None
+            self._page = 1
+            self._total = 0
             self.image.clear()
             self.image.setText("No se encontraron PDFs procesados")
             self._sync_controls()
-
-    def _on_pdf_changed(self, index: int) -> None:
-        if 0 <= index < len(self._paths):
-            self.show_page(1, self._paths[index])
 
     def _jump(self) -> None:
         try:
@@ -270,19 +264,17 @@ class EmbeddedPdfViewer(QWidget):
         self._total = total
         self._page = page
         self.page_edit.setText(str(page))
+        validator = self.page_edit.validator()
+        if isinstance(validator, QIntValidator):
+            validator.setTop(max(1, total))
         self.image.setPixmap(QPixmap.fromImage(qimage))
-        index = next((i for i, item in enumerate(self._paths) if item == path), 0)
-        self.pdf_combo.blockSignals(True)
-        self.pdf_combo.setCurrentIndex(index)
-        self.pdf_combo.blockSignals(False)
         self._sync_controls()
 
     def _sync_controls(self) -> None:
-        index = self._paths.index(self._path) + 1 if self._path in self._paths else 0
-        self.context.setText(
-            f"PDF {index} de {len(self._paths)} · Página "
-            f"{self._page if self._path else 0} de {self._total if self._path else 0}"
-        )
+        self.pdf_name.setText(self._path.name if self._path else "Ninguno")
+        self.pdf_name.setToolTip(str(self._path) if self._path else "")
+        self.total_pages.setText(f"de {self._total}")
+        self.page_edit.setEnabled(bool(self._path))
         self.prev.setEnabled(bool(self._path) and self._page > 1)
         self.next.setEnabled(bool(self._path) and self._page < self._total)
 
@@ -373,6 +365,7 @@ class CsvViewerWindow(QMainWindow):
         layout.addLayout(search_row)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
+        self.content_splitter = splitter
         self.table = QTableWidget(0, 0)
         self.table.setAccessibleName("CSV procesado")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -384,13 +377,33 @@ class CsvViewerWindow(QMainWindow):
         splitter.addWidget(self.table)
         self.pdf_viewer = EmbeddedPdfViewer()
         splitter.addWidget(self.pdf_viewer)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([1, 1])
         layout.addWidget(splitter, 1)
 
         self.status_label = QLabel("Seleccione una carpeta para visualizar su CSV.")
         self.status_label.setStyleSheet("color: #57606a;")
         layout.addWidget(self.status_label)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().showEvent(event)
+        QTimer.singleShot(0, self._balance_content_splitter)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().resizeEvent(event)
+        if hasattr(self, "content_splitter"):
+            QTimer.singleShot(0, self._balance_content_splitter)
+
+    def _balance_content_splitter(self) -> None:
+        """Mantiene las dos zonas visuales con la misma altura."""
+        available = max(
+            0,
+            self.content_splitter.height()
+            - self.content_splitter.handleWidth(),
+        )
+        half = available // 2
+        self.content_splitter.setSizes([half, available - half])
 
     def browse_for_folder(self) -> None:
         initial = self._folder or self._start_folder
