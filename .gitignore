@@ -21,6 +21,7 @@ portable/
 output/
 recortes_firmas/
 build/
+tmp/portable-cleanup-*/
 
 # Directorio de entrada (PDFs escaneados, descargables por separado)
 input/*
