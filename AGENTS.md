@@ -1,5 +1,20 @@
 El output del reporte CSV no se debe modificar sin antes preguntar al usuario o sin que él lo pida.
 
+## Reglas de la plataforma (no negociables)
+
+- **Solo CPU.** Nunca se puede usar GPU ni ningún acelerador. Todo motor de
+  inferencia se instancia explícitamente con `device="cpu"` y no debe
+  autodetectar hardware. Las optimizaciones permitidas son las de CPU
+  (oneDNN/MKL-DNN, hilos, tamaño de lote, cuantización int8).
+- **Portable.** La carpeta completa se copia a cualquier PC Windows sin
+  permisos de administrador y funciona sin instalar nada. No se puede
+  depender de rutas del sistema, del registro, ni de descargas en tiempo de
+  ejecución: intérprete, dependencias, Tesseract y modelos viven dentro de
+  `portable/`, y el cache de modelos se redirige ahí con
+  `PADDLE_PDX_CACHE_HOME`.
+- Cualquier modelo nuevo debe quedar precacheado en `portable/` (ver
+  `tools/precache_paddle.py`) y funcionar sin conexión a internet.
+
 ## Reglas del dominio de bitácoras
 
 - Cada libro físico contiene 50 páginas y corresponde a un solo avión.

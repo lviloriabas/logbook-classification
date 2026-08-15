@@ -79,6 +79,52 @@ class TestGroupBooks(unittest.TestCase):
 
 
 class TestAggressiveCorrection(unittest.TestCase):
+    def test_repeated_4_7_ambiguity_uses_raw_matricula_evidence(self):
+        canonical_1414 = _page(1, "2073652", "HP-1414CMP", conf=0.59)
+        raw_1717 = _page(
+            2, "2073653", "", status=Status.ERROR, conf=0.78
+        )
+        _matricula(raw_1717).raw_value = "HP-1F17CMP"
+
+        stats = correct_matricula_by_book([
+            _report(canonical_1414, raw_1717)
+        ])
+
+        self.assertEqual(_matricula(canonical_1414).value, "HP-1717CMP")
+        self.assertEqual(_matricula(raw_1717).value, "HP-1717CMP")
+        self.assertIn("4/7 ambiguity", _matricula(canonical_1414).comment)
+        self.assertIn("HP-1414CMP", _matricula(canonical_1414).alternatives)
+        self.assertEqual(stats["flagged"], 1)
+        self.assertEqual(stats["corrected"], 1)
+
+    def test_repeated_4_7_can_repair_a_previously_wrong_book_correction(self):
+        canonical_1414 = _page(1, "2073652", "HP-1414CMP", conf=0.59)
+        old_correction = _page(2, "2073653", "HP-1414CMP", conf=0.59)
+        old_field = _matricula(old_correction)
+        old_field.raw_value = "HP-1F17CMP"
+        old_field.source = "book_correction"
+
+        correct_matricula_by_book([
+            _report(canonical_1414, old_correction)
+        ])
+
+        self.assertEqual(_matricula(canonical_1414).value, "HP-1717CMP")
+        self.assertEqual(_matricula(old_correction).value, "HP-1717CMP")
+        self.assertEqual(
+            _matricula(old_correction).inference_method,
+            "book_handwritten_4_7",
+        )
+
+    def test_single_4_7_difference_does_not_change_matricula(self):
+        canonical = _page(1, "2147337", "HP-1534CMP", conf=0.9)
+        raw_hint = _page(2, "2147338", "", status=Status.ERROR, conf=0.9)
+        _matricula(raw_hint).raw_value = "HP-153FCMP"
+
+        correct_matricula_by_book([_report(canonical, raw_hint)])
+
+        self.assertEqual(_matricula(canonical).value, "HP-1534CMP")
+        self.assertEqual(_matricula(raw_hint).value, "HP-1534CMP")
+
     def test_garbage_and_different_values_overwritten(self):
         pages = [
             _page(1, "2147337", "HP-1534CMP"),

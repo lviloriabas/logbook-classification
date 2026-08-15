@@ -130,9 +130,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--discrepancias", action="store_true",
-        help="Generar discrepancias.pdf con las páginas que tienen firmas "
-             "faltantes o inciertas, sin anotaciones. Estas páginas NO se "
-             "incluyen en los PDFs por avión/mes.",
+        help="Separar las páginas con firmas faltantes o inciertas. En un "
+             "PDF único se agregan al final bajo 'Posibles discrepancias'; "
+             "en modo de varios archivos se genera discrepancias.pdf.",
     )
     parser.add_argument(
         "--recortes-firmas", action="store_true",
@@ -382,6 +382,7 @@ def _run(args: argparse.Namespace) -> int:
 
     entradas = clasificar_lote(reports, template)
     excluidas = None
+    pdf_unico = args.un_solo_pdf or not args.separar_por
     if args.discrepancias and entradas:
         excluidas = {
             (Path(e.pdf_path).name, e.page_number) for e in entradas
@@ -423,7 +424,7 @@ def _run(args: argparse.Namespace) -> int:
         )
         print(f"  Recortes de firmas: {recortes_dir}")
 
-    if args.discrepancias and entradas:
+    if args.discrepancias and entradas and not pdf_unico:
         from app.reports.organize import escribir_pdf_discrepancias
 
         discrepancias_path = escribir_pdf_discrepancias(
@@ -435,15 +436,16 @@ def _run(args: argparse.Namespace) -> int:
         print(f"  Discrepancias: {discrepancias_path} "
               f"({len(entradas)} página(s): {faltantes} faltante(s), "
               f"{inciertas} para revisar)")
-    elif args.discrepancias:
+    elif args.discrepancias and not entradas and not pdf_unico:
         print("  Discrepancias: no hay páginas para exportar")
 
-    if args.un_solo_pdf:
+    if pdf_unico:
         from app.reports.organize import escribir_pdf_unico
 
         pdf_path = escribir_pdf_unico(
             reports, run_dir, args.separar_por or [],
             excluidas, dpi=args.dpi,
+            discrepancias_al_final=args.discrepancias,
         )
         print(f"  PDF único: {pdf_path.relative_to(run_dir)}")
     elif args.separar_por:
@@ -455,13 +457,6 @@ def _run(args: argparse.Namespace) -> int:
         print(f"  PDFs separados ({len(pdf_paths)}):")
         for pdf_path in pdf_paths:
             print(f"    - {pdf_path.relative_to(run_dir)}")
-    else:
-        from app.reports.organize import escribir_pdf_unico
-
-        pdf_path = escribir_pdf_unico(
-            reports, run_dir, [], excluidas, dpi=args.dpi
-        )
-        print(f"  PDF único: {pdf_path.relative_to(run_dir)}")
 
     # ── Estadísticas de la corrida (siempre) ────────────────────────────
     from app.reports.stats import escribir_stats

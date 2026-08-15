@@ -30,6 +30,7 @@ from PySide6.QtGui import (
     QFont,
     QIcon,
     QImage,
+    QIntValidator,
     QKeySequence,
     QPainter,
     QPen,
@@ -399,6 +400,7 @@ class MainWindow(QMainWindow):
         self._preview_total = 0
         self._preview_pdf: Path | None = None
         self._preview_documents: list[Path] = []
+        self._preview_document_counts: list[int] = []
         self._row_pdfs: list[Path] = []
         self._preview_source_pixmap: QPixmap | None = None
         self._preview_zoom = 1.0  # 1.0 = ajustado a la altura disponible
@@ -574,10 +576,10 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(8, 5, 8, 5)
         row.setSpacing(8)
 
-        engine_label = QLabel("OCR: Paddle v5 (automático)")
+        engine_label = QLabel("OCR: Paddle v5 (CPU)")
         engine_label.setToolTip(
-            "Motor fijado internamente tras la evaluación de precisión; no "
-            "requiere configuración del usuario."
+            "Motor y dispositivo CPU fijados internamente; no requiere "
+            "configuración del usuario."
         )
         row.addWidget(engine_label)
 
@@ -835,8 +837,8 @@ class MainWindow(QMainWindow):
         adv.addLayout(check_row)
 
         date_info = QLabel(
-            "OCR fijo: Paddle PP-OCRv5 mobile + detector v6 medium, sin "
-            "cadena de motores de respaldo ni VLM."
+            "OCR fijo en CPU: Paddle PP-OCRv5 mobile + detector v6 medium, "
+            "sin cadena de motores de respaldo ni VLM."
         )
         date_info.setStyleSheet("color: #57606a;")
         adv.addWidget(date_info)
@@ -852,17 +854,23 @@ class MainWindow(QMainWindow):
         return selected
 
     def _update_parallelism_hint(self) -> None:
-        """Muestra la distribución automática para los hilos seleccionados."""
+        """Muestra la distribución automática para los hilos seleccionados.
+
+        El reparto prioriza el número de procesos: los hilos internos del
+        motor OCR no aceleran la inferencia, así que puede sobrar algún hilo
+        sin que eso cueste velocidad.
+        """
         selected_threads = self.threads_spin.value()
         effective = self._effective_threads(selected_threads)
         selected_workers, selected_per_worker = recommended_parallelism(effective)
         automatic = (
-            f"{selected_workers} worker(s) x {selected_per_worker} "
-            f"hilo(s) = {effective} hilos"
+            f"{selected_workers} proceso(s) OCR x {selected_per_worker} "
+            f"hilo(s)"
         )
         if self._effective_threads(selected_threads) < selected_threads:
             automatic += (
-                f" ({selected_threads - effective} reservado(s) para la interfaz)"
+                f", {selected_threads - effective} hilo(s) reservado(s) "
+                "para la interfaz"
             )
         if selected_threads == self._available_cpu_threads:
             current = " Es la configuración más rápida y está seleccionada por defecto."
@@ -999,7 +1007,10 @@ class MainWindow(QMainWindow):
         self.preview_scroll.setMinimumSize(300, 220)
         self.preview_scroll.setWidget(self.preview_label)
 
-        nav = QHBoxLayout()
+        self.preview_pagination = QWidget()
+        self.preview_pagination.setObjectName("previewPagination")
+        nav = QHBoxLayout(self.preview_pagination)
+        nav.setContentsMargins(0, 0, 0, 0)
         self.btn_prev = QToolButton()
         self.btn_prev.setArrowType(Qt.ArrowType.LeftArrow)
         self.btn_prev.setToolTip("Página anterior (flecha izquierda)")
@@ -1014,32 +1025,55 @@ class MainWindow(QMainWindow):
         self.btn_next.setShortcut(QKeySequence(Qt.Key.Key_Right))
         self.btn_next.setEnabled(False)
         self.btn_next.clicked.connect(self._next_page)
-        self.page_label = QLabel("Página 0/0")
-        self.page_label.setMinimumWidth(90)
-        self.preview_pdf_combo = QComboBox()
-        self.preview_pdf_combo.setMinimumWidth(180)
-        self.preview_pdf_combo.setMaximumWidth(280)
-        self.preview_pdf_combo.setToolTip("PDF activo en la vista previa")
-        self.preview_pdf_combo.currentIndexChanged.connect(
-            self._on_preview_pdf_changed
+        self.preview_file_label = QLabel("Ninguno")
+        self.preview_file_label.setMaximumWidth(320)
+        self.preview_file_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
         )
+        self.preview_file_label.setAccessibleName(
+            "Archivo PDF activo en la vista previa"
+        )
+        self.preview_file_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.page_edit = QLineEdit()
-        self.page_edit.setPlaceholderText("Página")
-        self.page_edit.setToolTip("Escriba un número de página y pulse Ir")
-        self.page_edit.setFixedWidth(70)
-        self.page_edit.returnPressed.connect(self._jump_to_page_number)
-        page_go = QPushButton("Ir")
-        page_go.setToolTip("Saltar a la página escrita")
-        page_go.clicked.connect(self._jump_to_page_number)
-        nav.addStretch()
-        nav.addWidget(QLabel("PDF:"))
-        nav.addWidget(self.preview_pdf_combo)
+        self.page_edit.setValidator(QIntValidator(1, 1, self.page_edit))
+        self.page_edit.setToolTip(
+            "Escriba el número de página del lote; el salto se aplica al terminar"
+        )
+        self.page_edit.setAccessibleName("Página actual")
+        self.page_edit.setFixedWidth(48)
+        self.page_edit.editingFinished.connect(self._jump_to_page_number)
+        self.page_total_label = QLabel("de 0")
         nav.addWidget(self.btn_prev)
-        nav.addWidget(self.page_label)
+        nav.addWidget(QLabel("Página"))
         nav.addWidget(self.page_edit)
-        nav.addWidget(page_go)
+        nav.addWidget(self.page_total_label)
         nav.addWidget(self.btn_next)
-        nav.addStretch()
+
+        self.preview_file_indicator = QWidget()
+        file_row = QHBoxLayout(self.preview_file_indicator)
+        file_row.setContentsMargins(0, 0, 10, 0)
+        file_row.setSpacing(4)
+        file_row.addWidget(QLabel("Archivo:"))
+        file_row.addWidget(self.preview_file_label)
+
+        # Una sola barra: el archivo queda anclado a la izquierda y el
+        # paginador se centra sobre todo el ancho disponible del PDF.
+        self.preview_nav_bar = QWidget()
+        self.preview_nav_bar.setObjectName("previewNavigationBar")
+        nav_bar = QGridLayout(self.preview_nav_bar)
+        nav_bar.setContentsMargins(0, 0, 0, 0)
+        nav_bar.addWidget(
+            self.preview_file_indicator,
+            0,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        )
+        nav_bar.addWidget(
+            self.preview_pagination,
+            0,
+            0,
+            Qt.AlignmentFlag.AlignCenter,
+        )
 
         viewer_frame = QWidget()
         viewer_frame_layout = QGridLayout(viewer_frame)
@@ -1108,7 +1142,7 @@ class MainWindow(QMainWindow):
         page_layout = QVBoxLayout(page_area)
         page_layout.setContentsMargins(0, 0, 0, 0)
         page_layout.addWidget(viewer_frame, stretch=1)
-        page_layout.addLayout(nav)
+        page_layout.addWidget(self.preview_nav_bar)
         preview_layout.addWidget(page_area, stretch=1)
         self._update_preview_zoom_controls()
 
@@ -1169,7 +1203,9 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-weight: bold;")
         times_layout.addWidget(title)
 
-        self.preview_context_label = QLabel("PDF 0 de 0 · Página 0 de 0")
+        self.preview_context_label = QLabel(
+            "Archivo 0 de 0 · Página 0 de 0 en el archivo"
+        )
         self.preview_context_label.setObjectName("previewContext")
         self.preview_context_label.setWordWrap(True)
         times_layout.addWidget(self.preview_context_label)
@@ -1363,8 +1399,11 @@ class MainWindow(QMainWindow):
         self._show_preview_page(1, self._pdf_paths[0])
 
     def _set_preview_documents(self, paths: list[Path]) -> None:
-        """Actualiza el selector de PDF sin perder el documento activo."""
+        """Actualiza la secuencia global de PDFs sin perder el activo."""
+        from app.vision.pdf_loader import page_count
+
         unique: list[Path] = []
+        counts: list[int] = []
         seen: set[str] = set()
         for path in paths:
             path = Path(path)
@@ -1372,37 +1411,69 @@ class MainWindow(QMainWindow):
             if path.is_file() and path.suffix.lower() == ".pdf" and key not in seen:
                 seen.add(key)
                 unique.append(path)
-        current = str(self._preview_pdf.resolve()).casefold() if self._preview_pdf else ""
+                try:
+                    counts.append(max(0, page_count(path)))
+                except Exception:  # noqa: BLE001 - el visor omite PDFs inválidos
+                    counts.append(0)
         self._preview_documents = unique
-        self.preview_pdf_combo.blockSignals(True)
-        self.preview_pdf_combo.clear()
-        for path in unique:
-            self.preview_pdf_combo.addItem(path.name, str(path))
-        index = next(
-            (i for i, path in enumerate(unique)
-             if str(path.resolve()).casefold() == current),
-            0,
+        self._preview_document_counts = counts
+        active = (
+            str(self._preview_pdf.resolve()).casefold()
+            if self._preview_pdf is not None
+            else ""
         )
-        self.preview_pdf_combo.setCurrentIndex(index if unique else -1)
-        self.preview_pdf_combo.setEnabled(bool(unique))
-        self.preview_pdf_combo.blockSignals(False)
+        if active and all(
+            str(path.resolve()).casefold() != active for path in unique
+        ):
+            self._preview_pdf = None
+            self._preview_page = 1
+            self._preview_total = 0
         self._update_preview_nav()
 
-    def _on_preview_pdf_changed(self, index: int) -> None:
-        if 0 <= index < len(self._preview_documents):
-            self._preview_source_pixmap = None
-            self._preview_zoom = 1.0
-            self._show_preview_page(1, self._preview_documents[index])
+    def _preview_global_page(self) -> int:
+        """Posición de la página actual dentro de todos los PDFs."""
+        if self._preview_pdf is None:
+            return 0
+        current = str(self._preview_pdf.resolve()).casefold()
+        offset = 0
+        for path, count in zip(
+            self._preview_documents, self._preview_document_counts
+        ):
+            if str(path.resolve()).casefold() == current:
+                if count <= 0:
+                    return 0
+                return offset + min(max(1, self._preview_page), count)
+            offset += count
+        return 0
+
+    def _preview_location(self, global_page: int) -> tuple[Path, int] | None:
+        """Convierte una página global en (PDF, página local)."""
+        total = sum(self._preview_document_counts)
+        if total <= 0:
+            return None
+        remaining = min(max(1, global_page), total)
+        for path, count in zip(
+            self._preview_documents, self._preview_document_counts
+        ):
+            if remaining <= count:
+                return path, remaining
+            remaining -= count
+        return None
 
     def _jump_to_page_number(self) -> None:
         if self._preview_pdf is None:
             return
         try:
-            page = int(self.page_edit.text())
+            global_page = int(self.page_edit.text())
         except ValueError:
-            self.page_edit.setText(str(self._preview_page))
+            self.page_edit.setText(str(self._preview_global_page()))
+            self.page_edit.setModified(False)
             return
-        self._show_preview_page(page, self._preview_pdf)
+        location = self._preview_location(global_page)
+        if location is None:
+            return
+        self.page_edit.setModified(False)
+        self._show_preview_page(location[1], location[0])
 
     def _open_fleet_editor(self) -> None:
         dialog = FleetEditorDialog(FleetStore(SCRIPT_DIR / FLEET_FILENAME), self)
@@ -2675,15 +2746,19 @@ class MainWindow(QMainWindow):
             )
 
     def _update_preview_nav(self) -> None:
-        """Habilita/deshabilita las flechas según la página actual."""
+        """Sincroniza la paginación global y el indicador de archivo."""
         has_pdf = self._preview_pdf is not None
-        self.btn_prev.setEnabled(has_pdf and self._preview_page > 1)
-        self.btn_next.setEnabled(
-            has_pdf
-            and self._preview_total > 0
-            and self._preview_page < self._preview_total
-        )
-        self.page_edit.setText(str(self._preview_page) if has_pdf else "")
+        global_page = self._preview_global_page()
+        global_total = sum(self._preview_document_counts)
+        self.btn_prev.setEnabled(has_pdf and global_page > 1)
+        self.btn_next.setEnabled(has_pdf and global_page < global_total)
+        self.page_edit.setText(str(global_page) if has_pdf else "")
+        self.page_edit.setModified(False)
+        validator = self.page_edit.validator()
+        if isinstance(validator, QIntValidator):
+            validator.setTop(max(1, global_total))
+        self.page_edit.setEnabled(has_pdf and global_total > 0)
+        self.page_total_label.setText(f"de {global_total}")
         index = next(
             (i for i, path in enumerate(self._preview_documents)
              if self._preview_pdf is not None
@@ -2691,33 +2766,32 @@ class MainWindow(QMainWindow):
              == str(self._preview_pdf.resolve()).casefold()),
             -1,
         )
-        self.preview_pdf_combo.blockSignals(True)
-        self.preview_pdf_combo.setCurrentIndex(index)
-        self.preview_pdf_combo.blockSignals(False)
         pdf_text = self._preview_pdf.name if has_pdf else "Sin PDF"
-        pdf_position = f"PDF {index + 1} de {len(self._preview_documents)}"
+        self.preview_file_label.setText(pdf_text)
+        self.preview_file_label.setToolTip(
+            str(self._preview_pdf) if self._preview_pdf is not None else ""
+        )
+        pdf_position = f"Archivo {index + 1} de {len(self._preview_documents)}"
         context = (
             f"{pdf_position} · {pdf_text} · Página "
             f"{self._preview_page if has_pdf else 0} de "
-            f"{self._preview_total if has_pdf else 0}"
+            f"{self._preview_total if has_pdf else 0} en el archivo"
         )
         self.preview_context_label.setText(context)
-        self.page_label.setText(
-            f"Página {self._preview_page}/{self._preview_total or '?'}"
-            if has_pdf else "Página 0/0"
-        )
 
     def _prev_page(self) -> None:
-        if self._preview_pdf and self._preview_page > 1:
-            self._show_preview_page(self._preview_page - 1, self._preview_pdf)
+        current = self._preview_global_page()
+        if current > 1:
+            location = self._preview_location(current - 1)
+            if location is not None:
+                self._show_preview_page(location[1], location[0])
 
     def _next_page(self) -> None:
-        if (
-            self._preview_pdf
-            and self._preview_total
-            and self._preview_page < self._preview_total
-        ):
-            self._show_preview_page(self._preview_page + 1, self._preview_pdf)
+        current = self._preview_global_page()
+        if current < sum(self._preview_document_counts):
+            location = self._preview_location(current + 1)
+            if location is not None:
+                self._show_preview_page(location[1], location[0])
 
     def _draw_template_boxes(
         self,

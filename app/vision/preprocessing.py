@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import statistics
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -88,7 +88,9 @@ def rotate(image: np.ndarray, angle_deg: float) -> np.ndarray:
 
 
 def crop_region(image: np.ndarray, field: FieldTemplate,
-                pad: float = 0.10) -> np.ndarray:
+                pad: float = 0.10,
+                pad_x: Optional[float] = None,
+                pad_y: Optional[float] = None) -> np.ndarray:
     """Recorta la región de un campo (coordenadas relativas + margen).
 
     Args:
@@ -97,14 +99,18 @@ def crop_region(image: np.ndarray, field: FieldTemplate,
         pad: Margen relativo al *tamaño del campo* (fracción de su alto/ancho)
             para no cortar caracteres. Relativo al campo, no a la página,
             para que el margen sea proporcional al contenido.
+        pad_x: Margen horizontal propio, si el campo necesita uno distinto
+            del vertical (los campos de firma tienen columnas impresas a los
+            lados y rasgos que se salen por arriba y por abajo).
+        pad_y: Margen vertical propio.
 
     Returns:
         Sub-imagen de la región del campo.
     """
     height, width = image.shape[:2]
     left, top, right, bottom = field.rect_pixels(width, height)
-    px = max(1, round(pad * (right - left)))
-    py = max(1, round(pad * (bottom - top)))
+    px = max(1, round((pad if pad_x is None else pad_x) * (right - left)))
+    py = max(1, round((pad if pad_y is None else pad_y) * (bottom - top)))
     left = max(0, left - px)
     top = max(0, top - py)
     right = min(width, right + px)

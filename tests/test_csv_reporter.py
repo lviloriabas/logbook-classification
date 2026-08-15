@@ -8,7 +8,11 @@ import unittest
 from pathlib import Path
 
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
-from app.reports.csv_reporter import CsvReporter
+from app.reports.csv_reporter import (
+    CSV_DATE_MONTH_END,
+    CSV_DATE_SPECIFIC,
+    CsvReporter,
+)
 from app.templates.schema import FieldTemplate, Template
 
 
@@ -23,10 +27,12 @@ def _report(*pages: PageResult) -> ValidationReport:
 
 
 class TestCsvGates(unittest.TestCase):
-    def _rows(self, page: PageResult) -> dict:
+    def _rows(
+        self, page: PageResult, date_mode: str = CSV_DATE_SPECIFIC
+    ) -> dict:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "out.csv"
-            CsvReporter().write(_report(page), path)
+            CsvReporter().write(_report(page), path, date_mode=date_mode)
             with open(path, encoding="utf-8-sig", newline="") as fh:
                 return list(csv.DictReader(fh))[0]
 
@@ -67,6 +73,58 @@ class TestCsvGates(unittest.TestCase):
         self.assertEqual(row["date"], "2026/07/16")
         self.assertEqual(row["year"], "26")
 
+    def test_specific_day_keeps_a_correct_14(self):
+        page = PageResult(page_number=1, date="2026/07/14")
+        page.add_field(_field("day", "14"))
+        page.add_field(_field("month", "JUL"))
+        page.add_field(_field("year", "26"))
+
+        row = self._rows(page, CSV_DATE_SPECIFIC)
+
+        self.assertEqual(row["day"], "14")
+        self.assertEqual(row["date"], "2026/07/14")
+        self.assertEqual(row["day_source"], "direct")
+
+    def test_specific_day_uses_month_end_only_when_day_is_missing(self):
+        page = PageResult(page_number=1)
+        page.add_field(_field("day", None, conf=0.0))
+        page.add_field(_field("month", "JUL", conf=0.8))
+        page.add_field(_field("year", "26", conf=0.7))
+
+        row = self._rows(page, CSV_DATE_SPECIFIC)
+
+        self.assertEqual(row["day"], "31")
+        self.assertEqual(row["date"], "2026/07/31")
+        self.assertEqual(row["day_status"], "WARNING")
+        self.assertEqual(row["day_source"], "csv_date_policy")
+        self.assertIn("sin resolver", row["day_comment"])
+
+    def test_month_end_mode_changes_detected_day_without_mutating_page(self):
+        page = PageResult(page_number=1, date="2026/07/14")
+        page.add_field(_field("day", "14"))
+        page.add_field(_field("month", "JUL"))
+        page.add_field(_field("year", "26"))
+
+        row = self._rows(page, CSV_DATE_MONTH_END)
+
+        self.assertEqual(row["day"], "31")
+        self.assertEqual(row["date"], "2026/07/31")
+        self.assertEqual(row["day_source"], "csv_date_policy")
+        self.assertEqual(next(f for f in page.fields if f.field_id == "day").value,
+                         "14")
+        self.assertEqual(page.date, "2026/07/14")
+
+    def test_month_end_mode_respects_leap_year(self):
+        page = PageResult(page_number=1)
+        page.add_field(_field("day", None))
+        page.add_field(_field("month", "FEB"))
+        page.add_field(_field("year", "24"))
+
+        row = self._rows(page, CSV_DATE_MONTH_END)
+
+        self.assertEqual(row["day"], "29")
+        self.assertEqual(row["date"], "2024/02/29")
+
     def test_canonical_values_pass(self):
         page = PageResult(page_number=1)
         page.add_field(_field("day", "23"))
@@ -76,6 +134,13 @@ class TestCsvGates(unittest.TestCase):
         self.assertEqual(row["day"], "23")
         self.assertEqual(row["month"], "JUL")
         self.assertEqual(row["year"], "2026")
+
+    def test_english_and_spanish_canonical_months_pass(self):
+        for month in ("JAN", "ENE", "APR", "ABR", "AUG", "AGO", "DEC", "DIC"):
+            page = PageResult(page_number=1)
+            page.add_field(_field("month", month))
+            row = self._rows(page)
+            self.assertEqual(row["month"], month)
 
     def test_signature_columns_omit_status_and_comment(self):
         template = Template(
@@ -101,6 +166,46 @@ class TestCsvGates(unittest.TestCase):
         self.assertEqual(row["pilot_signature_source"], "direct")
         self.assertIn("matricula_status", row)
         self.assertIn("matricula_comment", row)
+
+    def test_dup_is_persisted_after_page_for_the_complete_batch(self):
+        first = PageResult(page_number=2)
+        first.add_field(_field("log_number", "2147300"))
+        repeated = PageResult(page_number=9)
+        repeated.add_field(FieldResult(
+            page_number=9,
+            field_id="log_number",
+            field_type="ocr",
+            value="2147300",
+            confidence=0.9,
+        ))
+        reports = [
+            ValidationReport(
+                pdf_path="first.pdf",
+                template_name="fixture",
+                pages=[first],
+            ),
+            ValidationReport(
+                pdf_path="second.pdf",
+                template_name="fixture",
+                pages=[repeated],
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            CsvReporter().write(reports, path)
+            with open(path, encoding="utf-8-sig", newline="") as fh:
+                reader = csv.DictReader(fh)
+                rows = list(reader)
+                columns = reader.fieldnames
+
+        self.assertEqual(columns[:4], [
+            "file",
+            "page",
+            "log_number",
+            "dup",
+        ])
+        self.assertEqual([row["dup"] for row in rows], ["false", "true"])
 
 
 if __name__ == "__main__":

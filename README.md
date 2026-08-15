@@ -10,7 +10,7 @@ Aplicación profesional para automatizar la **validación de bitácoras aeronáu
 | **Sistema de plantillas** | JSON con coordenadas relativas (0-1), sin coordenadas hardcodeadas |
 | **Editor visual** | Aplicación independiente para dibujar regiones sobre la página |
 | **OCR por región** | PaddleOCR ejecutado únicamente sobre las regiones definidas |
-| **Detección de firmas** | OpenCV: tinta presente/ausente/incierta con umbral adaptativo y análisis de trazos (no identificación de personas) |
+| **Detección de firmas** | OpenCV: presente/ausente/incierta por densidad local de tinta medida contra el papel local, descartando la estructura impresa (no identificación de personas) |
 | **Alineación automática** | Rotación + traslación + escala vía ORB/RANSAC contra imagen de referencia |
 | **Validaciones** | `required`, `regex`, `min_length`, `max_length` — todas desde el JSON |
 | **Reportes** | CSV + JSON consolidado (mismo nombre que el CSV) en `datos/`, por página, campo, valor, confianza, estado, comentario |
@@ -56,8 +56,8 @@ BITS/
     │   ├── preprocessing.py # Escala de grises, binarización, deskew
     │   ├── blank_detection.py
     │   ├── alignment.py     # Alineación ORB/RANSAC
-    │   ├── marks.py         # Análisis de tinta (común)
-    │   ├── signature.py     # Detección de firma
+    │   ├── marks.py         # Cobertura de tinta (checkbox)
+    │   ├── signature.py     # Detección de firma por densidad de tinta
     │   └── checkbox.py      # Detección de checkbox
     ├── templates/
     │   ├── schema.py        # Esquemas pydantic de plantilla
@@ -195,7 +195,8 @@ portable\python312\tools\python.exe run_cli.py --pdf input\test.pdf --output-dir
 ```
 
 El motor se decide internamente: PaddleOCR con `PP-OCRv6_medium_det` y
-`PP-OCRv5_mobile_rec`. No hay selector de motor ni de modelo.
+`PP-OCRv5_mobile_rec`, fijado explícitamente a CPU. No hay selector de motor,
+modelo ni dispositivo, y el paquete requerido es `paddlepaddle` para CPU.
 
 Opciones principales:
 
@@ -209,7 +210,7 @@ Opciones principales:
 | `--limit-books` | — | Procesar solo las primeras N bitácoras (PDFs ordenados de la carpeta de entrada) |
 | `--debug` | — | Generar `debug.pdf` con las páginas originales, sin anotaciones |
 | `--reference-page` | 1 | Página usada como referencia de alineación |
-| `--threads` (`--cpu-threads`) | Todos los disponibles | Hilos totales del procesador; workers y hilos internos se distribuyen automáticamente |
+| `--threads` (`--cpu-threads`) | Todos los disponibles | Hilos totales del procesador; procesos e hilos internos se distribuyen automáticamente (un proceso OCR por núcleo físico) |
 | `--no-deskew` | — | Desactivar corrección de inclinación |
 | `--no-align` | — | Desactivar alineación |
 | `--separar-por avion\|mes` | — | Separar las bitácoras en PDFs independientes (repetible y combinable: solo avión, solo mes, o ambos) |
@@ -310,8 +311,10 @@ confianza: una lectura de baja confianza nunca se acusa como falta, se
 marca como **incierta** (REVISAR) para evitar discrepancias falsas.
 
 Con `--recortes-firmas` se vuelcan los recortes de las regiones de firma a
-`recortes_firmas/<campo>/` para verificar visualmente los bounding boxes
-(usar con `--max-pages` para lotes pequeños).
+`recortes_firmas/<campo>/`, con el mismo margen que ve el detector y con el
+veredicto (`true`/`false`/`unclear`) al principio del nombre del archivo:
+ordenando la carpeta por nombre quedan juntos todos los casos inciertos para
+revisarlos de una vez (usar con `--max-pages` para lotes pequeños).
 
 ### 2. GUI principal
 
@@ -347,14 +350,21 @@ portable\python312\tools\python.exe run_gui.py
  6. Opciones avanzadas (colapsable): hilos totales del procesador y página de
     referencia. El motor OCR y los modelos no se exponen como opciones.
     La aplicación detecta los hilos disponibles, selecciona todos por defecto
-    y distribuye automáticamente el trabajo entre workers e hilos internos.
+    y reparte el trabajo en **un proceso OCR por núcleo físico** (los hilos
+    internos del motor no aceleran la inferencia; ver *Rendimiento*). La
+    línea de ayuda muestra el reparto resultante, p. ej. `5 proceso(s) OCR x
+    2 hilo(s)`. Desmarcar "Reservar un núcleo para la interfaz" libera un
+    hilo más y suele habilitar un proceso adicional, a costa de una interfaz
+    menos fluida durante el procesamiento.
 7. Procesar → barra de progreso con tiempo transcurrido, restante estimado
    (medido en vivo según el ritmo real de cada bitácora) y, al terminar,
    el tiempo por bitácora. El resultado OCR queda disponible en memoria para
    exportarlo varias veces.
- 8. La vista previa permite cambiar entre todos los PDFs seleccionados, saltar
-    a una página escrita y muestra el PDF/página actual y sus totales. Carga la
-    primera página del PDF seleccionado inmediatamente,
+ 8. La vista previa recorre todos los PDFs seleccionados como una sola secuencia
+    de páginas. El número actual es un campo editable: al terminar de escribirlo
+    salta directamente a esa página global, sin botón adicional. Junto al
+    paginador se muestra el archivo activo y, en el detalle, su página local.
+    Carga la primera página seleccionada inmediatamente,
    antes del procesamiento, para revisar los bounding boxes cuando
    "Visualizar campos" está marcado (solo dibujo, sin costo extra). Al terminar
    el OCR, se actualiza con la versión de la corrida. Se reajusta al área de la
@@ -437,8 +447,13 @@ portable\python312\tools\python.exe run_editor.py
 | `regex` | Patrón que debe cumplir el valor |
 | `min_length` / `max_length` | Longitudes mínima/máxima |
 | `postprocess` | `matricula`, `date` o `digits` (normalización) |
-| `min_ink_ratio` / `max_ink_ratio` | Umbrales de tinta (firma/checkbox) |
-| `min_components` | Trazos mínimos (firma) |
+| `ocr_mode` | `detect` (por defecto) o `line`; ver *Modo de lectura por campo* |
+| `min_ink_ratio` / `max_ink_ratio` | Umbrales de tinta (checkbox); en firmas `max_ink_ratio` marca cuándo el recorte está tan oscuro que es indeterminable |
+| `min_components` | Trazos mínimos (checkbox) |
+| `ink_delta` | Cuánto más oscuro que su propio papel debe ser un píxel para contar como tinta de firma |
+| `min_ink_peak` | Densidad local de tinta a partir de la cual la firma se da por presente |
+| `max_empty_peak` | Densidad local por debajo de la cual el campo se da por vacío; entre ambos umbrales la firma queda incierta |
+| `min_ink_span` | Fracción del ancho con tinta que basta para dar por presente una escritura poco densa pero repartida (números de licencia) |
 
 ## Postprocesado de matrícula
 
@@ -486,9 +501,17 @@ origen (`ocr`, `ocr_fallback`, `vision`, `vlm` o `inferred`). Esto permite
 distinguir una lectura directa de un mes/año inferido por intervalo de
 `log_number`.
 
-**Firma por color de tinta.** Además de la textura en gris, el detector
-mide píxeles saturados oscuros de bolígrafo (azul, etc.): evita marcar
-"ausente"/"incierta" una firma azul clara que el canal gris aplana.
+**Firma por densidad local de tinta.** El recorte de un campo de firma no
+trae solo la firma: trae la línea impresa, a veces un rótulo del formulario
+("CAPTAIN LICENSE No."), la calca de la página anterior y el gris irregular
+de la fotocopia. El detector mide la tinta contra el *papel local* (cierre
+morfológico), no contra un umbral global, de modo que una fotocopia gris no
+cuenta como tinta; descarta las reglas largas del formulario; y decide por
+la **densidad máxima de tinta en una ventana del alto del campo**, que es lo
+que separa la escritura (densa) del ruido impreso (trazos finos y sueltos).
+El recorte se lleva a una escala canónica antes de medirlo, así que el
+veredicto no cambia con el DPI de renderizado. La tinta se mide sobre el
+canal más oscuro de los tres, para no aplanar un bolígrafo azul claro.
 
 **Tipo de página robusto.** Cuando la licencia de técnico es ilegible, la
 página ya no se fuerza a "vuelo" (discrepancia falsa a favor del capitán/
@@ -529,6 +552,65 @@ También se pueden pasar URLs propias con `--model-url` y `--mmproj-url`.
 
 En `stats.json` de cada corrida se añade el bloque `vlm` (crops
 consultados, firmas/campos resueltos, o el motivo de desactivación).
+
+## Rendimiento (solo CPU)
+
+La aplicación nunca usa GPU: todos los motores se instancian con
+`device="cpu"`. Las mediciones siguientes se hicieron con el CLI del propio
+programa sobre `input/test2.pdf` en un equipo de 12 hilos lógicos.
+
+### Reparto de procesos e hilos
+
+Medido sobre los recortes reales del pipeline, **los hilos internos del motor
+OCR no aceleran la inferencia**: el mismo lote tarda lo mismo con 1 hilo que
+con 12 (~170 ms por recorte en ambos casos). Lo que escala es el número de
+procesos, hasta saturar los núcleos físicos:
+
+| procesos x hilos | páginas/s |
+|---|---|
+| 1 x 12 | 0.38 |
+| 3 x 4 | 0.87 |
+| 6 x 2 | 1.35 |
+| 12 x 1 | 1.39 |
+
+Por eso `recommended_parallelism()` reparte **un proceso OCR por núcleo
+físico** (estimado como la mitad de los hilos lógicos), con un tope de 8 y
+limitado además por la memoria libre (cada proceso ocupa ~480 MB con el
+detector y el reconocedor cargados).
+
+El reparto ya no exige que el número de procesos divida exactamente el total
+de hilos. Exigirlo hacía que cualquier total primo colapsara a un solo
+proceso: como la GUI reserva un hilo para la interfaz, un equipo de 12 hilos
+pedía 11 y ejecutaba `1 proceso x 11 hilos`, la configuración más lenta de
+todas. Corregirlo es la mejora de tiempo más grande de esta versión y **no
+cambia ni una celda del reporte**:
+
+| corrida | antes | después |
+|---|---|---|
+| GUI por defecto (12 páginas) | 115 s (1 proceso) | **46 s** (5 procesos) — 2.5x |
+| CLI por defecto (24 páginas) | 103 s (3 procesos) | **73 s** (6 procesos) — 1.4x |
+
+### Modo de lectura por campo (`ocr_mode`)
+
+El OCR consume el 96 % del tiempo de página y se reparte en 13 recortes. De
+esos 646 ms por recorte, el **detector de texto** es la fase cara: leer el
+recorte directamente con el reconocedor cuesta 175 ms (3.7x menos).
+
+Un campo puede declarar `"ocr_mode": "line"` para saltarse el detector cuando
+su recorte ya contiene un único valor. La lectura rápida pasa por un predicado
+que aplica el postprocesado y la `regex` del campo; lo que no lo supera se
+relee con el pipeline completo, así que saltarse el detector puede ahorrar
+tiempo pero nunca perder una lectura que el detector sí habría resuelto.
+
+Por defecto **solo `log_number` usa `line`** (validado por `^\d{7}$`: en el
+A/B sobre 24 páginas no cambió ni un valor). El resto conserva `detect`
+porque, medido campo por campo, saltarse el detector sí cambia resultados:
+en las casillas manuscritas de fecha desestabiliza el consenso entre la
+lectura global y la de celdas (`_join_char_fields`), con un saldo de −1 fecha
+resuelta de 18 en la muestra. Bajar la resolución de la banda de fecha
+(600 → 300 DPI) o usar un detector más liviano dan 2.4x y 3.2x, pero cambian
+el 17 % y el 31 % de las lecturas respectivamente: son palancas disponibles,
+no gratuitas.
 
 ## Escalabilidad (puntos de extensión)
 

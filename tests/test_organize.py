@@ -10,16 +10,20 @@ from unittest.mock import patch
 
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.reports.organize import (
+    _claves_en_orden_seccion,
+    _etiqueta_grupo,
     _etiqueta_separador,
     _preparar_paginas,
     agrupar_paginas,
     clave_mes,
+    escribir_pdf_discrepancias,
     escribir_pdf_unico,
     generar_pdfs,
     nombre_mes,
     ruta_pdf,
 )
 from app.utils.io import sanitize_filename
+from app.validation.discrepancias import Discrepancia
 
 INPUT = Path(__file__).resolve().parents[1] / "input"
 
@@ -85,6 +89,22 @@ class TestAgrupar(unittest.TestCase):
         self.assertEqual(sorted(grupos), [("2026-07",), ("2026-08",)])
         self.assertEqual(len(grupos[("2026-07",)]), 2)
 
+    def test_mes_inferido_agrupa_aunque_el_dia_siga_vacio(self):
+        page = _page(1, "2147300", "HP-1534CMP", date=None)
+        page.add_field(FieldResult(
+            page_number=1, field_id="month", field_type="ocr",
+            value="JUL", confidence=0.6, status="WARNING",
+        ))
+        page.add_field(FieldResult(
+            page_number=1, field_id="year", field_type="ocr",
+            value="26", confidence=0.6, status="WARNING",
+        ))
+
+        grupos = agrupar_paginas([_reporte(page)], ["mes"], None)
+
+        self.assertIn(("2026-07",), grupos)
+        self.assertEqual(clave_mes(page), "2026-07")
+
     def test_avion_y_mes_combinados(self):
         pages = [
             _page(1, "2147300", "HP-1534CMP", date="2026/07/15"),
@@ -97,6 +117,26 @@ class TestAgrupar(unittest.TestCase):
             ("HP-1534CMP", "2026-08"),
             ("HP-1538CMP", "2026-07"),
         ])
+
+    def test_secciones_ordenan_matricula_y_fecha_con_faltantes_al_final(self):
+        pages = [
+            _page(1, "1000001", "HP-1538CMP", date=None),
+            _page(2, "9000001", "HP-1534CMP", date="2026/08/02"),
+            _page(3, "9000002", "HP-1534CMP", date="2026/07/28"),
+            _page(4, "0000001", None, date="2026/01/01"),
+        ]
+        criterios = ["avion", "mes"]
+        grupos = agrupar_paginas([_reporte(*pages)], criterios, None)
+
+        self.assertEqual(
+            _claves_en_orden_seccion(grupos, criterios),
+            [
+                ("HP-1534CMP", "2026-07"),
+                ("HP-1534CMP", "2026-08"),
+                ("HP-1538CMP", "sin_fecha"),
+                ("sin_matricula", "2026-01"),
+            ],
+        )
 
     def test_fallbacks_sin_matricula_y_sin_fecha(self):
         pages = [
@@ -148,12 +188,29 @@ class TestPrepararPaginas(unittest.TestCase):
         )
         self.assertEqual([r.page.page_number for r in refs], [2])
 
+    def test_sin_criterios_tambien_ordena_por_logpage(self):
+        refs = _preparar_paginas(
+            [_reporte(
+                _page(1, "2147302", "HP-1534CMP"),
+                _page(2, "2147300", "HP-1534CMP"),
+                _page(3, "2147301", "HP-1534CMP"),
+            )],
+            None,
+        )
+        self.assertEqual([r.page.page_number for r in refs], [2, 3, 1])
+
     def test_etiquetas_separador(self):
         self.assertEqual(_etiqueta_separador("mes", "2026-07"), "2026/JUL")
         self.assertEqual(_etiqueta_separador("mes", "sin_fecha"),
-                         "sin_fecha")
+                         "SIN FECHA")
         self.assertEqual(_etiqueta_separador("avion", "HP-1534CMP"),
                          "HP-1534CMP")
+        self.assertEqual(
+            _etiqueta_grupo(
+                ("HP-1534CMP", "2026-07"), ("avion", "mes")
+            ),
+            "HP-1534CMP\n2026/JUL",
+        )
 
 
 class TestNombres(unittest.TestCase):
@@ -177,16 +234,20 @@ class TestNombres(unittest.TestCase):
         self.assertEqual(ruta_pdf(("sin_fecha",), ["mes"]),
                          Path("sf.pdf"))
 
-    def test_combinado_carpeta_por_matricula(self):
+    def test_combinado_nombre_incluye_matricula_y_mes(self):
         self.assertEqual(
             ruta_pdf(("HP-1534CMP", "2026-07"), ["avion", "mes"]),
-            Path("HP-1534CMP") / "2026-JUL.pdf")
+            Path("HP-1534CMP_2026-JUL.pdf"))
         self.assertEqual(
             ruta_pdf(("HP-1534CMP", "sin_fecha"), ["avion", "mes"]),
-            Path("HP-1534CMP") / "sf.pdf")
+            Path("HP-1534CMP_sf.pdf"))
         self.assertEqual(
             ruta_pdf(("sin_matricula", "sin_fecha"), ["avion", "mes"]),
-            Path("sin_matricula") / "sf.pdf")
+            Path("sin_matricula_sf.pdf"))
+        self.assertEqual(
+            ruta_pdf(("2026-07", "HP-1534CMP"), ["mes", "avion"]),
+            Path("HP-1534CMP_2026-JUL.pdf"),
+        )
 
     def test_nombre_mes(self):
         self.assertEqual(nombre_mes("2026-07"), "2026-JUL")
@@ -230,7 +291,7 @@ class TestPdfsOrdenados(unittest.TestCase):
                                  dpi=100)
         self.assertEqual(len(rutas), 1)
 
-    def test_combinado_crea_carpeta_por_matricula(self):
+    def test_combinado_archivo_incluye_matricula_y_mes(self):
         reporte = ValidationReport(
             pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
             pages=[_page(1, "2147300", "HP-1534CMP", date="2026/07/15")],
@@ -240,7 +301,7 @@ class TestPdfsOrdenados(unittest.TestCase):
                              dpi=100)
         self.assertEqual(len(rutas), 1)
         self.assertEqual(rutas[0],
-                         run_dir / "HP-1534CMP" / "2026-JUL.pdf")
+                         run_dir / "HP-1534CMP_2026-JUL.pdf")
         self.assertGreater(rutas[0].stat().st_size, 0)
 
     def test_combinado_sin_fecha_es_sf(self):
@@ -251,7 +312,7 @@ class TestPdfsOrdenados(unittest.TestCase):
         run_dir = Path(tempfile.mkdtemp())
         rutas = generar_pdfs([reporte], run_dir, ["avion", "mes"], None,
                              dpi=100)
-        self.assertEqual(rutas[0], run_dir / "HP-1534CMP" / "sf.pdf")
+        self.assertEqual(rutas[0], run_dir / "HP-1534CMP_sf.pdf")
 
     def test_pdf_unico_con_separador_matricula(self):
         reporte = ValidationReport(
@@ -269,8 +330,10 @@ class TestPdfsOrdenados(unittest.TestCase):
         import pymupdf as fitz
 
         doc = fitz.open(str(ruta))
-        self.assertEqual(doc.page_count, 3)  # 2 escaneos + 1 divisor
-        self.assertEqual(doc.load_page(1).get_text().strip(),
+        self.assertEqual(doc.page_count, 4)  # 2 escaneos + 2 divisores
+        self.assertEqual(doc.load_page(0).get_text().strip(),
+                         "HP-1534CMP")
+        self.assertEqual(doc.load_page(2).get_text().strip(),
                          "HP-1538CMP")
         doc.close()
 
@@ -303,11 +366,12 @@ class TestPdfsOrdenados(unittest.TestCase):
         import pymupdf as fitz
 
         doc = fitz.open(str(ruta))
-        self.assertEqual(doc.page_count, 3)
-        self.assertEqual(doc.load_page(1).get_text().strip(), "2026/AUG")
+        self.assertEqual(doc.page_count, 4)
+        self.assertEqual(doc.load_page(0).get_text().strip(), "2026/JUL")
+        self.assertEqual(doc.load_page(2).get_text().strip(), "2026/AUG")
         doc.close()
 
-    def test_pdf_unico_ambos_criterios_dos_tipos_de_divisor(self):
+    def test_pdf_unico_ambos_criterios_en_cada_divisor(self):
         reporte = ValidationReport(
             pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
             pages=[
@@ -323,10 +387,103 @@ class TestPdfsOrdenados(unittest.TestCase):
         import pymupdf as fitz
 
         doc = fitz.open(str(ruta))
-        self.assertEqual(doc.page_count, 5)  # 3 escaneos + 2 divisores
-        self.assertEqual(doc.load_page(1).get_text().strip(), "2026/AUG")
-        self.assertEqual(doc.load_page(3).get_text().strip(), "HP-1538CMP")
+        self.assertEqual(doc.page_count, 6)  # 3 escaneos + 3 divisores
+        self.assertEqual(
+            doc.load_page(0).get_text().strip(), "HP-1534CMP\n2026/JUL"
+        )
+        self.assertEqual(
+            doc.load_page(2).get_text().strip(), "HP-1534CMP\n2026/AUG"
+        )
+        self.assertEqual(
+            doc.load_page(4).get_text().strip(), "HP-1538CMP\n2026/JUL"
+        )
         doc.close()
+
+    def test_pdf_unico_discrepancias_al_final_sin_subdivisiones(self):
+        import pymupdf as fitz
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_path = tmp_path / "source.pdf"
+            source = fitz.open()
+            for label in ("PAGINA 1", "PAGINA 2", "PAGINA 3"):
+                source.new_page().insert_text((72, 72), label)
+            source.save(str(source_path))
+            source.close()
+
+            reporte = ValidationReport(
+                pdf_path=str(source_path),
+                template_name="fixture",
+                pages=[
+                    _page(1, "2147302", "HP-1534CMP", "2026/08/01"),
+                    _page(2, "2147301", "HP-1538CMP", "2026/07/01"),
+                    _page(3, "2147300", "HP-1534CMP", "2026/06/01"),
+                ],
+            )
+            run_dir = tmp_path / "salida"
+            ruta = escribir_pdf_unico(
+                [reporte],
+                run_dir,
+                ["avion", "mes"],
+                {("source.pdf", 2), ("source.pdf", 3)},
+                dpi=100,
+                discrepancias_al_final=True,
+            )
+
+            with fitz.open(str(ruta)) as doc:
+                textos = [page.get_text().strip() for page in doc]
+                self.assertGreater(doc.load_page(0).rect.width,
+                                   doc.load_page(0).rect.height)
+            self.assertEqual(
+                textos,
+                [
+                    "HP-1534CMP\n2026/AUG",
+                    "PAGINA 1",
+                    "POSIBLES DISCREPANCIAS",
+                    "PAGINA 3",
+                    "PAGINA 2",
+                ],
+            )
+
+    def test_pdf_discrepancias_tiene_portada_y_orden_global(self):
+        import pymupdf as fitz
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            source_path = tmp_path / "source.pdf"
+            source = fitz.open()
+            for label in ("PAGINA 1", "PAGINA 2", "PAGINA 3"):
+                source.new_page().insert_text((72, 72), label)
+            source.save(str(source_path))
+            source.close()
+            entradas = [
+                Discrepancia(
+                    pdf_path=str(source_path),
+                    page_number=2,
+                    log_number=2147301,
+                    tipo="vuelo",
+                    categoria="missing",
+                ),
+                Discrepancia(
+                    pdf_path=str(source_path),
+                    page_number=3,
+                    log_number=2147300,
+                    tipo="vuelo",
+                    categoria="uncertain",
+                ),
+            ]
+
+            ruta = escribir_pdf_discrepancias(
+                entradas, None, tmp_path / "salida", dpi=100
+            )
+            self.assertEqual(ruta.name, "discrepancias.pdf")
+
+            with fitz.open(str(ruta)) as doc:
+                textos = [page.get_text().strip() for page in doc]
+            self.assertEqual(
+                textos,
+                ["POSIBLES DISCREPANCIAS", "PAGINA 3", "PAGINA 2"],
+            )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,0 @@
-p01 ERROR   date=None day='2'(ocr_fallback) cells={'day_1': '2', 'day_2': 'O', 'month_1': 'J', 'month_2': 'N', 'month_3': None, 'year_1': 'Y', 'year_2': '1'}
-p02 ERROR   date=None day=None(ocr) cells={'day_1': '乙', 'day_2': 'L', 'month_1': '4', 'month_2': 'N', 'month_3': 'L', 'year_1': 'Y', 'year_2': '2'}
-p03 WARNING date='2026/06/20' day='20'(ocr_fallback) cells={'day_1': '二', 'day_2': 'O', 'month_1': 'J', 'month_2': 'N', 'month_3': 'C', 'year_1': 'Y', 'year_2': '3'}
-p04 WARNING date='2026/07/20' day='20'(ocr) cells={'day_1': 'N', 'day_2': 'O', 'month_1': 'J', 'month_2': 'M', 'month_3': '1', 'year_1': '2', 'year_2': '4'}
-paginas_join=0/4
-csv=/mnt/d/BITS/smoke_char.csv
