@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -10,7 +10,7 @@ from loguru import logger
 
 from app.models.schemas import OcrResult
 from app.ocr.engine import OcrEngine
-from app.templates.schema import FieldTemplate
+from app.templates.schema import FieldTemplate, OcrMode
 from app.vision.ink_extent import crop_to_ink, strip_date_label
 from app.vision.pdf_loader import RenderedRegion
 from app.vision.preprocessing import crop_region, upscale_for_ocr
@@ -49,6 +49,7 @@ def ocr_regions(
     date_image: Optional[np.ndarray] = None,
     date_region: Optional[RenderedRegion] = None,
     overrides: Optional[dict[str, FieldTemplate]] = None,
+    accept: Optional[Callable[[FieldTemplate, str, float], bool]] = None,
 ) -> List[Tuple[str, float]]:
     """Aplica OCR a varias regiones en una sola llamada al motor.
 
@@ -66,12 +67,18 @@ def ocr_regions(
             prioridad sobre ``date_image`` y evita rasterizar la página entera.
         overrides: Geometría ajustada por página (``locate_date_grid``);
             solo afecta al recorte, no al ``id`` ni a las reglas del campo.
+        accept: Predicado que decide si la lectura rápida de un campo
+            ``ocr_mode='line'`` es utilizable. Los campos que no lo pasan se
+            releen con el detector completo, de modo que saltarse la
+            detección nunca puede empeorar el resultado. Si es None, la
+            lectura rápida se acepta siempre.
 
     Returns:
         Lista (mismo orden que ``fields``) de (texto unido, confianza 0-1).
     """
-    engines: dict[Optional[str], list[tuple[int, np.ndarray]]] = {}
-    positions: dict[Optional[str], list[int]] = {}
+    # Clave: (motor, modo de lectura). El modo separa los recortes que
+    # necesitan el detector de los que ya son una sola línea.
+    engines: dict[tuple[str, str], list[tuple[int, np.ndarray]]] = {}
     # Se preasigna para conservar exactamente el orden de ``fields`` aun
     # cuando se usan motores distintos o un recorte individual falla.
     results: List[Tuple[str, float]] = [("", 0.0) for _ in fields]
@@ -118,18 +125,18 @@ def ocr_regions(
             date_engine is not None
             and is_date
         )
-        key = "date" if use_date_engine else "main"
+        # Los campos de una sola línea saltan el detector de texto: es la
+        # fase cara y no aporta nada cuando el recorte ya es el valor.
+        mode = "line" if field.ocr_mode is OcrMode.LINE else "detect"
+        key = ("date" if use_date_engine else "main", mode)
         engines.setdefault(key, []).append((index, region))
-        positions.setdefault(key, []).append(index)
 
-    for key in ("main", "date"):
-        items = engines.get(key)
-        if not items:
-            continue
-        target = date_engine if key == "date" else engine
-        if target is None:
-            target = engine
-        batch = target.recognize_batch([crop for _, crop in items])
+    def read(target: OcrEngine, items, mode: str) -> None:
+        crops = [crop for _, crop in items]
+        if mode == "line" and hasattr(target, "recognize_lines"):
+            batch = target.recognize_lines(crops)
+        else:
+            batch = target.recognize_batch(crops)
         for (orig_idx, _crop), lines in zip(items, batch):
             field = fields[orig_idx]
             texts = [line.text.strip() for line in lines if line.text.strip()]
@@ -139,6 +146,34 @@ def ocr_regions(
             ) if lines else 0.0
             logger.debug(f"OCR {field.id}: {text!r} (conf={confidence})")
             results[orig_idx] = (text, confidence)
+
+    for source in ("main", "date"):
+        target = date_engine if source == "date" else engine
+        if target is None:
+            target = engine
+        detect_items = list(engines.get((source, "detect"), ()))
+        line_items = engines.get((source, "line"))
+        if line_items:
+            read(target, line_items, "line")
+            if accept is not None:
+                # Saltarse el detector solo puede ganar tiempo, nunca
+                # perder lecturas: lo que no supera el predicado se relee
+                # con el pipeline completo. En la práctica reintenta muy
+                # pocos recortes, así que conserva casi toda la ventaja.
+                retry = [
+                    (index, crop) for index, crop in line_items
+                    if not accept(fields[index], *results[index])
+                ]
+                if retry:
+                    logger.debug(
+                        "OCR: %d recorte(s) de una línea se releen con "
+                        "detector: %s",
+                        len(retry),
+                        [fields[index].id for index, _ in retry],
+                    )
+                    detect_items.extend(retry)
+        if detect_items:
+            read(target, detect_items, "detect")
 
     return results
 

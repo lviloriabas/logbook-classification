@@ -173,6 +173,23 @@ class TestMonthAndYearInference(unittest.TestCase):
 
         self.assertIsNone(_field_of(missing, "month").value)
 
+    def test_exact_positional_month_warning_can_anchor_inference(self):
+        before = _page(
+            1, "2147301", "20", "JUL", "26", month_status=Status.WARNING
+        )
+        before_month = _field_of(before, "month")
+        before_month.confidence = 0.40
+        before_month.source = "ocr_fallback"
+        before_month.inference_method = "ranuras"
+        missing = _page(2, "2147302", "21", None, "26")
+        after = _page(3, "2147303", "22", "JUL", "26")
+
+        stats = correct_dates_by_book([_report(before, missing, after)])
+
+        self.assertEqual(_field_of(missing, "month").value, "JUL")
+        self.assertEqual(missing.date, "2026/07/21")
+        self.assertEqual(stats["months_filled"], 1)
+
     def test_inferred_reading_does_not_feed_a_second_inference(self):
         inferred = _page(1, "2147301", "20", "JUL", "26")
         _field_of(inferred, "month").source = "inferred"
@@ -187,7 +204,7 @@ class TestMonthAndYearInference(unittest.TestCase):
 
 
 class TestDayPolicy(unittest.TestCase):
-    def test_day_is_never_inferred(self):
+    def test_day_is_not_mutated_by_book_corrector(self):
         first = _page(1, "2147301", "20", "JUL", "26")
         missing_day = _page(2, "2147302", None, "JUL", "26")
         last = _page(3, "2147303", "20", "JUL", "26")
@@ -198,6 +215,7 @@ class TestDayPolicy(unittest.TestCase):
         self.assertIsNone(day.value)
         self.assertIs(day.status, Status.WARNING)
         self.assertIsNone(missing_day.date)
+        self.assertEqual(stats["days_filled"], 0)
 
     def test_missing_day_does_not_block_inferred_month_and_year(self):
         first = _page(1, "2147301", "20", "JUL", "26")
@@ -208,6 +226,7 @@ class TestDayPolicy(unittest.TestCase):
 
         self.assertEqual(_field_of(missing_day, "month").value, "JUL")
         self.assertEqual(_field_of(missing_day, "year").value, "26")
+        self.assertIsNone(_field_of(missing_day, "day").value)
         self.assertIsNone(missing_day.date)
 
 

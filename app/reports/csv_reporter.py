@@ -4,32 +4,41 @@ from __future__ import annotations
 
 import csv
 import re
+from calendar import monthrange
 from pathlib import Path
 from typing import List, Optional, Union
 
 from loguru import logger
 
-from app.models.schemas import PageResult, ValidationReport
+from app.models.schemas import PageResult, Status, ValidationReport
 from app.templates.schema import FieldType, Template
-from app.utils.postprocess import MESES
+from app.utils.postprocess import MONTH_WORDS
+from app.validation.duplicates import detect_duplicate_log_pages
 
 _DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(CMP|WWP)$")
 _DAY_RE = re.compile(r"^\d{1,2}$")
-_MONTH_RE = re.compile(r"^(\d{1,2}|" + "|".join(MESES) + r")$")
+_MONTH_NAMES = tuple(word for word, _number in MONTH_WORDS)
+_MONTH_RE = re.compile(r"^(\d{1,2}|" + "|".join(_MONTH_NAMES) + r")$")
 # Celdas de carácter de la banda de fecha (una casilla por campo).
 _CHAR_DIGIT_CELL_RE = re.compile(r"^(day|year)_\d+$")
 _CHAR_LETTER_CELL_RE = re.compile(r"^month_\d+$")
+
+CSV_DATE_SPECIFIC = "specific_day"
+CSV_DATE_MONTH_END = "month_end"
+CSV_DATE_MODES = frozenset({CSV_DATE_SPECIFIC, CSV_DATE_MONTH_END})
+_MONTH_NUMBER = {word: number for word, number in MONTH_WORDS}
 
 
 class CsvReporter:
     """Escribe el reporte de validación en CSV ancho (en inglés).
 
     Una fila por página del PDF:
-        file, page, <field>, <field>_conf, <field>_status,
+        file, page, <field>, dup, <field>_conf, <field>_status,
         <field>_comment, <field>_source, ..., date, time_ms
 
     - ``file``: nombre del PDF del que proviene la página.
+    - ``dup``: ``true`` cuando el ``log_number`` ya apareció antes en el lote.
     - ``date``: fecha normalizada (YYYY/MM/dd) combinando day/month/year.
     - ``time_ms``: tiempo de procesamiento solo de la página (el total
       del PDF solo se imprime en consola).
@@ -50,6 +59,7 @@ class CsvReporter:
         report_or_reports: Union[ValidationReport, List[ValidationReport]],
         path: Path,
         template: Optional[Template] = None,
+        date_mode: str = CSV_DATE_SPECIFIC,
     ) -> Path:
         """Guarda el reporte como CSV (UTF-8 con BOM para Excel).
 
@@ -59,6 +69,9 @@ class CsvReporter:
             path: Ruta de salida.
             template: Plantilla usada (define el orden y los campos). Si no
                 se provee, se usan los campos de la primera página no vacía.
+            date_mode: ``specific_day`` conserva el día leído y usa fin de
+                mes solo cuando falta; ``month_end`` representa todas las
+                fechas con el último día calendario del mes.
 
         Returns:
             La ruta del archivo generado.
@@ -70,6 +83,8 @@ class CsvReporter:
         )
         if not reports:
             raise ValueError("No hay reportes para generar el CSV")
+        if date_mode not in CSV_DATE_MODES:
+            raise ValueError(f"Política de fecha CSV no válida: {date_mode}")
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,13 +92,21 @@ class CsvReporter:
         fields = self.fields_for(reports, template)
         skip_ids = self._skip_ids(reports, template)
         columns = self.columns_for_fields(fields, skip_ids=skip_ids)
+        duplicates = iter(detect_duplicate_log_pages(reports))
 
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
             writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
             for report in reports:
                 for page in report.pages:
-                    writer.writerow(self.row_for_page(report, page, fields))
+                    duplicate = next(duplicates)
+                    writer.writerow(self.row_for_page(
+                        report,
+                        page,
+                        fields,
+                        date_mode=date_mode,
+                        duplicate=duplicate.duplicate,
+                    ))
 
         logger.info(f"Reporte CSV generado: {path} "
                     f"({sum(len(r.pages) for r in reports)} páginas)")
@@ -101,13 +124,18 @@ class CsvReporter:
         """
         columns = ["file", "page"]
         for field_id in fields:
-            columns.extend([field_id, f"{field_id}_conf"])
+            columns.append(field_id)
+            if field_id == "log_number":
+                columns.append("dup")
+            columns.append(f"{field_id}_conf")
             if field_id not in skip_ids:
                 columns.extend([
                     f"{field_id}_status",
                     f"{field_id}_comment",
                 ])
             columns.append(f"{field_id}_source")
+        if "dup" not in columns:
+            columns.append("dup")
         columns.extend(["date", "time_ms"])
         return columns
 
@@ -137,11 +165,14 @@ class CsvReporter:
         report: ValidationReport,
         page: PageResult,
         fields: List[str],
+        date_mode: str = CSV_DATE_SPECIFIC,
+        duplicate: bool = False,
     ) -> dict[str, object]:
         """Construye la fila CSV correspondiente a una página."""
         row: dict[str, object] = {
             "file": Path(report.pdf_path).name,
             "page": page.page_number,
+            "dup": str(duplicate).lower(),
         }
         by_id = {field.field_id: field for field in page.fields}
 
@@ -160,9 +191,90 @@ class CsvReporter:
             row[f"{field_id}_comment"] = result.comment
             row[f"{field_id}_source"] = result.source
 
-        row["date"] = cls._date(page)
+        policy = cls._date_policy(page, by_id, date_mode)
+        if policy is not None:
+            day_value, date_value, changed, reason = policy
+            row["date"] = date_value
+            if changed and "day" in fields:
+                day = by_id.get("day")
+                confidences = [
+                    field.confidence for field in (
+                        by_id.get("month"), by_id.get("year")
+                    ) if field is not None
+                ]
+                row["day"] = day_value
+                row["day_conf"] = round(min(confidences, default=0.0), 3)
+                row["day_status"] = Status.WARNING.value
+                row["day_comment"] = reason
+                row["day_source"] = "csv_date_policy"
+        else:
+            row["date"] = cls._date(page)
         row["time_ms"] = round(page.processing_ms, 1)
         return row
+
+    @staticmethod
+    def _date_policy(
+        page: PageResult,
+        by_id: dict[str, object],
+        date_mode: str,
+    ) -> Optional[tuple[str, str, bool, str]]:
+        """Calcula la fecha de salida sin mutar el resultado OCR original."""
+        if date_mode not in CSV_DATE_MODES:
+            raise ValueError(f"Política de fecha CSV no válida: {date_mode}")
+        month_field = by_id.get("month")
+        year_field = by_id.get("year")
+        day_field = by_id.get("day")
+        month_value = getattr(month_field, "value", None)
+        year_value = getattr(year_field, "value", None)
+        day_value = getattr(day_field, "value", None)
+        month = _MONTH_NUMBER.get(str(month_value).upper())
+        if month is None and str(month_value).isdigit():
+            numeric_month = int(str(month_value))
+            month = numeric_month if 1 <= numeric_month <= 12 else None
+        if year_value is None or not str(year_value).isdigit():
+            return None
+        year_text = str(year_value)
+        if len(year_text) == 2:
+            year = 2000 + int(year_text)
+        elif len(year_text) == 4 and 2000 <= int(year_text) <= 2100:
+            year = int(year_text)
+        else:
+            return None
+        if month is None:
+            return None
+        last_day = monthrange(year, month)[1]
+        detected_day = (
+            int(str(day_value))
+            if day_value is not None and str(day_value).isdigit()
+            else None
+        )
+        if detected_day is not None and not 1 <= detected_day <= last_day:
+            detected_day = None
+
+        if date_mode == CSV_DATE_SPECIFIC and detected_day is not None:
+            selected_day = detected_day
+            changed = False
+            reason = ""
+        elif date_mode == CSV_DATE_MONTH_END:
+            selected_day = last_day
+            changed = detected_day != last_day
+            reason = (
+                "CSV configurado para usar el último día del mes; "
+                f"día OCR: {day_value or 'vacío'}"
+            )
+        else:
+            selected_day = last_day
+            changed = True
+            reason = (
+                "Día OCR sin resolver; se usó el último día calendario "
+                "del mes en el CSV"
+            )
+        return (
+            str(selected_day),
+            f"{year:04d}/{month:02d}/{selected_day:02d}",
+            changed,
+            reason,
+        )
 
     @staticmethod
     def _gated_value(field_id: str, value: Optional[str]) -> str:

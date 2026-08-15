@@ -236,7 +236,7 @@ class TestClasificacion(unittest.TestCase):
 
 
 class TestOrdenYMarcado(unittest.TestCase):
-    def test_orden_por_avion_y_logpage(self):
+    def test_orden_global_por_logpage(self):
         pages = [
             _vuelo_ok(1, "2147337", "HP-1538CMP",
                       captain_signature=("false", AUSENTE)),
@@ -251,15 +251,15 @@ class TestOrdenYMarcado(unittest.TestCase):
         matriculas = [e.matricula for e in entradas]
         logs = [e.log_number for e in entradas]
         self.assertEqual(matriculas,
-                         ["HP-1534CMP", "HP-1534CMP", "HP-1538CMP",
+                         ["HP-1538CMP", "HP-1534CMP", "HP-1534CMP",
                           "HP-1538CMP"])
-        self.assertEqual(logs, [2147338, 2147340, 2147337, 2271650])
+        self.assertEqual(logs, [2147337, 2147338, 2147340, 2271650])
         self.assertEqual(
             [(e.matricula, e.log_number) for e in entradas],
             [
+                ("HP-1538CMP", 2147337),
                 ("HP-1534CMP", 2147338),
                 ("HP-1534CMP", 2147340),
-                ("HP-1538CMP", 2147337),
                 ("HP-1538CMP", 2271650),
             ],
         )
@@ -272,7 +272,7 @@ class TestOrdenYMarcado(unittest.TestCase):
         clasificar_lote([_reporte(pagina_ok)], TEMPLATE)
         self.assertFalse(pagina_ok.discrepancy)
 
-    def test_sin_matricula_va_al_final(self):
+    def test_sin_matricula_no_crea_una_subdivision(self):
         pagina = _page(1, "2147337", None,
                        pilot_signature=("true", PRESENTE),
                        captain_signature=("true", PRESENTE),
@@ -283,8 +283,8 @@ class TestOrdenYMarcado(unittest.TestCase):
                             captain_signature=("false", AUSENTE))
         entradas = clasificar_lote([_reporte(pagina2, pagina)], TEMPLATE)
         self.assertEqual(len(entradas), 2)
-        self.assertEqual(entradas[0].matricula, "HP-1534CMP")
-        self.assertIsNone(entradas[1].matricula)
+        self.assertIsNone(entradas[0].matricula)
+        self.assertEqual(entradas[1].matricula, "HP-1534CMP")
 
 
 if __name__ == "__main__":

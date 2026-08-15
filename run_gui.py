@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+from functools import partial
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent
@@ -47,6 +48,12 @@ def main() -> int:
     window.setWindowIcon(app_icon)
     window.show()
     set_windows_taskbar_icon(window, icon)
+    # Qt y el shell terminan de crear/asociar el botón de la barra de tareas
+    # después de show(). Se reafirma entonces el icono de la ventana real.
+    QTimer.singleShot(
+        250,
+        partial(set_windows_taskbar_icon, window, icon),
+    )
     # Detectar PDFs y calcular la estimación puede tocar archivos grandes.
     # Se difiere para que la ventana sea visible inmediatamente.
     QTimer.singleShot(0, window.load_initial_data)

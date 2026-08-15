@@ -52,6 +52,15 @@ class OcrEngine(Protocol):
         """
         ...
 
+    def recognize_lines(self, images: List[np.ndarray]) -> List[List[OcrResult]]:
+        """Reconoce recortes que ya son una sola línea de texto.
+
+        Permite saltarse la fase de detección cuando el recorte de la
+        plantilla contiene exactamente un valor. Un motor que no pueda
+        separar ambas fases devuelve lo mismo que ``recognize_batch``.
+        """
+        ...
+
 
 class PaddleOcrEngine:
     """Motor OCR basado en PaddleOCR (carga perezosa).
@@ -67,6 +76,10 @@ class PaddleOcrEngine:
     _HANDWRITTEN_REC_MODEL = "PP-OCRv5_mobile_rec"
     _HANDWRITTEN_DET_MODEL = "PP-OCRv6_medium_det"
 
+    # Recortes por llamada al reconocedor. Medido: 229 ms/recorte con lotes
+    # de 1 frente a 172 ms con lotes de 16 (el resto de la curva es plana).
+    _REC_BATCH_SIZE = 16
+
     def __init__(self, lang: str = "en", cpu_threads: Optional[int] = None,
                  det_model: Optional[str] = None,
                  rec_model: Optional[str] = None, **kwargs) -> None:
@@ -76,6 +89,7 @@ class PaddleOcrEngine:
         self._rec_model = rec_model or self._auto_rec_model()
         self._extra_kwargs = kwargs
         self._engine = None
+        self._recognizer = None
 
     @classmethod
     def _auto_rec_model(cls) -> str:
@@ -115,6 +129,10 @@ class PaddleOcrEngine:
         logger.info("Inicializando PaddleOCR (primera carga puede tardar)...")
         if "use_angle_cls" in _init_params(PaddleOCR):
             kwargs = dict(self._extra_kwargs)
+            # La API 2.x usa este interruptor. Se fija después de mezclar los
+            # argumentos extra para que ningún llamador pueda habilitar otro
+            # dispositivo accidentalmente.
+            kwargs["use_gpu"] = False
             if self._cpu_threads is not None:
                 kwargs["cpu_threads"] = self._cpu_threads
             self._engine = PaddleOCR(
@@ -132,12 +150,54 @@ class PaddleOcrEngine:
                 "use_textline_orientation": False,
             }
             kwargs = {**defaults, **self._extra_kwargs}
+            # PaddleOCR/PaddleX 3.x acepta ``device`` mediante **kwargs.
+            # Declararlo evita que una instalación distinta autodetecte un
+            # acelerador y mantiene el portable compatible con equipos Intel.
+            kwargs["device"] = "cpu"
             kwargs["text_detection_model_name"] = self._det_model
             kwargs["text_recognition_model_name"] = self._rec_model
             if self._cpu_threads is not None:
                 kwargs["cpu_threads"] = self._cpu_threads
             self._engine = PaddleOCR(lang=self.lang, **kwargs)
         return self._engine
+
+    def _ensure_recognizer(self):
+        """Carga solo el reconocedor, sin el detector de texto.
+
+        El detector es la fase cara (646 ms por recorte frente a 175 ms del
+        reconocedor). Los campos declarados ``ocr_mode='line'`` ya entregan
+        un recorte con un único valor, así que detectar dónde está el texto
+        no aporta nada. Se instancia con ``device='cpu'`` explícito y usa el
+        mismo cache de modelos portable que el resto de la aplicación.
+        """
+        if self._recognizer is not None:
+            return self._recognizer
+        ensure_portable_env()
+        os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
+        try:
+            from paddlex import create_predictor
+        except ImportError:
+            logger.debug(
+                "paddlex no disponible: los campos de una sola línea usan "
+                "el detector completo"
+            )
+            self._recognizer = False
+            return False
+        kwargs = {"batch_size": self._REC_BATCH_SIZE, "device": "cpu"}
+        if self._cpu_threads is not None:
+            kwargs["cpu_threads"] = self._cpu_threads
+        try:
+            self._recognizer = create_predictor(
+                model_name=self._rec_model, **kwargs
+            )
+        except Exception:  # noqa: BLE001 - se degrada al detector completo
+            logger.warning(
+                "No se pudo cargar el reconocedor sin detector; "
+                "los campos de una sola línea usan el pipeline completo",
+                exc_info=True,
+            )
+            self._recognizer = False
+        return self._recognizer
 
     def recognize(self, image: np.ndarray) -> List[OcrResult]:
         engine = self._ensure_engine()
@@ -147,6 +207,36 @@ class PaddleOcrEngine:
         except TypeError:
             raw = engine.predict(image)  # API v3.x
         return self._parse(raw)
+
+    def recognize_lines(
+        self, images: List[np.ndarray]
+    ) -> List[List[OcrResult]]:
+        """Reconoce recortes de una sola línea sin ejecutar el detector."""
+        if not images:
+            return []
+        recognizer = self._ensure_recognizer()
+        if recognizer is False:
+            return self.recognize_batch(images)
+        prepared = [self._to_bgr(img) for img in images]
+        try:
+            raw = list(recognizer.predict(prepared))
+        except Exception:  # noqa: BLE001 - fallback robusto
+            logger.debug(
+                "Reconocimiento sin detector falló; se usa el pipeline "
+                "completo", exc_info=True,
+            )
+            return self.recognize_batch(images)
+        if len(raw) != len(prepared):
+            return self.recognize_batch(images)
+        results: List[List[OcrResult]] = []
+        for item in raw:
+            text = item.get("rec_text") or ""
+            score = item.get("rec_score") or 0.0
+            results.append(
+                [OcrResult(text=str(text), confidence=float(score))]
+                if str(text).strip() else []
+            )
+        return results
 
     def recognize_batch(self, images: List[np.ndarray]) -> List[List[OcrResult]]:
         """Reconoce varias imágenes en una sola llamada (API v3.x).
@@ -235,6 +325,14 @@ class TesseractOcrEngine:
     def recognize(self, image: np.ndarray,
                   config: Optional[str] = None) -> List[OcrResult]:
         return self.recognize_batch([image], config=config)[0]
+
+    def recognize_lines(
+        self, images: List[np.ndarray]
+    ) -> List[List[OcrResult]]:
+        """Lee cada recorte como una sola línea (``--psm 7``)."""
+        if not images:
+            return []
+        return self.recognize_batch(images, config="--psm 7 --oem 3")
 
     def recognize_batch(
         self,

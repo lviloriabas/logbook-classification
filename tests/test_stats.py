@@ -133,10 +133,10 @@ class TestConstruirStats(unittest.TestCase):
         self.assertEqual(
             archivos,
             {
-                "HP-1534CMP/2026-JUL.pdf": 2,
-                "HP-1534CMP/sf.pdf": 1,
-                "HP-1538CMP/2026-AUG.pdf": 1,
-                "sin_matricula/2026-AUG.pdf": 1,
+                "HP-1534CMP_2026-JUL.pdf": 2,
+                "HP-1534CMP_sf.pdf": 1,
+                "HP-1538CMP_2026-AUG.pdf": 1,
+                "sin_matricula_2026-AUG.pdf": 1,
             },
         )
         self.assertEqual(sep["total_pdfs"], 4)

@@ -84,3 +84,25 @@ def test_explicit_qwen_model_selects_matching_mmproj(tmp_path: Path):
 
     with patch.object(launcher, "_models_dir", return_value=models):
         assert launcher._pick_mmproj(qwen) == qwen_mmproj
+
+
+def test_server_forces_cpu_only_execution(tmp_path: Path):
+    binary = tmp_path / "llama-server"
+    model = tmp_path / "model.gguf"
+    mmproj = tmp_path / "mmproj.gguf"
+    for path in (binary, model, mmproj):
+        path.touch()
+    paths = launcher.VlmPaths(str(binary), model, mmproj)
+
+    process = __import__("unittest.mock").mock.Mock()
+    process.poll.return_value = None
+    with (
+        patch.object(launcher, "_free_port", return_value=12345),
+        patch.object(launcher.LlamaServer, "_health", return_value=True),
+        patch.object(launcher.subprocess, "Popen", return_value=process) as popen,
+    ):
+        assert launcher.LlamaServer(paths=paths).start()
+
+    args = popen.call_args.args[0]
+    index = args.index("--n-gpu-layers")
+    assert args[index + 1] == "0"

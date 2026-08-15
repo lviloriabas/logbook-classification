@@ -74,7 +74,12 @@ from app.vision.pdf_loader import (
     render_page,
 )
 from app.vision.preprocessing import crop_region, deskew, rotate, upscale_for_ocr
-from app.vision.signature import UNCLEAR, detect_signature
+from app.vision.signature import (
+    SIGNATURE_PAD_X,
+    SIGNATURE_PAD_Y,
+    UNCLEAR,
+    detect_signature,
+)
 from app.vision.date_geometry import (
     DateFieldGeometry,
     field_override,
@@ -386,11 +391,16 @@ def process_page_image(
             "scale": float(alignment_transform.scale),
         }
 
-    # 3.5) Preparar una copia sin fondo impreso para firmas y casillas.
-    # No se usa para OCR: si varias páginas repiten la misma escritura, el
-    # consenso del fondo también la clasifica como impresa.
+    # 3.5) Preparar una copia sin fondo impreso para las casillas. No se usa
+    # ni para OCR (si varias páginas repiten la misma escritura, el consenso
+    # del fondo también la clasifica como impresa) ni para firmas (la máscara
+    # abre huecos dentro de los trazos). Solo se construye si la plantilla
+    # tiene casillas: es una copia de la página entera.
     analysis_image = image
-    if printed_mask is not None:
+    has_checkboxes = any(
+        field.type is FieldType.CHECKBOX for field in template.fields
+    )
+    if printed_mask is not None and has_checkboxes:
         if printed_mask.shape != image.shape[:2]:
             mask = cv2.resize(
                 printed_mask.astype(np.uint8),
@@ -498,7 +508,8 @@ def process_page_image(
                               date_engine=date_engine,
                               date_image=date_image,
                               date_region=date_region,
-                              overrides=ocr_overrides)
+                              overrides=ocr_overrides,
+                              accept=_accept_line_reading)
     by_id = {field.id: result
              for field, result in zip(ocr_fields, ocr_results)}
 
@@ -551,9 +562,16 @@ def process_page_image(
 
     for field in template.fields:
         if field.type in (FieldType.SIGNATURE, FieldType.CHECKBOX):
-            region = crop_region(analysis_image, field, config.crop_padding)
             if field.type is FieldType.SIGNATURE:
-                result = detect_signature(region, field, page_number)
+                # La firma se lee sobre la página tal cual. La máscara de
+                # fondo impreso se calcula por consenso a media resolución y
+                # abre huecos dentro de los trazos; el detector ya descarta
+                # la estructura impresa por su cuenta.
+                result = detect_signature(
+                    crop_region(image, field,
+                                pad_x=SIGNATURE_PAD_X, pad_y=SIGNATURE_PAD_Y),
+                    field, page_number, dpi=config.dpi,
+                )
                 if page.alignment_quality != "ok":
                     result.status = Status.WARNING
                     result.confidence = min(result.confidence, 0.40)
@@ -563,7 +581,10 @@ def process_page_image(
                         "firma requiere revisión"
                     )
             else:
-                result = detect_checkbox(region, field, page_number)
+                result = detect_checkbox(
+                    crop_region(analysis_image, field, config.crop_padding),
+                    field, page_number,
+                )
         else:
             raw_text, confidence = by_id.get(field.id, ("", 0.0))
             text, note = raw_text, ""
@@ -724,6 +745,31 @@ def process_page_image(
 
     page.processing_ms = round((time.perf_counter() - t_start) * 1000, 1)
     return page
+
+
+def _accept_line_reading(
+    field: "FieldTemplate", text: str, confidence: float
+) -> bool:
+    """Decide si la lectura sin detector de un campo es utilizable.
+
+    Los campos ``ocr_mode='line'`` se leen sin detector porque su recorte ya
+    contiene un único valor. Cuando esa lectura rápida no produce un valor
+    canónico —o no cumple la regla del campo— se relee con el pipeline
+    completo, así que la optimización solo puede ahorrar tiempo y nunca
+    perder una lectura que el detector sí habría resuelto.
+    """
+    if not text.strip():
+        return False
+    value = text.strip()
+    if field.postprocess:
+        value, note = apply_postprocess(field.id, field.postprocess, text)
+        if not value:
+            return False
+        if note and not any(soft in note for soft in _SOFT_NOTES):
+            return False
+    if field.regex and not re.fullmatch(field.regex, value):
+        return False
+    return True
 
 
 _CRITICAL_POSTPROCESS = frozenset(
@@ -1787,14 +1833,20 @@ class Pipeline:
                 if field_tmpl is None:
                     continue
                 try:
-                    field_padding = (
-                        0.024
-                        if field_tmpl.postprocess in _DATE_FIELDS
-                        else self.config.crop_padding
-                    )
-                    crop = crop_region(
-                        image, field_tmpl, field_padding
-                    )
+                    if field_tmpl.type is FieldType.SIGNATURE:
+                        # El VLM debe ver exactamente el mismo recorte que
+                        # dejó la firma incierta.
+                        crop = crop_region(
+                            image, field_tmpl,
+                            pad_x=SIGNATURE_PAD_X, pad_y=SIGNATURE_PAD_Y,
+                        )
+                    else:
+                        crop = crop_region(
+                            image, field_tmpl,
+                            0.024
+                            if field_tmpl.postprocess in _DATE_FIELDS
+                            else self.config.crop_padding,
+                        )
                 except ValueError:
                     continue
                 if field_tmpl.postprocess in _DATE_FIELDS:
@@ -1887,7 +1939,12 @@ class Pipeline:
         anchors: Optional[List[TransformResult]] = None,
         own: Optional[List[TransformResult]] = None,
     ) -> np.ndarray:
-        """Reproduce deskew + alineación + máscara impresa del procesado."""
+        """Reproduce el deskew y la alineación del procesado.
+
+        Sin la máscara de fondo impreso: ni el OCR ni las firmas la usan, y
+        aplicarla aquí le daría al VLM un recorte con huecos blancos dentro
+        de la escritura que el detector nunca vio.
+        """
         if self.config.deskew:
             image, _skew = deskew(image)
         if self.config.align and reference is not None:
@@ -1898,15 +1955,6 @@ class Pipeline:
                 own_t = compute_similarity_transform(image, reference, self.config)
                 if own_t.reliable:
                     image = apply_transform(image, own_t)
-        if self._printed_mask is not None:
-            mask = self._printed_mask
-            if mask.shape != image.shape[:2]:
-                mask = cv2.resize(
-                    mask.astype(np.uint8),
-                    (image.shape[1], image.shape[0]),
-                    interpolation=cv2.INTER_NEAREST,
-                ).astype(bool)
-            image[mask] = 255
         return image
 
     @staticmethod

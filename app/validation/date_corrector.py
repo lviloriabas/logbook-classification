@@ -10,7 +10,10 @@ La politica de inferencia es deliberadamente asimetrica:
 
 * mes y ano pueden inferirse entre dos anclas directas compatibles;
 * en los extremos se permite una extrapolacion corta con dos anclas locales;
-* el dia nunca se infiere. Si falta, ``page.date`` permanece vacio.
+* una lectura mensual posicional clara puede actuar como ancla aun si su
+  confianza aislada es baja;
+* el día OCR no se sustituye ni se inventa. La política de representación del
+  CSV (día específico o fin de mes) se aplica al escribir el reporte.
 
 Una inferencia conserva su procedencia en ``FieldResult`` y queda en WARNING,
 nunca se presenta como una lectura OCR directa en estado OK.
@@ -38,6 +41,9 @@ DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
 # Las anclas directas deben tener al menos la confianza que dispara el
 # WARNING normal del OCR. Valores por debajo de esto no deben propagar errores.
 MIN_DIRECT_CONFIDENCE = 0.5
+# Una lectura exacta por ranuras conserva evidencia física suficiente para el
+# mes aunque la confianza del carácter manuscrito quede en WARNING.
+MIN_POSITIONAL_MONTH_CONFIDENCE = 0.35
 # Para inferir un tramo se necesitan dos anclas del mismo componente.
 MIN_ANCHORS = 2
 # La extrapolacion a un extremo es mas arriesgada que un intervalo cerrado.
@@ -349,6 +355,25 @@ def _is_direct_anchor(field: Optional[FieldResult], value: Optional[str]) -> boo
     )
 
 
+def _is_positional_month_anchor(
+    field: Optional[FieldResult], value: Optional[str]
+) -> bool:
+    """Acepta un mes canónico reconstruido directamente desde sus casillas."""
+    comment = (field.comment or "").lower() if field is not None else ""
+    return bool(
+        field is not None
+        and value is not None
+        and field.status is Status.WARNING
+        and field.confidence >= MIN_POSITIONAL_MONTH_CONFIDENCE
+        and field.inference_method in {"ranuras", "date_cells"}
+        and field.source not in {"inferred", "book_correction"}
+        and not field.alternatives
+        and "fuzzy" not in comment
+        and "numeric handwritten month" not in comment
+        and "conflict" not in comment
+    )
+
+
 Anchor = Tuple[int, str, PageResult]
 Normalizer = Callable[[Optional[str]], Optional[str]]
 
@@ -369,7 +394,13 @@ def _anchors(
         if (
             number is None
             or page.alignment_quality != "ok"
-            or not _is_direct_anchor(field, value)
+            or not (
+                _is_direct_anchor(field, value)
+                or (
+                    field_id == "month"
+                    and _is_positional_month_anchor(field, value)
+                )
+            )
         ):
             continue
         anchors.append((number, value, page))  # type: ignore[arg-type]
@@ -400,6 +431,9 @@ def _set_inferred_component(
     if field is None:
         return False
     formatted = _format_component(field_id, value)
+    previous = field.value
+    if previous and previous != formatted and previous not in field.alternatives:
+        field.alternatives.append(previous)
     field.value = formatted
     field.status = Status.WARNING
     field.confidence = _inferred_confidence(
@@ -595,7 +629,7 @@ def _check_regressions(book: Sequence[PageResult]) -> int:
 
 
 def _flag_unresolved(book: Sequence[PageResult]) -> int:
-    """Marca faltantes sin convertir el dia ausente en una inferencia."""
+    """Marca los componentes que siguen sin resolverse tras la inferencia."""
     unresolved = 0
     for page in book:
         if page.blank:
@@ -637,12 +671,11 @@ def _flag_unresolved(book: Sequence[PageResult]) -> int:
 def correct_dates_by_book(
     reports: List[ValidationReport],
 ) -> Dict[str, int]:
-    """Completa mes y ano por intervalos de ``log_number``.
+    """Completa mes y año por ``log_number`` sin alterar el día OCR.
 
     El resultado ``corrected`` cuenta componentes inferidos o corregidos,
     no paginas.
-    ``days_filled`` se conserva en cero como garantia explicita de que este
-    corrector nunca inventa el dia.
+    ``days_filled`` permanece en cero: el fin de mes es una política del CSV.
     """
     books = group_books(reports)
     stats: Dict[str, int] = {

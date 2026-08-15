@@ -18,7 +18,9 @@ class TestFieldGeometry(unittest.TestCase):
         with self.assertRaises(ValidationError):
             FieldTemplate(id="bad", x=0.1, y=0.9, w=0.1, h=0.2)
 
-    def test_rejects_invalid_signature_band(self):
+    def test_rejects_inverted_signature_thresholds(self):
+        """El umbral de campo vacío no puede exigir más tinta que el de
+        firma presente: dejaría la franja incierta al revés."""
         with self.assertRaises(ValidationError):
             FieldTemplate(
                 id="bad",
@@ -27,8 +29,8 @@ class TestFieldGeometry(unittest.TestCase):
                 y=0.1,
                 w=0.2,
                 h=0.1,
-                zone_top=0.8,
-                zone_bottom=0.2,
+                min_ink_peak=0.05,
+                max_empty_peak=0.20,
             )
 
 

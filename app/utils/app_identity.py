@@ -39,10 +39,34 @@ def set_windows_taskbar_icon(
         return False
     try:
         import ctypes
+        from ctypes import wintypes
 
         user32 = ctypes.windll.user32
         load_image = user32.LoadImageW
+        load_image.argtypes = (
+            wintypes.HINSTANCE,
+            wintypes.LPCWSTR,
+            wintypes.UINT,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.UINT,
+        )
         load_image.restype = ctypes.c_void_p
+        send_message = user32.SendMessageW
+        send_message.argtypes = (
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            ctypes.c_ssize_t,
+        )
+        send_message.restype = ctypes.c_ssize_t
+        set_class_icon = user32.SetClassLongPtrW
+        set_class_icon.argtypes = (
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_void_p,
+        )
+        set_class_icon.restype = ctypes.c_void_p
         hwnd = int(window.winId())
 
         def load(metric_x: int, metric_y: int) -> int:
@@ -61,13 +85,11 @@ def set_windows_taskbar_icon(
         small = load(SM_CXSMICON, SM_CYSMICON)
         if not big or not small:
             return False
-        user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, big)
-        user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small)
+        send_message(hwnd, WM_SETICON, ICON_BIG, big)
+        send_message(hwnd, WM_SETICON, ICON_SMALL, small)
         # Windows 11 puede consultar el icono de la clase en lugar de enviar
         # WM_GETICON cuando crea o reagrupa el botón de la barra de tareas.
         # Se actualizan ambos orígenes con los mismos handles.
-        set_class_icon = user32.SetClassLongPtrW
-        set_class_icon.restype = ctypes.c_void_p
         set_class_icon(hwnd, GCLP_HICON, big)
         set_class_icon(hwnd, GCLP_HICONSM, small)
         # Los HICON deben permanecer válidos durante toda la vida del HWND.

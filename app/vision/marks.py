@@ -1,4 +1,10 @@
-"""Análisis de tinta compartido por firmas y checkboxes."""
+"""Análisis de cobertura de tinta de los checkboxes.
+
+Las firmas no usan estas métricas: una casilla se marca con un trazo que
+ocupa una fracción conocida de un recuadro pequeño, mientras que una firma
+hay que distinguirla del rótulo y de las líneas impresas del formulario
+(ver ``app/vision/signature.py``).
+"""
 
 from __future__ import annotations
 

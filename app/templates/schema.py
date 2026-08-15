@@ -19,6 +19,25 @@ class FieldType(str, Enum):
     CHECKBOX = "checkbox"
 
 
+class OcrMode(str, Enum):
+    """Cómo se lee el recorte de un campo con PaddleOCR (solo CPU).
+
+    ``detect`` ejecuta el detector de texto y luego el reconocedor. El
+    detector localiza la escritura dentro de la casilla, así que tolera
+    bordes impresos, rótulos y márgenes sobrantes.
+
+    ``line`` salta el detector y envía el recorte completo al reconocedor,
+    que lo trata como una sola línea de texto. Medido sobre los recortes
+    reales del pipeline: 646 ms por recorte con detector frente a 175 ms
+    sin él (3.7x). Solo es equivalente cuando el recorte ya contiene
+    exactamente un valor y nada más; en casillas con rótulo impreso o
+    varias palabras el detector sigue siendo necesario.
+    """
+
+    DETECT = "detect"
+    LINE = "line"
+
+
 class FieldTemplate(BaseModel):
     """Definición de un campo de la plantilla (coordenadas relativas 0-1)."""
 
@@ -41,29 +60,39 @@ class FieldTemplate(BaseModel):
         description="Modo de localización antes del OCR: 'ink' sub-recorta "
                     "la región al extento de la tinta manuscrita",
     )
+    ocr_mode: OcrMode = Field(
+        default=OcrMode.DETECT,
+        description="'detect' ejecuta detector + reconocedor (por defecto); "
+                    "'line' salta el detector y lee el recorte como una "
+                    "sola línea (3.7x más rápido, solo válido cuando el "
+                    "recorte contiene un único valor)",
+    )
     min_ink_ratio: float = Field(default=0.02, ge=0.0, le=1.0)
     max_ink_ratio: float = Field(default=0.90, ge=0.0, le=1.0)
     min_components: int = Field(default=2, ge=0)
-    min_component_area: float = Field(
-        default=6.0, ge=0.0,
-        description="área mínima (px) de un trazo para contarlo como "
-                    "componente de firma; filtra speckles de ruido",
+    ink_delta: float = Field(
+        default=80.0, ge=1.0, le=255.0,
+        description="cuánto más oscuro que su propio papel debe ser un píxel "
+                    "para contar como tinta de firma; al medirse contra el "
+                    "fondo local no depende del gris de la fotocopia",
     )
-    min_dominant_area: float = Field(
-        default=60.0, ge=0.0,
-        description="área (px) del trazo mayor que, combinada con tinta "
-                    "texturizada fuerte, permite declarar la firma presente "
-                    "aun cuando los trazos se fusionan con la línea impresa",
+    min_ink_peak: float = Field(
+        default=0.12, ge=0.0, le=1.0,
+        description="densidad local de tinta (fracción de una ventana del "
+                    "alto del campo) a partir de la cual se declara la firma "
+                    "presente",
     )
-    zone_top: float = Field(default=0.15, ge=0.0, le=1.0,
-                            description="inicio de banda de firma (fracción de alto)")
-    zone_bottom: float = Field(default=0.70, ge=0.0, le=1.0,
-                               description="fin de banda de firma (fracción de alto)")
-    texture_threshold: float = Field(default=140, ge=0.0, le=255,
-                                     description="umbral de oscuridad para trazos texturizados")
-    min_texture_ink: float = Field(
-        default=0.004, ge=0.0, le=1.0,
-        description="fracción mínima de tinta texturizada para considerar firma presente",
+    max_empty_peak: float = Field(
+        default=0.05, ge=0.0, le=1.0,
+        description="densidad local de tinta por debajo de la cual el campo "
+                    "se considera vacío; entre este umbral y min_ink_peak la "
+                    "firma queda incierta",
+    )
+    min_ink_span: float = Field(
+        default=0.30, ge=0.0, le=1.0,
+        description="fracción del ancho con tinta que basta para dar por "
+                    "presente una escritura poco densa pero repartida "
+                    "(números de licencia manuscritos)",
     )
     sig_present_conf: float = Field(
         default=0.45, ge=0.0, le=1.0,
@@ -88,9 +117,14 @@ class FieldTemplate(BaseModel):
                 f"campo '{self.id}' excede el alto de la página "
                 f"(y + h = {self.y + self.h:.6f})"
             )
-        if self.type is FieldType.SIGNATURE and self.zone_bottom <= self.zone_top:
+        if (
+            self.type is FieldType.SIGNATURE
+            and self.max_empty_peak > self.min_ink_peak
+        ):
             raise ValueError(
-                f"campo '{self.id}' tiene una banda de firma inválida"
+                f"campo '{self.id}' tiene umbrales de firma invertidos "
+                f"(max_empty_peak {self.max_empty_peak} > "
+                f"min_ink_peak {self.min_ink_peak})"
             )
         return self
 

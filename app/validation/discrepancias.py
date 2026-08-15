@@ -23,8 +23,8 @@ umbrales del campo (``sig_present_conf`` / ``sig_absent_conf``): una
 lectura de baja confianza nunca se acusa como falta (evita discrepancias
 falsas) y se marca como *incierta* (categoría UNCERTAIN, revisión manual).
 
-Las discrepancias se ordenan por avión (matrícula corregida) y luego por
-número de bitácora (``log_number``) ascendente.
+Las discrepancias se ordenan globalmente por número de bitácora
+(``log_number``) ascendente, sin subdividirlas por matrícula o mes.
 """
 
 from __future__ import annotations
@@ -266,9 +266,9 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
                     ) -> List[Discrepancia]:
     """Clasifica todas las páginas del lote y devuelve las discrepancias.
 
-    Marca ``page.discrepancy`` en las páginas afectadas y ordena el
-    resultado por avión (matrícula) y luego por ``log_number`` ascendente
-    (libro + logpage), y dentro del mismo número por archivo/página.
+    Marca ``page.discrepancy`` en las páginas afectadas y ordena el resultado
+    globalmente por ``log_number`` ascendente (libro + logpage), y dentro del
+    mismo número por archivo/página.
     """
     entradas: List[Discrepancia] = []
     for report in reports:
@@ -292,7 +292,6 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
             ))
 
     entradas.sort(key=lambda d: (
-        d.matricula or "\uffff",
         d.log_number if d.log_number is not None else 1 << 30,
         d.pdf_path,
         d.page_number,

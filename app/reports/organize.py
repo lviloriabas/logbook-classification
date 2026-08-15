@@ -2,10 +2,13 @@
 
 - **PDFs ordenados**: reordenan los escaneos tal cual (sin encabezados ni
   anotaciones, listos para subir a la plataforma de indexado), agrupados
-  por avión (matrícula corregida) y/o mes (``page.date`` -> YYYY-MM), con
-  las páginas en orden de libro (``log_number``) y logpage.
-- **PDF de discrepancias**: las páginas con firmas faltantes o inciertas,
-  sin anotaciones, ordenadas por avión y logpage.
+  por avión (matrícula corregida) y/o mes inferido (YYYY-MM). En un
+  PDF único, las secciones se ordenan por matrícula y fecha; dentro de cada
+  sección las páginas siguen ``log_number`` y logpage.
+- **Posibles discrepancias**: en un PDF único forman una sola sección final;
+  en la salida de varios archivos se escriben en ``discrepancias.pdf``. En
+  ambos casos se ordenan únicamente por logpage y no se subdividen por avión
+  ni mes.
 - **Recortes de firmas**: volcado de las regiones de firma para auditar
   visualmente los bounding boxes.
 
@@ -18,9 +21,8 @@ Convenciones de nombres (rutas relativas a la carpeta de la corrida):
                                       separadores independientes entre grupos
 - ``HP-XXXXCMP.pdf``                 solo por avión (PDFs sueltos, sin carpetas)
 - ``2026-JUL.pdf`` / ``sf.pdf``      solo por mes (``sf`` = sin fecha)
-- ``HP-XXXXCMP/2026-JUL.pdf``        por avión y mes: una carpeta por
-                                     matrícula y, dentro, un PDF por mes
-                                     (``sf.pdf`` para las páginas sin fecha)
+- ``HP-XXXXCMP_2026-JUL.pdf``        por avión y mes: ambos valores forman el
+                                     nombre (``HP-XXXXCMP_sf.pdf`` sin fecha)
 - ``discrepancias.pdf``              páginas con discrepancias
 
 Las páginas sin matrícula legible van al grupo ``sin_matricula`` y las
@@ -53,6 +55,7 @@ from app.validation.discrepancias import (
 )
 from app.validation.grouping import log_number
 from app.vision.pdf_loader import PdfDocumentCache, copy_pdf_pages, render_page
+from app.vision.signature import SIGNATURE_PAD_X, SIGNATURE_PAD_Y
 
 _DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(CMP|WWP)$")
@@ -60,6 +63,12 @@ _MONTHS = (
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
 )
+_MONTH_NUMBER = {
+    "JAN": 1, "ENE": 1, "FEB": 2, "MAR": 3,
+    "APR": 4, "ABR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "AGO": 8, "SEP": 9,
+    "OCT": 10, "NOV": 11, "DEC": 12, "DIC": 12,
+}
 
 @dataclass(frozen=True)
 class PaginaRef:
@@ -90,9 +99,31 @@ def clave_avion(page: PageResult) -> str:
 
 
 def clave_mes(page: PageResult) -> str:
-    """Mes de la página (YYYY-MM), o 'sin_fecha' si no es legible."""
+    """Mes de la página, incluso cuando el día no pudo determinarse."""
     if page.date and _DATE_RE.match(page.date):
         return page.date[:7].replace("/", "-")
+    by_id = {field.field_id: field for field in page.fields}
+    month_field = by_id.get("month")
+    year_field = by_id.get("year")
+    if (
+        month_field is None
+        or year_field is None
+        or month_field.status is Status.ERROR
+        or year_field.status is Status.ERROR
+    ):
+        return "sin_fecha"
+    month_value = month_field.value or ""
+    year_value = year_field.value or ""
+    month = _MONTH_NUMBER.get(str(month_value).upper())
+    if month is None and str(month_value).isdigit():
+        numeric = int(str(month_value))
+        month = numeric if 1 <= numeric <= 12 else None
+    if str(year_value).isdigit() and len(str(year_value)) in (2, 4):
+        year = int(str(year_value))
+        if len(str(year_value)) == 2:
+            year += 2000
+        if month is not None and 2000 <= year <= 2100:
+            return f"{year:04d}-{month:02d}"
     return "sin_fecha"
 
 
@@ -169,9 +200,8 @@ def ruta_pdf(
 ) -> Path:
     """Ruta relativa del PDF de un grupo dentro de la carpeta de la corrida.
 
-    Las divisiones por matrícula son carpetas solo cuando también se
-    separa por mes; en cualquier otro caso las divisiones son PDFs
-    sueltos en la carpeta madre (ver convenciones del módulo).
+    Cada PDF queda suelto en la carpeta de la corrida y su nombre incluye
+    exactamente los criterios que lo identifican.
     """
     if not separar_por:
         if run_dir is not None:
@@ -179,9 +209,13 @@ def ruta_pdf(
             return Path(f"{sanitize_filename(nombre)}.pdf")
         return Path("bitacoras.pdf")
     if "avion" in separar_por and "mes" in separar_por:
-        avion, mes = clave
-        return (Path(sanitize_filename(avion))
-                / f"{sanitize_filename(nombre_mes(mes))}.pdf")
+        valores = dict(zip(separar_por, clave))
+        avion, mes = valores["avion"], valores["mes"]
+        nombre = "_".join((
+            sanitize_filename(avion),
+            sanitize_filename(nombre_mes(mes)),
+        ))
+        return Path(f"{nombre}.pdf")
     if "avion" in separar_por:
         return Path(f"{sanitize_filename(clave[0])}.pdf")
     return Path(f"{sanitize_filename(nombre_mes(clave[0]))}.pdf")
@@ -239,7 +273,7 @@ def _preparar_paginas(
     reports: Sequence[ValidationReport],
     excluidas: Optional[set[Tuple[str, int]]],
 ) -> List[PaginaRef]:
-    """Devuelve las páginas no en blanco ni excluidas, en orden original."""
+    """Devuelve páginas no en blanco ni excluidas, ordenadas por logpage."""
     excluidas = excluidas or set()
     refs: List[PaginaRef] = []
     for ref in iterar_paginas(reports):
@@ -248,38 +282,151 @@ def _preparar_paginas(
         if (Path(ref.pdf_path).name, ref.page.page_number) in excluidas:
             continue
         refs.append(ref)
+    refs.sort(key=lambda ref: clave_orden(ref.page, ref.orden))
     return refs
 
 
-def _pagina_divisoria(doc: fitz.Document, texto: str) -> None:
-    """Página blanca A4 con el texto (matrícula o mes) en grande, centrado."""
-    ancho, alto = 595.0, 842.0
+def _preparar_paginas_incluidas(
+    reports: Sequence[ValidationReport],
+    incluidas: Optional[set[Tuple[str, int]]],
+) -> List[PaginaRef]:
+    """Devuelve solo las páginas indicadas, ordenadas globalmente por logpage."""
+    incluidas = incluidas or set()
+    if not incluidas:
+        return []
+    refs = [
+        ref
+        for ref in iterar_paginas(reports)
+        if not ref.page.blank
+        and (Path(ref.pdf_path).name, ref.page.page_number) in incluidas
+    ]
+    refs.sort(key=lambda ref: clave_orden(ref.page, ref.orden))
+    return refs
+
+
+def _pagina_divisoria(
+    doc: fitz.Document,
+    texto: str,
+    size: Tuple[float, float] = (842.0, 595.0),
+) -> None:
+    """Añade una página horizontal blanca con texto grande centrado."""
+    ancho, alto = max(size), min(size)
     page = doc.new_page(width=ancho, height=alto)
     page.draw_rect(fitz.Rect(0, 0, ancho, alto), fill=(1, 1, 1), color=None)
 
-    texto = texto.upper()
+    lineas = [linea.strip().upper() for linea in texto.splitlines() if linea.strip()]
+    if not lineas:
+        return
     fontname = "hebo"  # Helvetica-Bold
     fontsize = 72
-    while fontsize >= 12 and fitz.get_text_length(
-            texto, fontname=fontname, fontsize=fontsize) > ancho - 100:
+    while fontsize >= 12 and max(
+        fitz.get_text_length(linea, fontname=fontname, fontsize=fontsize)
+        for linea in lineas
+    ) > ancho - 100:
         fontsize -= 8
-    ancho_texto = fitz.get_text_length(
-        texto, fontname=fontname, fontsize=fontsize
+    interlineado = fontsize * 1.25
+    primera_base = (
+        alto / 2 - (len(lineas) - 1) * interlineado / 2 + fontsize * 0.35
     )
-    page.insert_text(
-        ((ancho - ancho_texto) / 2, alto / 2 + fontsize * 0.35),
-        texto,
-        fontname=fontname,
-        fontsize=fontsize,
-        color=(0.05, 0.05, 0.05),
-    )
+    for indice, linea in enumerate(lineas):
+        ancho_texto = fitz.get_text_length(
+            linea, fontname=fontname, fontsize=fontsize
+        )
+        page.insert_text(
+            ((ancho - ancho_texto) / 2, primera_base + indice * interlineado),
+            linea,
+            fontname=fontname,
+            fontsize=fontsize,
+            color=(0.05, 0.05, 0.05),
+        )
 
 
 def _etiqueta_separador(condicion: str, valor: str) -> str:
     """Texto de la página separadora para un criterio y su valor."""
-    if condicion == "mes" and valor != "sin_fecha":
+    if condicion == "mes":
+        if valor == "sin_fecha":
+            return "SIN FECHA"
         return nombre_mes(valor).replace("-", "/")
+    if condicion == "avion" and valor == "sin_matricula":
+        return "SIN MATRICULA"
     return valor
+
+
+def _etiqueta_grupo(
+    clave: Tuple[str, ...],
+    criterios: Sequence[str],
+) -> str:
+    """Une matrícula y mes en el mismo separador cuando se piden ambos."""
+    valores = dict(zip(criterios, clave))
+    orden = [
+        condicion for condicion in ("avion", "mes")
+        if condicion in valores
+    ]
+    return "\n".join(
+        _etiqueta_separador(condicion, valores[condicion])
+        for condicion in orden
+    )
+
+
+def _claves_en_orden_seccion(
+    grupos: Dict[Tuple[str, ...], List[PaginaRef]],
+    criterios: Sequence[str],
+) -> List[Tuple[str, ...]]:
+    """Ordena por matrícula y fecha; valores sin determinar van al final."""
+
+    def section_key(clave: Tuple[str, ...]) -> tuple:
+        valores = dict(zip(criterios, clave))
+        key: List[tuple] = []
+        if "avion" in valores:
+            avion = valores["avion"]
+            if avion == "sin_matricula":
+                key.append((1, ""))
+            else:
+                match = re.search(r"HP-(\d{4})(CMP|WWP)", avion)
+                key.append((
+                    0,
+                    int(match.group(1)) if match else 1 << 30,
+                    match.group(2) if match else avion,
+                ))
+        if "mes" in valores:
+            mes = valores["mes"]
+            if mes == "sin_fecha":
+                key.append((1, 1 << 30, 13))
+            else:
+                match = re.fullmatch(r"(\d{4})-(\d{2})", mes)
+                key.append((
+                    0,
+                    int(match.group(1)) if match else 1 << 30,
+                    int(match.group(2)) if match else 13,
+                ))
+        key.append(clave_orden(grupos[clave][0].page, grupos[clave][0].orden))
+        return tuple(key)
+
+    return sorted(grupos, key=section_key)
+
+
+def _tamano_horizontal_fuente(
+    sources: PdfDocumentCache,
+    ref: PaginaRef,
+) -> Tuple[float, float]:
+    """Tamaño horizontal de la bitácora que sigue al separador."""
+    page = sources.get(ref.pdf_path).load_page(ref.page.page_number - 1)
+    return max(page.rect.width, page.rect.height), min(
+        page.rect.width, page.rect.height
+    )
+
+
+def _insertar_pagina_fuente(
+    doc: fitz.Document,
+    sources: PdfDocumentCache,
+    ref: PaginaRef,
+) -> None:
+    """Copia una página fuente al documento sin rasterizarla ni anotarla."""
+    doc.insert_pdf(
+        sources.get(ref.pdf_path),
+        from_page=ref.page.page_number - 1,
+        to_page=ref.page.page_number - 1,
+    )
 
 
 def escribir_pdf_unico(
@@ -288,14 +435,19 @@ def escribir_pdf_unico(
     separar_por: Sequence[str] = (),
     excluidas: Optional[set[Tuple[str, int]]] = None,
     dpi: int = 150,
+    discrepancias_al_final: bool = False,
 ) -> Path:
     """Genera un único PDF con el mismo nombre que ``run_dir``.
 
-    - ``separar_por`` vacío: páginas en orden original, sin separadores.
+    - ``separar_por`` vacío: páginas en orden de logpage, sin separadores.
     - Con ``avion`` y/o ``mes``: las páginas se agrupan por esos criterios
-      (ordenadas por logpage dentro del grupo) y se inserta una página en
-      blanco con la matrícula o el mes en grande cada vez que cambia el
-      grupo, sirviendo como separador visual.
+      (ordenadas por logpage dentro del grupo) y cada grupo comienza con una
+      página blanca horizontal. Las secciones van por matrícula ascendente y
+      fecha cronológica, con los valores sin determinar al final. Si se eligen
+      ambos criterios, el mismo separador muestra matrícula y mes.
+    - Si ``discrepancias_al_final`` es verdadero, las páginas excluidas de los
+      grupos se agregan al final bajo un único separador ``POSIBLES
+      DISCREPANCIAS``, ordenadas globalmente por logpage.
     """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -307,40 +459,42 @@ def escribir_pdf_unico(
     if criterios:
         grupos = agrupar_paginas(reports, criterios, excluidas)
         refs = [ref for grupo in grupos.values() for ref in grupo]
+    refs_discrepancias = (
+        _preparar_paginas_incluidas(reports, excluidas)
+        if discrepancias_al_final
+        else []
+    )
+    todas_las_refs = refs + refs_discrepancias
 
-    if not refs:
+    if not todas_las_refs:
         output_path.unlink(missing_ok=True)
         logger.info(f"[Organize] No hay páginas para exportar: {output_path}")
         return output_path
 
     doc = fitz.open()
     try:
-        with PdfDocumentCache(ref.pdf_path for ref in refs) as sources:
+        with PdfDocumentCache(ref.pdf_path for ref in todas_las_refs) as sources:
             if not criterios:
                 for ref in refs:
-                    doc.insert_pdf(
-                        sources.get(ref.pdf_path),
-                        from_page=ref.page.page_number - 1,
-                        to_page=ref.page.page_number - 1,
-                    )
+                    _insertar_pagina_fuente(doc, sources, ref)
             else:
-                clave_previa: Optional[Tuple[str, ...]] = None
-                for clave in sorted(grupos):
-                    if clave_previa is not None:
-                        for i, condicion in enumerate(criterios):
-                            if clave[i] != clave_previa[i]:
-                                _pagina_divisoria(
-                                    doc,
-                                    _etiqueta_separador(condicion, clave[i]),
-                                )
-                                break
-                    clave_previa = clave
-                    for ref in grupos[clave]:
-                        doc.insert_pdf(
-                            sources.get(ref.pdf_path),
-                            from_page=ref.page.page_number - 1,
-                            to_page=ref.page.page_number - 1,
-                        )
+                for clave in _claves_en_orden_seccion(grupos, criterios):
+                    grupo = grupos[clave]
+                    _pagina_divisoria(
+                        doc,
+                        _etiqueta_grupo(clave, criterios),
+                        _tamano_horizontal_fuente(sources, grupo[0]),
+                    )
+                    for ref in grupo:
+                        _insertar_pagina_fuente(doc, sources, ref)
+            if refs_discrepancias:
+                _pagina_divisoria(
+                    doc,
+                    "POSIBLES DISCREPANCIAS",
+                    _tamano_horizontal_fuente(sources, refs_discrepancias[0]),
+                )
+                for ref in refs_discrepancias:
+                    _insertar_pagina_fuente(doc, sources, ref)
         doc.save(str(output_path), deflate=True)
     finally:
         doc.close()
@@ -354,20 +508,41 @@ def escribir_pdf_discrepancias(
     run_dir: Path,
     dpi: int = 150,
 ) -> Path:
-    """Genera discrepancias.pdf con las páginas fuente sin anotaciones.
-
-    El orden ya viene aplicado por ``clasificar_lote``. ``template`` y
-    ``dpi`` se conservan en la firma para compatibilidad, pero la salida no
-    dibuja información sobre las bitácoras.
-    """
+    """Genera discrepancias.pdf con título y páginas ordenadas por logpage."""
     del template, dpi
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     output_path = run_dir / "discrepancias.pdf"
-    copy_pdf_pages(
-        ((entrada.pdf_path, entrada.page_number) for entrada in entradas),
-        output_path,
+    ordenadas = sorted(
+        enumerate(entradas),
+        key=lambda par: (
+            par[1].log_number
+            if par[1].log_number is not None
+            else 1 << 30,
+            par[0],
+        ),
     )
+    doc = fitz.open()
+    try:
+        with PdfDocumentCache(entrada.pdf_path for _, entrada in ordenadas) as sources:
+            primera = ordenadas[0][1]
+            source_page = sources.get(primera.pdf_path).load_page(
+                primera.page_number - 1
+            )
+            _pagina_divisoria(
+                doc,
+                "POSIBLES DISCREPANCIAS",
+                (source_page.rect.width, source_page.rect.height),
+            )
+            for _, entrada in ordenadas:
+                doc.insert_pdf(
+                    sources.get(entrada.pdf_path),
+                    from_page=entrada.page_number - 1,
+                    to_page=entrada.page_number - 1,
+                )
+        doc.save(str(output_path), deflate=True)
+    finally:
+        doc.close()
     logger.info(f"[Discrepancias] PDF generado: {output_path} "
                 f"({len(entradas)} páginas)")
     return output_path
@@ -442,10 +617,12 @@ def escribir_recortes_firmas(
 ) -> Path:
     """Vuelca los recortes de las regiones de firma como PNG por campo.
 
-    Útil para verificar visualmente que cada bounding box capture solo la
-    línea de firma (sin etiquetas impresas ni contenido vecino). El
-    recorte se toma sobre la página renderizada sin alineación, por lo que
-    puede variar unos píxeles respecto al recorte real del pipeline.
+    Sirve para auditar a ojo por qué el detector decidió lo que decidió: el
+    recorte incluye el mismo margen que usa ``detect_signature`` y el nombre
+    del archivo lleva el veredicto (``true``/``false``/``unclear``), de modo
+    que basta ordenar la carpeta por nombre para revisar juntos todos los
+    casos inciertos. La página se renderiza sin alineación, por lo que el
+    encuadre puede variar unos píxeles respecto al recorte real.
     """
     run_dir = Path(run_dir)
     out_root = run_dir / "recortes_firmas"
@@ -469,13 +646,22 @@ def escribir_recortes_firmas(
             logger.warning(f"[Recortes] Página {ref.page.page_number} "
                            f"no renderizable: {exc}")
             continue
-        nombre = f"{Path(ref.pdf_path).stem}_p{ref.page.page_number:03d}.png"
+        base = f"{Path(ref.pdf_path).stem}_p{ref.page.page_number:03d}.png"
+        leidos = {f.field_id: f.value for f in ref.page.fields}
         for campo in campos:
             left, top, right, bottom = campo.rect_pixels(
                 imagen.width, imagen.height
             )
-            recorte = np.array(imagen)[top:bottom, left:right]
-            Image.fromarray(recorte).save(out_root / campo.id / nombre)
+            margen_x = max(1, round(SIGNATURE_PAD_X * (right - left)))
+            margen_y = max(1, round(SIGNATURE_PAD_Y * (bottom - top)))
+            recorte = np.array(imagen)[
+                max(0, top - margen_y):min(imagen.height, bottom + margen_y),
+                max(0, left - margen_x):min(imagen.width, right + margen_x),
+            ]
+            veredicto = leidos.get(campo.id) or "sin_lectura"
+            Image.fromarray(recorte).save(
+                out_root / campo.id / f"{veredicto}_{base}"
+            )
             total += 1
     logger.info(f"[Recortes] {total} recorte(s) guardados en {out_root}")
     return out_root

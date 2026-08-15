@@ -298,7 +298,8 @@ class CsvViewerWindow(QMainWindow):
         self.resize(1180, 720)
         self.setStyleSheet(
             "QMainWindow, QWidget { font-family: 'Segoe UI', sans-serif; font-size: 10pt; }"
-            "QHeaderView::section { background: #eef2f6; padding: 6px 8px;"
+            "QHeaderView::section { background: #eef2f6; color: #24292f;"
+            " padding: 6px 8px;"
             " font-weight: 600; border: 0; border-bottom: 1px solid #c9d1d9; }"
             "QTableWidget { alternate-background-color: #f6f8fa; }"
         )

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+from functools import partial
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent
@@ -22,6 +23,7 @@ from app.utils.app_identity import set_windows_taskbar_icon
 def main() -> int:
     setup_logging(Path("output") / "logs")
     try:
+        from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QApplication
         from app.gui.editor_window import EditorWindow
     except ImportError as exc:
@@ -48,6 +50,10 @@ def main() -> int:
     window.setWindowIcon(app_icon)
     window.show()
     set_windows_taskbar_icon(window, icon)
+    QTimer.singleShot(
+        250,
+        partial(set_windows_taskbar_icon, window, icon),
+    )
     return app.exec()
 
 

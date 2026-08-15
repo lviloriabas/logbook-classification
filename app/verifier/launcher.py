@@ -201,6 +201,7 @@ class LlamaServer:
             paths.binary,
             "-m", str(paths.model),
             "--mmproj", str(paths.mmproj),
+            "--n-gpu-layers", "0",
             "--host", "127.0.0.1",
             "--port", str(port),
             "--ctx-size", "4096",

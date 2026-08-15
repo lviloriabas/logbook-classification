@@ -7,6 +7,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from app.gui.csv_viewer import (
@@ -122,6 +123,34 @@ def test_true_dup_uses_warning_color_convention():
     assert viewer._status_for({"dup": "true"}, "dup") == "WARNING"
     assert viewer._status_for({"dup": "false"}, "dup") is None
 
+    viewer.close()
+    app.processEvents()
+
+
+def test_row_and_column_indicators_are_visible(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    run = tmp_path / "run"
+    data = run / "datos"
+    data.mkdir(parents=True)
+    (data / "run.csv").write_text(
+        "file,page,log_number\na.pdf,1,1234500\n",
+        encoding="utf-8",
+    )
+    viewer = CsvViewerWindow(tmp_path)
+
+    assert viewer.load_folder(run)
+    horizontal = [
+        viewer.table.horizontalHeaderItem(index).text()
+        for index in range(viewer.table.columnCount())
+    ]
+    vertical = [
+        viewer.table.model().headerData(index, Qt.Orientation.Vertical)
+        for index in range(viewer.table.rowCount())
+    ]
+
+    assert horizontal == ["file", "page", "log_number"]
+    assert vertical == [1]
+    assert "color: #24292f" in viewer.styleSheet()
     viewer.close()
     app.processEvents()
 

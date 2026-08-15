@@ -15,7 +15,7 @@ from typing import Callable, Optional, Sequence
 from loguru import logger
 
 from app.models.schemas import ValidationReport
-from app.reports.csv_reporter import CsvReporter
+from app.reports.csv_reporter import CSV_DATE_SPECIFIC, CsvReporter
 from app.reports.dual_csv import write_minimal_csv
 from app.reports.debug_pdf import write_debug_pdf
 from app.reports.json_reporter import JsonReporter
@@ -42,6 +42,7 @@ class OutputOptions:
     debug: bool = False
     run_dir: Path | None = None
     skip_pdfs: bool = False
+    csv_date_mode: str = CSV_DATE_SPECIFIC
     important_csv_columns: tuple[str, ...] = ()
 
 
@@ -145,7 +146,12 @@ def write_outputs(
     stage("Escribiendo CSV mínimo y completo…", 10)
     csv_path = datos_dir / csv_name
     full_csv_path = complete_csv_path(csv_path)
-    CsvReporter().write(reports, full_csv_path, template)
+    CsvReporter().write(
+        reports,
+        full_csv_path,
+        template,
+        date_mode=options.csv_date_mode,
+    )
     write_minimal_csv(
         full_csv_path, csv_path, options.important_csv_columns
     )
@@ -164,14 +170,17 @@ def write_outputs(
         )
 
     separar = list(options.separar_por) or None
-    if options.discrepancias and entradas and not skip_pdfs:
+    pdf_unico = options.un_solo_pdf or not separar
+    if (options.discrepancias and entradas and not skip_pdfs
+            and not pdf_unico):
         stage("Generando discrepancias.pdf…", 45)
         from app.reports.organize import escribir_pdf_discrepancias
 
         escribir_pdf_discrepancias(
             entradas, template, run_dir, dpi=options.dpi
         )
-    elif options.discrepancias and not skip_pdfs:
+    elif (options.discrepancias and not entradas and not skip_pdfs
+          and not pdf_unico):
         logger.info("No hay discrepancias; no se genera discrepancias.pdf")
 
     if skip_pdfs:
@@ -181,7 +190,7 @@ def write_outputs(
         from app.reports.organize import escribir_pdf_unico, generar_pdfs
 
         stage("Organizando PDFs…", 60)
-        if options.un_solo_pdf:
+        if pdf_unico:
             pdf_paths = [
                 escribir_pdf_unico(
                     reports,
@@ -189,6 +198,7 @@ def write_outputs(
                     separar or [],
                     excluidas,
                     dpi=options.dpi,
+                    discrepancias_al_final=options.discrepancias,
                 )
             ]
             logger.info(f"PDF único: {pdf_paths[0].relative_to(run_dir)}")
@@ -203,17 +213,6 @@ def write_outputs(
             logger.info(f"PDFs separados: {len(pdf_paths)}")
             for pdf_path in pdf_paths:
                 logger.info(f"  - {pdf_path.relative_to(run_dir)}")
-        else:
-            pdf_paths = [
-                escribir_pdf_unico(
-                    reports,
-                    run_dir,
-                    [],
-                    excluidas,
-                    dpi=options.dpi,
-                )
-            ]
-            logger.info(f"PDF único: {pdf_paths[0].relative_to(run_dir)}")
 
     from app.reports.stats import escribir_stats
 

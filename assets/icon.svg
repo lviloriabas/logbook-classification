@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <rect x="20" y="20" width="472" height="472" rx="92" fill="#16345d"/>
-  <rect x="105" y="65" width="302" height="382" rx="28" fill="#ffffff"/>
-  <polygon points="312,65 407,65 407,165 312,145" fill="#66b9f2"/>
-  <rect x="145" y="185" width="210" height="20" rx="10" fill="#8aa8c7"/>
-  <rect x="145" y="235" width="165" height="20" rx="10" fill="#8aa8c7"/>
-  <path d="M145 350l50 50 100-110" fill="none" stroke="#2dbe73"
-        stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="65" y="115" width="382" height="282" rx="28" fill="#ffffff"/>
+  <polygon points="347,115 447,115 447,215 347,195" fill="#66b9f2"/>
+  <rect x="105" y="220" width="220" height="20" rx="10" fill="#8aa8c7"/>
+  <rect x="105" y="270" width="175" height="20" rx="10" fill="#8aa8c7"/>
+  <path d="M305 310l35 35 65-70" fill="none" stroke="#2dbe73"
+        stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

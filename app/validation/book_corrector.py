@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from app.models.schemas import PageResult, Status, ValidationReport
+from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.validation.grouping import group_books
 
 MATRICULA_FIELD_ID = "matricula"
@@ -35,6 +35,7 @@ MATRICULA_FIELD_ID = "matricula"
 MIN_VOTE_CONFIDENCE = 0.5
 
 _ORDER = {Status.OK: 0, Status.WARNING: 1, Status.ERROR: 2}
+_CANONICAL_MATRICULA_RE = re.compile(r"^HP-(\d{4})(CMP|WWP)$")
 
 
 def _matricula_field(page: PageResult):
@@ -42,6 +43,81 @@ def _matricula_field(page: PageResult):
         if field.field_id == MATRICULA_FIELD_ID:
             return field
     return None
+
+
+def _handwritten_4_7_hint(field) -> Optional[str]:
+    """Recupera una matrícula completa cuando el OCR leyó un 7 como ``F``.
+
+    Esta equivalencia se limita deliberadamente al recorte manuscrito de
+    matrícula. No se comparte con los campos de fecha ni transforma por sí
+    sola una lectura canónica: solo aporta evidencia al consenso del libro.
+    """
+    if field is None or field.confidence < MIN_VOTE_CONFIDENCE:
+        return None
+    raw = re.sub(r"[^A-Z0-9]", "", (field.raw_value or "").upper())
+    match = re.search(r"(?:HP|HR|HD)([A-Z0-9]{4})", raw)
+    if match is None:
+        return None
+    observed = match.group(1)
+    if "F" not in observed:
+        return None
+    number = observed.replace("F", "7")
+    if not number.isdigit():
+        return None
+    suffix = "WWP" if "WWP" in raw else "CMP"
+    return f"HP-{number}{suffix}"
+
+
+def _repeated_4_read_as_7(winner: str, hint: str) -> bool:
+    """Indica que el candidato solo cambia dos o más ``4`` por ``7``."""
+    winner_match = _CANONICAL_MATRICULA_RE.fullmatch(winner)
+    hint_match = _CANONICAL_MATRICULA_RE.fullmatch(hint)
+    if winner_match is None or hint_match is None:
+        return False
+    if winner_match.group(2) != hint_match.group(2):
+        return False
+    differences = [
+        (left, right)
+        for left, right in zip(winner_match.group(1), hint_match.group(1))
+        if left != right
+    ]
+    return len(differences) >= 2 and all(
+        left == "4" and right == "7" for left, right in differences
+    )
+
+
+def _resolve_repeated_4_7_ambiguity(
+    entries: List[Tuple[PageResult, FieldResult]],
+    winner: str,
+    winner_count: int,
+) -> Optional[Tuple[str, int, float]]:
+    """Prefiere 1717 frente a 1414 si el mismo libro aporta esa forma.
+
+    Se exige una matrícula completa reconstruida desde el texto crudo, dos o
+    más posiciones 4→7 y al menos tanta evidencia como votos del candidato
+    1414. Así una única ``F`` aislada no cambia matrículas como 1534.
+    """
+    evidence: Dict[str, List[float]] = {}
+    for _page, field in entries:
+        hint = _handwritten_4_7_hint(field)
+        if hint is None or not _repeated_4_read_as_7(winner, hint):
+            continue
+        evidence.setdefault(hint, []).append(float(field.confidence))
+    if not evidence:
+        return None
+    ranked = sorted(
+        evidence.items(),
+        key=lambda item: (len(item[1]), sum(item[1])),
+        reverse=True,
+    )
+    hint, confidences = ranked[0]
+    if (
+        len(confidences) < winner_count
+        or (len(ranked) > 1 and len(ranked[1][1]) == len(confidences))
+    ):
+        return None
+    confidence = round(sum(confidences) / len(confidences), 3)
+    return hint, len(confidences), confidence
 
 
 def _book_winner(
@@ -90,7 +166,8 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
         for _, field in entries
         if (field.status is Status.OK
             and field.value
-            and field.confidence >= MIN_VOTE_CONFIDENCE)
+            and field.confidence >= MIN_VOTE_CONFIDENCE
+            and field.source not in {"book_correction", "inferred"})
     ]
     if not votes:
         return 0, 0
@@ -99,6 +176,11 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
     if winner_info is None:
         return 0, 0
     winner, count, winner_confidence = winner_info
+    ambiguity = _resolve_repeated_4_7_ambiguity(entries, winner, count)
+    ambiguity_from = None
+    if ambiguity is not None:
+        ambiguity_from = winner
+        winner, count, winner_confidence = ambiguity
 
     corrected = 0
     flagged = 0
@@ -106,12 +188,27 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
         if field.value == winner:
             continue
         original = field.value
+        if original and original not in field.alternatives:
+            field.alternatives.append(original)
         field.value = winner
         field.confidence = winner_confidence
         field.status = Status.OK
         field.source = "book_correction"
-        field.inference_method = "book_majority"
-        if original:
+        field.inference_method = (
+            "book_handwritten_4_7" if ambiguity_from is not None
+            else "book_majority"
+        )
+        if ambiguity_from is not None:
+            field.comment = (
+                "Corrected handwritten registration 4/7 ambiguity from "
+                f"{original or ambiguity_from!r} to {winner!r} using raw "
+                f"evidence from the same book ({count} vote(s))"
+            )
+            if original:
+                flagged += 1
+            else:
+                corrected += 1
+        elif original:
             field.comment = (
                 f"Corrected from {original!r} by book majority "
                 f"({count} vote(s))"
