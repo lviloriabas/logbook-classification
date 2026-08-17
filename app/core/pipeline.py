@@ -171,6 +171,45 @@ def _load_worker_job(state_path: str) -> None:
     _WORKER_STATE["state_path"] = state_path
 
 
+def _load_calibration_job(state_path: str) -> dict:
+    """Carga una vez por proceso el estado de calibración de un PDF."""
+    if _WORKER_STATE.get("calib_state_path") != state_path:
+        with open(state_path, "rb") as stream:
+            state = pickle.load(stream)
+        renderer = _WORKER_STATE.get("renderer")
+        if renderer is not None:
+            renderer.close()
+        _WORKER_STATE["calibration"] = state
+        _WORKER_STATE["renderer"] = PdfPageRenderer(state["pdf_path"])
+        _WORKER_STATE["calib_state_path"] = state_path
+        # El estado de OCR queda invalidado: su documento acaba de cerrarse,
+        # así que la primera página que llegue lo volverá a cargar.
+        _WORKER_STATE.pop("state_path", None)
+    return _WORKER_STATE["calibration"]
+
+
+def _calibrate_page_worker(
+    page_number: int, state_path: str
+) -> Tuple[TransformResult, Optional[float]]:
+    """Calibra una página dentro de un proceso worker.
+
+    Es la misma secuencia que la ruta en serie —render a DPI de calibración,
+    deskew y estimación de similitud contra la referencia— sin nada del motor
+    OCR: la calibración no lee texto, solo mide dónde está la página.
+    """
+    state = _load_calibration_job(state_path)
+    config: AppConfig = state["config"]
+    renderer: PdfPageRenderer = _WORKER_STATE["renderer"]
+    image = renderer.render_page(page_number, state["calib_dpi"])
+    angle: Optional[float] = None
+    if config.deskew:
+        image, angle = deskew(image)
+    transform = compute_similarity_transform(image, state["calib_ref"], config)
+    transform.tx *= state["factor"]
+    transform.ty *= state["factor"]
+    return transform, angle
+
+
 class OcrProcessPool:
     """Pool de Paddle/Tesseract reutilizable durante un lote completo."""
 
@@ -1776,42 +1815,72 @@ class Pipeline:
             accum += dark.astype(np.float32)
             aligned_count += 1
 
-        for page_number in range(first, last + 1):
-            if self._is_cancelled():
-                break
-            # Progreso como etapa, sin contar páginas: las páginas reales se
-            # cuentan solo en la fase de procesamiento (done=0 no avanza).
-            self._notify(
-                0, total,
-                f"Calibrando alineación (página {page_number}/{last})",
-            )
-            image = (
-                renderer.render_page(page_number, calib_dpi)
-                if renderer is not None
-                else render_page(pdf_path, page_number, calib_dpi)
-            )
-            if self.config.deskew:
-                # El ángulo se guarda: la fase de OCR lo aplica en vez de
-                # volver a buscarlo sobre la página a DPI completo, que es la
-                # parte cara (Canny + Hough, 103-139 ms frente a los 62 ms de
-                # aquí). El ángulo de una línea no depende de la escala.
-                image, angle = deskew(image)
-                self._skew_angles.append(angle)
-            tr = compute_similarity_transform(image, calib_ref, self.config)
-            tr.tx *= factor
-            tr.ty *= factor
-            own.append(tr)
-
-            # La página en grises espera aquí a que su ancla quede fija; la
-            # máscara usa el mismo marco estabilizado que la fase de OCR. Un
-            # solo canal conserva toda la evidencia que la máscara necesita.
-            if collect_background:
-                pending_gray[len(own) - 1] = cv2.cvtColor(
-                    image, cv2.COLOR_BGR2GRAY
+        # Con el pool ya creado la calibración se reparte entre sus procesos,
+        # que si no estarían parados esperando a que termine. No se reparte
+        # cuando hay que construir el fondo impreso: ese consenso necesita la
+        # página en grises, y devolverla desde cada worker cambiaría un buffer
+        # acotado por un trasiego de imágenes entre procesos.
+        pooled = (
+            self.process_pool is not None
+            and self.workers > 1
+            and not collect_background
+        )
+        measured: Optional[List[Tuple[TransformResult, Optional[float]]]] = None
+        if pooled:
+            try:
+                measured = self._pooled_calibration(
+                    pdf_path, first, last, total, calib_dpi, calib_ref, factor
                 )
-                settled = len(own) - half_window - 1
-                if settled >= 0:
-                    fold_background(settled)
+            except Exception as exc:  # noqa: BLE001 - se cae a la ruta serie
+                logger.warning(
+                    f"[Pipeline] La calibración en paralelo falló ({exc}); "
+                    f"se calibra en serie"
+                )
+                measured = None
+                self._skew_angles = []
+
+        if measured is not None:
+            for tr, angle in measured:
+                if angle is not None:
+                    self._skew_angles.append(angle)
+                own.append(tr)
+        else:
+            for page_number in range(first, last + 1):
+                if self._is_cancelled():
+                    break
+                # Progreso como etapa, sin contar páginas: las páginas reales
+                # se cuentan solo en el procesamiento (done=0 no avanza).
+                self._notify(
+                    0, total,
+                    f"Calibrando alineación (página {page_number}/{last})",
+                )
+                image = (
+                    renderer.render_page(page_number, calib_dpi)
+                    if renderer is not None
+                    else render_page(pdf_path, page_number, calib_dpi)
+                )
+                if self.config.deskew:
+                    # El ángulo se guarda: la fase de OCR lo aplica en vez de
+                    # volver a buscarlo sobre la página a DPI completo, que es
+                    # la parte cara (Canny + Hough, 103-139 ms frente a los
+                    # 62 ms de aquí). El ángulo no depende de la escala.
+                    image, angle = deskew(image)
+                    self._skew_angles.append(angle)
+                tr = compute_similarity_transform(image, calib_ref, self.config)
+                tr.tx *= factor
+                tr.ty *= factor
+                own.append(tr)
+
+                # La página en grises espera aquí a que su ancla quede fija; la
+                # máscara usa el mismo marco estabilizado que la fase de OCR.
+                # Un canal conserva toda la evidencia que la máscara necesita.
+                if collect_background:
+                    pending_gray[len(own) - 1] = cv2.cvtColor(
+                        image, cv2.COLOR_BGR2GRAY
+                    )
+                    settled = len(own) - half_window - 1
+                    if settled >= 0:
+                        fold_background(settled)
 
         # Las últimas páginas de la ventana, ya con la lista completa.
         for index in sorted(pending_gray):
@@ -1848,6 +1917,66 @@ class Pipeline:
                 f"{sorted(self._date_slot_map)}"
             )
         return own, anchors
+
+    def _pooled_calibration(
+        self,
+        pdf_path: Path,
+        first: int,
+        last: int,
+        total: int,
+        calib_dpi: int,
+        calib_ref: np.ndarray,
+        factor: float,
+    ) -> List[Tuple[TransformResult, Optional[float]]]:
+        """Calibra el tramo repartiendo las páginas entre el pool OCR.
+
+        La calibración corría en el proceso principal, página a página,
+        mientras los procesos del pool —ya arrancados, con los modelos
+        cargados— esperaban sin hacer nada. Medido: 202 ms por página
+        (render 70 + deskew 41 + ORB 90), que en un libro de 50 páginas son
+        10,1 s de un reloj de unos 65.
+
+        Los resultados se consumen en orden de página, así que las anclas y
+        los ángulos salen exactamente igual que en la ruta en serie. Si se
+        cancela, devuelve lo calibrado hasta ese punto.
+        """
+        pool = self.process_pool
+        assert pool is not None  # lo garantiza el llamador
+        state_path = pool.prepare({
+            "pdf_path": Path(pdf_path),
+            "config": self.config,
+            "calib_dpi": calib_dpi,
+            "calib_ref": calib_ref,
+            "factor": factor,
+        })
+        measured: List[Tuple[TransformResult, Optional[float]]] = []
+        futures = []
+        try:
+            for page_number in range(first, last + 1):
+                futures.append(pool.executor.submit(
+                    _calibrate_page_worker, page_number, str(state_path)
+                ))
+            for offset, future in enumerate(futures):
+                if self._is_cancelled():
+                    for remaining in futures[offset:]:
+                        remaining.cancel()
+                    break
+                measured.append(future.result())
+                self._notify(
+                    0, total,
+                    f"Calibrando alineación "
+                    f"(página {first + offset}/{last})",
+                )
+        finally:
+            # Ningún worker puede seguir leyendo el pickle cuando se borra.
+            for future in futures:
+                if not future.cancelled():
+                    try:
+                        future.result()
+                    except Exception:  # noqa: BLE001 - ya se propagó arriba
+                        pass
+            pool.release(state_path)
+        return measured
 
     @staticmethod
     def _stabilize_anchors(
