@@ -1730,8 +1730,52 @@ class Pipeline:
                                interpolation=cv2.INTER_AREA)
         factor = self.config.dpi / calib_dpi
 
+        # La máscara de fondo impreso solo se construye si alguien va a
+        # leerla: la aplican las casillas (``process_page_image``, y solo
+        # cuando la plantilla declara alguna) y el mapa de ranuras de fecha
+        # (``build_slot_maps``, solo con ``date_slot_ocr``). Construirla sin
+        # consumidor costaba una imagen en grises por página retenida durante
+        # toda la calibración —0,89 MB cada una, 0,34 GB en un libro de 393
+        # páginas, fuera del presupuesto de memoria por proceso que calcula
+        # ``app.core.parallelism``— más un warp y una acumulación por página.
+        collect_background = (
+            self.config.remove_printed
+            and total >= 3
+            and self._printed_mask_has_consumer()
+        )
         own: List[TransformResult] = []
-        calib_images: List[np.ndarray] = []
+        # Las páginas en grises esperando a que su ancla quede fija. El ancla
+        # de la página i es la mediana de la ventana [i-7, i+7], así que queda
+        # decidida en cuanto se ha calibrado la página i+7 y no hace falta
+        # retener el libro entero: como mucho hay ``half_window + 1`` páginas
+        # aquí dentro (~7 MB), sea el libro de 50 páginas o de 393.
+        half_window = 7
+        pending_gray: dict[int, np.ndarray] = {}
+        accum: Optional[np.ndarray] = None
+        aligned_count = 0
+
+        def fold_background(index: int) -> None:
+            """Acumula una página ya alineada en el consenso del fondo."""
+            nonlocal accum, aligned_count
+            gray = pending_gray.pop(index, None)
+            if gray is None:
+                return
+            anchor = self._anchor_at(own, index, half_window)
+            if not anchor.reliable:
+                return
+            calib_tr = TransformResult(
+                rot=anchor.rot, scale=anchor.scale,
+                tx=anchor.tx / factor, ty=anchor.ty / factor,
+            )
+            warped = warp_with_transform(
+                gray, calib_tr, (calib_ref.shape[1], calib_ref.shape[0])
+            )
+            dark = warped < self.config.printed_ink_threshold
+            if accum is None:
+                accum = np.zeros_like(dark, dtype=np.float32)
+            accum += dark.astype(np.float32)
+            aligned_count += 1
+
         for page_number in range(first, last + 1):
             if self._is_cancelled():
                 break
@@ -1758,35 +1802,25 @@ class Pipeline:
             tr.ty *= factor
             own.append(tr)
 
-            # Guardamos las imágenes ya deskewed. La máscara se construye
-            # después de estabilizar las anclas, para que use exactamente el
-            # mismo marco que la fase de OCR. Un solo canal conserva toda la
-            # evidencia que usa la máscara y reduce este buffer a un tercio.
-            if self.config.remove_printed and total >= 3:
-                calib_images.append(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY))
+            # La página en grises espera aquí a que su ancla quede fija; la
+            # máscara usa el mismo marco estabilizado que la fase de OCR. Un
+            # solo canal conserva toda la evidencia que la máscara necesita.
+            if collect_background:
+                pending_gray[len(own) - 1] = cv2.cvtColor(
+                    image, cv2.COLOR_BGR2GRAY
+                )
+                settled = len(own) - half_window - 1
+                if settled >= 0:
+                    fold_background(settled)
+
+        # Las últimas páginas de la ventana, ya con la lista completa.
+        for index in sorted(pending_gray):
+            fold_background(index)
 
         anchors = self._stabilize_anchors(own)
         reliable = sum(1 for t in own if t.reliable)
         logger.info(f"[Pipeline] Calibración: {reliable}/{total} páginas "
                     f"fiables; anclas estabilizadas por ventana")
-        accum: Optional[np.ndarray] = None
-        aligned_count = 0
-        if calib_images:
-            for image, anchor in zip(calib_images, anchors):
-                if not anchor.reliable:
-                    continue
-                calib_tr = TransformResult(
-                    rot=anchor.rot, scale=anchor.scale,
-                    tx=anchor.tx / factor, ty=anchor.ty / factor,
-                )
-                warped = warp_with_transform(
-                    image, calib_tr, (calib_ref.shape[1], calib_ref.shape[0])
-                )
-                dark = warped < self.config.printed_ink_threshold
-                if accum is None:
-                    accum = np.zeros_like(dark, dtype=np.float32)
-                accum += dark.astype(np.float32)
-                aligned_count += 1
 
         if accum is not None and aligned_count:
             printed = (accum / aligned_count) >= 0.60
@@ -1826,23 +1860,48 @@ class Pipeline:
         mismo lote. Si en la ventana no hay páginas fiables, toma la
         ventana completa como respaldo.
         """
-        n = len(transforms)
-        anchors: List[TransformResult] = []
-        for i in range(n):
-            lo = max(0, i - half_window)
-            hi = min(n, i + half_window + 1)
-            window = transforms[lo:hi]
-            reliable_pool = [t for t in window if t.reliable]
-            pool = reliable_pool or window
-            anchors.append(TransformResult(
-                rot=float(np.median([t.rot for t in pool])),
-                tx=float(np.median([t.tx for t in pool])),
-                ty=float(np.median([t.ty for t in pool])),
-                scale=float(np.median([t.scale for t in pool])),
-                inliers=max((t.inliers for t in pool), default=0),
-                reliable=bool(reliable_pool),
-            ))
-        return anchors
+        return [
+            Pipeline._anchor_at(transforms, index, half_window)
+            for index in range(len(transforms))
+        ]
+
+    @staticmethod
+    def _anchor_at(
+        transforms: List[TransformResult], index: int, half_window: int = 7
+    ) -> TransformResult:
+        """Ancla de una sola página, con la misma regla que el lote entero.
+
+        Separarla permite decidir el ancla de una página en cuanto se ha
+        calibrado la última de su ventana, sin esperar al libro completo: es
+        lo que deja acotado el buffer del consenso de fondo impreso.
+        """
+        lo = max(0, index - half_window)
+        hi = min(len(transforms), index + half_window + 1)
+        window = transforms[lo:hi]
+        reliable_pool = [t for t in window if t.reliable]
+        pool = reliable_pool or window
+        return TransformResult(
+            rot=float(np.median([t.rot for t in pool])),
+            tx=float(np.median([t.tx for t in pool])),
+            ty=float(np.median([t.ty for t in pool])),
+            scale=float(np.median([t.scale for t in pool])),
+            inliers=max((t.inliers for t in pool), default=0),
+            reliable=bool(reliable_pool),
+        )
+
+    def _printed_mask_has_consumer(self) -> bool:
+        """¿Alguien va a leer la máscara de fondo impreso en esta corrida?
+
+        Sus dos consumidores son las casillas —que solo la aplican si la
+        plantilla declara alguna— y el mapa de ranuras de fecha, que depende
+        de ``date_slot_ocr``. Sin ninguno de los dos, construirla es trabajo
+        y memoria que nadie mira.
+        """
+        if self.config.date_slot_ocr:
+            return True
+        return any(
+            field.type is FieldType.CHECKBOX for field in self.template.fields
+        )
 
     # ── Pasos internos ──────────────────────────────────────────────────
 
