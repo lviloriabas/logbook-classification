@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QBrush, QColor, QIcon, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
+    QLabel,
     QScrollArea,
     QStyle,
     QStyledItemDelegate,
+    QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -106,6 +110,95 @@ def scrollbars_qss(scope: str) -> str:  # noqa: E302 - va junto a la hoja
 
 
 DATA_TABLE_QSS += scrollbars_qss("QTableView") + scrollbars_qss("QTableWidget")
+
+# Recuadro flotante de zoom: el mismo bloque en la vista previa de la ventana
+# principal y en el visor de PDF del visor de CSV. Vive aquí para que los dos
+# no puedan separarse; cada ventana lo añade al final de su hoja, después de
+# sus reglas de panel, para ganar a las que tienen la misma especificidad.
+ZOOM_OVERLAY_QSS = """
+#zoomOverlay {
+    background-color: rgb(49, 49, 49);
+    border: 1px solid rgb(49, 49, 49);
+    border-radius: 8px;
+}
+#zoomOverlay QLabel {
+    border: 0;
+    background: transparent;
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 600;
+}
+#zoomOverlay QToolButton#zoomControl {
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background-color: rgb(49, 49, 49);
+}
+#zoomOverlay QToolButton#zoomControl:hover {
+    background-color: rgb(64, 64, 64);
+    border-color: rgb(102, 102, 102);
+}
+#zoomOverlay QToolButton#zoomControl:pressed {
+    background-color: rgb(38, 38, 38);
+    border-color: rgb(102, 102, 102);
+}
+#zoomOverlay QToolButton#zoomControl:disabled {
+    background-color: rgb(49, 49, 49);
+}
+#zoomOverlay QLabel#zoomCaption,
+#zoomOverlay QLabel#zoomValue {
+    min-width: 28px;
+    max-width: 28px;
+    padding: 0;
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 600;
+}
+"""
+
+# Tipografía y controles de la aplicación. Las dos ventanas parten de esta
+# hoja: sin ella el visor de CSV heredaba el estilo nativo de Windows y sus
+# cuadros salían con las esquinas en pico y los botones de otro alto.
+APP_CHROME_QSS = """
+QMainWindow, QWidget {
+    font-family: "Segoe UI", "Noto Sans", sans-serif;
+    font-size: 10pt;
+}
+QPushButton {
+    min-height: 26px;
+    padding: 4px 12px;
+}
+#primaryButton {
+    background-color: rgb(49, 49, 49);
+    color: #ffffff;
+}
+#primaryButton:hover {
+    background-color: rgb(64, 64, 64);
+}
+#primaryButton:pressed {
+    background-color: rgb(38, 38, 38);
+}
+QPushButton:disabled { color: #8c959f; }
+QToolButton { padding: 2px 6px; }
+QGroupBox {
+    font-weight: 600;
+    border: 1px solid #c9d1d9; border-radius: 6px;
+    margin-top: 8px; padding: 8px 8px 6px 8px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin; left: 8px; padding: 0 4px;
+}
+QProgressBar {
+    border: 1px solid #c9d1d9; border-radius: 5px;
+    text-align: center;
+}
+QProgressBar::chunk { background-color: #2f81f7; border-radius: 4px; }
+QSpinBox, QComboBox, QLineEdit { padding: 3px; }
+""" + ZOOM_OVERLAY_QSS
 
 
 class FlatSelectionDelegate(QStyledItemDelegate):
@@ -210,6 +303,55 @@ def load_zoom_icon(name: str) -> QIcon:
     """Carga un icono de zoom local para que los visores se vean igual en Windows."""
     path = _ASSETS / f"zoom_{name}.svg"
     return QIcon(str(path)) if path.is_file() else QIcon.fromTheme(f"zoom-{name}")
+
+
+class ZoomOverlay(QFrame):
+    """Recuadro vertical de zoom que flota sobre la página.
+
+    Lo comparten la vista previa de la ventana principal y el visor de PDF
+    del visor de CSV: es el mismo control, con los mismos tamaños y el mismo
+    orden (acercar, ajustar, alejar y el porcentaje debajo). Cada ventana
+    aporta únicamente los textos de sus acciones, que hablan de la vista
+    previa o de la página según dónde esté.
+    """
+
+    def __init__(self, zoom_in, fit, zoom_out, parent: QWidget | None = None) -> None:
+        """Cada acción es ``(tooltip, nombre accesible, función)``."""
+        super().__init__(parent)
+        self.setObjectName("zoomOverlay")
+        self.setFixedWidth(42)
+        panel = QVBoxLayout(self)
+        panel.setContentsMargins(5, 6, 5, 6)
+        panel.setSpacing(2)
+
+        caption = QLabel("Zoom")
+        caption.setObjectName("zoomCaption")
+        caption.setFixedWidth(28)
+        caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        panel.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self.btn_in = self._button("in", zoom_in, panel)
+        self.btn_fit = self._button("fit", fit, panel)
+        self.btn_out = self._button("out", zoom_out, panel)
+
+        self.value_label = QLabel("100%")
+        self.value_label.setObjectName("zoomValue")
+        self.value_label.setFixedWidth(28)
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        panel.addWidget(self.value_label, 0, Qt.AlignmentFlag.AlignHCenter)
+
+    def _button(self, icon: str, action, panel: QVBoxLayout) -> QToolButton:
+        tooltip, accessible, slot = action
+        button = QToolButton()
+        button.setObjectName("zoomControl")
+        button.setIcon(load_zoom_icon(icon))
+        button.setIconSize(QSize(14, 14))
+        button.setFixedSize(28, 28)
+        button.setToolTip(tooltip)
+        button.setAccessibleName(accessible)
+        button.clicked.connect(slot)
+        panel.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
+        return button
 
 
 class ZoomableScrollArea(QScrollArea):

@@ -19,7 +19,6 @@ from PySide6.QtCore import (
     QObject,
     QProcess,
     QRectF,
-    QSize,
     Qt,
     QThread,
     QTimer,
@@ -39,7 +38,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -54,7 +52,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QRadioButton,
     QScrollArea,
     QSpinBox,
     QSplitter,
@@ -78,22 +75,20 @@ from app.gui.csv_viewer import (
     apply_csv_column_visibility,
 )
 from app.gui.eta import estimate_remaining_seconds, wall_ms_per_page
+from app.gui.export_options import ExportOptionsGroup
 from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.fleet_editor import FLEET_FILENAME, FleetEditorDialog, FleetStore
 from app.gui.table_sort import ColumnSortController
 from app.gui.widgets import (
+    APP_CHROME_QSS,
     DATA_TABLE_QSS,
     ZoomableScrollArea,
-    load_zoom_icon,
+    ZoomOverlay,
     style_data_table,
 )
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
 from app.models.schemas import PageResult, Status, ValidationReport
-from app.reports.csv_reporter import (
-    CSV_DATE_MONTH_END,
-    CSV_DATE_SPECIFIC,
-    CsvReporter,
-)
+from app.reports.csv_reporter import CSV_DATE_SPECIFIC, CsvReporter
 from app.templates.manager import TemplateManager
 from app.templates.schema import Template
 from app.utils.important_fields import (
@@ -154,88 +149,12 @@ def _visible_preview_fields(
         return [field for field in template.fields if field.required]
     return [field for field in template.fields if field.id in important_ids]
 
-_QSS = """
-QMainWindow, QWidget {
-    font-family: "Segoe UI", "Noto Sans", sans-serif;
-    font-size: 10pt;
-}
+_QSS = APP_CHROME_QSS + """
 QWidget#previewContext, QLabel#previewContext {
     color: #57606a;
     font-weight: 600;
     padding: 4px 2px;
 }
-QPushButton {
-    min-height: 26px;
-    padding: 4px 12px;
-}
-#primaryButton {
-    background-color: rgb(49, 49, 49);
-    color: #ffffff;
-}
-#primaryButton:hover {
-    background-color: rgb(64, 64, 64);
-}
-#primaryButton:pressed {
-    background-color: rgb(38, 38, 38);
-}
-#zoomOverlay {
-    background-color: rgb(49, 49, 49);
-    border: 1px solid rgb(49, 49, 49);
-    border-radius: 8px;
-}
-#zoomOverlay QLabel {
-    border: 0;
-    background: transparent;
-    color: #ffffff;
-    font-size: 10px;
-    font-weight: 600;
-}
-#zoomOverlay QToolButton#zoomControl {
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 28px;
-    max-height: 28px;
-    padding: 0;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background-color: rgb(49, 49, 49);
-}
-#zoomOverlay QToolButton#zoomControl:hover {
-    background-color: rgb(64, 64, 64);
-    border-color: rgb(102, 102, 102);
-}
-#zoomOverlay QToolButton#zoomControl:pressed {
-    background-color: rgb(38, 38, 38);
-    border-color: rgb(102, 102, 102);
-}
-#zoomOverlay QToolButton#zoomControl:disabled {
-    background-color: rgb(49, 49, 49);
-}
-#zoomOverlay QLabel#zoomCaption,
-#zoomOverlay QLabel#zoomValue {
-    min-width: 28px;
-    max-width: 28px;
-    padding: 0;
-    color: #ffffff;
-    font-size: 10px;
-    font-weight: 600;
-}
-QPushButton:disabled { color: #8c959f; }
-QToolButton { padding: 2px 6px; }
-QGroupBox {
-    font-weight: 600;
-    border: 1px solid #c9d1d9; border-radius: 6px;
-    margin-top: 8px; padding: 8px 8px 6px 8px;
-}
-QGroupBox::title {
-    subcontrol-origin: margin; left: 8px; padding: 0 4px;
-}
-QProgressBar {
-    border: 1px solid #c9d1d9; border-radius: 5px;
-    text-align: center;
-}
-QProgressBar::chunk { background-color: #2f81f7; border-radius: 4px; }
-QSpinBox, QComboBox, QLineEdit { padding: 3px; }
 #timeBar {
     background-color: #e1e7ee;
     font-size: 9pt; font-weight: 600; color: #24292f;
@@ -695,84 +614,20 @@ class MainWindow(QMainWindow):
         return group
 
     def _build_options_group(self) -> QGroupBox:
-        group = QGroupBox("Salidas")
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(8, 5, 8, 5)
-        layout.setSpacing(4)
-
-        formato_row = QHBoxLayout()
-        formato_row.setSpacing(10)
-        formato_label = QLabel("Salida")
-        formato_label.setStyleSheet("font-weight: 600;")
-        formato_row.addWidget(formato_label)
-        formato_row.addSpacing(8)
-        self.modo_grupo = QButtonGroup(self)
-        self.radio_varios = QRadioButton("Varios PDF")
-        self.radio_varios.setToolTip("Genera un PDF por cada matrícula/mes marcado")
-        self.radio_unico = QRadioButton("Un solo PDF")
-        self.radio_unico.setToolTip(
-            "Genera un único PDF con el mismo nombre que la carpeta de la "
-            "corrida, con páginas separadoras de matrícula/mes para los "
-            "criterios marcados"
-        )
-        self.modo_grupo.addButton(self.radio_varios)
-        self.modo_grupo.addButton(self.radio_unico)
-        self.radio_varios.setChecked(True)
-        formato_row.addWidget(self.radio_varios)
-        formato_row.addWidget(self.radio_unico)
-        formato_row.addStretch()
-        layout.addLayout(formato_row)
-
-        sep_row = QHBoxLayout()
-        sep_row.setSpacing(10)
-        sep_label = QLabel("Separar")
-        sep_label.setStyleSheet("font-weight: 600;")
-        sep_row.addWidget(sep_label)
-        sep_row.addSpacing(8)
-        self.matricula_check = QCheckBox("Matrícula")
-        self.matricula_check.setToolTip(
-            "Varios PDF: un archivo por matrícula. "
-            "Un solo PDF: página separadora por matrícula."
-        )
-        sep_row.addWidget(self.matricula_check)
-        self.mes_check = QCheckBox("Mes")
-        self.mes_check.setToolTip(
-            "Varios PDF: un archivo por mes. Un solo PDF: página separadora por mes."
-        )
-        sep_row.addWidget(self.mes_check)
-
-        self.discrepancias_check = QCheckBox("Discrepancias")
-        self.discrepancias_check.setToolTip(
-            "Un solo PDF: agrega al final una sección 'Posibles "
-            "discrepancias'. Varios PDF: genera discrepancias.pdf."
-        )
-        sep_row.addWidget(self.discrepancias_check)
-        sep_row.addStretch()
-        layout.addLayout(sep_row)
-
-        date_row = QHBoxLayout()
-        date_row.setSpacing(10)
-        date_label = QLabel("Fecha del CSV")
-        date_label.setStyleSheet("font-weight: 600;")
-        date_row.addWidget(date_label)
-        date_row.addSpacing(8)
-        self.csv_date_mode_combo = QComboBox()
-        self.csv_date_mode_combo.addItem(
-            "Día específico (si falta, fin de mes)", CSV_DATE_SPECIFIC
-        )
-        self.csv_date_mode_combo.addItem(
-            "Último día del mes", CSV_DATE_MONTH_END
-        )
-        self.csv_date_mode_combo.setToolTip(
-            "Cambia la fecha representada en el CSV sin volver a ejecutar OCR. "
-            "El resultado OCR original se conserva."
-        )
+        # El cuadro de salidas es el mismo que muestra el visor de CSV; aquí
+        # se le añaden las opciones que solo tienen sentido al procesar.
+        group = self.export_options = ExportOptionsGroup()
+        layout = group.layout()
+        self.modo_grupo = group.modo_grupo
+        self.radio_varios = group.radio_varios
+        self.radio_unico = group.radio_unico
+        self.matricula_check = group.matricula_check
+        self.mes_check = group.mes_check
+        self.discrepancias_check = group.discrepancias_check
+        self.csv_date_mode_combo = group.csv_date_mode_combo
         self.csv_date_mode_combo.currentIndexChanged.connect(
             self._on_csv_date_mode_changed
         )
-        date_row.addWidget(self.csv_date_mode_combo)
-        date_row.addStretch()
-        layout.addLayout(date_row)
 
         divider = QFrame()
         divider.setFrameShape(QFrame.Shape.HLine)
@@ -1157,51 +1012,28 @@ class MainWindow(QMainWindow):
         viewer_frame_layout.setContentsMargins(0, 0, 0, 0)
         viewer_frame_layout.addWidget(self.preview_scroll, 0, 0)
 
-        zoom_overlay = QFrame(viewer_frame)
-        zoom_overlay.setObjectName("zoomOverlay")
-        zoom_overlay.setFixedWidth(42)
-        zoom_panel = QVBoxLayout(zoom_overlay)
-        zoom_panel.setContentsMargins(5, 6, 5, 6)
-        zoom_panel.setSpacing(2)
-        zoom_title = QLabel("Zoom")
-        zoom_title.setObjectName("zoomCaption")
-        zoom_title.setFixedWidth(28)
-        zoom_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zoom_panel.addWidget(zoom_title, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.btn_zoom_in = QToolButton()
-        self.btn_zoom_in.setObjectName("zoomControl")
-        self.btn_zoom_in.setIcon(load_zoom_icon("in"))
-        self.btn_zoom_in.setToolTip("Acercar la vista previa")
-        self.btn_zoom_in.setAccessibleName("Acercar vista previa")
-        self.btn_zoom_in.setIconSize(QSize(14, 14))
-        self.btn_zoom_in.setFixedSize(28, 28)
-        self.btn_zoom_in.clicked.connect(lambda: self._zoom_preview(1.25))
-        zoom_panel.addWidget(self.btn_zoom_in, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.btn_zoom_fit = QToolButton()
-        self.btn_zoom_fit.setObjectName("zoomControl")
-        self.btn_zoom_fit.setIcon(load_zoom_icon("fit"))
-        self.btn_zoom_fit.setToolTip(
-            "Ajustar la vista previa a la altura de la ventana"
+        zoom_overlay = ZoomOverlay(
+            (
+                "Acercar la vista previa",
+                "Acercar vista previa",
+                lambda: self._zoom_preview(1.25),
+            ),
+            (
+                "Ajustar la vista previa a la altura de la ventana",
+                "Ajustar página a la ventana",
+                self._fit_preview_vertical,
+            ),
+            (
+                "Alejar la vista previa",
+                "Alejar vista previa",
+                lambda: self._zoom_preview(0.8),
+            ),
+            viewer_frame,
         )
-        self.btn_zoom_fit.setAccessibleName("Ajustar página a la ventana")
-        self.btn_zoom_fit.setIconSize(QSize(14, 14))
-        self.btn_zoom_fit.setFixedSize(28, 28)
-        self.btn_zoom_fit.clicked.connect(self._fit_preview_vertical)
-        zoom_panel.addWidget(self.btn_zoom_fit, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.btn_zoom_out = QToolButton()
-        self.btn_zoom_out.setObjectName("zoomControl")
-        self.btn_zoom_out.setIcon(load_zoom_icon("out"))
-        self.btn_zoom_out.setToolTip("Alejar la vista previa")
-        self.btn_zoom_out.setAccessibleName("Alejar vista previa")
-        self.btn_zoom_out.setIconSize(QSize(14, 14))
-        self.btn_zoom_out.setFixedSize(28, 28)
-        self.btn_zoom_out.clicked.connect(lambda: self._zoom_preview(0.8))
-        zoom_panel.addWidget(self.btn_zoom_out, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.zoom_label = QLabel("100%")
-        self.zoom_label.setObjectName("zoomValue")
-        self.zoom_label.setFixedWidth(28)
-        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zoom_panel.addWidget(self.zoom_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.btn_zoom_in = zoom_overlay.btn_in
+        self.btn_zoom_fit = zoom_overlay.btn_fit
+        self.btn_zoom_out = zoom_overlay.btn_out
+        self.zoom_label = zoom_overlay.value_label
 
         zoom_holder = QWidget(viewer_frame)
         zoom_holder_layout = QVBoxLayout(zoom_holder)
@@ -2085,16 +1917,11 @@ class MainWindow(QMainWindow):
 
     def _separator_value(self) -> list[str] | None:
         """Devuelve las claves para generar_pdfs según las casillas."""
-        separator = []
-        if self.matricula_check.isChecked():
-            separator.append("avion")
-        if self.mes_check.isChecked():
-            separator.append("mes")
-        return separator or None
+        return self.export_options.separar_por()
 
     def _csv_date_mode(self) -> str:
         """Política reversible usada únicamente al representar el CSV."""
-        return self.csv_date_mode_combo.currentData() or CSV_DATE_SPECIFIC
+        return self.export_options.csv_date_mode()
 
     def _on_csv_date_mode_changed(self, _index: int) -> None:
         """Actualiza tabla y CSV existente sin reprocesar OCR ni PDFs."""
