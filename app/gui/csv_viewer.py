@@ -105,6 +105,13 @@ _RESIZE_PRECISION = 64
 # previa y la tabla de la ventana principal.
 _PDF_PANE_SHARE = 2
 _TABLE_SHARE = 3
+# El mismo texto que en la ventana principal; el botón lo recupera cuando
+# deja de explicar por qué no se puede exportar.
+_EXPORT_TOOLTIP = (
+    "Volver a generar CSV, JSON y PDFs de esta corrida con las opciones "
+    "actuales, sin reprocesar los archivos. Los PDFs ya exportados se "
+    "conservan: los nuevos se numeran (-2, -3…) si el nombre se repite"
+)
 # El panel se estiliza a sí mismo para verse igual dentro y fuera del visor.
 _PDF_PANE_QSS = (
     # El panel va en el mismo gris oscuro que la tabla a la que acompaña: en
@@ -320,15 +327,25 @@ def resolve_source_documents(
     return resolved, available, missing
 
 
-def run_dir_for_csv(csv_path: Path) -> Path:
-    """Carpeta de la corrida a la que pertenece el CSV.
+def run_dir_for_csv(csv_path: Path) -> Path | None:
+    """Carpeta de la corrida a la que pertenece el CSV, si se reconoce.
 
     Las corridas guardan el reporte en ``<corrida>/datos/``; las históricas
-    lo dejaban en la raíz de la corrida.
+    lo dejaban en la raíz de la corrida. Devuelve ``None`` cuando el CSV no
+    está en la carpeta de su corrida, que es el único sitio sobre el que se
+    puede volver a exportar.
     """
     csv_path = Path(csv_path)
     parent = csv_path.parent
-    return parent.parent if parent.name.casefold() == "datos" else parent
+    run_dir = parent.parent if parent.name.casefold() == "datos" else parent
+    # La carpeta tiene que ser la de esta corrida y no una cualquiera donde
+    # alguien haya dejado copias: volver a exportar limpia de ahí lo que la
+    # corrida regenera, y sobre una carpeta ajena eso borraría archivos que
+    # no son suyos. Una corrida siempre nombra igual su carpeta y su CSV.
+    stem = csv_path.stem
+    if stem.casefold().endswith("_completo"):
+        stem = stem[: -len("_completo")]
+    return run_dir if run_dir.name.casefold() == stem.casefold() else None
 
 
 def reports_for_csv(
@@ -1069,12 +1086,7 @@ class CsvViewerWindow(QMainWindow):
         status_row.addWidget(self.status_label, 1)
         self.btn_export = QPushButton("Exportar")
         self.btn_export.setEnabled(False)
-        self.btn_export.setToolTip(
-            "Volver a generar CSV, JSON y PDFs de esta corrida con las "
-            "opciones actuales, sin reprocesar los archivos. Los PDFs ya "
-            "exportados se conservan: los nuevos se numeran (-2, -3…) si el "
-            "nombre se repite"
-        )
+        self.btn_export.setToolTip(_EXPORT_TOOLTIP)
         self.btn_export.clicked.connect(self._exportar)
         status_row.addWidget(self.btn_export)
         layout.addLayout(status_row)
@@ -1329,22 +1341,26 @@ class CsvViewerWindow(QMainWindow):
     # ── Exportación ─────────────────────────────────────────────────────
 
     def _sync_export_button(self) -> None:
-        """Solo se exporta lo que el JSON de la corrida permite rehacer."""
+        """Solo se exporta la corrida que el CSV abierto permite rehacer."""
         csv_path = self._current_csv_path()
-        exportable = bool(
-            csv_path is not None
-            and _companion_payload(csv_path).get("reportes")
-        )
-        self.btn_export.setEnabled(
-            exportable
-            and (self._outputs_worker is None
-                 or not self._outputs_worker.isRunning())
-        )
-        if not exportable:
-            self.btn_export.setToolTip(
+        if csv_path is None or not _companion_payload(csv_path).get("reportes"):
+            reason = (
                 "Este CSV no viene acompañado del JSON de su corrida, así que "
                 "no se pueden volver a generar las salidas."
             )
+        elif run_dir_for_csv(csv_path) is None:
+            reason = (
+                "Este CSV no está en la carpeta de su corrida, y las salidas "
+                "solo se pueden volver a generar sobre ella."
+            )
+        else:
+            reason = ""
+        self.btn_export.setToolTip(reason or _EXPORT_TOOLTIP)
+        self.btn_export.setEnabled(
+            not reason
+            and (self._outputs_worker is None
+                 or not self._outputs_worker.isRunning())
+        )
 
     def _important_columns_for_export(self, template) -> list[str]:
         """Columnas del CSV mínimo, independientes del dataset completo."""
@@ -1367,7 +1383,7 @@ class CsvViewerWindow(QMainWindow):
         if self._outputs_worker is not None and self._outputs_worker.isRunning():
             return
         csv_path = self._current_csv_path()
-        if csv_path is None:
+        if csv_path is None or run_dir_for_csv(csv_path) is None:
             return
 
         template = template_for_csv(csv_path)
