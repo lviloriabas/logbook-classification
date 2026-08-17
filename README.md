@@ -401,9 +401,15 @@ portable\python312\tools\python.exe run_gui.py
     ordena esa columna de mayor a menor, el segundo la invierte y el tercero
     devuelve la tabla al orden original del CSV. El selector de
     campos importantes solo cambia la vista y se puede abrir en cualquier estado.
-    La lista de flota se edita desde **Editar lista…** y se guarda en
-    `fleet.json`; **Verificar matrículas** la activa de forma opcional y señala
-    como WARNING las matrículas válidas que no estén en la lista.
+    La lista de aviones de la flota se edita desde **Editar lista…** y se
+    guarda en `fleet.json`. **Verificar matrículas** la activa de forma
+    opcional: la matrícula leída que no esté en la lista se reclasifica como
+    la más parecida de la flota, con el valor leído guardado como alternativa
+    y la página en WARNING para poder auditarla. Si dos aviones quedan igual
+    de parecidos no se elige ninguno y la página solo se marca para revisión.
+    **La lista debe contener todos los aviones de la flota**: la reclasificación
+    asume que es el catálogo completo, así que el avión que falte hará que sus
+    páginas terminen clasificadas como otro avión.
 9. Los outputs (CSV y JSON consolidado en `datos/`, `stats.json` y PDFs
     organizados por la selección actual) se exportan
     automáticamente en `output/<nombre del CSV>/` según las casillas

@@ -1,4 +1,4 @@
-"""Verificación opcional de matrículas contra la lista de flota."""
+"""Clasificación de matrículas contra la lista de flota."""
 
 from __future__ import annotations
 
@@ -13,43 +13,96 @@ from app.utils.fleet import load_fleet
 
 _MATRICULA_RE = re.compile(r"^HP-(\d{4})(CMP|WWP)$")
 
+# Pares de dígitos que el trazo manuscrito de estas bitácoras confunde de
+# verdad: el 1 sin base contra el 7 con travesaño, el 2 mal cerrado contra el
+# 7, el 3 contra el 8 cuando el lazo se cierra, el 0 contra el 6 y el 9 según
+# dónde arranque el trazo. Cambiar uno de estos cuesta menos que cambiar una
+# cifra que no se le parece, así que entre dos aviones de la flota que están
+# a la misma cantidad de dígitos de distancia gana el que solo pide el trazo
+# confundible, que es el error que de verdad comete el reconocedor.
+_CONFUSABLE_DIGITS = frozenset({
+    "17", "27", "12", "14", "47", "49", "07",
+    "38", "35", "58", "56", "68", "08", "06", "09",
+})
+# Costos enteros: comparar distancias en float haría que 0.6+0.6 no empatara
+# exacto con 1.2 y un empate real se resolvería por ruido de coma flotante.
+_DIFFERENT_DIGIT_COST = 10
+_CONFUSABLE_DIGIT_COST = 6
+# El sufijo no se lee de la página: ``apply_postprocess`` lo deduce del número
+# con su propia lista de aviones WWP. Por eso cuesta menos que un dígito: si la
+# flota trae un WWP que esa lista no conoce, la flota manda y corrige el sufijo.
+_SUFFIX_COST = 5
 
-def _unique_nearby_fleet_match(value: str, allowed: set[str]) -> str | None:
-    """Devuelve una única matrícula de flota a un dígito de distancia.
 
-    Restringir la comparación a igual prefijo/sufijo y exactamente una
-    posición distinta permite corregir el 2/7 manuscrito sin convertir una
-    lista incompleta en una regla agresiva de sustitución.
+def _digit_cost(left: str, right: str) -> int:
+    if left == right:
+        return 0
+    pair = "".join(sorted(left + right))
+    if pair in _CONFUSABLE_DIGITS:
+        return _CONFUSABLE_DIGIT_COST
+    return _DIFFERENT_DIGIT_COST
+
+
+def _distance(observed: re.Match[str], expected: re.Match[str]) -> int:
+    """Cuánto hay que forzar la lectura para convertirla en el candidato."""
+    cost = sum(
+        _digit_cost(left, right)
+        for left, right in zip(observed.group(1), expected.group(1))
+    )
+    if observed.group(2) != expected.group(2):
+        cost += _SUFFIX_COST
+    return cost
+
+
+def _nearest_fleet_match(
+    value: str, allowed: set[str]
+) -> tuple[str | None, list[str]]:
+    """Avión de la flota más parecido a ``value``.
+
+    Devuelve ``(ganador, empatados)``. La lista de flota se mantiene completa,
+    así que una lectura que no está en ella es un error de OCR y el avión más
+    parecido es la respuesta. Solo cuando dos aviones quedan exactamente a la
+    misma distancia no hay "el más parecido": ahí no se elige, porque acertar
+    sería suerte, y las opciones se dejan escritas para quien revise.
+
+    Una lectura sin formato de matrícula no se compara con nadie: no tiene
+    los cuatro dígitos que sostienen la comparación, así que cualquier avión
+    de la flota estaría igual de lejos.
     """
     observed = _MATRICULA_RE.fullmatch(value)
     if observed is None:
-        return None
-    digits, suffix = observed.groups()
-    candidates: list[str] = []
+        return None, []
+    ranked = []
     for candidate in allowed:
-        match = _MATRICULA_RE.fullmatch(candidate)
-        if match is None or match.group(2) != suffix:
-            continue
-        distance = sum(left != right for left, right in zip(digits, match.group(1)))
-        if distance == 1:
-            candidates.append(candidate)
-    return candidates[0] if len(candidates) == 1 else None
+        expected = _MATRICULA_RE.fullmatch(candidate)
+        if expected is not None:
+            ranked.append((_distance(observed, expected), candidate))
+    if not ranked:
+        return None, []
+    ranked.sort()
+    best = ranked[0][0]
+    tied = [candidate for distance, candidate in ranked if distance == best]
+    return (tied[0] if len(tied) == 1 else None), tied
 
 
 def verify_reports_against_fleet(
     reports: list[ValidationReport], fleet_path: Path
 ) -> None:
-    """Valida y, si no hay ambigüedad, corrige matrículas con la flota.
+    """Reclasifica cada matrícula fuera de lista como el avión más parecido.
 
-    Una lectura canónica fuera de lista solo se corrige cuando hay exactamente
-    una matrícula del mismo tipo a un dígito de distancia. El valor OCR queda
-    en ``alternatives`` y la página sigue en WARNING para que la corrección sea
-    auditable. Si la lista no decide de forma única, solo se marca para revisión.
+    La lista de flota es el catálogo completo de aviones, así que una lectura
+    canónica que no aparezca en ella no existe como avión: se reemplaza por la
+    matrícula más parecida de la flota. El valor leído queda en
+    ``alternatives`` y la página sigue en WARNING para que la reclasificación
+    sea auditable. Si dos aviones quedan igual de cerca, o si la lectura ni
+    siquiera tiene formato de matrícula, solo se marca para revisión.
     """
     allowed = set(load_fleet(Path(fleet_path)))
     if not allowed:
         logger.warning(
-            f"Verificación de flota activa pero la lista está vacía o no existe: {fleet_path}"
+            "Verificación de flota activa pero la lista está vacía o no "
+            f"existe: {fleet_path}. Sin lista no se puede reclasificar "
+            "ninguna matrícula."
         )
         return
     for report in reports:
@@ -58,19 +111,26 @@ def verify_reports_against_fleet(
                 (item for item in page.fields if item.field_id == "matricula"),
                 None,
             )
-            value = (field.value or "").strip().upper() if field else ""
+            if field is None:
+                continue
+            value = (field.value or "").strip().upper()
             if not value or value in allowed:
                 continue
-            fleet_match = _unique_nearby_fleet_match(value, allowed)
+            fleet_match, tied = _nearest_fleet_match(value, allowed)
             if fleet_match is not None:
                 if value not in field.alternatives:
                     field.alternatives.append(value)
                 field.value = fleet_match
                 field.source = "fleet_validation"
-                field.inference_method = "fleet_unique_hamming"
+                field.inference_method = "fleet_nearest_match"
                 note = (
-                    f"Matrícula corregida de {value} a {fleet_match} mediante "
-                    "coincidencia única con la flota"
+                    f"Matrícula reclasificada de {value} a {fleet_match}: "
+                    "es la más parecida de la lista de flota"
+                )
+            elif tied:
+                note = (
+                    f"Matrícula fuera de la lista de flota: {value} queda a la "
+                    f"misma distancia de {', '.join(tied)}"
                 )
             else:
                 note = f"Matrícula no encontrada en la lista de flota: {value}"

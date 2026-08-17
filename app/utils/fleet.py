@@ -1,4 +1,4 @@
-"""Formato y lectura de la lista portable de matrícula."""
+"""Formato y lectura de la lista portable de aviones de la flota."""
 
 from __future__ import annotations
 

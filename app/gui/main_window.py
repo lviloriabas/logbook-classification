@@ -674,18 +674,26 @@ class MainWindow(QMainWindow):
         fleet_row.addWidget(fleet_label)
         self.fleet_check = QCheckBox("Verificar matrículas")
         self.fleet_check.setToolTip(
-            "Marca para comparar las matrículas leídas contra fleet.json. "
-            "Las matrículas ausentes se señalan para revisión."
+            "Compara las matrículas leídas contra la lista de aviones. La "
+            "lectura que no esté en la lista se reclasifica como la "
+            "matrícula más parecida y queda marcada para revisión; si dos "
+            "quedan igual de parecidas no se elige ninguna. La lista debe "
+            "tener todos los aviones para que la clasificación sea correcta."
         )
         fleet_row.addWidget(self.fleet_check)
         fleet_button = QPushButton("Editar lista…")
         fleet_button.setToolTip(
-            f"Editar {FLEET_FILENAME}; manténgalo actualizado en la carpeta del programa."
+            "Editar la lista de aviones de la flota; debe incluirlos todos "
+            "y mantenerse al día con las altas y las bajas."
         )
         fleet_button.clicked.connect(self._open_fleet_editor)
         fleet_row.addWidget(fleet_button)
         fleet_row.addWidget(
-            QLabel(f"Archivo: {FLEET_FILENAME} en la carpeta del programa")
+            ElidedLabel(
+                "La lista debe tener todos los aviones "
+                f"({FLEET_FILENAME} en la carpeta del programa)"
+            ),
+            1,
         )
         fleet_row.addStretch()
         layout.addLayout(fleet_row)
@@ -746,7 +754,7 @@ class MainWindow(QMainWindow):
         top_row.addStretch()
         adv.addLayout(top_row)
 
-        self.parallelism_hint = QLabel()
+        self.parallelism_hint = ElidedLabel()
         self.parallelism_hint.setStyleSheet("color: #57606a;")
         adv.addWidget(self.parallelism_hint)
         self.threads_spin.valueChanged.connect(self._update_parallelism_hint)
@@ -766,7 +774,7 @@ class MainWindow(QMainWindow):
         check_row.addStretch()
         adv.addLayout(check_row)
 
-        date_info = QLabel(
+        date_info = ElidedLabel(
             "OCR fijo en CPU: Paddle PP-OCRv5 mobile + detector v6 medium, "
             "sin cadena de motores de respaldo ni VLM."
         )
@@ -823,7 +831,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(10)
 
-        self.status_label = QLabel("Listo.")
+        self.status_label = ElidedLabel("Listo.")
         row.addWidget(self.status_label, 1)
 
         self.busy_label = QLabel("")

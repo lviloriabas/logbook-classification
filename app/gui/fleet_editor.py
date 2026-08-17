@@ -1,4 +1,4 @@
-"""Editor pequeño y autocontenido para la lista portable de matrícula."""
+"""Editor pequeño y autocontenido para la lista portable de aviones."""
 
 from __future__ import annotations
 
@@ -58,7 +58,11 @@ class FleetEditorDialog(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         intro = QLabel(
-            "Mantenga actualizada la lista de matrículas autorizadas.\n"
+            "Esta lista debe tener todos los aviones de la flota, sin "
+            "faltar ninguno. Al verificar matrículas, la lectura que no "
+            "aparezca aquí se reclasifica como la matrícula más parecida "
+            "de la lista: el avión que falte termina clasificado como "
+            "otro.\n"
             f"Archivo: {self.store.path}"
         )
         intro.setWordWrap(True)
