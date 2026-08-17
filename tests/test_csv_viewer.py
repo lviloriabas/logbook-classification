@@ -702,8 +702,13 @@ def _run_with_companion_json(tmp_path: Path, pdf_path: Path) -> tuple[Path, Path
 def test_run_folder_is_recovered_from_the_csv_location(tmp_path: Path):
     run = tmp_path / "BITS TEST"
     assert run_dir_for_csv(run / "datos" / "BITS TEST.CSV") == run
+    assert run_dir_for_csv(run / "datos" / "BITS TEST_completo.CSV") == run
     # Las corridas históricas dejaban el reporte en la raíz de la corrida.
     assert run_dir_for_csv(run / "BITS TEST.CSV") == run
+    # Una copia suelta no identifica ninguna carpeta: volver a exportar sobre
+    # ella borraría los archivos que la corrida regenera, que ahí son ajenos.
+    assert run_dir_for_csv(tmp_path / "Documentos" / "BITS TEST.CSV") is None
+    assert run_dir_for_csv(run / "datos" / "copia.CSV") is None
 
 
 def test_reports_are_rebuilt_from_the_companion_json(tmp_path: Path):
@@ -752,6 +757,11 @@ def test_export_is_offered_only_when_the_run_can_be_rebuilt(tmp_path: Path):
         assert viewer.load_csv_file(loose) is True
         assert not viewer.btn_export.isEnabled()
         assert "JSON" in viewer.btn_export.toolTip()
+
+        # Al volver a la corrida el botón recupera su explicación de siempre.
+        assert viewer.load_csv_file(csv_path) is True
+        assert viewer.btn_export.isEnabled()
+        assert "Volver a generar" in viewer.btn_export.toolTip()
     finally:
         viewer.close()
         app.processEvents()
