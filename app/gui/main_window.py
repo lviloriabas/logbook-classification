@@ -115,6 +115,10 @@ _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _TABLE_CELL_CHUNK = 2000
 # Espera entre comprobaciones mientras se detiene el trabajo para cerrar.
 _SHUTDOWN_POLL_MS = 150
+# Pausa tras el último evento de tamaño antes de reescalar la vista previa.
+# Arrastrar el borde emite un evento por píxel y cada uno reescalaba la página
+# entera con interpolación suave; así se reescala una vez al soltar.
+_PREVIEW_RESIZE_MS = 80
 _DUP_COLUMN = "dup"
 _DISC_COLUMN = "disc"
 # Alto de la consola y del panel de avance: caben seis archivos sin desplazar.
@@ -476,6 +480,13 @@ class MainWindow(QMainWindow):
         self._shutdown_timer = QTimer(self)
         self._shutdown_timer.setInterval(_SHUTDOWN_POLL_MS)
         self._shutdown_timer.timeout.connect(self._on_shutdown_tick)
+
+        # Reescalado de la vista previa tras un arrastre: un solo repintado
+        # cuando el borde se queda quieto, no uno por evento de tamaño.
+        self._resize_preview_timer = QTimer(self)
+        self._resize_preview_timer.setSingleShot(True)
+        self._resize_preview_timer.setInterval(_PREVIEW_RESIZE_MS)
+        self._resize_preview_timer.timeout.connect(self._render_preview_pixmap)
 
         self._bottom_splitter_adjusted = False
         self._file_rows: dict[int, dict] = {}
@@ -1530,6 +1541,24 @@ class MainWindow(QMainWindow):
         """Identidad de un PDF para comparar documentos entre sí."""
         return str(Path(path).resolve()).casefold()
 
+    def _known_page_count(self, path: Path) -> int | None:
+        """Páginas de un PDF si ya se contaron, sin volver a abrirlo.
+
+        La detección de DPI cuenta las páginas de toda la entrada y el visor
+        las conserva por documento. Reabrir un PDF solo para repetir ese
+        recuento cuesta en el hilo de la interfaz, que es donde se nota.
+        """
+        key = self._document_key(path)
+        for known, count in zip(
+            self._preview_document_keys, self._preview_document_counts
+        ):
+            if known == key and count > 0:
+                return count
+        for known, count in zip(self._pdf_paths, self._input_page_counts):
+            if self._document_key(known) == key and count > 0:
+                return count
+        return None
+
     def _set_preview_documents(
         self, paths: list[Path], counts: list[int] | None = None
     ) -> None:
@@ -2566,7 +2595,12 @@ class MainWindow(QMainWindow):
             for report in reports
             for page in report.pages
         }
-        self._set_preview_documents([Path(report.pdf_path) for report in reports])
+        # Los recuentos ya los tiene la ventana desde la detección de DPI: sin
+        # pasarlos, el visor reabría cada PDF del lote para volver a contarlos.
+        processed = [Path(report.pdf_path) for report in reports]
+        self._set_preview_documents(
+            processed, [self._known_page_count(path) for path in processed]
+        )
         self._corrida_dir = None
         self._pending_export = False
         # El botón Exportar queda disponible en cuanto el OCR termina, sin
@@ -3206,13 +3240,18 @@ class MainWindow(QMainWindow):
         if pdf_path is None:
             return
         if pdf_path != self._preview_pdf:
-            # El total se consulta una sola vez por documento.
-            try:
-                from app.vision.pdf_loader import page_count
+            # El total se consulta una sola vez por documento, y solo si no se
+            # sabe ya: abrir el PDF aquí bloquea el hilo de la interfaz justo
+            # al cambiar de bitácora.
+            total = self._known_page_count(pdf_path)
+            if total is None:
+                try:
+                    from app.vision.pdf_loader import page_count
 
-                self._preview_total = page_count(pdf_path)
-            except Exception:  # noqa: BLE001 - no crítico
-                self._preview_total = 0
+                    total = page_count(pdf_path)
+                except Exception:  # noqa: BLE001 - no crítico
+                    total = 0
+            self._preview_total = total
         if self._preview_total:
             page_number = max(1, min(page_number, self._preview_total))
         self._preview_page = page_number
@@ -3337,11 +3376,17 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._balance_bottom_splitter)
 
     def resizeEvent(self, event) -> None:
-        """Reajusta la vista también cuando cambia el tamaño de la ventana."""
+        """Reajusta la vista también cuando cambia el tamaño de la ventana.
+
+        Arrastrar el borde emite un evento por cada píxel, y cada uno reescala
+        la página completa con interpolación suave. Se reescala una sola vez,
+        cuando el arrastre se detiene: mientras tanto la imagen anterior sigue
+        en pantalla, estirada por el propio layout.
+        """
         super().resizeEvent(event)
         QTimer.singleShot(0, self._balance_bottom_splitter)
         if self._preview_source_pixmap is not None:
-            QTimer.singleShot(0, self._render_preview_pixmap)
+            self._resize_preview_timer.start()
 
     # ── Cierre ──────────────────────────────────────────────────────────
 
@@ -3416,8 +3461,8 @@ class MainWindow(QMainWindow):
             return
         self._torn_down = True
         for timer in (
-            self._timer, self._table_timer,
-            self._log_timer, self._shutdown_timer,
+            self._timer, self._table_timer, self._log_timer,
+            self._shutdown_timer, self._resize_preview_timer,
         ):
             timer.stop()
         if self._csv_viewer is not None:
