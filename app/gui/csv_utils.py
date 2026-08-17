@@ -150,27 +150,39 @@ def template_name_for_csv(path: Path) -> str | None:
         return None
 
 
+def template_for_csv(path: Path):
+    """Plantilla con la que se procesó el CSV, si sigue estando disponible.
+
+    El CSV solo guarda el nombre de la plantilla, así que se busca por nombre
+    entre las del programa. Sin ella no se pueden volver a generar las
+    salidas de la corrida ni saber qué campos declaró importantes.
+    """
+    template_name = template_name_for_csv(path)
+    if not template_name:
+        return None
+    manager = TemplateManager()
+    for template_path in manager.list_templates_with_fallback():
+        try:
+            template = manager.load(template_path)
+        except Exception:  # noqa: BLE001 - una plantilla ajena no bloquea el visor
+            continue
+        if template.name == template_name:
+            return template
+    return None
+
+
 def important_field_ids_for_csv(path: Path, columns: Iterable[str]) -> set[str]:
     """Recupera los campos obligatorios desde la plantilla de la corrida."""
-    template_name = template_name_for_csv(path)
-    if template_name:
-        manager = TemplateManager()
-        for template_path in manager.list_templates_with_fallback():
-            try:
-                template = manager.load(template_path)
-            except Exception:  # noqa: BLE001 - una plantilla ajena no bloquea el visor
-                continue
-            if template.name == template_name:
-                important = {
-                    field.id for field in template.fields if field.required
-                }
-                important.update(
-                    field.id
-                    for field in template.fields
-                    if field.type.value == "signature"
-                )
-                important.update(
-                    {"captain_license", "flight_number"}.intersection(columns)
-                )
-                return important
+    template = template_for_csv(path)
+    if template is not None:
+        important = {field.id for field in template.fields if field.required}
+        important.update(
+            field.id
+            for field in template.fields
+            if field.type.value == "signature"
+        )
+        important.update(
+            {"captain_license", "flight_number"}.intersection(columns)
+        )
+        return important
     return infer_important_field_ids(columns)
