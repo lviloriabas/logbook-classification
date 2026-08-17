@@ -87,7 +87,7 @@ from app.gui.widgets import (
     style_data_table,
 )
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
-from app.models.schemas import Status, ValidationReport
+from app.models.schemas import PageResult, Status, ValidationReport
 from app.reports.csv_reporter import (
     CSV_DATE_MONTH_END,
     CSV_DATE_SPECIFIC,
@@ -456,6 +456,13 @@ class MainWindow(QMainWindow):
         self._table_timer.timeout.connect(self._on_table_chunk)
         self._table_columns: list[str] = []
         self._table_pending: list = []
+        # Lo que cada tramo necesita para armar sus filas. Se fija al empezar
+        # el llenado y no cambia mientras dura, para que todas las filas de
+        # una corrida salgan con el mismo criterio.
+        self._table_reporter = CsvReporter()
+        self._table_fields: list[str] = []
+        self._table_time_factor: float = 1.0
+        self._table_date_mode: str = CSV_DATE_SPECIFIC
         self._table_important_field_ids: set[str] = set()
         self._selected_important_columns: set[str] = set()
         self._important_fields_user_selected = False
@@ -2854,6 +2861,12 @@ class MainWindow(QMainWindow):
         El llenado completo de miles de filas bloquea el hilo de interfaz;
         con ``_table_timer`` se inserta un tramo de ``_TABLE_CELL_CHUNK``
         celdas por tick.
+
+        Aquí solo se apunta qué página va en cada fila. Armar los valores
+        (``row_for_page`` formatea una columna por campo, más confianza,
+        estado, comentario y origen) se hace dentro de cada tramo: hacerlo
+        de golpe para todo el lote dejaba la ventana congelada antes de que
+        el troceado llegara a empezar.
         """
         self.table.setUpdatesEnabled(False)
         self.table_sort.suspend()
@@ -2869,12 +2882,17 @@ class MainWindow(QMainWindow):
             duplicate_iter = iter(duplicates)
             # El mismo reparto de tiempo que escribe el CSV: la tabla y el
             # archivo no pueden mostrar dos números distintos por página.
-            time_factor = reporter.run_time_factor(reports)
+            self._table_reporter = reporter
+            self._table_fields = fields
+            self._table_time_factor = reporter.run_time_factor(reports)
+            # La política de fecha se congela al empezar: cambiarla a mitad
+            # del llenado dejaría unas filas con un criterio y otras con otro.
+            self._table_date_mode = self._csv_date_mode()
             pending: list[
                 tuple[
                     int,
-                    dict[str, object],
-                    dict[str, object],
+                    ValidationReport,
+                    PageResult,
                     DuplicateLogPage,
                 ]
             ] = []
@@ -2883,22 +2901,8 @@ class MainWindow(QMainWindow):
                 for page in report.pages:
                     duplicate = next(duplicate_iter)
                     self._row_pdfs.append(pdf_path)
-                    row = reporter.row_for_page(
-                        report,
-                        page,
-                        fields,
-                        date_mode=self._csv_date_mode(),
-                        duplicate=duplicate.duplicate,
-                        time_factor=time_factor,
-                    )
-                    field_results = {field.field_id: field for field in page.fields}
                     pending.append(
-                        (
-                            len(self._row_pdfs) - 1,
-                            row,
-                            field_results,
-                            duplicate,
-                        )
+                        (len(self._row_pdfs) - 1, report, page, duplicate)
                     )
 
             self.table.setColumnCount(len(columns))
@@ -3029,7 +3033,16 @@ class MainWindow(QMainWindow):
         rows = self._rows_per_chunk()
         batch = self._table_pending[:rows]
         del self._table_pending[:rows]
-        for row_index, values, field_results, duplicate in batch:
+        for row_index, report, page, duplicate in batch:
+            values = self._table_reporter.row_for_page(
+                report,
+                page,
+                self._table_fields,
+                date_mode=self._table_date_mode,
+                duplicate=duplicate.duplicate,
+                time_factor=self._table_time_factor,
+            )
+            field_results = {field.field_id: field for field in page.fields}
             for col_index, column in enumerate(self._table_columns):
                 value = values.get(column, "")
                 item = QTableWidgetItem(str(value))
