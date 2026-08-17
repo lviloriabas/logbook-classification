@@ -200,7 +200,7 @@ class TestPrepararPaginas(unittest.TestCase):
         self.assertEqual([r.page.page_number for r in refs], [2, 3, 1])
 
     def test_etiquetas_separador(self):
-        self.assertEqual(_etiqueta_separador("mes", "2026-07"), "2026/JUL")
+        self.assertEqual(_etiqueta_separador("mes", "2026-07"), "JUL 2026")
         self.assertEqual(_etiqueta_separador("mes", "sin_fecha"),
                          "SIN FECHA")
         self.assertEqual(_etiqueta_separador("avion", "HP-1534CMP"),
@@ -209,7 +209,7 @@ class TestPrepararPaginas(unittest.TestCase):
             _etiqueta_grupo(
                 ("HP-1534CMP", "2026-07"), ("avion", "mes")
             ),
-            "HP-1534CMP\n2026/JUL",
+            "HP-1534CMP\nJUL 2026",
         )
 
 
@@ -351,6 +351,30 @@ class TestPdfsOrdenados(unittest.TestCase):
         self.assertEqual(doc.load_page(0).get_text().strip(), "")
         doc.close()
 
+    def test_pdf_unico_sin_paginas_conserva_el_anterior(self):
+        """Sin nada que exportar no se toca el PDF de la entrega previa."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "salida"
+            run_dir.mkdir()
+            previo = run_dir / f"{run_dir.name}.pdf"
+            previo.write_bytes(b"anterior")
+            ruta = escribir_pdf_unico([], run_dir, [], None, dpi=100)
+            self.assertEqual(ruta, previo)
+            self.assertEqual(previo.read_bytes(), b"anterior")
+
+    def test_pdf_unico_no_pisa_el_anterior(self):
+        """Re-exportar deja el PDF previo intacto y numera el nuevo."""
+        reporte = ValidationReport(
+            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pages=[_page(1, "2147300", "HP-1534CMP")],
+        )
+        run_dir = Path(tempfile.mkdtemp())
+        primera = escribir_pdf_unico([reporte], run_dir, [], None, dpi=100)
+        tamano = primera.stat().st_size
+        segunda = escribir_pdf_unico([reporte], run_dir, [], None, dpi=100)
+        self.assertEqual(segunda, run_dir / f"{run_dir.name}-2.pdf")
+        self.assertEqual(primera.stat().st_size, tamano)
+
     def test_pdf_unico_separador_mes_dentro_de_matricula(self):
         reporte = ValidationReport(
             pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
@@ -367,8 +391,8 @@ class TestPdfsOrdenados(unittest.TestCase):
 
         doc = fitz.open(str(ruta))
         self.assertEqual(doc.page_count, 4)
-        self.assertEqual(doc.load_page(0).get_text().strip(), "2026/JUL")
-        self.assertEqual(doc.load_page(2).get_text().strip(), "2026/AUG")
+        self.assertEqual(doc.load_page(0).get_text().strip(), "JUL 2026")
+        self.assertEqual(doc.load_page(2).get_text().strip(), "AUG 2026")
         doc.close()
 
     def test_pdf_unico_ambos_criterios_en_cada_divisor(self):
@@ -389,13 +413,13 @@ class TestPdfsOrdenados(unittest.TestCase):
         doc = fitz.open(str(ruta))
         self.assertEqual(doc.page_count, 6)  # 3 escaneos + 3 divisores
         self.assertEqual(
-            doc.load_page(0).get_text().strip(), "HP-1534CMP\n2026/JUL"
+            doc.load_page(0).get_text().strip(), "HP-1534CMP\nJUL 2026"
         )
         self.assertEqual(
-            doc.load_page(2).get_text().strip(), "HP-1534CMP\n2026/AUG"
+            doc.load_page(2).get_text().strip(), "HP-1534CMP\nAUG 2026"
         )
         self.assertEqual(
-            doc.load_page(4).get_text().strip(), "HP-1538CMP\n2026/JUL"
+            doc.load_page(4).get_text().strip(), "HP-1538CMP\nJUL 2026"
         )
         doc.close()
 
@@ -437,7 +461,7 @@ class TestPdfsOrdenados(unittest.TestCase):
             self.assertEqual(
                 textos,
                 [
-                    "HP-1534CMP\n2026/AUG",
+                    "HP-1534CMP\nAUG 2026",
                     "PAGINA 1",
                     "POSIBLES DISCREPANCIAS",
                     "PAGINA 3",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -11,11 +12,13 @@ from unittest.mock import patch
 import numpy as np
 import cv2
 import pymupdf as fitz
+import pytest
 
 from app.core.config import AppConfig
 from app.core.pipeline import OcrProcessPool, Pipeline, process_pdf_batch
 from app.models.schemas import PageResult, ValidationReport
 from app.ocr.engine import TesseractOcrEngine
+from app.reports.csv_reporter import CsvReporter
 from app.templates.schema import Template
 from app.vision.alignment import TransformResult, warp_with_transform
 
@@ -161,6 +164,54 @@ def test_file_parallelism_runs_in_the_real_persistent_process_pool(tmp_path):
     assert len(stats) == 2
 
 
+def test_the_csv_time_column_adds_up_to_the_clock_of_a_real_run(tmp_path):
+    """La suma de ``time_ms`` es lo que tardó la corrida, no varias veces eso.
+
+    Con un proceso por archivo cada bitácora mide su propio reloj mientras
+    comparte la CPU con las demás: sumarlos contaba el mismo minuto una vez
+    por archivo. Esta prueba usa el pool real porque el fallo solo aparece
+    cuando los archivos se solapan de verdad en procesos distintos.
+    """
+    paths = [tmp_path / f"book_{index}.pdf" for index in range(4)]
+    for path in paths:
+        _fixture_pdf(path)
+    config = AppConfig(
+        dpi=100,
+        date_dpi=100,
+        blank_threshold=0,
+        deskew=False,
+        align=False,
+        remove_printed=False,
+        date_ocr_fallback=False,
+        date_slot_ocr=False,
+        ocr_engine="tesseract",
+        ocr_lang="eng",
+    )
+    engine = TesseractOcrEngine(lang="eng", tesseract_cmd="tesseract.exe")
+
+    started = time.perf_counter()
+    with OcrProcessPool(2, config, "tesseract", "eng", 1) as pool:
+        reports, _stats = process_pdf_batch(
+            paths, config, Template(name="empty"), pool, engine
+        )
+    elapsed_ms = (time.perf_counter() - started) * 1000
+
+    assert all(report.started_at > 0 for report in reports)
+    csv_path = tmp_path / "out.csv"
+    CsvReporter().write(reports, csv_path)
+    with open(csv_path, encoding="utf-8-sig", newline="") as fh:
+        times = [float(row["time_ms"]) for row in csv.DictReader(fh)]
+
+    assert len(times) == len(reports)
+    # Nunca puede sumar más que el reloj de la corrida (el error original:
+    # cuatro archivos en dos procesos sumaban del orden del doble).
+    assert sum(times) <= elapsed_ms
+    # Y cubre la corrida salvo el arranque y el cierre del pool, que no son
+    # tiempo imputable a ninguna página.
+    assert sum(times) >= elapsed_ms * 0.5
+    assert sum(times) == pytest.approx(CsvReporter.run_wall_ms(reports), rel=0.01)
+
+
 def test_mass_scheduler_retries_a_failed_file_with_profile_b(tmp_path):
     paths = [tmp_path / f"book_{index}.pdf" for index in range(12)]
     failed = paths[5]
@@ -225,6 +276,86 @@ def test_profile_c_uses_page_parallelism_for_a_small_batch(tmp_path):
     file_worker.assert_not_called()
 
 
+def test_file_parallelism_reports_progress_of_every_file_in_flight(tmp_path):
+    """Con un PDF por proceso el avance sigue siendo página a página.
+
+    Antes la única señal era el fin de cada archivo: las barras se quedaban
+    quietas y luego saltaban al 100 %, y la barra global se repartía en orden
+    de archivo aunque avanzaran otros.
+    """
+    paths = [tmp_path / f"book_{index}.pdf" for index in range(4)]
+    pool = _FakePool(tmp_path, workers=4)
+    updates: list[tuple[int, int, int]] = []
+
+    def fake_worker(path, *args):
+        # El worker real escribe su contador en la ruta que recibe del padre.
+        counter = Path(args[-1])
+        for page in range(1, 51):
+            counter.write_text(f"{page}/50", encoding="ascii")
+            time.sleep(0.005)
+        return _report(path), {"enabled": False}
+
+    with patch("app.core.pipeline.PdfPageRenderer", _FakeRenderer), patch(
+        "app.core.pipeline._process_pdf_worker", side_effect=fake_worker
+    ):
+        process_pdf_batch(
+            paths,
+            AppConfig(),
+            Template(name="empty"),
+            pool,
+            _FakeEngine(),
+            on_file_progress=lambda index, done, total: updates.append(
+                (index, done, total)
+            ),
+        )
+    pool.executor.shutdown()
+
+    assert {index for index, _done, _total in updates} == {1, 2, 3, 4}
+    # Cada archivo pasó por avances intermedios, no solo 0 % y final.
+    for file_index in (1, 2, 3, 4):
+        done = [d for index, d, _t in updates if index == file_index]
+        assert done[0] == 0
+        assert any(0 < value < 50 for value in done)
+    assert all(total == 50 for _index, _done, total in updates)
+    assert not list(tmp_path.glob("pages_*.count"))
+
+
+def test_page_parallelism_reports_the_same_per_file_progress(tmp_path):
+    paths = [tmp_path / "book_1.pdf", tmp_path / "book_2.pdf"]
+    pool = _FakePool(tmp_path, workers=4)
+    updates: list[tuple[int, int, int]] = []
+
+    class FakePipeline:
+        def __init__(self, *_args, **_kwargs):
+            self.vlm_stats = {"enabled": False}
+            self.on_progress = None
+
+        def process(self, path, **_kwargs):
+            for page in range(1, 51):
+                self.on_progress(page, 50, f"Procesando página {page}/50")
+            return _report(path)
+
+    with patch("app.core.pipeline.PdfPageRenderer", _FakeRenderer), patch(
+        "app.core.pipeline.config_for_pdf", side_effect=lambda config, _p: config
+    ), patch("app.core.pipeline.Pipeline", FakePipeline):
+        process_pdf_batch(
+            paths,
+            AppConfig(),
+            Template(name="empty"),
+            pool,
+            _FakeEngine(),
+            on_file_progress=lambda index, done, total: updates.append(
+                (index, done, total)
+            ),
+        )
+    pool.executor.shutdown()
+
+    assert (1, 0, 50) in updates and (2, 0, 50) in updates
+    assert (1, 25, 50) in updates and (2, 25, 50) in updates
+    # La forma del avance es idéntica a la de la estrategia por archivos.
+    assert all(total == 50 for _index, _done, total in updates)
+
+
 def test_mass_scheduler_cancellation_does_not_fill_the_queue(tmp_path):
     paths = [tmp_path / f"book_{index}.pdf" for index in range(100)]
     pool = _FakePool(tmp_path, workers=2)
@@ -273,6 +404,7 @@ def test_page_scheduler_bounds_futures_for_a_large_pdf(tmp_path):
     ):
         pages = pipeline._process_parallel(
             Path("large.pdf"),
+            1,
             1000,
             np.zeros((2, 2, 3), np.uint8),
         )

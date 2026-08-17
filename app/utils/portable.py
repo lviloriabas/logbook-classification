@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from app.utils.no_console import suppress_child_consoles
+
 
 def app_root() -> Path:
     """Raíz del proyecto (BITS/)."""
@@ -32,7 +34,12 @@ def ensure_portable_env() -> Path:
     - PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=0
       (evita el bug de oneDNN en Windows: ConvertPirAttribute2Runtime...).
     - TESSDATA_PREFIX → <raíz>/portable/tesseract/tessdata si existe.
+
+    También instala la supresión de consolas de los subprocesos: la GUI
+    corre sin consola y cualquier dependencia que llame a ``subprocess``
+    haría aparecer una ventana negra (ver ``app.utils.no_console``).
     """
+    suppress_child_consoles()
     root = app_root()
     os.environ.setdefault(
         "PADDLE_PDX_CACHE_HOME", str(root / "portable" / "paddlex")

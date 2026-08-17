@@ -199,13 +199,138 @@ class TestCsvGates(unittest.TestCase):
                 rows = list(reader)
                 columns = reader.fieldnames
 
-        self.assertEqual(columns[:4], [
+        self.assertEqual(columns[:5], [
             "file",
             "page",
             "log_number",
             "dup",
+            "disc",
         ])
         self.assertEqual([row["dup"] for row in rows], ["false", "true"])
+
+    def test_disc_marks_the_pages_flagged_as_discrepancy(self):
+        limpia = PageResult(page_number=1)
+        limpia.add_field(_field("log_number", "2147300"))
+        marcada = PageResult(page_number=2)
+        marcada.add_field(_field("log_number", "2147301"))
+        marcada.discrepancy = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            CsvReporter().write(_report(limpia, marcada), path)
+            with open(path, encoding="utf-8-sig", newline="") as fh:
+                rows = list(csv.DictReader(fh))
+
+        self.assertEqual([row["disc"] for row in rows], ["false", "true"])
+
+    def test_disc_is_written_without_a_log_number_column(self):
+        page = PageResult(page_number=1)
+        page.add_field(_field("matricula", "HP-1534CMP"))
+        row = self._rows(page)
+        self.assertEqual(row["disc"], "false")
+
+
+class TestPageTime(unittest.TestCase):
+    """``time_ms`` debe sumar el tiempo real de la bitácora, no varias veces."""
+
+    def _report(self, page_times, total_ms) -> ValidationReport:
+        pages = []
+        for number, milliseconds in enumerate(page_times, start=1):
+            page = PageResult(page_number=number)
+            page.processing_ms = milliseconds
+            pages.append(page)
+        return ValidationReport(
+            pdf_path="fixture.pdf",
+            template_name="fixture",
+            pages=pages,
+            processing_ms=total_ms,
+        )
+
+    def _times(self, report: ValidationReport) -> list:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            CsvReporter().write(report, path)
+            with open(path, encoding="utf-8-sig", newline="") as fh:
+                return [float(row["time_ms"]) for row in csv.DictReader(fh)]
+
+    def test_parallel_page_times_are_scaled_to_the_run_clock(self):
+        # Cuatro páginas de 10 s medidas dentro de sus procesos mientras el
+        # reloj de la bitácora marcaba 10 s: sumadas daban 40 s.
+        report = self._report([10_000.0] * 4, 10_000.0)
+        times = self._times(report)
+        self.assertAlmostEqual(sum(times), 10_000.0, places=0)
+        self.assertEqual(times, [2500.0] * 4)
+
+    def test_relative_weight_between_pages_is_preserved(self):
+        report = self._report([2_000.0, 6_000.0], 4_000.0)
+        times = self._times(report)
+        self.assertAlmostEqual(sum(times), 4_000.0, places=0)
+        self.assertAlmostEqual(times[1] / times[0], 3.0, places=3)
+
+    def test_sequential_run_keeps_its_measured_times(self):
+        # Sin paralelismo la suma ya coincide con el reloj: el factor es 1.
+        report = self._report([1_500.0, 2_500.0], 4_000.0)
+        self.assertEqual(self._times(report), [1_500.0, 2_500.0])
+
+    def test_missing_run_clock_falls_back_to_the_measured_time(self):
+        report = self._report([1_200.0], 0.0)
+        self.assertEqual(self._times(report), [1_200.0])
+
+
+class TestRunTime(unittest.TestCase):
+    """El lote se normaliza contra el reloj de la corrida, no por archivo."""
+
+    def _report(
+        self, page_times, total_ms, started_at=0.0
+    ) -> ValidationReport:
+        pages = []
+        for number, milliseconds in enumerate(page_times, start=1):
+            page = PageResult(page_number=number)
+            page.processing_ms = milliseconds
+            pages.append(page)
+        return ValidationReport(
+            pdf_path="fixture.pdf",
+            template_name="fixture",
+            pages=pages,
+            processing_ms=total_ms,
+            started_at=started_at,
+        )
+
+    def _times(self, reports) -> list:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            CsvReporter().write(reports, path)
+            with open(path, encoding="utf-8-sig", newline="") as fh:
+                return [float(row["time_ms"]) for row in csv.DictReader(fh)]
+
+    def test_overlapping_files_are_not_counted_once_per_file(self):
+        # Cuatro archivos arrancados a la vez, 100 s cada uno: la corrida duró
+        # 100 s, no 400. Sumar los relojes multiplicaba la columna por cuatro.
+        reports = [
+            self._report([50_000.0, 50_000.0], 100_000.0, started_at=1_000.0)
+            for _ in range(4)
+        ]
+        self.assertEqual(CsvReporter.run_wall_ms(reports), 100_000.0)
+        times = self._times(reports)
+        self.assertAlmostEqual(sum(times), 100_000.0, places=0)
+        self.assertEqual(times, [12_500.0] * 8)
+
+    def test_staggered_files_span_from_the_first_start_to_the_last_end(self):
+        reports = [
+            self._report([10_000.0], 10_000.0, started_at=1_000.0),
+            self._report([10_000.0], 10_000.0, started_at=1_005.0),
+        ]
+        # De 1000 a 1015: 15 s de reloj para 20 s de página medidos.
+        self.assertEqual(CsvReporter.run_wall_ms(reports), 15_000.0)
+        self.assertAlmostEqual(sum(self._times(reports)), 15_000.0, places=0)
+
+    def test_reports_without_a_start_stamp_keep_the_per_file_clock(self):
+        reports = [
+            self._report([2_000.0, 2_000.0], 2_000.0),
+            self._report([1_000.0], 1_000.0),
+        ]
+        self.assertEqual(CsvReporter.run_wall_ms(reports), 3_000.0)
+        self.assertAlmostEqual(sum(self._times(reports)), 3_000.0, places=0)
 
 
 if __name__ == "__main__":

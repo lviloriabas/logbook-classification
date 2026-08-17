@@ -79,7 +79,9 @@ class TestGroupBooks(unittest.TestCase):
 
 
 class TestAggressiveCorrection(unittest.TestCase):
-    def test_repeated_4_7_ambiguity_uses_raw_matricula_evidence(self):
+    def test_rejected_reading_still_provides_evidence(self):
+        # La página descartada por el formato conserva dígitos legibles:
+        # su texto crudo pesa tanto como el de una lectura aceptada.
         canonical_1414 = _page(1, "2073652", "HP-1414CMP", conf=0.59)
         raw_1717 = _page(
             2, "2073653", "", status=Status.ERROR, conf=0.78
@@ -92,14 +94,16 @@ class TestAggressiveCorrection(unittest.TestCase):
 
         self.assertEqual(_matricula(canonical_1414).value, "HP-1717CMP")
         self.assertEqual(_matricula(raw_1717).value, "HP-1717CMP")
-        self.assertIn("4/7 ambiguity", _matricula(canonical_1414).comment)
+        self.assertIn("book consensus", _matricula(canonical_1414).comment)
         self.assertIn("HP-1414CMP", _matricula(canonical_1414).alternatives)
         self.assertEqual(stats["flagged"], 1)
         self.assertEqual(stats["corrected"], 1)
 
-    def test_repeated_4_7_can_repair_a_previously_wrong_book_correction(self):
-        canonical_1414 = _page(1, "2073652", "HP-1414CMP", conf=0.59)
-        old_correction = _page(2, "2073653", "HP-1414CMP", conf=0.59)
+    def test_consensus_can_repair_a_previously_wrong_book_correction(self):
+        # Confianzas del libro real 20736-B, donde el 1414 es la lectura
+        # equivocada y la reconstruida es la buena.
+        canonical_1414 = _page(1, "2073652", "HP-1414CMP", conf=0.536)
+        old_correction = _page(2, "2073653", "HP-1414CMP", conf=0.707)
         old_field = _matricula(old_correction)
         old_field.raw_value = "HP-1F17CMP"
         old_field.source = "book_correction"
@@ -112,10 +116,10 @@ class TestAggressiveCorrection(unittest.TestCase):
         self.assertEqual(_matricula(old_correction).value, "HP-1717CMP")
         self.assertEqual(
             _matricula(old_correction).inference_method,
-            "book_handwritten_4_7",
+            "book_digit_consensus",
         )
 
-    def test_single_4_7_difference_does_not_change_matricula(self):
+    def test_single_ambiguous_character_does_not_change_matricula(self):
         canonical = _page(1, "2147337", "HP-1534CMP", conf=0.9)
         raw_hint = _page(2, "2147338", "", status=Status.ERROR, conf=0.9)
         _matricula(raw_hint).raw_value = "HP-153FCMP"
@@ -124,6 +128,46 @@ class TestAggressiveCorrection(unittest.TestCase):
 
         self.assertEqual(_matricula(canonical).value, "HP-1534CMP")
         self.assertEqual(_matricula(raw_hint).value, "HP-1534CMP")
+
+    def test_confident_wrong_digit_loses_to_the_rest_of_the_book(self):
+        # Caso real: el 7 manuscrito de HP-1719CMP se lee como 3 en la
+        # única página que supera el formato. Con mayoría sobre la
+        # matrícula completa esa página se imponía al libro entero; con el
+        # voto por posición el 7 gana porque lo aportan varias páginas.
+        pages = [
+            _page(1, "2307043", "", status=Status.ERROR, conf=0.675),
+            _page(2, "2307044", "HP-1319CMP", conf=0.684),
+            _page(3, "2307045", "", status=Status.ERROR, conf=0.675),
+            _page(4, "2307048", "", status=Status.ERROR, conf=0.675),
+            _page(5, "2307049", "", status=Status.ERROR, conf=0.675),
+        ]
+        for page, raw in zip(pages, (
+            "H0-1219", "4P-1319.C0P", "HP1119-CMC", "HPI7I0", "4o-1719cn0",
+        )):
+            _matricula(page).raw_value = raw
+
+        correct_matricula_by_book([_report(*pages)])
+
+        for page in pages:
+            self.assertEqual(_matricula(page).value, "HP-1719CMP")
+
+    def test_same_page_scanned_twice_votes_once(self):
+        # El mismo log_number en dos PDF es una sola página física: si
+        # contara dos veces, un error de OCR duplicado ganaría al resto.
+        first = _report(
+            _page(1, "2307044", "HP-1319CMP", conf=0.684),
+            _page(2, "2307049", "HP-1719CMP", conf=0.675),
+        )
+        second = _report(_page(1, "2307044", "HP-1319CMP", conf=0.684))
+        _page_three = _page(3, "2307048", "", status=Status.ERROR, conf=0.675)
+        _matricula(_page_three).raw_value = "HPI7I0"
+        first.pages.append(_page_three)
+
+        correct_matricula_by_book([first, second])
+
+        for report in (first, second):
+            for page in report.pages:
+                self.assertEqual(_matricula(page).value, "HP-1719CMP")
 
     def test_garbage_and_different_values_overwritten(self):
         pages = [

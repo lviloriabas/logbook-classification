@@ -38,6 +38,7 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -66,7 +67,9 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.config import AppConfig
+from app.core.page_range import FileSlice, PageRange, slice_batch, total_pages
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
+from app.gui.csv_utils import template_field_ids_for_columns
 from app.gui.csv_viewer import (
     CsvColumnModeButton,
     CsvViewerWindow,
@@ -76,6 +79,13 @@ from app.gui.csv_viewer import (
 from app.gui.eta import estimate_remaining_seconds, wall_ms_per_page
 from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.fleet_editor import FLEET_FILENAME, FleetEditorDialog, FleetStore
+from app.gui.table_sort import ColumnSortController
+from app.gui.widgets import (
+    DATA_TABLE_QSS,
+    ZoomableScrollArea,
+    load_zoom_icon,
+    style_data_table,
+)
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
 from app.models.schemas import Status, ValidationReport
 from app.reports.csv_reporter import (
@@ -85,6 +95,10 @@ from app.reports.csv_reporter import (
 )
 from app.templates.manager import TemplateManager
 from app.templates.schema import Template
+from app.utils.important_fields import (
+    IMPORTANT_FIELDS_FILENAME,
+    ImportantFieldsStore,
+)
 from app.utils.io import send_to_trash
 from app.validation.duplicates import DuplicateLogPage, detect_duplicate_log_pages
 
@@ -93,8 +107,20 @@ PERF_CACHE = SCRIPT_DIR / "output" / ".performance.json"
 _DEFAULT_MS_PER_PAGE = 2500.0  # costo nominal antes de la primera corrida
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-_TABLE_CHUNK = 400  # filas de la tabla por tick del QTimer
+# Celdas —no filas— por tick del QTimer. El costo de llenar la tabla es por
+# celda (medido: ~16 µs cada una), así que un presupuesto en filas escala con
+# el número de columnas: 400 filas del CSV completo son 34.000 celdas, medio
+# segundo de interfaz bloqueada por tick. Con un presupuesto en celdas cada
+# tick cuesta lo mismo tenga la corrida 3 columnas o 90.
+_TABLE_CELL_CHUNK = 2000
+# Espera entre comprobaciones mientras se detiene el trabajo para cerrar.
+_SHUTDOWN_POLL_MS = 150
 _DUP_COLUMN = "dup"
+_DISC_COLUMN = "disc"
+# Alto de la consola y del panel de avance: caben seis archivos sin desplazar.
+_BOTTOM_PANE_HEIGHT = 190
+# Columna del nombre en el panel de avance; el resto de la fila es la barra.
+_NAME_COLUMN_WIDTH = 220
 
 
 _COLORS = {
@@ -104,17 +130,24 @@ _COLORS = {
 }
 
 
-def _visible_preview_fields(template: Template, important_only: bool):
+def _visible_preview_fields(
+    template: Template,
+    important_only: bool,
+    important_ids: set[str] | None = None,
+):
     """Campos que debe pintar el visor.
 
-    La plantilla ya expresa la importancia mediante ``required``. Esto
-    conserva matrícula, log_number, fecha y firmas obligatorias, y oculta
-    las celdas auxiliares y licencias opcionales cuando se pide una vista
-    simplificada.
+    Sin ``important_only`` se dibuja la plantilla completa. Con la vista
+    simplificada manda ``important_ids``: los campos marcados en el selector
+    de campos importantes, incluidos los que la plantilla no declara
+    ``required``. Solo cuando todavía no hay ninguna selección se recurre a
+    ``required``, que es la importancia declarada por la propia plantilla.
     """
     if not important_only:
         return list(template.fields)
-    return [field for field in template.fields if field.required]
+    if important_ids is None:
+        return [field for field in template.fields if field.required]
+    return [field for field in template.fields if field.id in important_ids]
 
 _QSS = """
 QMainWindow, QWidget {
@@ -198,18 +231,11 @@ QProgressBar {
 }
 QProgressBar::chunk { background-color: #2f81f7; border-radius: 4px; }
 QSpinBox, QComboBox, QLineEdit { padding: 3px; }
-QTableWidget {
-    gridline-color: #d8dee4;
-    alternate-background-color: #f6f8fa;
+#timeBar {
+    background-color: #e1e7ee;
+    font-size: 9pt; font-weight: 600; color: #24292f;
 }
-QHeaderView::section {
-    background-color: #eef2f6;
-    border: 0;
-    border-bottom: 1px solid #c9d1d9;
-    padding: 6px 8px;
-    font-weight: 600;
-}
-#timeBar { background-color: #e1e7ee; }
+#filePages { color: #57606a; }
 #timeSummary {
     background-color: rgb(49, 49, 49);
     border: 1px solid rgb(49, 49, 49);
@@ -224,7 +250,7 @@ QHeaderView::section {
     font-size: 10px;
     font-weight: 600;
 }
-"""
+""" + DATA_TABLE_QSS
 
 
 def _format_duration(seconds: float) -> str:
@@ -293,12 +319,6 @@ def _load_app_icon() -> QIcon:
     return QIcon()
 
 
-def _load_zoom_icon(name: str) -> QIcon:
-    """Carga un icono de zoom local para que el visor sea consistente en Windows."""
-    path = SCRIPT_DIR / "assets" / f"zoom_{name}.svg"
-    return QIcon(str(path)) if path.is_file() else QIcon.fromTheme(f"zoom-{name}")
-
-
 class QtLogSink(QObject):
     """Sink de Loguru que reenvía mensajes a la GUI vía señal."""
 
@@ -356,26 +376,6 @@ class PreviewLoader(QObject):
             self.previewReady.emit(page_number, pdf_path, None)
 
 
-class ZoomableScrollArea(QScrollArea):
-    """QScrollArea con zoom por Ctrl + rueda del ratón."""
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self._zoom_callback = None
-
-    def set_zoom_callback(self, callback) -> None:
-        self._zoom_callback = callback
-
-    def wheelEvent(self, event) -> None:
-        if (event.modifiers() & Qt.KeyboardModifier.ControlModifier
-                and self._zoom_callback is not None):
-            delta = event.angleDelta().y()
-            self._zoom_callback(1.25 if delta > 0 else 0.8)
-            event.accept()
-            return
-        super().wheelEvent(event)
-
-
 class MainWindow(QMainWindow):
     """Ventana principal de la aplicación."""
 
@@ -389,6 +389,9 @@ class MainWindow(QMainWindow):
         self._pdf_paths: list[Path] = []
         self._template_path: Path | None = None
         self._reports: list[ValidationReport] | None = None
+        # Estadísticas de la corrida, copiadas al terminar: el worker se libera
+        # en cuanto acaba y una re-exportación posterior las sigue necesitando.
+        self._vlm_stats: list[dict] = []
         self._worker: PipelineWorker | None = None
         self._preprocess_worker: PreprocessWorker | None = None
         self._outputs_worker: OutputsWorker | None = None
@@ -401,10 +404,16 @@ class MainWindow(QMainWindow):
         self._preview_pdf: Path | None = None
         self._preview_documents: list[Path] = []
         self._preview_document_counts: list[int] = []
+        self._preview_document_keys: list[str] = []
         self._row_pdfs: list[Path] = []
         self._preview_source_pixmap: QPixmap | None = None
+        # Render sin recuadros: permite repintar el overlay al cambiar la
+        # selección de campos sin volver a rasterizar la página.
+        self._preview_base_image: QImage | None = None
         self._preview_zoom = 1.0  # 1.0 = ajustado a la altura disponible
-        self._preprocessed_images: dict[tuple[str, int], QImage] = {}
+        # Geometria de preprocesado por pagina (deskew + alineacion), no
+        # la imagen: ver PreprocessWorker.
+        self._preprocess_geometry: dict[tuple[str, int], dict] = {}
         self._preprocessed_active = False
         self._log_sink = QtLogSink()
         self._processed_template: Template | None = None
@@ -413,6 +422,9 @@ class MainWindow(QMainWindow):
 
         self._detected_dpi = 200
         self._detected_dpis: dict[str, int] = {}
+        # Páginas de cada PDF de la entrada, alineado con ``_pdf_paths``: es
+        # lo que convierte el rango global del lote en tramos por archivo.
+        self._input_page_counts: list[int] = []
         self._config: AppConfig | None = None
         self._ms_per_page = _load_ms_per_page()
 
@@ -433,13 +445,19 @@ class MainWindow(QMainWindow):
         self._log_timer.start()
 
         self._table_timer = QTimer(self)
-        self._table_timer.setInterval(120)
+        # Intervalo cero: cada tramo se ejecuta cuando la cola de eventos queda
+        # vacía, así que la ventana atiende clics y repintados entre uno y otro
+        # en vez de acumular 120 ms de espera por tramo.
+        self._table_timer.setInterval(0)
         self._table_timer.timeout.connect(self._on_table_chunk)
         self._table_columns: list[str] = []
         self._table_pending: list = []
         self._table_important_field_ids: set[str] = set()
         self._selected_important_columns: set[str] = set()
         self._important_fields_user_selected = False
+        self._important_fields_store = ImportantFieldsStore(
+            SCRIPT_DIR / IMPORTANT_FIELDS_FILENAME
+        )
         self._csv_viewer: CsvViewerWindow | None = None
 
         self._preview_thread = QThread(self)
@@ -451,6 +469,15 @@ class MainWindow(QMainWindow):
         self._preview_pending: tuple[int, str] | None = None
         self._preview_results: dict[tuple[str, int], object] = {}
 
+        # Cierre ordenado: destruir un QThread en marcha aborta el proceso, así
+        # que la ventana pide la parada y espera sin bloquear la interfaz.
+        self._closing = False
+        self._torn_down = False
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setInterval(_SHUTDOWN_POLL_MS)
+        self._shutdown_timer.timeout.connect(self._on_shutdown_tick)
+
+        self._bottom_splitter_adjusted = False
         self._file_rows: dict[int, dict] = {}
         self._row_ms: dict[int, float] = {}
         self._row_started: dict[int, float] = {}
@@ -458,8 +485,15 @@ class MainWindow(QMainWindow):
         self._file_page_counts: list[int] = []
 
         self._build_ui()
+        # Si la aplicación termina sin pasar por el cierre de la ventana
+        # (cierre de sesión, ``quit()`` desde otro sitio), los hilos se paran
+        # igual: destruirlos en marcha aborta el proceso.
+        application = QApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self._teardown)
         self._attach_logger()
         self._refresh_templates()
+        self._restore_important_columns()
         self._install_zoom_shortcuts()
 
     def load_initial_data(self) -> None:
@@ -482,7 +516,9 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_splitter(), stretch=1)
 
         bottom = self._build_bottom_splitter()
-        bottom.setMinimumHeight(100)
+        # Cuatro archivos visibles sin desplazar: por debajo de esto el panel
+        # se queda en dos filas y deja de servir para seguir un lote.
+        bottom.setMinimumHeight(150)
         root.addWidget(bottom)
 
     def _build_controls(self) -> QWidget:
@@ -583,23 +619,39 @@ class MainWindow(QMainWindow):
         )
         row.addWidget(engine_label)
 
-        row.addWidget(QLabel("Archivos:"))
-        self.limit_spin = QSpinBox()
-        self.limit_spin.setRange(0, 9999)
-        self.limit_spin.setValue(0)
-        self.limit_spin.setToolTip("Procesar solo los primeros N archivos (0 = todos)")
-        self.limit_spin.valueChanged.connect(self._refresh_estimate)
-        row.addWidget(self.limit_spin)
-
-        row.addWidget(QLabel("Páginas:"))
-        self.pages_spin = QSpinBox()
-        self.pages_spin.setRange(0, 9999)
-        self.pages_spin.setValue(0)
-        self.pages_spin.setToolTip(
-            "Procesar solo las primeras N páginas de cada archivo (0 = todas)"
+        # El lote se numera de corrido, igual que lo navega el visor: un solo
+        # rango decide qué páginas entran, caigan en los archivos que caigan.
+        range_tip = (
+            "Rango de páginas contando el lote entero de corrido, como en el "
+            "visor: la página 1 es la primera del primer archivo y la "
+            "numeración sigue en el siguiente sin reiniciarse. Arranca en la "
+            "primera y la última página de todos los archivos seleccionados. "
+            "Los archivos que quedan fuera del rango no se abren."
         )
-        self.pages_spin.valueChanged.connect(self._refresh_estimate)
-        row.addWidget(self.pages_spin)
+        row.addWidget(QLabel("Páginas:"))
+        self.page_from_spin = QSpinBox()
+        self.page_from_spin.setRange(1, 1)
+        self.page_from_spin.setValue(1)
+        self.page_from_spin.setToolTip(range_tip)
+        self.page_from_spin.setAccessibleName("Primera página del rango")
+        self.page_from_spin.valueChanged.connect(self._on_page_from_changed)
+        row.addWidget(self.page_from_spin)
+
+        row.addWidget(QLabel("a"))
+        self.page_to_spin = QSpinBox()
+        # Ambos extremos son números de página reales: el final arranca en la
+        # última del lote, para que se lea de un vistazo cuánto abarca.
+        self.page_to_spin.setRange(1, 1)
+        self.page_to_spin.setValue(1)
+        self.page_to_spin.setToolTip(range_tip)
+        self.page_to_spin.setAccessibleName("Última página del rango")
+        self.page_to_spin.valueChanged.connect(self._on_page_to_changed)
+        row.addWidget(self.page_to_spin)
+
+        self.page_range_label = QLabel("")
+        self.page_range_label.setStyleSheet("color: #667085;")
+        self.page_range_label.setToolTip(range_tip)
+        row.addWidget(self.page_range_label)
 
         self.deskew_check = QCheckBox("Corrección de inclinación")
         self.deskew_check.setChecked(True)
@@ -723,8 +775,9 @@ class MainWindow(QMainWindow):
         self.important_fields_check = QCheckBox("Solo importantes")
         self.important_fields_check.setEnabled(False)
         self.important_fields_check.setToolTip(
-            "Mostrar únicamente matrícula, log_number, fecha y firmas "
-            "obligatorias; oculta celdas auxiliares y campos opcionales."
+            "Mostrar únicamente los campos marcados en la lista de campos "
+            "importantes (botón contiguo). Sin la casilla se dibuja la "
+            "plantilla completa."
         )
         self.important_fields_check.toggled.connect(self._on_fields_toggled)
         self.fields_check.toggled.connect(
@@ -732,7 +785,10 @@ class MainWindow(QMainWindow):
         )
         info_row.addWidget(self.important_fields_check)
         self.important_fields_button = ImportantFieldsButton()
-        self.important_fields_button.setToolTip("Seleccionar campos importantes")
+        self.important_fields_button.setToolTip(
+            "Seleccionar los campos importantes; la lista se guarda por "
+            "plantilla y decide qué recuadros y columnas se muestran."
+        )
         self.important_fields_button.clicked.connect(self._open_important_fields)
         info_row.addWidget(self.important_fields_button)
         info_row.addStretch()
@@ -856,9 +912,9 @@ class MainWindow(QMainWindow):
     def _update_parallelism_hint(self) -> None:
         """Muestra la distribución automática para los hilos seleccionados.
 
-        El reparto prioriza el número de procesos: los hilos internos del
-        motor OCR no aceleran la inferencia, así que puede sobrar algún hilo
-        sin que eso cueste velocidad.
+        El reparto prioriza el número de procesos: un proceso extra rinde
+        mucho más que un hilo interno extra (ver ``app/core/parallelism``),
+        así que puede sobrar algún hilo sin que eso cueste velocidad.
         """
         selected_threads = self.threads_spin.value()
         effective = self._effective_threads(selected_threads)
@@ -962,7 +1018,9 @@ class MainWindow(QMainWindow):
         self.btn_export.setEnabled(False)
         self.btn_export.setToolTip(
             "Volver a generar CSV, JSON y PDFs con las opciones actuales, "
-            "sin reprocesar los archivos"
+            "sin reprocesar los archivos. Los PDFs ya exportados se "
+            "conservan: los nuevos se numeran (-2, -3…) si el nombre se "
+            "repite"
         )
         self.btn_export.clicked.connect(self._exportar)
         row.addWidget(self.btn_export)
@@ -1093,7 +1151,7 @@ class MainWindow(QMainWindow):
         zoom_panel.addWidget(zoom_title, 0, Qt.AlignmentFlag.AlignHCenter)
         self.btn_zoom_in = QToolButton()
         self.btn_zoom_in.setObjectName("zoomControl")
-        self.btn_zoom_in.setIcon(_load_zoom_icon("in"))
+        self.btn_zoom_in.setIcon(load_zoom_icon("in"))
         self.btn_zoom_in.setToolTip("Acercar la vista previa")
         self.btn_zoom_in.setAccessibleName("Acercar vista previa")
         self.btn_zoom_in.setIconSize(QSize(14, 14))
@@ -1102,7 +1160,7 @@ class MainWindow(QMainWindow):
         zoom_panel.addWidget(self.btn_zoom_in, 0, Qt.AlignmentFlag.AlignHCenter)
         self.btn_zoom_fit = QToolButton()
         self.btn_zoom_fit.setObjectName("zoomControl")
-        self.btn_zoom_fit.setIcon(_load_zoom_icon("fit"))
+        self.btn_zoom_fit.setIcon(load_zoom_icon("fit"))
         self.btn_zoom_fit.setToolTip(
             "Ajustar la vista previa a la altura de la ventana"
         )
@@ -1113,7 +1171,7 @@ class MainWindow(QMainWindow):
         zoom_panel.addWidget(self.btn_zoom_fit, 0, Qt.AlignmentFlag.AlignHCenter)
         self.btn_zoom_out = QToolButton()
         self.btn_zoom_out.setObjectName("zoomControl")
-        self.btn_zoom_out.setIcon(_load_zoom_icon("out"))
+        self.btn_zoom_out.setIcon(load_zoom_icon("out"))
         self.btn_zoom_out.setToolTip("Alejar la vista previa")
         self.btn_zoom_out.setAccessibleName("Alejar vista previa")
         self.btn_zoom_out.setIconSize(QSize(14, 14))
@@ -1150,12 +1208,13 @@ class MainWindow(QMainWindow):
         self.table.setAccessibleName("Resultados de validación")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setSortingEnabled(True)
+        style_data_table(self.table)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionsClickable(True)
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.horizontalHeader().setSectionsMovable(False)
         self.table.horizontalHeader().setFixedHeight(30)
+        self.table_sort = ColumnSortController(self.table)
         self.table.cellDoubleClicked.connect(self._jump_to_page)
 
         table_panel = QWidget()
@@ -1191,7 +1250,7 @@ class MainWindow(QMainWindow):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setAccessibleName("Registro de eventos")
-        self.log_view.setMaximumHeight(150)
+        self.log_view.setMaximumHeight(_BOTTOM_PANE_HEIGHT)
         self.log_view.document().setMaximumBlockCount(2000)
         self.log_view.setMinimumWidth(340)
         splitter.addWidget(self.log_view)
@@ -1212,25 +1271,123 @@ class MainWindow(QMainWindow):
 
         self.times_vbox = QVBoxLayout()
         self.times_vbox.setContentsMargins(0, 0, 0, 0)
-        self.times_vbox.setSpacing(2)
+        self.times_vbox.setSpacing(3)
         self.times_container = QWidget()
         self.times_container.setLayout(self.times_vbox)
 
         self.times_scroll = QScrollArea()
         self.times_scroll.setWidgetResizable(True)
         self.times_scroll.setWidget(self.times_container)
-        self.times_scroll.setMaximumHeight(150)
+        self.times_scroll.setMaximumHeight(_BOTTOM_PANE_HEIGHT)
         times_layout.addWidget(self.times_scroll, 1)
 
         self.empty_times_label = QLabel("Sin archivos procesados aún.")
         times_layout.addWidget(self.empty_times_label)
 
-        times.setMinimumWidth(440)
-        times.setMaximumWidth(620)
+        # Mitad y mitad, como la tabla y el visor del Visor de CSV: el panel
+        # lleva cuatro columnas por archivo y la consola no necesita el resto.
+        # El mínimo es la fila completa, para que nunca haya scroll lateral.
+        times.setMinimumWidth(560)
         splitter.addWidget(times)
-        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
+        splitter.splitterMoved.connect(self._on_bottom_splitter_moved)
+        self.bottom_splitter = splitter
         return splitter
+
+    def _on_bottom_splitter_moved(self, _position: int, _index: int) -> None:
+        """Una vez que el usuario reparte el espacio, se respeta su medida."""
+        self._bottom_splitter_adjusted = True
+
+    def _balance_bottom_splitter(self) -> None:
+        """Reparte el ancho entre consola y panel mientras nadie lo ajuste."""
+        if self._bottom_splitter_adjusted:
+            return
+        available = max(
+            0, self.bottom_splitter.width() - self.bottom_splitter.handleWidth()
+        )
+        half = available // 2
+        self.bottom_splitter.setSizes([half, available - half])
+
+    def _make_file_row(self) -> dict:
+        """Fila del panel: nombre, barra con porcentaje, páginas y reloj."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        name = QLabel("")
+        # Anchos fijos en las tres columnas de texto: con anchos mínimos cada
+        # fila empezaba la barra en un sitio distinto según lo largo que
+        # fuera el nombre, y el panel dejaba de leerse como una tabla.
+        name.setFixedWidth(_NAME_COLUMN_WIDTH)
+        bar = QProgressBar()
+        bar.setObjectName("timeBar")
+        # La barra de 14 px recortaba el texto y el porcentaje no llegaba a
+        # verse; con la altura de una línea cabe dentro de la propia barra.
+        bar.setFixedHeight(20)
+        bar.setMinimumWidth(140)
+        bar.setRange(0, 100)
+        bar.setValue(0)
+        bar.setTextVisible(True)
+        # RAE: espacio entre la cifra y el signo. La hoja ya lo centra.
+        bar.setFormat("%p %")
+        pages = QLabel("–")
+        pages.setObjectName("filePages")
+        pages.setFixedWidth(86)
+        pages.setAlignment(Qt.AlignmentFlag.AlignRight
+                           | Qt.AlignmentFlag.AlignVCenter)
+        pages.setToolTip("Páginas procesadas de las que tiene el archivo")
+        secs = QLabel("–")
+        secs.setFixedWidth(70)
+        secs.setAlignment(Qt.AlignmentFlag.AlignRight
+                          | Qt.AlignmentFlag.AlignVCenter)
+        secs.setToolTip("Tiempo que lleva el archivo")
+        row.addWidget(name)
+        row.addWidget(bar, 1)
+        row.addWidget(pages)
+        row.addWidget(secs)
+        self.times_vbox.addLayout(row)
+        return {"name": name, "bar": bar, "pages": pages, "secs": secs}
+
+    @staticmethod
+    def _set_row_name(row: dict, name: str, tooltip: str = "") -> None:
+        """Escribe el nombre recortado a la columna, con el completo al pasar."""
+        label = row["name"]
+        label.setToolTip(tooltip or name)
+        label.setText(
+            label.fontMetrics().elidedText(
+                name, Qt.TextElideMode.ElideMiddle, _NAME_COLUMN_WIDTH - 2
+            )
+        )
+
+    @staticmethod
+    def _set_row_pages(row: dict, done: int, total: int) -> None:
+        """Escribe el contador de páginas y la barra de la fila."""
+        row["pages"].setText(f"{done}/{total} pág." if total else f"{done} pág.")
+        row["bar"].setRange(0, 100)
+        row["bar"].setValue(round(done * 100 / total) if total else 0)
+
+    def _prepare_file_rows(self, paths: list[Path]) -> None:
+        """Lista el lote completo antes de empezar, con sus páginas y 0 %.
+
+        El planificador puede arrancar varios archivos a la vez, así que las
+        filas no pueden aparecer a medida que cada uno empieza: la lista se
+        muestra entera desde el principio y cada fila avanza por su cuenta.
+        """
+        self._clear_times()
+        if not paths:
+            return
+        self.empty_times_label.setVisible(False)
+        for index, path in enumerate(paths):
+            row = self._make_file_row()
+            self._set_row_name(row, path.name, str(path))
+            self._set_row_pages(row, 0, self._pages_of_file(index))
+            self._file_rows[index] = row
+        self.times_vbox.addStretch()
+
+    def _pages_of_file(self, index: int) -> int:
+        """Páginas previstas del archivo ``index`` (0-based), 0 si no se sabe."""
+        if 0 <= index < len(self._file_page_counts):
+            return self._file_page_counts[index]
+        return 0
 
     def _ensure_file_rows(self, total: int) -> None:
         """Crea una fila por archivo en el panel de tiempos (idempotente)."""
@@ -1240,66 +1397,30 @@ class MainWindow(QMainWindow):
         self._file_rows = {}
         self._row_ms = {}
         self._row_started = {}
-        for i in range(total):
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            name = QLabel("")
-            name.setMinimumWidth(150)
-            name.setMaximumWidth(220)
-            bar = QProgressBar()
-            bar.setObjectName("timeBar")
-            bar.setFixedHeight(14)
-            bar.setMinimumWidth(120)
-            bar.setRange(0, 100)
-            bar.setValue(0)
-            bar.setTextVisible(True)
-            secs = QLabel("–")
-            secs.setMinimumWidth(64)
-            secs.setAlignment(Qt.AlignmentFlag.AlignRight)
-            row.addWidget(name)
-            row.addWidget(bar, 1)
-            row.addWidget(secs)
-            self.times_vbox.addLayout(row)
-            self._file_rows[i] = {"name": name, "bar": bar, "secs": secs}
+        for index in range(total):
+            self._file_rows[index] = self._make_file_row()
+            self._set_row_pages(
+                self._file_rows[index], 0, self._pages_of_file(index)
+            )
         self.times_vbox.addStretch()
 
-    def _rescale_time_bars(self) -> None:
-        """Conservado por compatibilidad; el avance ya es porcentaje real."""
-        for index in self._row_ms:
-            row = self._file_rows.get(index)
-            if row is not None:
-                row["bar"].setRange(0, 100)
-                row["bar"].setValue(100)
+    def _set_file_page_counts(self, slices: list[FileSlice]) -> None:
+        """Páginas previstas de cada archivo de la corrida, ya recortadas."""
+        self._file_page_counts = [item.count or 0 for item in slices]
 
-    def _set_file_page_counts(self, paths: list[Path]) -> None:
-        from app.vision.pdf_loader import page_count
+    def _on_file_progress(self, index: int, done: int, total: int) -> None:
+        """Avance real del archivo ``index`` (1-based), venga de donde venga.
 
-        limit = self.pages_spin.value()
-        self._file_page_counts = []
-        for path in paths:
-            try:
-                count = page_count(path)
-            except Exception:  # noqa: BLE001 - el pipeline reportará el PDF inválido
-                count = 0
-            self._file_page_counts.append(min(count, limit) if limit > 0 else count)
-
-    def _update_file_progress(self, done: int) -> None:
-        """Distribuye el contador global en porcentajes por PDF."""
-        if not self._file_page_counts or not self._file_rows:
+        El planificador reparte páginas de un archivo o archivos completos
+        según el tamaño del lote, y antes solo la primera estrategia movía
+        las barras: la global se repartía en orden de archivo, así que con
+        varios PDF en vuelo se llenaban los de arriba mientras avanzaban
+        otros. Con el avance por archivo las dos estrategias se ven igual.
+        """
+        row = self._file_rows.get(index - 1)
+        if row is None:
             return
-        offset = 0
-        for index, total in enumerate(self._file_page_counts):
-            row = self._file_rows.get(index)
-            if row is None:
-                offset += total
-                continue
-            if total <= 0:
-                value = 100 if done >= offset else 0
-            else:
-                value = round(max(0, min(total, done - offset)) * 100 / total)
-            row["bar"].setRange(0, 100)
-            row["bar"].setValue(value)
-            offset += total
+        self._set_row_pages(row, done, total or self._pages_of_file(index - 1))
 
     # ── Logging ─────────────────────────────────────────────────────────
 
@@ -1355,7 +1476,7 @@ class MainWindow(QMainWindow):
 
     def _set_input_paths(self, paths: list[Path]) -> None:
         self._pdf_paths = []
-        self._preprocessed_images = {}
+        self._preprocess_geometry = {}
         self._preprocessed_active = False
         seen: set[str] = set()
         for p in paths:
@@ -1365,9 +1486,13 @@ class MainWindow(QMainWindow):
                 seen.add(key)
                 self._pdf_paths.append(p)
         self._refresh_input_summary()
-        self._set_preview_documents(self._pdf_paths)
-        self._preview_selected_input()
+        # El DPI se detecta primero porque esa pasada ya cuenta las páginas de
+        # cada PDF: pasárselas al visor evita abrir el lote entero por segunda
+        # vez, que era la mitad del tiempo que la ventana pasaba congelada al
+        # elegir archivos (medido: 65 ms por PDF, la mitad en cada apertura).
         self._detect_dpi()
+        self._set_preview_documents(self._pdf_paths, self._input_page_counts)
+        self._preview_selected_input()
         self._refresh_estimate()
 
     def _preview_selected_input(self) -> None:
@@ -1384,6 +1509,7 @@ class MainWindow(QMainWindow):
             self._preview_page = 1
             self._preview_total = 0
             self._preview_source_pixmap = None
+            self._preview_base_image = None
             self._set_preview_documents([])
             self._preview_zoom = 1.0
             self.preview_label.clear()
@@ -1392,59 +1518,86 @@ class MainWindow(QMainWindow):
             self._update_preview_nav()
             return
         self._preview_source_pixmap = None
+        self._preview_base_image = None
         self._preview_zoom = 1.0
         self.preview_label.clear()
         self.preview_label.setText("Cargando vista previa…")
         self._update_preview_zoom_controls()
         self._show_preview_page(1, self._pdf_paths[0])
 
-    def _set_preview_documents(self, paths: list[Path]) -> None:
-        """Actualiza la secuencia global de PDFs sin perder el activo."""
+    @staticmethod
+    def _document_key(path: Path) -> str:
+        """Identidad de un PDF para comparar documentos entre sí."""
+        return str(Path(path).resolve()).casefold()
+
+    def _set_preview_documents(
+        self, paths: list[Path], counts: list[int] | None = None
+    ) -> None:
+        """Actualiza la secuencia global de PDFs sin perder el activo.
+
+        ``counts`` permite reutilizar un recuento de páginas ya hecho (el de
+        la detección de DPI) en vez de reabrir cada PDF solo para contarlas.
+        """
         from app.vision.pdf_loader import page_count
 
+        known: dict[str, int] = {}
+        if counts is not None and len(counts) == len(paths):
+            known = {str(Path(path)): count for path, count in zip(paths, counts)}
+
         unique: list[Path] = []
-        counts: list[int] = []
+        document_counts: list[int] = []
+        keys: list[str] = []
         seen: set[str] = set()
         for path in paths:
             path = Path(path)
-            key = str(path.resolve()).casefold()
+            key = self._document_key(path)
             if path.is_file() and path.suffix.lower() == ".pdf" and key not in seen:
                 seen.add(key)
                 unique.append(path)
-                try:
-                    counts.append(max(0, page_count(path)))
-                except Exception:  # noqa: BLE001 - el visor omite PDFs inválidos
-                    counts.append(0)
+                keys.append(key)
+                count = known.get(str(path))
+                if count is None:
+                    try:
+                        count = max(0, page_count(path))
+                    except Exception:  # noqa: BLE001 - el visor omite PDFs inválidos
+                        count = 0
+                document_counts.append(max(0, count))
         self._preview_documents = unique
-        self._preview_document_counts = counts
+        self._preview_document_counts = document_counts
+        # Las claves se calculan una vez: ``resolve()`` toca el disco y la
+        # navegación las consultaba una vez por documento en cada página.
+        self._preview_document_keys = keys
         active = (
-            str(self._preview_pdf.resolve()).casefold()
+            self._document_key(self._preview_pdf)
             if self._preview_pdf is not None
             else ""
         )
-        if active and all(
-            str(path.resolve()).casefold() != active for path in unique
-        ):
+        if active and active not in seen:
             self._preview_pdf = None
             self._preview_page = 1
             self._preview_total = 0
         self._update_preview_nav()
 
+    def _preview_document_index(self) -> int:
+        """Posición del PDF activo dentro de la secuencia, o ``-1``."""
+        if self._preview_pdf is None:
+            return -1
+        current = self._document_key(self._preview_pdf)
+        try:
+            return self._preview_document_keys.index(current)
+        except ValueError:
+            return -1
+
     def _preview_global_page(self) -> int:
         """Posición de la página actual dentro de todos los PDFs."""
-        if self._preview_pdf is None:
+        index = self._preview_document_index()
+        if index < 0:
             return 0
-        current = str(self._preview_pdf.resolve()).casefold()
-        offset = 0
-        for path, count in zip(
-            self._preview_documents, self._preview_document_counts
-        ):
-            if str(path.resolve()).casefold() == current:
-                if count <= 0:
-                    return 0
-                return offset + min(max(1, self._preview_page), count)
-            offset += count
-        return 0
+        count = self._preview_document_counts[index]
+        if count <= 0:
+            return 0
+        offset = sum(self._preview_document_counts[:index])
+        return offset + min(max(1, self._preview_page), count)
 
     def _preview_location(self, global_page: int) -> tuple[Path, int] | None:
         """Convierte una página global en (PDF, página local)."""
@@ -1489,22 +1642,59 @@ class MainWindow(QMainWindow):
                 "Cargue o procese un CSV para seleccionar sus columnas.",
             )
             return
-        selected = (
-            self._selected_important_columns
-            if self._important_fields_user_selected
-            else self._default_important_columns(columns)
+        dialog = ImportantFieldsDialog(
+            columns, self._current_important_columns(columns), self
         )
-        dialog = ImportantFieldsDialog(columns, selected, self)
         dialog.selectionChanged.connect(self._set_important_columns)
         dialog.exec()
 
     def _set_important_columns(self, columns: set[str]) -> None:
+        """Aplica y recuerda la selección hecha en el selector."""
         self._important_fields_user_selected = True
         self._selected_important_columns = set(columns)
+        self._important_fields_store.save(self._template_key(), columns)
+        self._apply_csv_table_view()
+        self._apply_preview_overlay()
+
+    def _template_key(self) -> str | None:
+        """Nombre de la plantilla bajo el que se recuerda la selección."""
+        template = self._processed_template or self._load_template()
+        return template.name if template is not None else None
+
+    def _current_important_columns(
+        self, columns: list[str] | None = None
+    ) -> set[str]:
+        """Columnas marcadas, o el conjunto por defecto si nunca se editó."""
+        if self._important_fields_user_selected:
+            return set(self._selected_important_columns)
+        if columns is None:
+            columns = self._table_columns or self._columns_for_template_preview()
+        return self._default_important_columns(columns)
+
+    def _restore_important_columns(self) -> None:
+        """Recupera del disco la selección guardada para la plantilla activa."""
+        stored = self._important_fields_store.load(self._template_key())
+        self._important_fields_user_selected = stored is not None
+        self._selected_important_columns = (
+            set(stored) if stored is not None else self._current_important_columns()
+        )
         self._apply_csv_table_view()
 
-    def _columns_for_template_preview(self) -> list[str]:
-        template = self._processed_template or self._load_template()
+    def _current_important_field_ids(self, template: Template) -> set[str] | None:
+        """Campos de la plantilla que corresponden a las columnas marcadas."""
+        columns = self._table_columns or self._columns_for_template_preview(template)
+        if not columns:
+            return None  # sin columnas conocidas manda ``required``
+        return template_field_ids_for_columns(
+            self._current_important_columns(columns),
+            [field.id for field in template.fields],
+            columns,
+        )
+
+    def _columns_for_template_preview(
+        self, template: Template | None = None
+    ) -> list[str]:
+        template = template or self._processed_template or self._load_template()
         if template is None:
             return []
         signature_ids = {
@@ -1518,7 +1708,7 @@ class MainWindow(QMainWindow):
     def _default_important_columns(self, columns: list[str]) -> set[str]:
         """Incluye los identificadores y campos críticos disponibles."""
         important = {
-            "file", "page", "date", "time_ms", "dup", "log_number",
+            "file", "page", "date", "time_ms", "dup", "disc", "log_number",
             "matricula", "flight_number", "pilot_signature",
             "captain_signature", "captain_license",
         }
@@ -1526,19 +1716,31 @@ class MainWindow(QMainWindow):
         return set(columns).intersection(important)
 
     def _detect_dpi(self) -> None:
-        from app.vision.pdf_loader import detect_dpi
+        """Lee DPI y número de páginas de la entrada en una sola apertura.
+
+        El rango de páginas necesita el recuento de cada PDF para repartirse
+        entre archivos, y el DPI ya obligaba a abrirlos todos: hacer las dos
+        lecturas con el mismo handle evita una segunda pasada por el lote.
+        """
+        from app.vision.pdf_loader import PdfPageRenderer
 
         self._detected_dpis = {}
+        self._input_page_counts = []
         for p in self._pdf_paths:
             try:
-                detected = detect_dpi(p, default=600)
-                self._detected_dpis[str(p.resolve())] = detected
+                with PdfPageRenderer(p) as renderer:
+                    self._detected_dpis[str(p.resolve())] = renderer.detect_dpi(
+                        default=600
+                    )
+                    self._input_page_counts.append(renderer.page_count())
             except Exception:  # noqa: BLE001 - PDF inválido, se sigue
+                self._input_page_counts.append(0)
                 continue
         if self._pdf_paths:
             self._detected_dpi = self._detected_dpis.get(
                 str(self._pdf_paths[0].resolve()), 200
             )
+        self._reset_page_range()
 
     def _refresh_input_summary(self) -> None:
         n = len(self._pdf_paths)
@@ -1549,38 +1751,99 @@ class MainWindow(QMainWindow):
         self.input_edit.setText(names)
         self.input_edit.setToolTip("\n".join(str(p) for p in self._pdf_paths))
 
+    def _page_range(self) -> PageRange:
+        """Rango elegido, contando el lote de corrido.
+
+        Un final que llega a la última página del lote se devuelve abierto:
+        es el mismo tramo y así el rango se reconoce como completo (nadie
+        vuelve a contar páginas y los mensajes lo dicen en esos términos),
+        aunque el control siga mostrando el número real.
+        """
+        last = self.page_to_spin.value()
+        return PageRange(
+            first=self.page_from_spin.value(),
+            last=None if last >= self._batch_total_pages() else last,
+        )
+
+    def _batch_total_pages(self) -> int:
+        """Páginas de toda la entrada, antes de aplicar el rango."""
+        return sum(self._input_page_counts)
+
+    def _batch_slices(self) -> list[FileSlice]:
+        """Tramos de la entrada que el rango deja dentro."""
+        return slice_batch(
+            self._pdf_paths, self._input_page_counts, self._page_range()
+        )
+
     def _resolved_paths(self) -> list[Path]:
-        """Aplica el límite 'primeros N archivos' a la entrada actual."""
-        paths = list(self._pdf_paths)
-        limit = self.limit_spin.value()
-        if limit > 0:
-            paths = paths[:limit]
-        return paths
+        """Archivos que aportan al menos una página al rango elegido."""
+        return [item.path for item in self._batch_slices()]
 
-    def _total_pages_for(self, paths: list[Path]) -> int:
-        from app.vision.pdf_loader import page_count
+    @staticmethod
+    def _set_spin_silently(spin: QSpinBox, value: int) -> None:
+        """Cambia un control sin reentrar en su propio manejador."""
+        spin.blockSignals(True)
+        spin.setValue(value)
+        spin.blockSignals(False)
 
-        pages = self.pages_spin.value()
-        total = 0
-        for p in paths:
-            try:
-                count = page_count(p)
-            except Exception:  # noqa: BLE001 - archivo inválido
-                continue
-            total += min(count, pages) if pages > 0 else count
-        return total
+    def _on_page_from_changed(self, value: int) -> None:
+        # Los dos extremos se arrastran: subir el inicio por encima del final
+        # deja un tramo de una página en vez de un rango imposible.
+        if value > self.page_to_spin.value():
+            self._set_spin_silently(self.page_to_spin, value)
+        self._refresh_page_range_label()
+        self._refresh_estimate()
+
+    def _on_page_to_changed(self, value: int) -> None:
+        if value < self.page_from_spin.value():
+            self._set_spin_silently(self.page_from_spin, value)
+        self._refresh_page_range_label()
+        self._refresh_estimate()
+
+    def _reset_page_range(self) -> None:
+        """Deja el rango cubriendo la entrada actual, de la primera a la última.
+
+        Se llama al cambiar los archivos: los números del rango anterior no
+        señalan las mismas páginas en otro lote, así que conservarlos
+        recortaría la corrida sin que nadie lo haya pedido.
+        """
+        top = max(1, self._batch_total_pages())
+        for spin in (self.page_from_spin, self.page_to_spin):
+            spin.blockSignals(True)
+            spin.setMaximum(top)
+            spin.blockSignals(False)
+        self._set_spin_silently(self.page_from_spin, 1)
+        self._set_spin_silently(self.page_to_spin, top)
+        self._refresh_page_range_label()
+
+    def _refresh_page_range_label(self) -> None:
+        """Indica cuántas páginas del lote deja seleccionadas el rango."""
+        total = self._batch_total_pages()
+        if not total:
+            self.page_range_label.setText("")
+            return
+        selected = total_pages(self._batch_slices())
+        self.page_range_label.setText(
+            f"de {total} pág." if selected == total
+            else f"{selected} de {total} pág."
+        )
 
     def _refresh_estimate(self) -> None:
-        resolved = self._resolved_paths()
-        pages = self._total_pages_for(resolved)
+        slices = self._batch_slices()
+        pages = total_pages(slices)
         if pages and self._ms_per_page:
             seconds = pages * self._ms_per_page / 1000.0
             self.estimate_label.setText(
                 f"Tiempo estimado: {_format_clock(seconds)}  "
-                f"{pages} páginas  {len(resolved)} archivos"
+                f"{pages} páginas  {len(slices)} archivos"
             )
-        elif resolved:
+        elif slices:
             self.estimate_label.setText("Estimación no disponible")
+        elif self._pdf_paths:
+            self.estimate_label.setText(
+                f"El rango ({self._page_range().label()}) no incluye ninguna "
+                f"página del lote"
+            )
         else:
             self.estimate_label.setText("")
 
@@ -1895,11 +2158,7 @@ class MainWindow(QMainWindow):
                 if field.type.value == "signature"
             ),
         )
-        selected = (
-            self._selected_important_columns
-            if self._important_fields_user_selected
-            else self._default_important_columns(columns)
-        )
+        selected = self._current_important_columns(columns)
         return [column for column in columns if column in selected]
 
     def _load_template(self) -> Template | None:
@@ -1950,18 +2209,21 @@ class MainWindow(QMainWindow):
         ):
             return
 
-        resolved = self._resolved_paths()
-        if not resolved:
-            QMessageBox.warning(self, "Aviso", "No hay archivos para preprocesar.")
+        slices = self._batch_slices()
+        if not slices:
+            QMessageBox.warning(self, "Aviso", self._empty_range_message())
             return
+        resolved = [item.path for item in slices]
 
         self._config = self._current_processing_config()
-        self._preprocessed_images = {}
+        self._preprocess_geometry = {}
         self._preprocessed_active = False
+        # El rango numera el lote completo, así que el worker recibe la
+        # entrada entera y lo reparte él: recortar antes lo renumeraría.
         worker = PreprocessWorker(
-            resolved,
+            self._pdf_paths,
             self._config,
-            max_pages=self.pages_spin.value() or None,
+            page_range=self._page_range(),
             reference_page=self.ref_spin.value(),
             parent=self,
         )
@@ -1977,8 +2239,8 @@ class MainWindow(QMainWindow):
         self.btn_preprocess.setEnabled(False)
         self.btn_export.setEnabled(False)
         self.btn_cancel.setEnabled(True)
-        total = self._total_pages_for(resolved)
-        self._set_file_page_counts(resolved)
+        total = total_pages(slices)
+        self._set_file_page_counts(slices)
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(0)
         self._total_global = total
@@ -1990,6 +2252,48 @@ class MainWindow(QMainWindow):
         estimate = total * self._ms_per_page / 1000.0 if total else None
         self._set_time_summary(0.0, estimate, estimate)
         worker.start()
+
+    def _empty_range_message(self) -> str:
+        """Explica por qué no hay nada que procesar con el rango actual."""
+        total = self._batch_total_pages()
+        if not total:
+            return "No hay archivos para procesar."
+        return (
+            f"El rango elegido ({self._page_range().label()}) no incluye "
+            f"ninguna página: el lote tiene {total} en total."
+        )
+
+    def _confirm_discard_results(self) -> bool:
+        """Pide confirmación antes de borrar de la vista una corrida previa.
+
+        Los archivos guardados en ``output/`` no se tocan; lo que se pierde es
+        la tabla, la vista previa y el avance por archivo en pantalla.
+        """
+        if not self._reports:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Procesar de nuevo",
+            "Ya hay un procesamiento en pantalla.\n\n"
+            "Al procesar de nuevo se borran de la vista la tabla, la vista "
+            "previa y el avance por archivo de la corrida actual. Los "
+            "archivos ya guardados en output/ no se borran.\n\n"
+            "¿Desea continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _clear_results_display(self) -> None:
+        """Deja la pantalla sin resultados, sin tocar lo escrito en disco."""
+        self._table_timer.stop()
+        self._table_pending = []
+        self.table.setRowCount(0)
+        self.table.setColumnCount(0)
+        self._update_duplicate_summary([])
+        self.csv_columns_toggle.setEnabled(False)
+        self.csv_columns_toggle.setVisible(False)
+        self._clear_times()
 
     def _start_processing(self) -> None:
         if not self._pdf_paths:
@@ -2009,9 +2313,12 @@ class MainWindow(QMainWindow):
         ):
             return
 
-        resolved = self._resolved_paths()
-        if not resolved:
-            QMessageBox.warning(self, "Aviso", "No hay archivos para procesar.")
+        slices = self._batch_slices()
+        if not slices:
+            QMessageBox.warning(self, "Aviso", self._empty_range_message())
+            return
+        resolved = [item.path for item in slices]
+        if not self._confirm_discard_results():
             return
 
         self._config = self._current_processing_config()
@@ -2026,43 +2333,44 @@ class MainWindow(QMainWindow):
         self._pending_csv_refresh = False
         self._last_run_cancelled = False
 
-        max_pages = self.pages_spin.value() or None
         selected_threads = self.threads_spin.value()
         effective_threads = self._effective_threads(selected_threads)
         workers, threads = recommended_parallelism(effective_threads)
 
+        # Igual que en el preprocesado: el worker recibe el lote completo y
+        # aplica el rango, que está numerado sobre toda la entrada.
         self._worker = PipelineWorker(
-            resolved,
+            self._pdf_paths,
             Path(self.template_combo.currentData()),
             self._config,
-            max_pages=max_pages,
+            page_range=self._page_range(),
             reference_page=self.ref_spin.value(),
             workers=workers,
             cpu_threads=threads,
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.file_started.connect(self._on_file_started)
+        self._worker.file_progress.connect(self._on_file_progress)
         self._worker.file_finished.connect(self._on_file_finished)
         self._worker.succeeded.connect(self._on_succeeded)
         self._worker.failed.connect(self._on_failed)
+        # Sin esto el hilo terminado quedaba retenido hasta la corrida
+        # siguiente, con todos los reportes del lote dentro.
+        self._worker.finished.connect(self._on_pipeline_thread_finished)
+        self._worker.finished.connect(self._worker.deleteLater)
 
         self.btn_process.setEnabled(False)
         self.btn_preprocess.setEnabled(False)
         self.btn_export.setEnabled(False)
         self.btn_cancel.setEnabled(True)
-        self.progress.setRange(0, max(1, self._total_pages_for(resolved)))
+        total = total_pages(slices)
+        self.progress.setRange(0, max(1, total))
         self.progress.setValue(0)
-        self.table.setRowCount(0)
-        self.table.setColumnCount(0)
-        self._update_duplicate_summary([])
-        self.csv_columns_toggle.setEnabled(False)
-        self.csv_columns_toggle.setVisible(False)
-        self._table_timer.stop()
-        self._table_pending = []
-        self._clear_times()
+        self._clear_results_display()
 
-        self._total_global = self._total_pages_for(resolved)
-        self._set_file_page_counts(resolved)
+        self._total_global = total
+        self._set_file_page_counts(slices)
+        self._prepare_file_rows(resolved)
         self._done_global = 0
         self._last_done = 0
         self._run_started = time.monotonic()
@@ -2074,8 +2382,8 @@ class MainWindow(QMainWindow):
 
         logger.info(
             f"Iniciando procesamiento: {len(resolved)} archivo(s), "
-            f"{self._total_global} página(s), 200 DPI base / "
-            f"hasta 600 DPI en fechas por PDF, "
+            f"{self._total_global} página(s) ({self._page_range().label()}), "
+            f"200 DPI base / hasta 600 DPI en fechas por PDF, "
             f"{effective_threads} hilos efectivos "
             f"({workers} worker(s) x {threads})"
         )
@@ -2106,27 +2414,21 @@ class MainWindow(QMainWindow):
         self.status_label.setText(message)
 
     def _on_preprocessed_page(
-        self, pdf_path: str, page_number: int, image
+        self, pdf_path: str, page_number: int, geometry
     ) -> None:
-        """Guarda una página preprocesada y la muestra si está seleccionada."""
-        import cv2
+        """Guarda la geometría de una página y la muestra si está en pantalla.
 
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        height, width, channels = rgb.shape
-        qimage = QImage(
-            rgb.data,
-            width,
-            height,
-            channels * width,
-            QImage.Format.Format_RGB888,
-        ).copy()
+        Se guardan unos pocos flotantes por página en vez de la imagen: el
+        visor rasteriza bajo demanda y aplica esta misma geometría, igual que
+        hace con las páginas ya procesadas.
+        """
         key = (pdf_path, page_number)
-        self._preprocessed_images[key] = qimage
+        self._preprocess_geometry[key] = geometry
         if self._preview_pdf is not None and key == (
             str(self._preview_pdf),
             self._preview_page,
         ):
-            self._set_preview_qimage(qimage)
+            self._preview_loader.requested.emit(page_number, pdf_path, geometry)
 
     def _on_preprocess_succeeded(self, cancelled: bool) -> None:
         elapsed = (
@@ -2134,7 +2436,7 @@ class MainWindow(QMainWindow):
             if self._run_started is not None
             else None
         )
-        self._preprocessed_active = bool(self._preprocessed_images)
+        self._preprocessed_active = bool(self._preprocess_geometry)
         self._timer.stop()
         self._run_started = None
         self._spinner_active = False
@@ -2179,6 +2481,9 @@ class MainWindow(QMainWindow):
     def _on_preprocess_thread_finished(self) -> None:
         self._preprocess_worker = None
 
+    def _on_pipeline_thread_finished(self) -> None:
+        self._worker = None
+
     def _on_file_started(self, index: int, total: int, name: str) -> None:
         """Activa la fila del archivo en curso en el panel de tiempos."""
         self.empty_times_label.setVisible(False)
@@ -2189,26 +2494,24 @@ class MainWindow(QMainWindow):
         font = row["name"].font()
         font.setBold(True)
         row["name"].setFont(font)
-        row["name"].setText(name)
-        row["bar"].setRange(0, 100)
-        row["bar"].setValue(0)
+        self._set_row_name(row, name)
+        self._set_row_pages(row, 0, self._pages_of_file(index - 1))
         row["secs"].setText("…")
         self._row_started[index - 1] = time.monotonic()
         self._current_file_index = index
 
     def _on_file_finished(self, index: int, report) -> None:
-        """Cierra la fila del archivo con su tiempo real y normaliza."""
+        """Cierra la fila del archivo con su tiempo real."""
         row = self._file_rows.get(index - 1)
         if row is not None:
             font = row["name"].font()
             font.setBold(False)
             row["name"].setFont(font)
             self._row_ms[index - 1] = report.processing_ms
-            row["bar"].setRange(0, 100)
-            row["bar"].setValue(100)
+            self._set_row_pages(row, len(report.pages), len(report.pages))
             row["secs"].setText(_format_clock(report.processing_ms / 1000.0))
-            self._rescale_time_bars()
-        self._current_file_index = 0
+        if self._current_file_index == index:
+            self._current_file_index = 0
 
     def _on_timer_tick(self) -> None:
         if self._spinner_active:
@@ -2230,11 +2533,13 @@ class MainWindow(QMainWindow):
             )
             total = elapsed + remaining
         self._set_time_summary(elapsed, remaining, total)
-        # Reloj en vivo de la fila del archivo en curso.
-        row = self._file_rows.get(self._current_file_index - 1)
-        if row is not None and self._current_file_index:
-            started = self._row_started.get(self._current_file_index - 1)
-            if started is not None:
+        # Reloj en vivo de cada archivo abierto: repartiendo un PDF por
+        # proceso hay varios corriendo a la vez, no solo el último iniciado.
+        for index, started in self._row_started.items():
+            if index in self._row_ms:
+                continue
+            row = self._file_rows.get(index)
+            if row is not None:
                 row["secs"].setText(_format_clock(time.monotonic() - started))
 
     def _on_progress(self, done: int, total: int, message: str) -> None:
@@ -2245,7 +2550,6 @@ class MainWindow(QMainWindow):
             if done > self._last_done:
                 self._last_done = done
             self._done_global = done
-            self._update_file_progress(done)
         self.status_label.setText(message)
 
     def _on_succeeded(self, reports: list[ValidationReport]) -> None:
@@ -2256,6 +2560,7 @@ class MainWindow(QMainWindow):
         )
         self._timer.stop()
         self._reports = reports
+        self._vlm_stats = list(getattr(self._worker, "vlm_stats", []) or [])
         self._preview_results = {
             (str(Path(report.pdf_path).resolve()), page.page_number): page
             for report in reports
@@ -2289,13 +2594,20 @@ class MainWindow(QMainWindow):
         warn = sum(r.summary.get("warning_pages", 0) for r in reports)
         err = sum(r.summary.get("error_pages", 0) for r in reports)
         blank = sum(r.summary.get("blank_pages", 0) for r in reports)
-        total_ms = sum(r.processing_ms for r in reports)
+        # Reloj de la corrida, no la suma de relojes: con un proceso por
+        # archivo los tiempos se solapan y sumarlos daba un total imposible,
+        # varias veces mayor que lo que el usuario esperó. Se prefiere el
+        # cronómetro de la ventana, que es el que estuvo a la vista.
+        total_ms = (
+            elapsed * 1000 if elapsed is not None
+            else CsvReporter.run_wall_ms(reports)
+        )
         calib_ms = sum(r.calibration_ms for r in reports)
         summary = (
             f"OK: {ok} | WARNING: {warn} | ERROR: {err} | "
             f"En blanco: {blank} | "
             f"Calibración: {calib_ms / 1000:.2f} s + "
-            f"Procesado: {(total_ms - calib_ms) / 1000:.2f} s = "
+            f"Procesado: {max(0.0, total_ms - calib_ms) / 1000:.2f} s = "
             f"Total: {total_ms / 1000:.2f} s"
         )
         state = "cancelado" if cancelled_any else "terminado"
@@ -2313,6 +2625,8 @@ class MainWindow(QMainWindow):
             self.status_label.setText(
                 "Procesamiento cancelado — guardando resultados parciales…"
             )
+            # El rango de páginas no se toca: para seguir donde se cortó hay
+            # que ajustarlo a mano antes de volver a procesar.
             self._timer.start()
             self._start_outputs(reports, context="proceso", skip_pdfs=True)
             return
@@ -2357,7 +2671,7 @@ class MainWindow(QMainWindow):
         worker = OutputsWorker(
             reports,
             options,
-            vlm_stats=getattr(self._worker, "vlm_stats", []),
+            vlm_stats=self._vlm_stats,
             parent=self,
         )
         self._outputs_worker = worker
@@ -2423,6 +2737,12 @@ class MainWindow(QMainWindow):
         self._spinner_active = False
         self.busy_label.setText("")
         self.progress.setRange(0, 100)
+        if self._closing:
+            # La ventana está cerrando: ni se reactivan los botones ni se
+            # encola otra exportación, que dejaría el cierre sin terminar.
+            self._pending_export = False
+            self._pending_csv_refresh = False
+            return
         self.btn_cancel.setEnabled(False)
         self.btn_process.setEnabled(True)
         self.btn_preprocess.setEnabled(True)
@@ -2498,18 +2818,24 @@ class MainWindow(QMainWindow):
         """Prepara las filas y las inserta por lotes para no congelar la UI.
 
         El llenado completo de miles de filas bloquea el hilo de interfaz;
-        con ``_table_timer`` se insertan ``_TABLE_CHUNK`` filas por tick.
+        con ``_table_timer`` se inserta un tramo de ``_TABLE_CELL_CHUNK``
+        celdas por tick.
         """
         self.table.setUpdatesEnabled(False)
+        self.table_sort.suspend()
         try:
             self.table.setRowCount(0)
             self._row_pdfs = []
+            self._classify_discrepancies(reports)
             reporter = CsvReporter()
             fields = reporter.fields_for(reports, self._processed_template)
             columns = reporter.columns_for(reports, self._processed_template)
             duplicates = detect_duplicate_log_pages(reports)
             self._update_duplicate_summary(duplicates)
             duplicate_iter = iter(duplicates)
+            # El mismo reparto de tiempo que escribe el CSV: la tabla y el
+            # archivo no pueden mostrar dos números distintos por página.
+            time_factor = reporter.run_time_factor(reports)
             pending: list[
                 tuple[
                     int,
@@ -2529,6 +2855,7 @@ class MainWindow(QMainWindow):
                         fields,
                         date_mode=self._csv_date_mode(),
                         duplicate=duplicate.duplicate,
+                        time_factor=time_factor,
                     )
                     field_results = {field.field_id: field for field in page.fields}
                     pending.append(
@@ -2551,10 +2878,13 @@ class MainWindow(QMainWindow):
                 if field.required
             }
             self._table_important_field_ids.add(_DUP_COLUMN)
-            if not self._important_fields_user_selected:
-                self._selected_important_columns = self._default_important_columns(columns)
-            else:
-                self._selected_important_columns.intersection_update(columns)
+            self._table_important_field_ids.add(_DISC_COLUMN)
+            # La selección guardada se conserva completa: recortarla contra
+            # las columnas de esta corrida perdería las marcas de un CSV con
+            # otras columnas la próxima vez que el usuario edite la lista.
+            self._selected_important_columns = self._current_important_columns(
+                columns
+            )
             self.csv_columns_toggle.setEnabled(bool(columns))
             self.csv_columns_toggle.setVisible(bool(columns))
             self._apply_csv_table_view()
@@ -2564,9 +2894,26 @@ class MainWindow(QMainWindow):
                 self.btn_next.setEnabled(False)
                 self._table_timer.start()
             else:
-                self.table.setSortingEnabled(True)
+                self.table_sort.reset()
         finally:
             self.table.setUpdatesEnabled(True)
+
+    def _classify_discrepancies(self, reports: list[ValidationReport]) -> None:
+        """Marca ``page.discrepancy`` antes de armar las filas de la tabla.
+
+        La columna ``disc`` sale de esa marca. La escritura de salidas la
+        calcula también, pero en el hilo de fondo y después de esta tabla: sin
+        recorrerla aquí, la pantalla mostraría ``false`` en páginas que el CSV
+        marca como discrepancia. Mientras ese hilo corre no se repite, porque
+        estaría reescribiendo las mismas marcas que el otro hilo lee.
+        """
+        if self._processed_template is None:
+            return
+        if self._outputs_worker is not None and self._outputs_worker.isRunning():
+            return
+        from app.validation.discrepancias import clasificar_lote
+
+        clasificar_lote(reports, self._processed_template)
 
     def _update_duplicate_summary(
         self, duplicates: list[DuplicateLogPage]
@@ -2607,6 +2954,12 @@ class MainWindow(QMainWindow):
         self.duplicates_label.setToolTip("\n".join(lines))
 
     @staticmethod
+    def _discrepancy_tooltip(value: str) -> str:
+        if value.strip().lower() == "true":
+            return "disc=true: la bitácora quedó marcada como discrepancia de firmas."
+        return "disc=false: la bitácora cumple las firmas exigidas."
+
+    @staticmethod
     def _duplicate_tooltip(duplicate: DuplicateLogPage) -> str:
         if duplicate.log_number is None:
             return "dup=false: log_number ausente o inválido."
@@ -2627,6 +2980,10 @@ class MainWindow(QMainWindow):
             self._selected_important_columns,
         )
 
+    def _rows_per_chunk(self) -> int:
+        """Filas que caben en el presupuesto de celdas de un tick."""
+        return max(1, _TABLE_CELL_CHUNK // max(1, len(self._table_columns)))
+
     def _on_table_chunk(self) -> None:
         if not self._table_pending:
             self._table_timer.stop()
@@ -2635,8 +2992,9 @@ class MainWindow(QMainWindow):
             self._update_preview_nav()
             self.table.viewport().update()
             return
-        batch = self._table_pending[:_TABLE_CHUNK]
-        del self._table_pending[:_TABLE_CHUNK]
+        rows = self._rows_per_chunk()
+        batch = self._table_pending[:rows]
+        del self._table_pending[:rows]
         for row_index, values, field_results, duplicate in batch:
             for col_index, column in enumerate(self._table_columns):
                 value = values.get(column, "")
@@ -2649,7 +3007,10 @@ class MainWindow(QMainWindow):
                     )
                 field_id = column.removesuffix("_conf")
                 field = field_results.get(field_id)
-                if column == _DUP_COLUMN:
+                if column == _DISC_COLUMN:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setToolTip(self._discrepancy_tooltip(str(value)))
+                elif column == _DUP_COLUMN:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     item.setToolTip(self._duplicate_tooltip(duplicate))
                     if duplicate.duplicate:
@@ -2672,7 +3033,7 @@ class MainWindow(QMainWindow):
             total = done + len(self._table_pending)
             self.status_label.setText(f"Construyendo tabla… {done}/{total}")
         else:
-            self.table.setSortingEnabled(True)
+            self.table_sort.reset()
 
     # ── Tiempo por archivo ──────────────────────────────────────────────
 
@@ -2687,7 +3048,7 @@ class MainWindow(QMainWindow):
             widget.update()
 
     def _populate_times(self, reports: list[ValidationReport]) -> None:
-        """Normalización final del panel: barras relativas al máximo del lote."""
+        """Estado final del panel: cada archivo al 100 % con sus páginas."""
         _clear_layout(self.times_vbox)
         self._file_rows = {}
         self._row_ms = {}
@@ -2696,39 +3057,30 @@ class MainWindow(QMainWindow):
         self.empty_times_label.setVisible(not bool(reports))
         if not reports:
             return
-        for report in reports:
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            name = QLabel(Path(report.pdf_path).name)
-            name.setToolTip(str(report.pdf_path))
-            name.setMinimumWidth(150)
-            name.setMaximumWidth(220)
-            bar = QProgressBar()
-            bar.setObjectName("timeBar")
-            bar.setFixedHeight(14)
-            bar.setMinimumWidth(120)
-            bar.setRange(0, 100)
-            bar.setValue(100)
-            bar.setTextVisible(True)
-            seconds = QLabel(_format_clock(report.processing_ms / 1000.0))
-            seconds.setAlignment(Qt.AlignmentFlag.AlignRight)
-            seconds.setMinimumWidth(64)
-            row.addWidget(name)
-            row.addWidget(bar, 1)
-            row.addWidget(seconds)
-            self.times_vbox.addLayout(row)
+        for index, report in enumerate(reports):
+            row = self._make_file_row()
+            self._set_row_name(
+                row, Path(report.pdf_path).name, str(report.pdf_path)
+            )
+            self._set_row_pages(row, len(report.pages), len(report.pages))
+            row["secs"].setText(_format_clock(report.processing_ms / 1000.0))
+            self._file_rows[index] = row
+            self._row_ms[index] = report.processing_ms
         self.times_vbox.addStretch()
 
     # ── Vista previa ───────────────────────────────────────────────────
 
     def _refresh_preview_template(self, _index: int = -1) -> None:
-        """Redibuja las casillas de la plantilla sobre la vista actual."""
-        if self._preview_pdf is not None:
-            self._show_preview_page(self._preview_page, self._preview_pdf)
+        """Redibuja las casillas de la plantilla sobre la vista actual.
+
+        Cada plantilla recuerda sus propios campos importantes, así que al
+        cambiarla se recupera la selección guardada para la nueva.
+        """
+        self._restore_important_columns()
+        self._apply_preview_overlay()
 
     def _on_fields_toggled(self, _checked: bool) -> None:
-        if self._preview_pdf is not None:
-            self._show_preview_page(self._preview_page, self._preview_pdf)
+        self._apply_preview_overlay()
 
     def _jump_to_page(self, row: int, _col: int) -> None:
         if self._table_pending:
@@ -2759,13 +3111,7 @@ class MainWindow(QMainWindow):
             validator.setTop(max(1, global_total))
         self.page_edit.setEnabled(has_pdf and global_total > 0)
         self.page_total_label.setText(f"de {global_total}")
-        index = next(
-            (i for i, path in enumerate(self._preview_documents)
-             if self._preview_pdf is not None
-             and str(path.resolve()).casefold()
-             == str(self._preview_pdf.resolve()).casefold()),
-            -1,
-        )
+        index = self._preview_document_index()
         pdf_text = self._preview_pdf.name if has_pdf else "Sin PDF"
         self.preview_file_label.setText(pdf_text)
         self.preview_file_label.setToolTip(
@@ -2810,7 +3156,10 @@ class MainWindow(QMainWindow):
         font.setBold(True)
         painter.setFont(font)
         important_only = self.important_fields_check.isChecked()
-        for field in _visible_preview_fields(template, important_only):
+        important_ids = (
+            self._current_important_field_ids(template) if important_only else None
+        )
+        for field in _visible_preview_fields(template, important_only, important_ids):
             coords = (boxes or {}).get(field.id)
             if coords is None or len(coords) != 4:
                 coords = (field.x, field.y, field.w, field.h)
@@ -2870,20 +3219,16 @@ class MainWindow(QMainWindow):
         self._preview_pdf = pdf_path
         self._update_preview_nav()
         self._preview_pending = (page_number, str(pdf_path))
-        cached = self._preprocessed_images.get((str(pdf_path), page_number))
         # Tras procesar, la geometría guardada en PageResult refleja exactamente
-        # la alineación (incluido el anclaje por lote) usada por el OCR. Una
-        # imagen preprocesada con anterioridad puede haber usado otro anclaje,
-        # así que solo reutilizamos esa caché mientras aún no hay resultado.
-        if (
-            self._preprocessed_active
-            and cached is not None
-            and self._current_preview_result() is None
-        ):
-            self._set_preview_qimage(cached)
-            return
+        # la alineación (incluido el anclaje por lote) usada por el OCR, así que
+        # tiene prioridad: el preprocesado previo pudo usar otro anclaje.
+        geometry = self._current_preview_geometry()
+        if geometry is None and self._preprocessed_active:
+            geometry = self._preprocess_geometry.get(
+                (str(pdf_path), page_number)
+            )
         self._preview_loader.requested.emit(
-            page_number, str(pdf_path), self._current_preview_geometry()
+            page_number, str(pdf_path), geometry
         )
 
     def _on_preview_ready(
@@ -2897,7 +3242,19 @@ class MainWindow(QMainWindow):
         self._set_preview_qimage(qimage)
 
     def _set_preview_qimage(self, qimage: QImage) -> None:
-        """Carga una imagen fuente y le aplica el overlay actual."""
+        """Guarda el render limpio y le aplica el overlay actual."""
+        self._preview_base_image = qimage
+        self._apply_preview_overlay()
+
+    def _apply_preview_overlay(self) -> None:
+        """Repinta los recuadros sobre el render ya disponible.
+
+        Cambiar qué campos se muestran no cambia la página rasterizada, así
+        que el overlay se rehace sin volver a pedirla al hilo de render.
+        """
+        qimage = self._preview_base_image
+        if qimage is None:
+            return
         pixmap = QPixmap.fromImage(qimage)
         if self.fields_check.isChecked():
             template = self._processed_template or self._load_template()
@@ -2975,18 +3332,103 @@ class MainWindow(QMainWindow):
             QShortcut(seq, self,
                       activated=lambda f=factor: self._zoom_preview(f))
 
+    def showEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().showEvent(event)
+        QTimer.singleShot(0, self._balance_bottom_splitter)
+
     def resizeEvent(self, event) -> None:
         """Reajusta la vista también cuando cambia el tamaño de la ventana."""
         super().resizeEvent(event)
+        QTimer.singleShot(0, self._balance_bottom_splitter)
         if self._preview_source_pixmap is not None:
             QTimer.singleShot(0, self._render_preview_pixmap)
 
+    # ── Cierre ──────────────────────────────────────────────────────────
+
+    def _running_workers(self) -> list[QThread]:
+        """Hilos de trabajo todavía en marcha, si los hay."""
+        running: list[QThread] = []
+        for worker in (
+            self._worker, self._preprocess_worker, self._outputs_worker
+        ):
+            if worker is None:
+                continue
+            try:
+                if worker.isRunning():
+                    running.append(worker)
+            except RuntimeError:
+                # El objeto C++ ya se destruyó tras ``deleteLater``.
+                continue
+        return running
+
     def closeEvent(self, event) -> None:
-        self._timer.stop()
-        self._table_timer.stop()
-        self._preview_thread.quit()
-        self._preview_thread.wait(2000)
+        """Cierra sin destruir hilos vivos, que abortaría el proceso.
+
+        Cerrar la ventana con OCR, preprocesado o exportación en marcha
+        destruía un ``QThread`` en ejecución y Windows mataba el programa
+        (0xC0000409). Ahora el cierre pide la parada, deja la ventana viva
+        atendiendo eventos mientras el trabajo en vuelo termina, y se
+        completa solo cuando ya no queda ningún hilo corriendo.
+        """
+        running = self._running_workers()
+        if running:
+            self._begin_shutdown(running)
+            event.ignore()
+            return
+        self._teardown()
         super().closeEvent(event)
+
+    def _begin_shutdown(self, running: list[QThread]) -> None:
+        """Pide la parada del trabajo en curso y espera sin congelar la GUI."""
+        if not self._closing:
+            self._closing = True
+            logger.info(
+                f"Cierre solicitado: deteniendo {len(running)} tarea(s) en curso"
+            )
+            for worker in running:
+                worker.requestInterruption()
+            for button in (
+                self.btn_process, self.btn_preprocess,
+                self.btn_export, self.btn_cancel,
+            ):
+                button.setEnabled(False)
+            self.status_label.setText(
+                "Cerrando… se está deteniendo el trabajo en curso. "
+                "Las páginas ya leídas se guardan."
+            )
+        if not self._shutdown_timer.isActive():
+            self._shutdown_timer.start()
+
+    def _on_shutdown_tick(self) -> None:
+        """Cierra de verdad en cuanto el último hilo termina."""
+        if self._running_workers():
+            return
+        self._shutdown_timer.stop()
+        self.close()
+
+    def _teardown(self) -> None:
+        """Detiene temporizadores e hilos propios antes de destruir la ventana.
+
+        Se ejecuta una sola vez: la llaman tanto el cierre de la ventana como
+        ``aboutToQuit``, y la segunda pasada no debe tocar nada.
+        """
+        if self._torn_down:
+            return
+        self._torn_down = True
+        for timer in (
+            self._timer, self._table_timer,
+            self._log_timer, self._shutdown_timer,
+        ):
+            timer.stop()
+        if self._csv_viewer is not None:
+            self._csv_viewer.close()
+        self._preview_thread.quit()
+        self._preview_thread.wait(5000)
+        # Red de seguridad: si algún hilo llegara vivo hasta aquí, esperarlo
+        # es preferible a que Qt lo destruya en marcha y aborte el proceso.
+        for worker in self._running_workers():
+            worker.requestInterruption()
+            worker.wait(10000)
 
 
 def _color_for(status: Status):

@@ -13,7 +13,8 @@ los PDFs ordenados (PDFs por matrícula, o carpetas por matrícula con un
 PDF por mes dentro) y los informes opcionales.
 
 Opciones útiles:
-    --limit-books N   Procesar solo los primeros N archivos.
+    --pages 1-40      Procesar solo ese rango de páginas del lote completo,
+                      numerado de corrido sobre los PDFs de la entrada.
     --debug           Generar debug.pdf con los bounding boxes de los
                       campos sobre los archivos procesados.
 """
@@ -35,6 +36,7 @@ ensure_portable_env()
 os.chdir(_ROOT)
 
 from app.core.config import AppConfig, config_for_pdf
+from app.core.page_range import PageRange, slice_paths
 from app.core.pipeline import OcrProcessPool, Pipeline, process_pdf_batch
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
 from app.models.schemas import Status
@@ -77,13 +79,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dpi", type=int, default=150, help="DPI de renderizado")
     parser.add_argument(
-        "--max-pages", type=int, default=None,
-        help="Procesar solo las primeras N páginas de cada PDF (para pruebas)",
-    )
-    parser.add_argument(
-        "--limit-books", type=int, default=None,
-        help="Procesar solo los primeros N archivos (PDFs ordenados "
-             "de la carpeta de entrada)",
+        "--pages", default=None, metavar="RANGO",
+        help="Procesar solo un rango de páginas del lote completo, numerado "
+             "de corrido sobre los PDFs ordenados de la entrada: '1-40' "
+             "(las 40 primeras del lote, caigan donde caigan), '200-' (desde "
+             "la 200 hasta el final) o '15' (solo esa página). Sin esta "
+             "opción se procesa todo.",
     )
     parser.add_argument(
         "--debug", action="store_true",
@@ -138,7 +139,7 @@ def parse_args() -> argparse.Namespace:
         "--recortes-firmas", action="store_true",
         help="Volcar los recortes de las regiones de firma a "
              "recortes_firmas/ para auditar visualmente los bounding boxes "
-             "(usar con --max-pages para lotes pequeños).",
+             "(usar con --pages para lotes pequeños).",
     )
     parser.add_argument(
         "--errores", action="store_true",
@@ -194,10 +195,10 @@ def _csv_name() -> str:
 
 
 def _print_pdf_result(
-    pdf_path: Path, report, vlm_stats: dict, max_pages: int | None
+    pdf_path: Path, report, vlm_stats: dict, pages: PageRange
 ) -> None:
-    print(f"\n>>> {pdf_path.name}"
-          + (f" (primeras {max_pages} páginas)" if max_pages else ""))
+    tramo = "" if pages.is_full else f" ({pages.label()} del archivo)"
+    print(f"\n>>> {pdf_path.name}{tramo}")
     if vlm_stats.get("enabled"):
         print(
             f"  VLM: {vlm_stats.get('crops', 0)} recorte(s), "
@@ -243,12 +244,13 @@ def _run(args: argparse.Namespace) -> int:
         vlm_enabled=False,
     )
 
-    if args.max_pages is not None and args.max_pages < 1:
-        print("ERROR: --max-pages debe ser >= 1", file=sys.stderr)
-        return 1
-    if args.limit_books is not None and args.limit_books < 1:
-        print("ERROR: --limit-books debe ser >= 1", file=sys.stderr)
-        return 1
+    page_range = PageRange()
+    if args.pages is not None:
+        try:
+            page_range = PageRange.parse(args.pages)
+        except ValueError as exc:
+            print(f"ERROR: --pages inválido: {exc}", file=sys.stderr)
+            return 1
     if args.cpu_threads is not None and args.cpu_threads < 1:
         print("ERROR: --threads debe ser >= 1", file=sys.stderr)
         return 1
@@ -260,9 +262,18 @@ def _run(args: argparse.Namespace) -> int:
     setup_logging(run_dir / "logs",
                   level="DEBUG" if args.verbose else "INFO")
 
-    pdfs = _resolve_pdfs(args)
-    if args.limit_books is not None:
-        pdfs = pdfs[: args.limit_books]
+    entrada = _resolve_pdfs(args)
+    # El rango numera el lote de corrido: se reparte entre los archivos que
+    # lo contienen y los demás ni se abren.
+    slices = slice_paths(entrada, page_range)
+    if not slices:
+        print(
+            f"ERROR: el rango ({page_range.label()}) no incluye ninguna "
+            f"página de los {len(entrada)} archivo(s) de la entrada",
+            file=sys.stderr,
+        )
+        return 1
+    pdfs = [item.path for item in slices]
 
     def on_progress(done: int, total: int, message: str) -> None:
         if total:
@@ -270,8 +281,8 @@ def _run(args: argparse.Namespace) -> int:
             print(f"\r[{pct:3d}%] {message:<60}", end="", flush=True)
 
     print(f"Analizando {len(pdfs)} archivo(s) de: {pdfs[0].parent}")
-    if args.limit_books is not None:
-        print(f"Limite: primeros {args.limit_books} archivos")
+    if not page_range.is_full:
+        print(f"Rango del lote: {page_range.label()}")
     print(f"Plantilla : {template.name} ({len(template.fields)} campos)")
     print(f"Salida    : {run_dir}")
 
@@ -319,21 +330,22 @@ def _run(args: argparse.Namespace) -> int:
             f"planificación adaptativa y colas acotadas"
         )
         reports, vlm_stats = process_pdf_batch(
-            pdfs,
+            entrada,
             config,
             template,
             process_pool,
             engine,
             date_engine=date_engine,
-            max_pages=args.max_pages,
+            page_range=page_range,
             reference_page=args.reference_page,
             on_progress=on_progress,
         )
-        for pdf_path, report, stats in zip(pdfs, reports, vlm_stats):
-            _print_pdf_result(pdf_path, report, stats, args.max_pages)
+        for item, report, stats in zip(slices, reports, vlm_stats):
+            _print_pdf_result(item.path, report, stats, item.pages)
     else:
         print("Perfil C activo: ejecución secuencial con un worker")
-        for pdf_path in pdfs:
+        for item in slices:
+            pdf_path = item.path
             file_config = config_for_pdf(config, pdf_path)
             logger.info(f"[CLI] Procesando: {pdf_path.name}")
             print(
@@ -352,11 +364,11 @@ def _run(args: argparse.Namespace) -> int:
                 process_pool=process_pool,
                 reference_page=args.reference_page,
             )
-            report = pipeline.process(pdf_path, max_pages=args.max_pages)
+            report = pipeline.process(pdf_path, page_range=item.pages)
             reports.append(report)
             vlm_stats.append(pipeline.vlm_stats)
             _print_pdf_result(
-                pdf_path, report, pipeline.vlm_stats, args.max_pages
+                pdf_path, report, pipeline.vlm_stats, item.pages
             )
 
     if process_pool is not None:

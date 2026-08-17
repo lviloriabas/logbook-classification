@@ -9,10 +9,13 @@ acusan como faltas: categoría UNCERTAIN (revisión manual).
 
 from __future__ import annotations
 
+import csv
+import tempfile
 import unittest
 from pathlib import Path
 
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
+from app.reports.csv_reporter import CsvReporter
 from app.templates.manager import TemplateManager
 from app.validation.discrepancias import (
     Categoria,
@@ -285,6 +288,26 @@ class TestOrdenYMarcado(unittest.TestCase):
         self.assertEqual(len(entradas), 2)
         self.assertIsNone(entradas[0].matricula)
         self.assertEqual(entradas[1].matricula, "HP-1534CMP")
+
+
+class TestColumnaDiscEnElCsv(unittest.TestCase):
+    """La columna ``disc`` del CSV sale de esta clasificación."""
+
+    def test_la_pagina_clasificada_llega_al_csv_como_true(self):
+        limpia = _vuelo_ok(1, "2147337")
+        marcada = _vuelo_ok(2, "2147338",
+                            captain_signature=("false", AUSENTE))
+        reporte = _reporte(limpia, marcada)
+
+        clasificar_lote([reporte], TEMPLATE)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            CsvReporter().write(reporte, path, TEMPLATE)
+            with open(path, encoding="utf-8-sig", newline="") as fh:
+                rows = list(csv.DictReader(fh))
+
+        self.assertEqual([row["disc"] for row in rows], ["false", "true"])
 
 
 if __name__ == "__main__":

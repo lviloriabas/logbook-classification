@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.widgets import load_zoom_icon
 from app.templates.manager import TEMPLATES_DIR, TemplateManager
 from app.templates.schema import FieldTemplate, FieldType, Template
 
@@ -123,13 +124,6 @@ def _load_icon() -> QIcon:
         if path.is_file():
             return QIcon(str(path))
     return QIcon()
-
-
-def _load_zoom_icon(name: str) -> QIcon:
-    """Icono de zoom local para que el editor sea consistente en Windows."""
-    assets = Path(__file__).resolve().parents[2] / "assets"
-    path = assets / f"zoom_{name}.svg"
-    return QIcon(str(path)) if path.is_file() else QIcon.fromTheme(f"zoom-{name}")
 
 
 class ResizableRectItem(QGraphicsRectItem):
@@ -321,6 +315,9 @@ class EditorWindow(QMainWindow):
         self._selected_id: Optional[str] = None
         self._editor_zoom = 1.0  # 1.0 = ajustado a la ventana
 
+        # Campos tal como venían en la plantilla, para no perder al guardar
+        # las propiedades que el editor no expone.
+        self._base_fields: Dict[str, FieldTemplate] = {}
         self._presets: Dict[str, dict] = self._load_presets()
 
         self._build_ui()
@@ -341,6 +338,11 @@ class EditorWindow(QMainWindow):
             return dict(_FALLBACK_PRESETS)
         presets: Dict[str, dict] = {}
         for field in template.fields:
+            # Se conserva el campo completo: al guardar se copia y solo se
+            # reemplaza lo que el editor realmente edita. Reconstruirlo desde
+            # el preset perdía silenciosamente todo lo que el editor no
+            # muestra (longitudes, umbrales de firma, modo de lectura).
+            self._base_fields[field.id] = field
             presets[field.id] = {
                 "type": field.type.value,
                 "required": field.required,
@@ -463,7 +465,7 @@ class EditorWindow(QMainWindow):
 
         self.btn_zoom_in = QToolButton()
         self.btn_zoom_in.setObjectName("zoomControl")
-        self.btn_zoom_in.setIcon(_load_zoom_icon("in"))
+        self.btn_zoom_in.setIcon(load_zoom_icon("in"))
         self.btn_zoom_in.setToolTip("Acercar el lienzo")
         self.btn_zoom_in.setAccessibleName("Acercar lienzo")
         self.btn_zoom_in.setIconSize(QSize(14, 14))
@@ -473,7 +475,7 @@ class EditorWindow(QMainWindow):
 
         self.btn_zoom_fit = QToolButton()
         self.btn_zoom_fit.setObjectName("zoomControl")
-        self.btn_zoom_fit.setIcon(_load_zoom_icon("fit"))
+        self.btn_zoom_fit.setIcon(load_zoom_icon("fit"))
         self.btn_zoom_fit.setToolTip("Ajustar la página a la ventana")
         self.btn_zoom_fit.setAccessibleName("Ajustar página a la ventana")
         self.btn_zoom_fit.setIconSize(QSize(14, 14))
@@ -483,7 +485,7 @@ class EditorWindow(QMainWindow):
 
         self.btn_zoom_out = QToolButton()
         self.btn_zoom_out.setObjectName("zoomControl")
-        self.btn_zoom_out.setIcon(_load_zoom_icon("out"))
+        self.btn_zoom_out.setIcon(load_zoom_icon("out"))
         self.btn_zoom_out.setToolTip("Alejar el lienzo")
         self.btn_zoom_out.setAccessibleName("Alejar lienzo")
         self.btn_zoom_out.setIconSize(QSize(14, 14))
@@ -827,23 +829,29 @@ class EditorWindow(QMainWindow):
         for field_id, item in self._items.items():
             rect = item.sceneBoundingRect()
             props = self._presets.get(field_id, {})
-            fields.append(FieldTemplate(
-                id=field_id,
-                type=FieldType(props.get("type", "ocr")),
-                required=bool(props.get("required")),
-                x=round(rect.left() / w, 4),
-                y=round(rect.top() / h, 4),
-                w=round(rect.width() / w, 4),
-                h=round(rect.height() / h, 4),
-                regex=props.get("regex") or None,
-                min_length=None,
-                max_length=None,
-                postprocess=props.get("postprocess") or None,
-                localize=props.get("localize") or None,
-                min_ink_ratio=props.get("min_ink_ratio", 0.02),
-                max_ink_ratio=props.get("max_ink_ratio", 0.90),
-                min_components=props.get("min_components", 2),
-            ))
+            # Solo estas propiedades se editan aquí; el resto (longitudes,
+            # modo de lectura, umbrales de firma) se hereda del campo
+            # original para que guardar la geometría no las borre.
+            edited = {
+                "id": field_id,
+                "type": FieldType(props.get("type", "ocr")),
+                "required": bool(props.get("required")),
+                "x": round(rect.left() / w, 4),
+                "y": round(rect.top() / h, 4),
+                "w": round(rect.width() / w, 4),
+                "h": round(rect.height() / h, 4),
+                "regex": props.get("regex") or None,
+                "postprocess": props.get("postprocess") or None,
+                "localize": props.get("localize") or None,
+                "min_ink_ratio": props.get("min_ink_ratio", 0.02),
+                "max_ink_ratio": props.get("max_ink_ratio", 0.90),
+                "min_components": props.get("min_components", 2),
+            }
+            base = self._base_fields.get(field_id)
+            fields.append(
+                base.model_copy(update=edited) if base is not None
+                else FieldTemplate(**edited)
+            )
         return Template(name="Aircraft Log", page_size=list(self._image_size),
                         fields=fields)
 
@@ -904,6 +912,11 @@ class EditorWindow(QMainWindow):
         self._items.clear()
         self.field_list.clear()
         w, h = self._image_size
+
+        # La plantilla abierta manda: sus campos son la base que se copia al
+        # guardar, para no reemplazar sus reglas por las del preset.
+        for field in template.fields:
+            self._base_fields[field.id] = field
 
         # Campos que no están en los presets del código se conservan como
         # extras: visibles y seleccionables, pero con reglas por defecto.

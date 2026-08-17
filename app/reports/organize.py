@@ -28,6 +28,10 @@ Convenciones de nombres (rutas relativas a la carpeta de la corrida):
 Las páginas sin matrícula legible van al grupo ``sin_matricula`` y las
 sin fecha legible al grupo ``sin_fecha`` (archivo ``sf.pdf``), de modo
 que ninguna bitácora queda por fuera de los PDFs generados.
+
+Exportar de nuevo nunca borra ni sobreescribe los PDFs que ya están en la
+carpeta: cuando el nombre está ocupado, la copia nueva lo repite con un
+sufijo numérico (``HP-XXXXCMP-2.pdf``, ``-3``…).
 """
 
 from __future__ import annotations
@@ -49,7 +53,7 @@ from app.models.schemas import (
     ValidationReport,
 )
 from app.templates.schema import FieldType, Template
-from app.utils.io import sanitize_filename
+from app.utils.io import sanitize_filename, unique_path
 from app.validation.discrepancias import (
     Discrepancia,
 )
@@ -251,7 +255,12 @@ def generar_pdfs(
     excluidas: Optional[set[Tuple[str, int]]] = None,
     dpi: int = 150,
 ) -> List[Path]:
-    """Genera los PDFs ordenados (uno por grupo) y devuelve sus rutas."""
+    """Genera los PDFs ordenados (uno por grupo) y devuelve sus rutas.
+
+    Los PDFs de una exportación anterior no se pisan: si el nombre del
+    grupo ya existe en la carpeta, la copia nueva lleva sufijo numérico.
+    Las rutas se devuelven en el orden de ``sorted(grupos)``.
+    """
     grupos = agrupar_paginas(reports, separar_por, excluidas)
     rutas: List[Path] = []
     refs = [ref for grupo in grupos.values() for ref in grupo]
@@ -259,7 +268,9 @@ def generar_pdfs(
         for clave in sorted(grupos):
             ruta = escribir_pdf_paginas(
                 grupos[clave],
-                Path(run_dir) / ruta_pdf(clave, separar_por, run_dir),
+                unique_path(
+                    Path(run_dir) / ruta_pdf(clave, separar_por, run_dir)
+                ),
                 dpi,
                 sources=sources,
             )
@@ -346,7 +357,11 @@ def _etiqueta_separador(condicion: str, valor: str) -> str:
     if condicion == "mes":
         if valor == "sin_fecha":
             return "SIN FECHA"
-        return nombre_mes(valor).replace("-", "/")
+        etiqueta = nombre_mes(valor)
+        if etiqueta == valor:
+            return etiqueta
+        anio, _, mes = etiqueta.partition("-")
+        return f"{mes} {anio}"
     if condicion == "avion" and valor == "sin_matricula":
         return "SIN MATRICULA"
     return valor
@@ -439,6 +454,10 @@ def escribir_pdf_unico(
 ) -> Path:
     """Genera un único PDF con el mismo nombre que ``run_dir``.
 
+    Si ese PDF ya existe (re-export), se conserva y el nuevo se escribe con
+    sufijo numérico. Sin páginas que exportar no se escribe nada ni se
+    toca el PDF anterior.
+
     - ``separar_por`` vacío: páginas en orden de logpage, sin separadores.
     - Con ``avion`` y/o ``mes``: las páginas se agrupan por esos criterios
       (ordenadas por logpage dentro del grupo) y cada grupo comienza con una
@@ -451,7 +470,7 @@ def escribir_pdf_unico(
     """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
-    output_path = run_dir / f"{run_dir.name}.pdf"
+    base_path = run_dir / f"{run_dir.name}.pdf"
 
     criterios = list(separar_por or [])
     refs = _preparar_paginas(reports, excluidas) if not criterios else []
@@ -467,10 +486,10 @@ def escribir_pdf_unico(
     todas_las_refs = refs + refs_discrepancias
 
     if not todas_las_refs:
-        output_path.unlink(missing_ok=True)
-        logger.info(f"[Organize] No hay páginas para exportar: {output_path}")
-        return output_path
+        logger.info(f"[Organize] No hay páginas para exportar: {base_path}")
+        return base_path
 
+    output_path = unique_path(base_path)
     doc = fitz.open()
     try:
         with PdfDocumentCache(ref.pdf_path for ref in todas_las_refs) as sources:
@@ -512,7 +531,7 @@ def escribir_pdf_discrepancias(
     del template, dpi
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
-    output_path = run_dir / "discrepancias.pdf"
+    output_path = unique_path(run_dir / "discrepancias.pdf")
     ordenadas = sorted(
         enumerate(entradas),
         key=lambda par: (
@@ -588,7 +607,7 @@ def escribir_pdf_errores(
     del template, dpi
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
-    output_path = run_dir / "errores.pdf"
+    output_path = unique_path(run_dir / "errores.pdf")
 
     pendientes: List[Tuple[PaginaRef, List[FieldResult]]] = []
     for ref in iterar_paginas(reports):

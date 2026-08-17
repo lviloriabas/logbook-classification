@@ -19,6 +19,25 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[<>:"/\\|?*]', "_", name).strip()
 
 
+def unique_path(path: Path) -> Path:
+    """Devuelve una ruta libre añadiendo ``-2``, ``-3``… al nombre.
+
+    Al exportar de nuevo sobre una corrida existente los archivos previos
+    se conservan: si ``bitacoras.pdf`` ya está, la copia nueva se llama
+    ``bitacoras-2.pdf``. Es la misma convención que usan las carpetas de
+    corrida cuando el nombre con fecha y hora ya existe.
+    """
+    path = Path(path)
+    if not path.exists():
+        return path
+    n = 2
+    while True:
+        candidate = path.with_name(f"{path.stem}-{n}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def output_paths(
     output_dir: Path, base_name: str
 ) -> tuple[Path, Path]:

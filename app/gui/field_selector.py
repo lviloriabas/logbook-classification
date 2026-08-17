@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -32,6 +34,9 @@ class ImportantFieldsDialog(QDialog):
         self.resize(420, 520)
         self.columns = list(columns)
         self.checks: dict[str, QCheckBox] = {}
+        # Marcar en bloque no debe emitir una selección por casilla: cada
+        # emisión guarda el archivo y repinta el visor.
+        self._bulk_update = False
         self._build_ui(set(selected))
 
     def _build_ui(self, selected: set[str]) -> None:
@@ -39,9 +44,23 @@ class ImportantFieldsDialog(QDialog):
         layout.addWidget(
             QLabel(
                 "Marque las columnas que deben aparecer en la vista de campos "
-                "importantes. El CSV guardado no se modifica."
+                "importantes y como recuadros en la vista previa del PDF. La "
+                "selección se guarda para la plantilla activa; el CSV "
+                "guardado no se modifica."
             )
         )
+        bulk_row = QHBoxLayout()
+        select_all = QPushButton("Marcar todas")
+        select_all.setToolTip("Marcar todas las columnas de la lista")
+        select_all.clicked.connect(lambda: self._set_all(True))
+        bulk_row.addWidget(select_all)
+        clear_all = QPushButton("Desmarcar todas")
+        clear_all.setToolTip("Desmarcar todas las columnas de la lista")
+        clear_all.clicked.connect(lambda: self._set_all(False))
+        bulk_row.addWidget(clear_all)
+        bulk_row.addStretch()
+        layout.addLayout(bulk_row)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         body = QWidget()
@@ -66,7 +85,18 @@ class ImportantFieldsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _set_all(self, checked: bool) -> None:
+        self._bulk_update = True
+        try:
+            for check in self.checks.values():
+                check.setChecked(checked)
+        finally:
+            self._bulk_update = False
+        self._emit_selection()
+
     def _emit_selection(self, *_args) -> None:
+        if self._bulk_update:
+            return
         selected = {
             column for column, check in self.checks.items() if check.isChecked()
         }
