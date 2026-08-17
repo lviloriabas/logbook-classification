@@ -52,11 +52,13 @@ verificador VLM: el pipeline lo contrasta con el resto de la bitácora
 (``review_with_background``, apoyado en ``app/vision/book_background.py``).
 Este módulo mira cada recorte aislado y estima el papel con morfología; aquel
 resta la mediana del mismo campo a lo largo del libro, que es ese campo
-realmente vacío. Medido sobre 200 recortes etiquetados de una bitácora real,
-la combinación baja las revisiones manuales de 6 a 2 sin producir ningún
-veredicto equivocado. Los veredictos firmes de aquí no se revisan: la segunda
-opinión solo se pronuncia sobre lo que este módulo dejó en duda, y solo cuando
-la evidencia del libro la sitúa fuera de toda duda.
+realmente vacío.
+
+Medido sobre 394 recortes etiquetados a mano de dos bitácoras distintas, la
+combinación baja las revisiones manuales de 12 a 1 **sin producir ningún
+veredicto equivocado en ninguna de las dos**. Los veredictos firmes de aquí no
+se revisan: la segunda opinión solo se pronuncia sobre lo que este módulo dejó
+en duda, y solo cuando la evidencia del libro la sitúa fuera de toda duda.
 """
 
 from __future__ import annotations
@@ -68,6 +70,7 @@ import numpy as np
 
 from app.models.schemas import FieldResult, Status
 from app.templates.schema import FieldTemplate
+from app.vision.book_background import drop_crossing_strokes as book_drop_crossing
 from app.vision.book_background import ink_mask as book_ink_mask
 from app.vision.book_background import peak_density as book_peak_density
 
@@ -292,8 +295,15 @@ def _classify(metrics: dict, field: FieldTemplate) -> tuple[str, float, str]:
 
 
 def background_peak(region: np.ndarray, background: np.ndarray) -> float:
-    """Densidad de tinta de esta página medida contra el fondo del libro."""
-    return book_peak_density(book_ink_mask(region, background))
+    """Densidad de tinta escrita en esta casilla, sobre el fondo del libro.
+
+    Entre medir y decidir hay un paso de atribución: la tinta que solo cruza
+    la casilla —la X de una página anulada— se descuenta, porque está en la
+    página pero no es de este campo.
+    """
+    return book_peak_density(
+        book_drop_crossing(book_ink_mask(region, background))
+    )
 
 
 def review_with_background(
