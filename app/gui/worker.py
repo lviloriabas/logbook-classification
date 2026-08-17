@@ -205,14 +205,22 @@ class PipelineWorker(QThread):
         cambiar de archivo el contador vuelve a empezar, así que se acumula
         un desplazamiento con el total de la bitácora anterior. El mensaje se
         antepone con el archivo actual para mostrar el avance por bitácora.
+
+        El total emitido solo cubre los archivos ya vistos: con el rango
+        completo los tramos llegan sin recuento y esta ruta no abre los PDFs
+        para contarlos. La ventana usa el total del lote, que ya calculó antes
+        de arrancar, y este par sirve para el avance por archivo.
         """
         if self._current_file_index != self._progress_file:
             self._progress_offset += self._prev_total
             self._progress_file = self._current_file_index
             self._prev_total = total
-        if total < self._prev_total:
-            self._progress_offset += self._prev_total
-        self._prev_total = total
+        # Hay etapas que informan con las páginas leídas en vez del total del
+        # tramo (la revisión de firmas, o una cancelación a media bitácora).
+        # El desplazamiento se queda con el mayor total visto del archivo:
+        # sumarlo otra vez, como hacía la comparación anterior, adelantaba el
+        # contador global de golpe en cuanto llegaba un total más pequeño.
+        self._prev_total = max(self._prev_total, total)
         if self._current_file_index:
             self.file_progress.emit(self._current_file_index, done, total)
         prefix = ""
@@ -221,7 +229,8 @@ class PipelineWorker(QThread):
             prefix = (f"Archivo {self._current_file_index}/"
                       f"{len(self._active_paths)}: {name} — ")
         self.progress.emit(self._progress_offset + done,
-                           self._progress_offset + total, prefix + message)
+                           self._progress_offset + self._prev_total,
+                           prefix + message)
 
 
 class PreprocessWorker(QThread):

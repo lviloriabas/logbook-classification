@@ -39,6 +39,7 @@ from app.core.config import AppConfig, config_for_pdf
 from app.core.page_range import PageRange, slice_paths
 from app.core.pipeline import OcrProcessPool, Pipeline, process_pdf_batch
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
+from app.core.progress import with_page_counter
 from app.models.schemas import Status
 from app.ocr.engine import create_engine
 from app.reports.csv_reporter import CsvReporter
@@ -278,7 +279,11 @@ def _run(args: argparse.Namespace) -> int:
     def on_progress(done: int, total: int, message: str) -> None:
         if total:
             pct = int(done * 100 / total)
-            print(f"\r[{pct:3d}%] {message:<60}", end="", flush=True)
+            # El contador de páginas lo pone quien conoce el par que se está
+            # mostrando; el pipeline solo nombra la etapa (ver
+            # ``app.core.progress``).
+            text = with_page_counter(done, total, message)
+            print(f"\r[{pct:3d}%] {text:<60}", end="", flush=True)
 
     print(f"Analizando {len(pdfs)} archivo(s) de: {pdfs[0].parent}")
     if not page_range.is_full:
