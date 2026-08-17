@@ -35,6 +35,24 @@ class AppConfig(BaseModel):
                     "se aplica directamente al OCR, porque la escritura "
                     "repetida también puede aparecer en el consenso.",
     )
+    signature_book_background: bool = Field(
+        default=True,
+        description="Contrastar las firmas que quedan inciertas con el resto "
+                    "de la bitácora: la mediana de cada campo a lo largo del "
+                    "libro es ese campo vacío, y las páginas ya resueltas "
+                    "dicen cuánta tinta significa 'firmado' en este escaneo. "
+                    "Solo revisa lo que quedó en duda; los veredictos firmes "
+                    "no se tocan.",
+    )
+    signature_background_pages: int = Field(
+        default=32, ge=4, le=60,
+        description="Páginas del libro que se muestrean para construir ese "
+                    "fondo. Cada una cuesta un renderizado. Medido sobre una "
+                    "bitácora etiquetada: con 12 páginas ya se resuelve parte "
+                    "de las dudas y con 32 se llega al máximo (no mejora con "
+                    "40); por debajo de eso el resultado depende de si la "
+                    "muestra pilla o no páginas sin firmar.",
+    )
     crop_preprocess: bool = Field(
         default=True,
         description="Preprocesado de los recortes antes del OCR: localización "

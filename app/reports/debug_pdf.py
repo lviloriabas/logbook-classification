@@ -14,6 +14,7 @@ from loguru import logger
 
 from app.models.schemas import ValidationReport
 from app.templates.schema import Template
+from app.utils.io import unique_path
 from app.vision.pdf_loader import copy_pdf_pages
 
 
@@ -30,9 +31,12 @@ def write_debug_pdf(
     ``template``, ``dpi``, ``legend`` y ``crop_padding`` se conservan en la
     firma para no romper llamadas existentes, pero no se dibuja información
     sobre las páginas exportadas.
+
+    Un ``debug.pdf`` anterior en la misma carpeta se conserva: el nuevo se
+    escribe con sufijo numérico.
     """
     del template, dpi, legend, crop_padding
-    output_path = Path(output_path)
+    output_path = unique_path(Path(output_path))
     page_refs = [
         (report.pdf_path, page.page_number)
         for report in reports

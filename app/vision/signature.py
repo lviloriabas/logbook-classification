@@ -46,15 +46,30 @@ La decisión tiene tres estados:
 Los umbrales están elegidos con margen hacia el lado seguro: un falso
 positivo esconde una firma que falta de verdad, mientras que un ``unclear``
 solo cuesta una revisión manual.
+
+Lo que queda en ``unclear`` tiene una segunda oportunidad antes de llegar al
+verificador VLM: el pipeline lo contrasta con el resto de la bitácora
+(``review_with_background``, apoyado en ``app/vision/book_background.py``).
+Este módulo mira cada recorte aislado y estima el papel con morfología; aquel
+resta la mediana del mismo campo a lo largo del libro, que es ese campo
+realmente vacío. Medido sobre 200 recortes etiquetados de una bitácora real,
+la combinación baja las revisiones manuales de 6 a 2 sin producir ningún
+veredicto equivocado. Los veredictos firmes de aquí no se revisan: la segunda
+opinión solo se pronuncia sobre lo que este módulo dejó en duda, y solo cuando
+la evidencia del libro la sitúa fuera de toda duda.
 """
 
 from __future__ import annotations
+
+from typing import Optional
 
 import cv2
 import numpy as np
 
 from app.models.schemas import FieldResult, Status
 from app.templates.schema import FieldTemplate
+from app.vision.book_background import ink_mask as book_ink_mask
+from app.vision.book_background import peak_density as book_peak_density
 
 # Estado de evidencia parcial: presente en el JSON como "unclear".
 UNCLEAR = "unclear"
@@ -219,6 +234,98 @@ def _result(
     )
 
 
+def _classify(metrics: dict, field: FieldTemplate) -> tuple[str, float, str]:
+    """Veredicto ("true"/"false"/"unclear"), confianza y motivo.
+
+    Está separado de la medición porque la calibración de umbrales
+    (``tools/signature_labeling/``) recorre miles de combinaciones sobre
+    recortes ya medidos: al decidir con esta misma función, lo que se calibra
+    es exactamente lo que después ejecuta el detector.
+    """
+    peak = metrics["peak"]
+    span = metrics["span"]
+    evidence = (
+        f"densidad={peak:.4f} (umbral {field.min_ink_peak:.3f}), "
+        f"extensión={span:.3f}, cobertura={metrics['coverage']:.4f}"
+    )
+
+    if metrics["dark_ratio"] > field.max_ink_ratio:
+        # Región quemada o deteriorada: bajo tanta tinta uniforme no se puede
+        # afirmar ni que hay firma ni que falta.
+        return (
+            UNCLEAR, 0.15,
+            f"Firma indeterminable: la región está oscura o dañada "
+            f"(tinta={metrics['dark_ratio']:.3f} > {field.max_ink_ratio:.3f})",
+        )
+
+    concentrated = peak >= field.min_ink_peak
+    spread = peak >= field.max_empty_peak and span >= field.min_ink_span
+    if concentrated or spread:
+        margin = min(1.0, peak / (3.0 * field.min_ink_peak))
+        return (
+            "true", 0.55 + 0.45 * margin,
+            "Firma detectada: "
+            + ("trazo denso" if concentrated else "escritura repartida")
+            + f"; {evidence}",
+        )
+
+    empty = (
+        peak < field.max_empty_peak
+        and metrics["coverage"] < _EMPTY_COVERAGE
+        and metrics["weak_peak"] < _WEAK_PEAK_GUARD
+    )
+    if empty:
+        margin = 1.0 - min(1.0, peak / max(field.max_empty_peak, 1e-6))
+        return (
+            "false", 0.60 + 0.35 * margin,
+            f"Firma ausente: el campo está vacío, no hay trazos de "
+            f"escritura; {evidence}",
+        )
+
+    return (
+        UNCLEAR,
+        min(0.5, 0.2 + 0.3 * peak / max(field.min_ink_peak, 1e-6)),
+        f"Firma incierta: hay tinta que no tiene forma de escritura "
+        f"(sello, calca o trazo fuera del campo); {evidence}; "
+        f"revisar manualmente",
+    )
+
+
+def background_peak(region: np.ndarray, background: np.ndarray) -> float:
+    """Densidad de tinta de esta página medida contra el fondo del libro."""
+    return book_peak_density(book_ink_mask(region, background))
+
+
+def review_with_background(
+    peak: float, band: tuple
+) -> Optional[tuple[str, float, str]]:
+    """Segunda opinión sobre una firma incierta, con la evidencia del libro.
+
+    Solo se pronuncia cuando el valor cae *fuera* de la franja de duda que
+    dejaron las páginas ya resueltas de esta bitácora. Dentro de la franja
+    devuelve None —"sigo sin saberlo"— en lugar de partir por el medio: la
+    firma incierta ya está a salvo en REVISAR, y convertirla en un veredicto
+    equivocado sería el único cambio que empeora las cosas de verdad.
+
+    Returns:
+        ``(valor, confianza, comentario)`` o None si tampoco puede decidirlo.
+    """
+    empty_ceiling, signed_floor = band
+    if peak >= signed_floor:
+        distance = (peak - signed_floor) / max(signed_floor, 1e-6)
+        return ("true", min(0.90, 0.72 + 0.18 * min(1.0, distance)),
+                f"Firma detectada al comparar con el resto de la bitácora: "
+                f"densidad={peak:.4f}, tanta como en sus páginas firmadas "
+                f"(desde {signed_floor:.4f})")
+    if peak <= empty_ceiling:
+        distance = (empty_ceiling - peak) / max(empty_ceiling, 1e-6)
+        return ("false", min(0.90, 0.72 + 0.18 * min(1.0, distance)),
+                f"Firma ausente al comparar con el resto de la bitácora: "
+                f"densidad={peak:.4f}, la de sus páginas sin firmar "
+                f"(hasta {empty_ceiling:.4f})")
+    return None
+
+
 def detect_signature(
     region: np.ndarray,
     field: FieldTemplate,
@@ -240,51 +347,5 @@ def detect_signature(
     Returns:
         FieldResult con valor "true", "false" o "unclear" y su confianza.
     """
-    metrics = _measure(region, field, dpi)
-    peak = metrics["peak"]
-    span = metrics["span"]
-    evidence = (
-        f"densidad={peak:.4f} (umbral {field.min_ink_peak:.3f}), "
-        f"extensión={span:.3f}, cobertura={metrics['coverage']:.4f}"
-    )
-
-    if metrics["dark_ratio"] > field.max_ink_ratio:
-        # Región quemada o deteriorada: bajo tanta tinta uniforme no se puede
-        # afirmar ni que hay firma ni que falta.
-        return _result(
-            field, page_number, UNCLEAR, 0.15,
-            f"Firma indeterminable: la región está oscura o dañada "
-            f"(tinta={metrics['dark_ratio']:.3f} > {field.max_ink_ratio:.3f})",
-        )
-
-    concentrated = peak >= field.min_ink_peak
-    spread = peak >= field.max_empty_peak and span >= field.min_ink_span
-    if concentrated or spread:
-        margin = min(1.0, peak / (3.0 * field.min_ink_peak))
-        return _result(
-            field, page_number, "true", 0.55 + 0.45 * margin,
-            "Firma detectada: "
-            + ("trazo denso" if concentrated else "escritura repartida")
-            + f"; {evidence}",
-        )
-
-    empty = (
-        peak < field.max_empty_peak
-        and metrics["coverage"] < _EMPTY_COVERAGE
-        and metrics["weak_peak"] < _WEAK_PEAK_GUARD
-    )
-    if empty:
-        margin = 1.0 - min(1.0, peak / max(field.max_empty_peak, 1e-6))
-        return _result(
-            field, page_number, "false", 0.60 + 0.35 * margin,
-            f"Firma ausente: el campo está vacío, no hay trazos de "
-            f"escritura; {evidence}",
-        )
-
-    return _result(
-        field, page_number, UNCLEAR,
-        min(0.5, 0.2 + 0.3 * peak / max(field.min_ink_peak, 1e-6)),
-        f"Firma incierta: hay tinta que no tiene forma de escritura "
-        f"(sello, calca o trazo fuera del campo); {evidence}; "
-        f"revisar manualmente",
-    )
+    value, confidence, comment = _classify(_measure(region, field, dpi), field)
+    return _result(field, page_number, value, confidence, comment)

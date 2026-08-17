@@ -51,11 +51,17 @@ class RenderedRegion:
 class PdfPageRenderer:
     """Mantiene un PDF abierto durante todas las etapas de procesamiento."""
 
+    # Páginas renderizadas a partir de las cuales conviene devolver el cache
+    # interno de MuPDF al cerrar (ver ``close``). Una vista previa suelta
+    # renderiza una sola página y no debe disparar la purga.
+    _CACHE_RELEASE_PAGES = 8
+
     def __init__(self, pdf_path: Path | str) -> None:
         self.pdf_path = Path(pdf_path)
         if not self.pdf_path.exists():
             raise FileNotFoundError(f"PDF no encontrado: {self.pdf_path}")
         self.document = fitz.open(str(self.pdf_path))
+        self._rendered_pages = 0
 
     def __enter__(self) -> "PdfPageRenderer":
         return self
@@ -66,19 +72,50 @@ class PdfPageRenderer:
     def close(self) -> None:
         if self.document is not None:
             self.document.close()
+            self._release_store_cache()
             self.document = None
+
+    def _release_store_cache(self) -> None:
+        """Devuelve al sistema el cache interno de MuPDF de este documento.
+
+        MuPDF guarda las imágenes decodificadas de las páginas que rasteriza.
+        Medido en un worker del pipeline: el cache crece hasta ~268 MB, se
+        estabiliza ahí (no es una fuga: de la página 75 a la 300 no sube) y
+        ``store_shrink`` lo devuelve entero. Sin esto, cada proceso worker
+        retiene esos 268 MB además de los ~540 MB de los modelos OCR, y con un
+        proceso por hilo lógico eso son varios GB inmovilizados en un cache
+        que ya nadie va a consultar, porque el documento acaba de cerrarse.
+
+        Solo se purga si este renderer rasterizó páginas suficientes para
+        haber llenado el cache. El store es global al proceso, así que una
+        vista previa de una sola página no debe tirar el cache que el
+        pipeline está usando en otro hilo.
+        """
+        if self._rendered_pages < self._CACHE_RELEASE_PAGES:
+            return
+        try:
+            fitz.TOOLS().store_shrink(100)
+        except Exception:  # noqa: BLE001 - liberar memoria nunca es crítico
+            logger.debug("No se pudo purgar el cache de MuPDF", exc_info=True)
 
     def page_count(self) -> int:
         return len(self.document)
 
     def detect_dpi(self, default: int = 200) -> int:
+        """DPI efectivo del escaneo, leído de los metadatos de la imagen.
+
+        ``get_images(full=True)`` ya devuelve el ancho en píxeles de cada
+        imagen incrustada (posición 2 de la tupla), que es el único dato que
+        hace falta. Extraerla con ``extract_image`` obligaba a descomprimir
+        el escaneo completo de la primera página: 0,5 s por PDF, que la GUI
+        pagaba en el arranque por cada archivo de ``input/``.
+        """
         if not len(self.document):
             return default
         page = self.document.load_page(0)
         width_pts = max(page.mediabox.width, 1.0)
         for img in page.get_images(full=True):
-            pix = self.document.extract_image(img[0])
-            dpi = round(pix.get("width", 0) * 72.0 / width_pts)
+            dpi = round(img[2] * 72.0 / width_pts)
             if 72 <= dpi <= 600:
                 return dpi
         return default
@@ -91,6 +128,7 @@ class PdfPageRenderer:
         zoom = dpi / 72.0
         page = self.document.load_page(page_number - 1)
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+        self._rendered_pages += 1
         return _pixmap_to_bgr(pix, cv2, np)
 
     def render_aligned_region(
@@ -154,6 +192,7 @@ class PdfPageRenderer:
         ry1 = min(full_height, int(np.ceil(raw_corners[1].max())) + margin)
         clip = fitz.Rect(rx0 / zoom, ry0 / zoom, rx1 / zoom, ry1 / zoom)
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+        self._rendered_pages += 1
         source = _pixmap_to_bgr(pix, cv2, np)
 
         local = transform[:2].copy()

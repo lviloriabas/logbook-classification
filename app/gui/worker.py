@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import traceback
 from pathlib import Path
-from typing import List, Union
+from typing import TYPE_CHECKING, List, Union
 
 from loguru import logger
 from PySide6.QtCore import QThread, Signal
 
 from app.core.config import AppConfig
+from app.core.page_range import PageRange, slice_batch, slice_paths
 from app.models.schemas import ValidationReport
 from app.templates.manager import TemplateManager
 from app.validation.book_corrector import correct_matricula_by_book
 from app.validation.date_corrector import correct_dates_by_book
+
+if TYPE_CHECKING:  # el módulo de salidas se importa dentro del hilo
+    from app.reports.outputs import OutputOptions
 
 
 class PipelineWorker(QThread):
@@ -28,6 +32,8 @@ class PipelineWorker(QThread):
 
     progress = Signal(int, int, str)
     file_started = Signal(int, int, str)
+    # (archivo 1-based, páginas hechas, páginas del archivo)
+    file_progress = Signal(int, int, int)
     file_finished = Signal(int, object)
     succeeded = Signal(object)
     failed = Signal(str)
@@ -37,7 +43,7 @@ class PipelineWorker(QThread):
         pdf_paths: Union[Path, List[Path]],
         template_path: Path,
         config: AppConfig,
-        max_pages: int | None = None,
+        page_range: PageRange | None = None,
         reference_page: int = 1,
         workers: int = 1,
         cpu_threads: int | None = None,
@@ -49,7 +55,7 @@ class PipelineWorker(QThread):
         self.pdf_paths = [Path(p) for p in pdf_paths]
         self.template_path = Path(template_path)
         self.config = config
-        self.max_pages = max_pages
+        self.page_range = page_range
         self.reference_page = max(1, reference_page)
         self.workers = max(1, workers)
         self.cpu_threads = cpu_threads
@@ -57,6 +63,8 @@ class PipelineWorker(QThread):
         self._prev_total = 0
         self._progress_file = 0
         self._current_file_index = 0
+        # Archivos que el rango deja dentro; se fija al arrancar la corrida.
+        self._active_paths: List[Path] = list(self.pdf_paths)
         self.reports: List[ValidationReport] = []
         self.vlm_stats: List[dict] = []
 
@@ -115,7 +123,7 @@ class PipelineWorker(QThread):
                         process_pool,
                         engine,
                         date_engine=date_engine,
-                        max_pages=self.max_pages,
+                        page_range=self.page_range,
                         reference_page=self.reference_page,
                         should_cancel=self.isInterruptionRequested,
                         on_file_started=lambda index, total, name: (
@@ -127,18 +135,26 @@ class PipelineWorker(QThread):
                         on_progress=lambda done, total, message: (
                             self.progress.emit(done, total, message)
                         ),
+                        on_file_progress=lambda index, done, total: (
+                            self.file_progress.emit(index, done, total)
+                        ),
                     )
                     self.reports = list(reports)
                 else:
                     logger.info(
                         "[Perfil C] activo | estrategia=secuencial | workers=1"
                     )
-                    for index, pdf_path in enumerate(self.pdf_paths):
+                    # El rango es del lote completo: recorta qué archivos
+                    # entran y con qué páginas antes de abrir ninguno.
+                    slices = slice_paths(self.pdf_paths, self.page_range)
+                    self._active_paths = [item.path for item in slices]
+                    for index, item in enumerate(slices):
                         if self.isInterruptionRequested():
                             break
+                        pdf_path = item.path
                         self._current_file_index = index + 1
                         self.file_started.emit(
-                            index + 1, len(self.pdf_paths), pdf_path.name
+                            index + 1, len(slices), pdf_path.name
                         )
                         try:
                             file_config = config_for_pdf(self.config, pdf_path)
@@ -159,12 +175,15 @@ class PipelineWorker(QThread):
                         )
                         report: ValidationReport = pipeline.process(
                             pdf_path,
-                            max_pages=self.max_pages,
+                            page_range=item.pages,
                             should_cancel=self.isInterruptionRequested,
                         )
                         reports.append(report)
                         self.vlm_stats.append(pipeline.vlm_stats)
                         self.reports = list(reports)
+                        self.file_progress.emit(
+                            index + 1, len(report.pages), len(report.pages)
+                        )
                         self.file_finished.emit(index + 1, report)
                         if report.cancelled:
                             break
@@ -194,19 +213,30 @@ class PipelineWorker(QThread):
         if total < self._prev_total:
             self._progress_offset += self._prev_total
         self._prev_total = total
+        if self._current_file_index:
+            self.file_progress.emit(self._current_file_index, done, total)
         prefix = ""
-        if self._current_file_index and self.pdf_paths:
-            name = self.pdf_paths[self._current_file_index - 1].name
+        if self._current_file_index and self._active_paths:
+            name = self._active_paths[self._current_file_index - 1].name
             prefix = (f"Archivo {self._current_file_index}/"
-                      f"{len(self.pdf_paths)}: {name} — ")
+                      f"{len(self._active_paths)}: {name} — ")
         self.progress.emit(self._progress_offset + done,
                            self._progress_offset + total, prefix + message)
 
 
 class PreprocessWorker(QThread):
-    """Aplica el preprocesamiento de página sin ejecutar OCR."""
+    """Calcula la geometría de preprocesado de cada página, sin OCR.
+
+    Emite la *geometría* (ángulo de deskew + transformación de alineación
+    normalizada), no la imagen. La vista previa reconstruye la página con
+    esos números cuando hace falta, que es exactamente lo que ya hace con las
+    páginas ya procesadas. Emitir la imagen obligaba a la ventana a retener un
+    ``QImage`` de página completa por página: 11.2 MB a 200 DPI, sin tope, es
+    decir 0.55 GB en un libro de 50 páginas y 4.3 GB en uno de 393.
+    """
 
     progress = Signal(int, int, str)
+    # (pdf, número de página, geometría) — ver ``_geometry``.
     page_ready = Signal(str, int, object)
     succeeded = Signal(bool)
     failed = Signal(str)
@@ -215,73 +245,89 @@ class PreprocessWorker(QThread):
         self,
         pdf_paths: List[Path],
         config: AppConfig,
-        max_pages: int | None = None,
+        page_range: PageRange | None = None,
         reference_page: int = 1,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.pdf_paths = [Path(path) for path in pdf_paths]
         self.config = config
-        self.max_pages = max_pages
+        self.page_range = page_range
         self.reference_page = max(1, reference_page)
 
     def run(self) -> None:
         """Renderiza, endereza y alinea las páginas para su revisión visual."""
         try:
-            from app.vision.alignment import apply_transform, compute_similarity_transform
+            from app.vision.alignment import compute_similarity_transform
             from app.core.config import config_for_pdf
             from app.vision.pdf_loader import PdfPageRenderer, page_count
             from app.vision.preprocessing import deskew
 
-            total = 0
-            counts: list[int] = []
-            for pdf_path in self.pdf_paths:
-                count = page_count(pdf_path)
-                if self.max_pages is not None:
-                    count = min(count, self.max_pages)
-                counts.append(count)
-                total += count
+            slices = slice_batch(
+                self.pdf_paths,
+                [page_count(pdf_path) for pdf_path in self.pdf_paths],
+                self.page_range,
+            )
+            total = sum(item.count or 0 for item in slices)
 
             done = 0
-            for pdf_path, count in zip(self.pdf_paths, counts):
+            for item in slices:
                 if self.isInterruptionRequested():
                     break
 
+                pdf_path = item.path
+                first, last = item.pages.first, item.pages.last or 0
+                count = item.count or 0
                 file_config = config_for_pdf(self.config, pdf_path)
                 with PdfPageRenderer(pdf_path) as renderer:
                     reference = None
                     if file_config.align and count:
                         reference = renderer.render_page(
-                            min(self.reference_page, count), file_config.dpi
+                            min(first + self.reference_page - 1, last),
+                            file_config.dpi,
                         )
 
-                    for page_number in range(1, count + 1):
+                    for page_number in range(first, last + 1):
                         if self.isInterruptionRequested():
                             break
                         self.progress.emit(
                             done,
                             total,
                             f"Preprocesando {pdf_path.name}: "
-                            f"página {page_number}/{count}",
+                            f"página {page_number}/{last}",
                         )
                         image = renderer.render_page(
                             page_number, file_config.dpi
                         )
+                        angle = 0.0
                         if file_config.deskew:
-                            image, _angle = deskew(image)
+                            image, angle = deskew(image)
+                        alignment = None
                         if file_config.align and reference is not None:
                             transform = compute_similarity_transform(
                                 image, reference, file_config
                             )
                             if transform.reliable:
-                                image = apply_transform(image, transform)
+                                # Ratios, no píxeles: la vista previa
+                                # rasteriza a otra resolución que este paso.
+                                height, width = image.shape[:2]
+                                alignment = {
+                                    "rot": float(transform.rot),
+                                    "tx_ratio": float(transform.tx) / max(width, 1),
+                                    "ty_ratio": float(transform.ty) / max(height, 1),
+                                    "scale": float(transform.scale),
+                                }
                         done += 1
-                        self.page_ready.emit(str(pdf_path), page_number, image)
+                        self.page_ready.emit(
+                            str(pdf_path),
+                            page_number,
+                            {"skew_angle": float(angle), "alignment": alignment},
+                        )
                         self.progress.emit(
                             done,
                             total,
                             f"Preprocesando {pdf_path.name}: "
-                            f"página {page_number}/{count}",
+                            f"página {page_number}/{last}",
                         )
             self.succeeded.emit(self.isInterruptionRequested())
         except Exception as exc:  # noqa: BLE001 - la GUI muestra el error
@@ -298,7 +344,7 @@ class OutputsWorker(QThread):
     def __init__(
         self,
         reports: List[ValidationReport],
-        options: OutputOptions,
+        options: "OutputOptions",
         vlm_stats: List[dict] | None = None,
         parent=None,
     ) -> None:

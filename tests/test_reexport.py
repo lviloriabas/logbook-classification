@@ -77,7 +77,8 @@ class TestReexport(unittest.TestCase):
             self.assertTrue((primer / "HP-1534CMP.pdf").exists())
             self.assertTrue((primer / "HP-1538CMP.pdf").exists())
 
-    def test_limpieza_de_artefactos_previos(self):
+    def test_conserva_los_pdfs_ya_exportados(self):
+        """Un re-export nunca destruye la entrega anterior."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             run = root / "BITS 07 AUG 2026 22 01"
@@ -85,16 +86,69 @@ class TestReexport(unittest.TestCase):
             (run / "logs").mkdir()
             (run / "HP-1234CMP.pdf").write_bytes(b"x")
             (run / "discrepancias.pdf").write_bytes(b"x")
+            (run / "recortes_firmas").mkdir()
             (run / "datos" / "BITS 07 AUG 2026 22 01.CSV").write_text(
                 "old", encoding="utf-8")
             (run / "logs" / "app.log").write_text("log", encoding="utf-8")
             write_outputs(self.reports, self._options(root, (), run))
-            self.assertFalse((run / "HP-1234CMP.pdf").exists())
-            self.assertFalse((run / "discrepancias.pdf").exists())
+            # Los PDFs previos siguen ahí, intactos.
+            self.assertEqual((run / "HP-1234CMP.pdf").read_bytes(), b"x")
+            self.assertEqual((run / "discrepancias.pdf").read_bytes(), b"x")
+            # Lo regenerable que ya no corresponde sí se limpia.
+            self.assertFalse((run / "recortes_firmas").exists())
             self.assertTrue(
                 (run / "datos" / "BITS 07 AUG 2026 22 01.CSV").exists()
             )
             self.assertTrue((run / "logs" / "app.log").exists())
+
+    def test_reexport_numera_los_pdfs_repetidos(self):
+        """Mismo nombre en la misma carpeta: la copia lleva sufijo."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run = write_outputs(
+                self.reports, self._options(root, ("avion",))
+            )
+            self.assertTrue((run / "HP-1534CMP.pdf").exists())
+            primer_tamano = (run / "HP-1534CMP.pdf").stat().st_size
+
+            write_outputs(
+                self.reports, self._options(root, ("avion",), run)
+            )
+            self.assertTrue((run / "HP-1534CMP-2.pdf").exists())
+            self.assertEqual(
+                (run / "HP-1534CMP.pdf").stat().st_size, primer_tamano
+            )
+
+            write_outputs(
+                self.reports, self._options(root, ("avion",), run)
+            )
+            self.assertTrue((run / "HP-1534CMP-3.pdf").exists())
+            self.assertEqual(
+                sorted(p.name for p in run.glob("HP-1534CMP*.pdf")),
+                ["HP-1534CMP-2.pdf", "HP-1534CMP-3.pdf", "HP-1534CMP.pdf"],
+            )
+
+    def test_stats_nombra_los_pdfs_reales(self):
+        """stats.json lista los archivos que existen, no los teóricos."""
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run = write_outputs(
+                self.reports, self._options(root, ("avion",))
+            )
+            write_outputs(
+                self.reports, self._options(root, ("avion",), run)
+            )
+            stats = json.loads(
+                (run / "stats.json").read_text(encoding="utf-8")
+            )
+            archivos = [p["archivo"] for p in stats["separacion"]["pdfs"]]
+            self.assertEqual(
+                archivos, ["HP-1534CMP-2.pdf", "HP-1538CMP-2.pdf"]
+            )
+            for nombre in archivos:
+                self.assertTrue((run / nombre).exists())
 
     def test_csv_conserva_nombre_y_contenido(self):
         with tempfile.TemporaryDirectory() as tmp:

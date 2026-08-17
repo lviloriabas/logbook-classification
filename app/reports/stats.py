@@ -127,19 +127,31 @@ def _stats_separacion(
     excluidas: Optional[Set[Tuple[str, int]]],
     total_paginas: int,
     paginas_en_blanco: int,
+    pdf_paths: Optional[Sequence[Path]] = None,
 ) -> dict:
-    """Bloque de separación: PDFs generados y verificación de conteo."""
+    """Bloque de separación: PDFs generados y verificación de conteo.
+
+    ``pdf_paths`` son las rutas realmente escritas, en el mismo orden que
+    ``sorted(grupos)`` que usa ``generar_pdfs``. Se prefieren al nombre
+    teórico porque un re-export conserva los PDFs anteriores y numera los
+    nuevos; sin ellas (o si no cuadran con los grupos) se cae al nombre
+    que le correspondería al grupo.
+    """
     excluidas = excluidas or set()
     grupos = agrupar_paginas(reports, separar_por, excluidas)
+    claves = sorted(grupos)
+    reales = list(pdf_paths or [])
+    nombres = (
+        [ruta.name for ruta in reales]
+        if len(reales) == len(claves)
+        else [ruta_pdf(clave, separar_por).as_posix() for clave in claves]
+    )
     pdfs: List[dict] = []
     distribuidas = 0
-    for clave in sorted(grupos):
+    for clave, nombre in zip(claves, nombres):
         paginas = len(grupos[clave])
         distribuidas += paginas
-        pdfs.append({
-            "archivo": ruta_pdf(clave, separar_por).as_posix(),
-            "paginas": paginas,
-        })
+        pdfs.append({"archivo": nombre, "paginas": paginas})
     excluidas_count = sum(
         1
         for ref in iterar_paginas(reports)
@@ -165,6 +177,7 @@ def construir_stats(
     entradas: Optional[Sequence[Discrepancia]] = None,
     excluidas: Optional[Set[Tuple[str, int]]] = None,
     vlm_stats: Optional[Sequence[dict]] = None,
+    pdf_paths: Optional[Sequence[Path]] = None,
 ) -> dict:
     """Construye el diccionario de estadísticas de la corrida.
 
@@ -177,6 +190,8 @@ def construir_stats(
         entradas: Discrepancias de firma clasificadas (si se calcularon).
         excluidas: Páginas excluidas de los PDFs por discrepancia.
         vlm_stats: Stats del verificador VLM por bitácora (si se ejecutó).
+        pdf_paths: Rutas de los PDFs realmente escritos, para que el bloque
+            ``separacion`` nombre los archivos que existen en disco.
 
     Returns:
         Diccionario listo para serializar como ``stats.json``.
@@ -207,7 +222,8 @@ def construir_stats(
     }
     if separar_por:
         stats["separacion"] = _stats_separacion(
-            reports, separar_por, excluidas, total_paginas, en_blanco
+            reports, separar_por, excluidas, total_paginas, en_blanco,
+            pdf_paths,
         )
     return stats
 
@@ -220,6 +236,7 @@ def escribir_stats(
     entradas: Optional[Sequence[Discrepancia]] = None,
     excluidas: Optional[Set[Tuple[str, int]]] = None,
     vlm_stats: Optional[Sequence[dict]] = None,
+    pdf_paths: Optional[Sequence[Path]] = None,
 ) -> Path:
     """Escribe ``stats.json`` en la carpeta de la corrida.
 
@@ -235,6 +252,7 @@ def escribir_stats(
         entradas=entradas,
         excluidas=excluidas,
         vlm_stats=vlm_stats,
+        pdf_paths=pdf_paths,
     )
     output_path = run_dir / "stats.json"
     with open(output_path, "w", encoding="utf-8") as fh:

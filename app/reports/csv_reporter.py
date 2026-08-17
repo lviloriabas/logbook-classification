@@ -34,14 +34,19 @@ class CsvReporter:
     """Escribe el reporte de validación en CSV ancho (en inglés).
 
     Una fila por página del PDF:
-        file, page, <field>, dup, <field>_conf, <field>_status,
+        file, page, <field>, dup, disc, <field>_conf, <field>_status,
         <field>_comment, <field>_source, ..., date, time_ms
 
     - ``file``: nombre del PDF del que proviene la página.
     - ``dup``: ``true`` cuando el ``log_number`` ya apareció antes en el lote.
+    - ``disc``: ``true`` cuando la bitácora quedó marcada como discrepancia
+      de firmas. Sale de ``page.discrepancy``, que fija ``clasificar_lote``
+      (``app/validation/discrepancias.py``) antes de escribir el reporte; si
+      esa clasificación no se ejecutó, la columna queda en ``false``.
     - ``date``: fecha normalizada (YYYY/MM/dd) combinando day/month/year.
-    - ``time_ms``: tiempo de procesamiento solo de la página (el total
-      del PDF solo se imprime en consola).
+    - ``time_ms``: tiempo de procesamiento de la página, repartido sobre el
+      reloj real de la corrida (ver ``page_time_ms``), de modo que la suma
+      de la columna es lo que tardó el procesamiento completo.
 
     Las columnas ``<field>_status`` y ``<field>_comment`` se omiten para
     los campos de firma: quedan ``<field>``, ``<field>_conf`` y
@@ -94,6 +99,8 @@ class CsvReporter:
         columns = self.columns_for_fields(fields, skip_ids=skip_ids)
         duplicates = iter(detect_duplicate_log_pages(reports))
 
+        time_factor = self.run_time_factor(reports)
+
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
             writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
@@ -106,6 +113,7 @@ class CsvReporter:
                         fields,
                         date_mode=date_mode,
                         duplicate=duplicate.duplicate,
+                        time_factor=time_factor,
                     ))
 
         logger.info(f"Reporte CSV generado: {path} "
@@ -126,7 +134,7 @@ class CsvReporter:
         for field_id in fields:
             columns.append(field_id)
             if field_id == "log_number":
-                columns.append("dup")
+                columns.extend(["dup", "disc"])
             columns.append(f"{field_id}_conf")
             if field_id not in skip_ids:
                 columns.extend([
@@ -134,8 +142,10 @@ class CsvReporter:
                     f"{field_id}_comment",
                 ])
             columns.append(f"{field_id}_source")
+        # Las dos banderas de la página acompañan al ``log_number``, que es lo
+        # que identifica la bitácora; sin ese campo se emiten igual al final.
         if "dup" not in columns:
-            columns.append("dup")
+            columns.extend(["dup", "disc"])
         columns.extend(["date", "time_ms"])
         return columns
 
@@ -167,12 +177,14 @@ class CsvReporter:
         fields: List[str],
         date_mode: str = CSV_DATE_SPECIFIC,
         duplicate: bool = False,
+        time_factor: Optional[float] = None,
     ) -> dict[str, object]:
         """Construye la fila CSV correspondiente a una página."""
         row: dict[str, object] = {
             "file": Path(report.pdf_path).name,
             "page": page.page_number,
             "dup": str(duplicate).lower(),
+            "disc": str(bool(page.discrepancy)).lower(),
         }
         by_id = {field.field_id: field for field in page.fields}
 
@@ -209,8 +221,75 @@ class CsvReporter:
                 row["day_source"] = "csv_date_policy"
         else:
             row["date"] = cls._date(page)
-        row["time_ms"] = round(page.processing_ms, 1)
+        row["time_ms"] = round(cls.page_time_ms(report, page, time_factor), 1)
         return row
+
+    @staticmethod
+    def run_wall_ms(reports: List[ValidationReport]) -> float:
+        """Reloj de pared de la corrida completa, sin contar dos veces.
+
+        Con un proceso por archivo las bitácoras se solapan: cada una mide su
+        propio reloj mientras comparte la CPU con las demás, así que sumar
+        ``processing_ms`` cuenta el mismo minuto una vez por archivo. El
+        tiempo real de la corrida es el intervalo que va del primer arranque
+        al último final.
+        """
+        stamped = [
+            report for report in reports
+            if report.started_at > 0 and report.processing_ms > 0
+        ]
+        if len(stamped) != len(reports) or not stamped:
+            # Reportes sin marca de arranque (pruebas, JSON reconstruido):
+            # se cae al reloj por bitácora, que es lo único medible.
+            return sum(report.processing_ms for report in reports)
+        start = min(report.started_at for report in stamped)
+        end = max(
+            report.started_at + report.processing_ms / 1000.0
+            for report in stamped
+        )
+        return max(0.0, (end - start) * 1000.0)
+
+    @classmethod
+    def run_time_factor(cls, reports: List[ValidationReport]) -> float:
+        """Escala que lleva los tiempos medidos al reloj real de la corrida."""
+        measured = sum(
+            page.processing_ms for report in reports for page in report.pages
+        )
+        wall = cls.run_wall_ms(reports)
+        if measured <= 0 or wall <= 0:
+            # Sin reloj de corrida no hay nada contra qué normalizar: se
+            # conserva el tiempo medido en cada página.
+            return 1.0
+        return wall / measured
+
+    @staticmethod
+    def page_time_ms(
+        report: ValidationReport,
+        page: PageResult,
+        factor: Optional[float] = None,
+    ) -> float:
+        """Tiempo de la página repartido sobre el reloj real de la corrida.
+
+        ``page.processing_ms`` es tiempo de pared medido *dentro* del proceso
+        que atendió la página. Con el OCR repartido en un proceso por núcleo,
+        varias páginas transcurren a la vez y además cada una tarda más por
+        competir por CPU y memoria, así que sumar la columna no daba el
+        tiempo de la corrida sino varias veces ese tiempo: 50 páginas que el
+        reloj midió en 150 s sumaban 693 s en el CSV.
+
+        Se conserva la proporción entre páginas —una página lenta sigue
+        destacando frente a las demás— y se escala el conjunto para que la
+        suma sea lo que tardó realmente la corrida. ``factor`` viene de
+        ``run_time_factor`` y cubre el lote completo; sin él se normaliza
+        contra el reloj de la propia bitácora, que es lo correcto cuando el
+        reporte se mira por separado.
+        """
+        if factor is not None:
+            return page.processing_ms * factor
+        measured = sum(other.processing_ms for other in report.pages)
+        if report.processing_ms <= 0 or measured <= 0:
+            return page.processing_ms
+        return page.processing_ms * report.processing_ms / measured
 
     @staticmethod
     def _date_policy(

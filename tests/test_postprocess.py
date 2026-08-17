@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from app.utils.postprocess import WEAK_MATRICULA_NOTE, apply_postprocess, \
-    combine_date
+from app.utils.postprocess import AMBIGUOUS_MATRICULA_NOTE, \
+    WEAK_MATRICULA_NOTE, apply_postprocess, combine_date
 
 
 class TestDay(unittest.TestCase):
@@ -179,15 +179,41 @@ class TestMatricula(unittest.TestCase):
         self.assertEqual(apply_postprocess("x", "matricula", "1522"),
                          ("HP-1522WWP", ""))
 
+    def test_handwritten_characters_read_as_digits(self):
+        # El '1' de estas bitácoras es un palo sin base y el '7' lleva
+        # travesaño: el reconocedor devuelve I/L/F donde hay dígitos. La
+        # ventana anclada entre "HP" y "CMP" recupera la matrícula entera
+        # en vez de descartar la página por no tener 4 dígitos seguidos.
+        for value, expected in (
+            ("HP-I7I7CMP", "HP-1717CMP"),
+            ("HP-1F17CMP", "HP-1717CMP"),
+            ("HP-1S34CMP", "HP-1534CMP"),
+            ("HO1S31CMe", "HP-1531CMP"),
+            ("wAT 1Hp i712cmp", "HP-1712CMP"),
+        ):
+            processed, note = apply_postprocess("x", "matricula", value)
+            self.assertEqual(processed, expected, value)
+            self.assertEqual(note, AMBIGUOUS_MATRICULA_NOTE, value)
+
+    def test_window_is_not_shifted_by_noise(self):
+        # Un dígito suelto detrás delata una ventana corrida: el número es
+        # el que queda entre el prefijo y el sufijo, no el primero que cabe.
+        for value, expected in (
+            ("40171900", "HP-1719CMP"),
+            ("H91534G070", "HP-1534CMP"),
+            ("All H89916cmp FL /C", "HP-9916CMP"),
+        ):
+            self.assertEqual(
+                apply_postprocess("x", "matricula", value)[0], expected, value
+            )
+
     def test_scattered_digits_weak(self):
-        value, note = apply_postprocess("x", "matricula",
-                                        "wAT 1Hp i712cmp")
-        self.assertEqual(value, "HP-1712CMP")
+        value, note = apply_postprocess("x", "matricula", "4P-996CmP")
+        self.assertEqual(value, "HP-4996CMP")
         self.assertEqual(note, WEAK_MATRICULA_NOTE)
 
     def test_garbage_returns_empty(self):
-        for value in ("All H89916cmp FL /C", "AIF 189915CHP FLT. /CHE",
-                      "All HP-GGIFCal R0", "All itp-g916", "AI", "HP"):
+        for value in ("All HP-GGIFCal R0", "All itp-g916", "AI", "HP"):
             value, note = apply_postprocess("x", "matricula", value)
             self.assertEqual(value, "")
             self.assertIn("registration without 4-digit number", note)

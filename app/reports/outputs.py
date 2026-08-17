@@ -60,16 +60,18 @@ def run_csv_name() -> str:
 
 
 def _clean_stale_artifacts(run_dir: Path) -> None:
-    """Borra los artefactos de una exportación anterior en la misma corrida.
+    """Borra los artefactos regenerables de una exportación anterior.
 
-    Conserva ``datos/`` (se sobreescribe) y ``logs/``. Elimina los PDFs de
-    la separación previa (incluidas carpetas por matrícula), stats, debug,
-    discrepancias y recortes, para que un re-export con opciones nuevas no
-    deje archivos que ya no corresponden.
+    Conserva ``datos/`` (se sobreescribe), ``logs/`` y **todos los PDFs ya
+    exportados**: un re-export nunca destruye una entrega anterior, sino que
+    escribe copias con sufijo numérico junto a ellas. Solo se limpia lo que
+    la corrida vuelve a escribir entero (stats, recortes de auditoría).
     """
     keep = {"datos", "logs"}
     for child in run_dir.iterdir():
         if child.name in keep:
+            continue
+        if child.is_file() and child.suffix.lower() == ".pdf":
             continue
         try:
             if child.is_dir():
@@ -96,6 +98,10 @@ def write_outputs(
     (mismo nombre de CSV y mismo carpeta de corrida): es el modo re-export,
     usado por la GUI para regenerar las salidas sin crear una corrida nueva.
     Si no, se crea una carpeta de corrida nueva con timestamp.
+
+    Un re-export NO borra los PDFs ya exportados: los conserva y escribe
+    los nuevos junto a ellos con sufijo numérico cuando el nombre coincide
+    (``HP-1534CMP.pdf`` → ``HP-1534CMP-2.pdf``).
 
     Con ``options.skip_pdfs`` (corrida cancelada a mitad de camino) se
     guardan solo los datos (CSV, JSON, stats) y NO se generan PDFs, para
@@ -225,6 +231,7 @@ def write_outputs(
         entradas=entradas,
         excluidas=excluidas or None,
         vlm_stats=vlm_stats,
+        pdf_paths=pdf_paths,
     )
     logger.info(f"Stats de la corrida: {stats_path}")
     stage("Finalizando…", 100)

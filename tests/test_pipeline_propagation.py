@@ -44,7 +44,7 @@ class TestSlotMapPropagation(unittest.TestCase):
             return_value=np.full((20, 20, 3), 255, np.uint8),
         ), patch.object(pipeline_module, "process_page_image", fake_process):
             self.pipeline._process_sequential(
-                Path("fixture.pdf"), 1, np.zeros((20, 20, 3), np.uint8)
+                Path("fixture.pdf"), 1, 1, np.zeros((20, 20, 3), np.uint8)
             )
 
         self.assertIs(captured["slot_map"], self.pipeline._date_slot_map)

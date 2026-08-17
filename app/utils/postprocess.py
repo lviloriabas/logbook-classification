@@ -59,9 +59,24 @@ _OCR_LETTER_TO_DIGIT_DICT = {
     "G": "6", "g": "6",
 }
 _OCR_LETTER_TO_DIGIT = str.maketrans(_OCR_LETTER_TO_DIGIT_DICT)
+# Caracteres que el reconocedor devuelve en lugar de un dígito manuscrito
+# dentro de la matrícula. Es el mismo mapa anterior en mayúscula (la
+# matrícula se normaliza así) más la 'F': el 7 de estas bitácoras se escribe
+# con travesaño y el modelo lo devuelve como F. Solo se aplica dentro del
+# token de cuatro caracteres de la matrícula; ningún otro campo lo usa.
+_MATRICULA_AMBIGUOUS = {
+    **{char.upper(): digit
+       for char, digit in _OCR_LETTER_TO_DIGIT_DICT.items()},
+    "F": "7",
+}
+# Primer carácter del sufijo "CMP"/"WWP" tal como lo devuelve el OCR.
+_MATRICULA_SUFFIX_HEAD = frozenset("CW")
 WWP_ONLY = {"1990", "1522"}
 WEAK_MATRICULA_NOTE = (
     "registration: digits inferred from scattered OCR (low confidence)"
+)
+AMBIGUOUS_MATRICULA_NOTE = (
+    "registration: handwritten characters read as digits"
 )
 NUMERIC_MONTH_NOTE = "numeric handwritten month"
 
@@ -301,12 +316,75 @@ def _year(value: str) -> Tuple[str, str]:
     return "", f"invalid year: {value}"
 
 
+def _matricula_digits(token: str) -> Optional[str]:
+    """Cuatro caracteres traducidos a dígitos, o None si alguno no lo es."""
+    digits = []
+    for char in token:
+        if char.isdigit():
+            digits.append(char)
+        elif char in _MATRICULA_AMBIGUOUS:
+            digits.append(_MATRICULA_AMBIGUOUS[char])
+        else:
+            return None
+    return "".join(digits)
+
+
+def _matricula_token(raw: str) -> Optional[Tuple[str, int]]:
+    """Número de la matrícula entre el prefijo "HP" y el sufijo "CMP".
+
+    El "1" de estas bitácoras es un palo sin base y el "7" lleva travesaño,
+    así que el reconocedor devuelve ``HP-I7I7CMP`` o ``HP-1F17CMP`` para
+    matrículas perfectamente legibles. Exigir cuatro dígitos seguidos
+    descarta esas lecturas enteras, así que aquí se busca la ventana de
+    cuatro caracteres traducibles a dígitos que mejor encaje en la
+    estructura del campo: prefijo de uno a tres caracteres y, detrás, el
+    sufijo ``CMP``/``WWP`` o el final del texto.
+
+    Returns:
+        (cuatro dígitos, cuántos eran ya dígitos) o None si ninguna ventana
+        encaja con suficiente evidencia.
+    """
+    best: Optional[Tuple[int, str, int]] = None
+    for start in range(len(raw) - 3):
+        digits = _matricula_digits(raw[start:start + 4])
+        if digits is None:
+            continue
+        real = sum(char.isdigit() for char in raw[start:start + 4])
+        if real < 2:
+            # Con un solo dígito real la ventana es indistinguible del
+            # ruido: "GLOB" no es una matrícula.
+            continue
+        suffix = raw[start + 4:]
+        if suffix[:1] in _MATRICULA_SUFFIX_HEAD:
+            suffix_score = 3
+        elif not suffix:
+            suffix_score = 1
+        elif suffix[0].isdigit():
+            # Un dígito suelto detrás delata una ventana corrida.
+            suffix_score = -3
+        else:
+            suffix_score = -1
+        prefix_score = (0, 1, 2, 1)[start] if start <= 3 else -2
+        score = suffix_score + prefix_score + real
+        if best is None or score > best[0]:
+            best = (score, digits, real)
+    if best is None:
+        return None
+    score, digits, real = best
+    if score >= 4 or (real == 4 and score >= 3):
+        return digits, real
+    return None
+
+
 def _matricula(value: str) -> Tuple[str, str]:
     """Normaliza la matrícula a HP-XXXXCMP (o HP-XXXXWWP).
 
     Acepta: 1717, hp1717, 1717cmp, HP-1717, hp-1717-cmp, 1717 CMP...
     Excepciones conocidas (sin CMP): HP-1990WWP, HP-1522WWP.
 
+    Si no hay cuatro dígitos seguidos se reconstruye el número a partir de
+    los caracteres que el OCR confunde con dígitos manuscritos
+    (``HP-I7I7CMP`` → 1717), anotando la lectura para que quede auditable.
     La lectura es "débil" cuando el número solo puede reconstruirse con
     dígitos dispersos (p. ej. "wAT 1Hp i712cmp" → 1712); en ese caso el
     pipeline reduce la confianza y el corrector por libro decide.
@@ -321,12 +399,17 @@ def _matricula(value: str) -> Tuple[str, str]:
         numero = match.group(0)
         note = ""
     else:
-        digits = re.findall(r"\d", raw)
-        if len(digits) == 4:
-            numero = "".join(digits)
-            note = WEAK_MATRICULA_NOTE
+        token = _matricula_token(raw)
+        if token is not None:
+            numero, real = token
+            note = "" if real == 4 else AMBIGUOUS_MATRICULA_NOTE
         else:
-            return "", "registration without 4-digit number"
+            digits = re.findall(r"\d", raw)
+            if len(digits) == 4:
+                numero = "".join(digits)
+                note = WEAK_MATRICULA_NOTE
+            else:
+                return "", "registration without 4-digit number"
     sufijo = "WWP" if ("WWP" in raw or numero in WWP_ONLY) else "CMP"
     return f"HP-{numero}{sufijo}", note
 

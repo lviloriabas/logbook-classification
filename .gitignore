@@ -34,3 +34,6 @@ input/*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Preferencias de la copia portable (se generan al usar la aplicación)
+important_fields.json

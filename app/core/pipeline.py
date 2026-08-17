@@ -11,8 +11,9 @@ modificar esta clase.
 
 Paralelismo: con ``workers > 1`` las páginas se reparten entre procesos
 worker (cada uno con su propio motor OCR), porque PaddleOCR no suelta el
-GIL y los hilos no escalan. ``cpu_threads`` controla los hilos internos
-de cada motor (ajustar según la máquina: núcleos / workers).
+GIL y los hilos no escalan: medido, seis hilos de Python repartiendo
+páginas rinden lo mismo que uno solo. ``cpu_threads`` controla los hilos
+internos de cada motor; el reparto lo calcula ``app.core.parallelism``.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ import numpy as np
 from loguru import logger
 
 from app.core.config import AppConfig, config_for_pdf
+from app.core.page_range import PageRange, slice_batch
 from app.models.schemas import (
     FieldResult,
     PageResult,
@@ -51,6 +53,7 @@ from app.ocr.regional import ocr_regions
 from app.templates.schema import FieldType, Template
 from app.utils.postprocess import (
     _OCR_LETTER_TO_DIGIT_DICT,
+    AMBIGUOUS_MATRICULA_NOTE,
     MONTH_WORDS,
     NUMERIC_MONTH_NOTE,
     WEAK_MATRICULA_NOTE,
@@ -66,6 +69,11 @@ from app.vision.alignment import (
     warp_with_transform,
 )
 from app.vision.blank_detection import is_blank
+from app.vision.book_background import (
+    MIN_BACKGROUND_PAGES,
+    build_background,
+    confident_band,
+)
 from app.vision.checkbox import detect_checkbox
 from app.vision.ink_extent import crop_to_ink, strip_date_label
 from app.vision.pdf_loader import (
@@ -78,7 +86,9 @@ from app.vision.signature import (
     SIGNATURE_PAD_X,
     SIGNATURE_PAD_Y,
     UNCLEAR,
+    background_peak,
     detect_signature,
+    review_with_background,
 )
 from app.vision.date_geometry import (
     DateFieldGeometry,
@@ -99,6 +109,11 @@ _ORDER = {Status.OK: 0, Status.WARNING: 1, Status.ERROR: 2}
 # Notas de postproceso "blandas": no son fallos del campo, solo avisos.
 _SOFT_NOTES = (
     WEAK_MATRICULA_NOTE,
+    # La matrícula reconstruida desde caracteres confundibles es una lectura
+    # normal: el texto sigue siendo el del recorte, solo se anota de dónde
+    # salieron los dígitos. Sin esto la página quedaría en ERROR y no podría
+    # votar en el consenso de su libro, que es justo donde más aporta.
+    AMBIGUOUS_MATRICULA_NOTE,
 )
 
 _WORKER_STATE: dict = {}
@@ -223,7 +238,8 @@ def _init_worker(config: AppConfig, template: Template, engine_name: str,
                  own_reliability: Optional[List[bool]] = None,
                  printed_mask: Optional[np.ndarray] = None,
                  slot_map: Optional[dict] = None,
-                 date_engine_name: Optional[str] = None) -> None:
+                 date_engine_name: Optional[str] = None,
+                 first_page: int = 1) -> None:
     """Inicializa un proceso worker: crea su propio motor OCR y guarda el
     estado compartido (config, plantilla, referencia, anclas, PDF)."""
     from app.ocr.engine import create_engine
@@ -238,6 +254,7 @@ def _init_worker(config: AppConfig, template: Template, engine_name: str,
     _WORKER_STATE["renderer"] = PdfPageRenderer(pdf_path)
     _WORKER_STATE["transforms"] = list(transforms or [])
     _WORKER_STATE["own_reliability"] = list(own_reliability or [])
+    _WORKER_STATE["first_page"] = max(1, first_page)
     _WORKER_STATE["slot_map"] = dict(slot_map or {})
     if printed_mask is not None:
         _WORKER_STATE["printed_mask"] = np.ascontiguousarray(printed_mask)
@@ -257,6 +274,16 @@ def _process_page_worker(
         _load_worker_job(state_path)
     transforms = _WORKER_STATE.get("transforms") or []
     reliability = _WORKER_STATE.get("own_reliability") or []
+    # Las anclas cubren solo el tramo procesado, así que se indexan desde su
+    # primera página y no desde la página 1 del documento.
+    index = page_number - _WORKER_STATE.get("first_page", 1)
+    transform = transforms[index] if 0 <= index < len(transforms) else None
+    if transform is not None:
+        reliable: Optional[bool] = transform.reliable
+    elif 0 <= index < len(reliability):
+        reliable = reliability[index]
+    else:
+        reliable = None
     return process_page(
         _WORKER_STATE["pdf_path"],
         page_number,
@@ -264,14 +291,8 @@ def _process_page_worker(
         _WORKER_STATE["engine"],
         _WORKER_STATE["template"],
         _WORKER_STATE["reference"],
-        transform=transforms[page_number - 1]
-        if len(transforms) >= page_number else None,
-        transform_reliable=(
-            transforms[page_number - 1].reliable
-            if len(transforms) >= page_number
-            else reliability[page_number - 1]
-            if len(reliability) >= page_number else None
-        ),
+        transform=transform,
+        transform_reliable=reliable,
         printed_mask=_WORKER_STATE.get("printed_mask"),
         slot_map=_WORKER_STATE.get("slot_map"),
         date_engine=_WORKER_STATE.get("date_engine"),
@@ -1360,14 +1381,17 @@ class Pipeline:
         return self._should_cancel is not None and self._should_cancel()
 
     def process(self, pdf_path: Path,
-                max_pages: Optional[int] = None,
+                page_range: Optional[PageRange] = None,
                 should_cancel: Optional[Callable[[], bool]] = None
                 ) -> ValidationReport:
-        """Procesa el PDF completo y devuelve el reporte de validación.
+        """Procesa el PDF y devuelve el reporte de validación.
 
         Args:
             pdf_path: Ruta del PDF escaneado.
-            max_pages: Procesar solo las primeras N páginas (opcional).
+            page_range: Tramo de páginas *de este PDF* (1-based, inclusivo).
+                None procesa el archivo entero. El reparto de un rango
+                global del lote entre archivos lo hace
+                :func:`app.core.page_range.slice_batch`.
             should_cancel: Callable sin argumentos que devuelve True cuando
                 se pidió la cancelación; el pipeline verifica entre páginas
                 y devuelve un reporte parcial con ``cancelled=True``.
@@ -1378,58 +1402,79 @@ class Pipeline:
         pdf_path = Path(pdf_path)
         with PdfPageRenderer(pdf_path) as renderer:
             return self._process_opened(
-                pdf_path, renderer, max_pages, should_cancel
+                pdf_path, renderer, page_range, should_cancel
             )
 
     def _process_opened(
         self,
         pdf_path: Path,
         renderer: PdfPageRenderer,
-        max_pages: Optional[int],
+        page_range: Optional[PageRange],
         should_cancel: Optional[Callable[[], bool]],
     ) -> ValidationReport:
         """Implementación con un único handle abierto para todo el PDF."""
         self._should_cancel = should_cancel
         t_start = time.perf_counter()
+        started_at = time.time()
         logger.info(f"[Pipeline] Inicio: {pdf_path.name} "
                     f"(plantilla {self.template.name}, "
                     f"workers={self.workers}, dpi={self.config.dpi}, "
                     f"date_dpi={self.config.date_dpi})")
 
-        total = renderer.page_count()
-        if max_pages is not None:
-            total = min(total, max_pages)
-        if total == 0:
+        count = renderer.page_count()
+        if count == 0:
             raise ValueError(f"El PDF no contiene páginas: {pdf_path}")
+        selection = page_range or PageRange()
+        first, last = selection.clamped(count)
+        if last < first:
+            raise ValueError(
+                f"El rango {selection.label()} no cubre ninguna página de "
+                f"{pdf_path.name} ({count} páginas)"
+            )
+        total = last - first + 1
+        if not selection.is_full:
+            logger.info(
+                f"[Pipeline] Tramo solicitado: {selection.label()} "
+                f"→ {first}-{last} de {count}"
+            )
 
         reference = self.reference_image
+        reference_number = min(first + self.reference_page - 1, last)
         if reference is None:
             reference = renderer.render_page(
-                min(self.reference_page, total), self.config.dpi
+                reference_number, self.config.dpi
             )
         logger.info(
             "[Pipeline] Referencia de alineación: "
             + ("imagen externa" if self.reference_image is not None
-               else "página 1")
+               else f"página {reference_number}")
         )
 
         own_transforms, anchors = self._calibrate(
-            pdf_path, total, reference, renderer=renderer
+            pdf_path, first, total, reference, renderer=renderer
         )
 
         if self._is_cancelled():
             pages: List[PageResult] = []
         elif self.workers > 1:
-            pages = self._process_parallel(pdf_path, total, reference,
+            pages = self._process_parallel(pdf_path, first, total, reference,
                                            anchors, own_transforms)
         else:
-            pages = self._process_sequential(pdf_path, total, reference,
+            pages = self._process_sequential(pdf_path, first, total, reference,
                                              anchors, own_transforms,
                                              renderer=renderer)
 
+        # Antes del VLM: las firmas que quedaron inciertas se contrastan con
+        # el resto de la bitácora, que es evidencia gratis y no requiere
+        # modelo. Lo que ni así se resuelve sigue su camino al verificador.
+        pages = self._review_signatures(
+            pdf_path, pages, reference, anchors, own_transforms,
+            renderer=renderer, first_page=first,
+        )
+
         pages = self._verify_pages(
             pdf_path, pages, reference, anchors, own_transforms,
-            renderer=renderer,
+            renderer=renderer, first_page=first,
         )
 
         self._notify(total, total, "Generando reporte")
@@ -1440,6 +1485,7 @@ class Pipeline:
             cancelled=self._is_cancelled(),
             calibration_ms=self.calibration_ms,
             processing_ms=round((time.perf_counter() - t_start) * 1000, 1),
+            started_at=started_at,
         )
         report.summary = self._compute_summary(pages)
 
@@ -1456,17 +1502,20 @@ class Pipeline:
     # ── Ejecución (secuencial / paralela) ────────────────────────────────
 
     def _process_sequential(
-            self, pdf_path: Path, total: int, reference: np.ndarray,
+            self, pdf_path: Path, first: int, total: int,
+            reference: np.ndarray,
             anchors: Optional[List[TransformResult]] = None,
             own: Optional[List[TransformResult]] = None,
             renderer: Optional[PdfPageRenderer] = None,
         ) -> List[PageResult]:
         pages: List[PageResult] = []
-        for page_number in range(1, total + 1):
+        last = first + total - 1
+        for index in range(total):
             if self._is_cancelled():
                 break
-            self._notify(page_number - 1, total,
-                         f"Procesando página {page_number}/{total}")
+            page_number = first + index
+            self._notify(index, total,
+                         f"Procesando página {page_number}/{last}")
             image = (
                 renderer.render_page(page_number, self.config.dpi)
                 if renderer is not None
@@ -1475,10 +1524,10 @@ class Pipeline:
             pages.append(process_page_image(
                 image, page_number, self.config, self.engine,
                 self.template, reference,
-                transform=anchors[page_number - 1] if anchors else None,
+                transform=anchors[index] if anchors else None,
                 transform_reliable=(
-                    anchors[page_number - 1].reliable
-                    if anchors else own[page_number - 1].reliable
+                    anchors[index].reliable
+                    if anchors else own[index].reliable
                     if own else None
                 ),
                 printed_mask=self._printed_mask,
@@ -1489,11 +1538,13 @@ class Pipeline:
         return pages
 
     def _process_parallel(
-            self, pdf_path: Path, total: int, reference: np.ndarray,
+            self, pdf_path: Path, first: int, total: int,
+            reference: np.ndarray,
             anchors: Optional[List[TransformResult]] = None,
             own: Optional[List[TransformResult]] = None,
         ) -> List[PageResult]:
         pages: List[PageResult] = []
+        last = first + total - 1
         state_path: Optional[Path] = None
         owns_pool = self.process_pool is None
         if self.process_pool is not None:
@@ -1506,6 +1557,7 @@ class Pipeline:
                 "own_reliability": [t.reliable for t in own or []],
                 "printed_mask": self._printed_mask,
                 "slot_map": dict(self._date_slot_map),
+                "first_page": first,
             })
             pool = self.process_pool.executor
         else:
@@ -1520,17 +1572,18 @@ class Pipeline:
                     self._printed_mask,
                     self._date_slot_map,
                     self.date_engine.name if self.date_engine else None,
+                    first,
                 ),
             )
         futures: dict = {}
         cancelled_pending: dict = {}
         try:
-            next_page = 1
+            next_page = first
             max_in_flight = max(self.workers, self.workers * 3)
 
             def submit_available() -> None:
                 nonlocal next_page
-                while next_page <= total and len(futures) < max_in_flight:
+                while next_page <= last and len(futures) < max_in_flight:
                     future = pool.submit(
                         _process_page_worker,
                         next_page,
@@ -1551,7 +1604,7 @@ class Pipeline:
                     pages.append((page_number, page))
                     self._notify(
                         len(pages), total,
-                        f"Procesando página {page_number}/{total}",
+                        f"Procesando página {page_number}/{last}",
                     )
                 if self._is_cancelled():
                     cancelled_pending = dict(futures)
@@ -1595,21 +1648,22 @@ class Pipeline:
     # ── Alineación por lote ─────────────────────────────────────────────
 
     def _calibrate(
-        self, pdf_path: Path, total: int, reference: np.ndarray,
+        self, pdf_path: Path, first: int, total: int, reference: np.ndarray,
         renderer: Optional[PdfPageRenderer] = None,
     ) -> Tuple[Optional[List[TransformResult]], Optional[List[TransformResult]]]:
         """Paso 1: estima la transformación de cada página a baja resolución.
 
         Solo renderiza + deskew + matching ORB (sin deformar ni OCR), y
-        devuelve (transformaciones propias, anclas estabilizadas). Con la
-        alineación deshabilitada devuelve (None, None).
+        devuelve (transformaciones propias, anclas estabilizadas), ambas
+        indexadas desde ``first``. Con la alineación deshabilitada devuelve
+        (None, None).
 
         Coste: bajo (~75), ≈ 0.2-0.4 s por página — sin OCR ni warp.
         """
         t_calib = time.perf_counter()
         try:
             return self._calibrate_impl(
-                pdf_path, total, reference, renderer=renderer
+                pdf_path, first, total, reference, renderer=renderer
             )
         finally:
             self.calibration_ms = round(
@@ -1617,13 +1671,14 @@ class Pipeline:
             )
 
     def _calibrate_impl(
-        self, pdf_path: Path, total: int, reference: np.ndarray,
+        self, pdf_path: Path, first: int, total: int, reference: np.ndarray,
         renderer: Optional[PdfPageRenderer] = None,
     ) -> Tuple[Optional[List[TransformResult]], Optional[List[TransformResult]]]:
         self._printed_mask = None
         self._date_slot_map = {}
         if not self.config.align or reference is None:
             return None, None
+        last = first + total - 1
 
         calib_dpi = max(75, self.config.dpi // 2)
         zoom = calib_dpi / self.config.dpi
@@ -1633,14 +1688,14 @@ class Pipeline:
 
         own: List[TransformResult] = []
         calib_images: List[np.ndarray] = []
-        for page_number in range(1, total + 1):
+        for page_number in range(first, last + 1):
             if self._is_cancelled():
                 break
             # Progreso como etapa, sin contar páginas: las páginas reales se
             # cuentan solo en la fase de procesamiento (done=0 no avanza).
             self._notify(
                 0, total,
-                f"Calibrando alineación (página {page_number}/{total})",
+                f"Calibrando alineación (página {page_number}/{last})",
             )
             image = (
                 renderer.render_page(page_number, calib_dpi)
@@ -1774,6 +1829,7 @@ class Pipeline:
         anchors: Optional[List[TransformResult]],
         own: Optional[List[TransformResult]],
         renderer: Optional[PdfPageRenderer] = None,
+        first_page: int = 1,
     ) -> List[PageResult]:
         """Arbitra con el VLM los campos incitos de la corrida.
 
@@ -1819,13 +1875,17 @@ class Pipeline:
             if self._is_cancelled():
                 break
             page = pages[idx]
+            # La página real manda sobre la posición en la lista: con un
+            # tramo (o una cancelación parcial) ya no coinciden.
+            page_number = page.page_number
             image = (
-                renderer.render_page(idx + 1, self.config.dpi)
+                renderer.render_page(page_number, self.config.dpi)
                 if renderer is not None
-                else render_page(pdf_path, idx + 1, self.config.dpi)
+                else render_page(pdf_path, page_number, self.config.dpi)
             )
             image = self._aligned_image(
-                image, idx, reference, anchors=anchors, own=own
+                image, page_number - first_page, reference,
+                anchors=anchors, own=own,
             )
             date_touched = False
             for field_id, post in items:
@@ -1931,6 +1991,177 @@ class Pipeline:
                         )
         return (date_targets + other_targets)[:self.config.vlm_max_crops]
 
+    def _review_signatures(
+        self,
+        pdf_path: Path,
+        pages: List[PageResult],
+        reference: Optional[np.ndarray],
+        anchors: Optional[List[TransformResult]],
+        own: Optional[List[TransformResult]],
+        renderer: Optional[PdfPageRenderer] = None,
+        first_page: int = 1,
+    ) -> List[PageResult]:
+        """Resuelve firmas inciertas comparándolas con el resto del libro.
+
+        Una bitácora son decenas de páginas del mismo formulario ya alineadas,
+        así que la mediana de un campo a lo largo del libro es ese campo
+        *vacío*, con su recuadro, su rótulo y el gris de la fotocopia. Restarla
+        deja solo lo escrito en cada página, y las páginas que el detector sí
+        resolvió dicen cuánta tinta significa "firmado" en este libro concreto
+        (ver ``app/vision/book_background.py``).
+
+        Solo se tocan los campos que quedaron en ``unclear``: los veredictos
+        firmes no se revisan. Y solo se renderizan las páginas necesarias —una
+        muestra para el fondo, más las dudosas—, no el libro entero.
+
+        Cualquier fallo aquí deja los resultados como estaban: es una segunda
+        opinión, no un eslabón del que dependa la corrida.
+        """
+        if not self.config.signature_book_background:
+            return pages
+        fields = [field for field in self.template.fields
+                  if field.type is FieldType.SIGNATURE]
+        if not fields:
+            return pages
+        pending = [
+            (page, result)
+            for page in pages
+            for result in page.fields
+            if result.value == UNCLEAR
+            and result.field_type == FieldType.SIGNATURE.value
+            and page.alignment_quality == "ok"
+        ]
+        if not pending:
+            return pages
+        try:
+            return self._review_signatures_impl(
+                pdf_path, pages, pending, fields, reference, anchors, own,
+                renderer, first_page,
+            )
+        except Exception as exc:  # noqa: BLE001 - nunca debe tumbar la corrida
+            logger.warning(
+                f"[Pipeline] No se pudo contrastar las firmas inciertas con "
+                f"el libro: {exc}"
+            )
+            return pages
+
+    def _review_signatures_impl(
+        self,
+        pdf_path: Path,
+        pages: List[PageResult],
+        pending: List[Tuple[PageResult, FieldResult]],
+        fields: List[FieldTemplate],
+        reference: Optional[np.ndarray],
+        anchors: Optional[List[TransformResult]],
+        own: Optional[List[TransformResult]],
+        renderer: Optional[PdfPageRenderer],
+        first_page: int,
+    ) -> List[PageResult]:
+        # Las páginas mal alineadas no sirven ni de fondo ni de referencia: sus
+        # recortes no caen sobre la misma casilla que los demás.
+        usable = [page for page in pages
+                  if not page.blank and page.alignment_quality == "ok"]
+        if len(usable) < MIN_BACKGROUND_PAGES:
+            logger.info(
+                f"[Pipeline] Firmas inciertas: {len(usable)} páginas alineadas, "
+                f"hacen falta {MIN_BACKGROUND_PAGES} para el fondo del libro"
+            )
+            return pages
+
+        # Muestra repartida por todo el libro para el fondo y para aprender
+        # qué densidad significa "firmado" aquí, más las páginas a resolver.
+        # El reparto va de la primera página a la última: tomar un paso fijo y
+        # cortar al llegar al cupo dejaría fuera el final del libro, que es
+        # justo donde el escaneo suele degradarse.
+        wanted_count = min(len(usable), self.config.signature_background_pages)
+        sample = [
+            usable[round(index * (len(usable) - 1) / max(1, wanted_count - 1))]
+            for index in range(wanted_count)
+        ]
+        wanted = {page.page_number for page in sample}
+        wanted.update(page.page_number for page, _ in pending)
+
+        self._notify(len(pages), len(pages),
+                     "Contrastando firmas inciertas con el libro")
+        crops: Dict[int, Dict[str, np.ndarray]] = {}
+        for page_number in sorted(wanted):
+            image = (
+                renderer.render_page(page_number, self.config.dpi)
+                if renderer is not None
+                else render_page(pdf_path, page_number, self.config.dpi)
+            )
+            image = self._aligned_image(
+                image, page_number - first_page, reference,
+                anchors=anchors, own=own,
+            )
+            page_crops: Dict[str, np.ndarray] = {}
+            for field in fields:
+                try:
+                    page_crops[field.id] = crop_region(
+                        image, field, pad_x=0.0, pad_y=0.0
+                    )
+                except ValueError:
+                    continue
+            crops[page_number] = page_crops
+
+        verdicts = {
+            (page.page_number, result.field_id): result.value
+            for page in pages for result in page.fields
+        }
+        resolved = 0
+        for field in fields:
+            sample_crops = [
+                crops[page.page_number][field.id] for page in sample
+                if field.id in crops.get(page.page_number, {})
+            ]
+            background = build_background(sample_crops)
+            if background is None:
+                continue
+            sample_peaks, sample_verdicts = [], []
+            for page in sample:
+                crop = crops.get(page.page_number, {}).get(field.id)
+                if crop is None:
+                    continue
+                sample_peaks.append(background_peak(crop, background))
+                sample_verdicts.append(
+                    verdicts.get((page.page_number, field.id), UNCLEAR)
+                )
+            band = confident_band(sample_peaks, sample_verdicts)
+            if band is None:
+                logger.info(
+                    f"[Pipeline] Firmas de '{field.id}': la bitácora no separa "
+                    f"firmadas de vacías con claridad; se dejan inciertas"
+                )
+                continue
+            for page, result in pending:
+                if result.field_id != field.id:
+                    continue
+                crop = crops.get(page.page_number, {}).get(field.id)
+                if crop is None:
+                    continue
+                opinion = review_with_background(
+                    background_peak(crop, background), band
+                )
+                if opinion is None:
+                    continue
+                value, confidence, comment = opinion
+                result.value = value
+                result.confidence = round(confidence, 3)
+                result.status = (
+                    Status.OK if value == "true"
+                    else Status.ERROR if field.required
+                    else Status.WARNING
+                )
+                result.source = "vision"
+                result.inference_method = "book_background"
+                result.comment = comment
+                resolved += 1
+        logger.info(
+            f"[Pipeline] Firmas inciertas contrastadas con el libro: "
+            f"{resolved}/{len(pending)} resueltas"
+        )
+        return pages
+
     def _aligned_image(
         self,
         image: np.ndarray,
@@ -1948,7 +2179,8 @@ class Pipeline:
         if self.config.deskew:
             image, _skew = deskew(image)
         if self.config.align and reference is not None:
-            if anchors and index < len(anchors) and anchors[index] is not None:
+            if (anchors and 0 <= index < len(anchors)
+                    and anchors[index] is not None):
                 if anchors[index].reliable:
                     image = apply_transform(image, anchors[index])
             else:
@@ -1998,9 +2230,10 @@ def _process_pdf_worker(
     pdf_path: Path,
     base_config: AppConfig,
     template: Template,
-    max_pages: Optional[int],
+    page_range: Optional[PageRange],
     reference_page: int,
     cancel_path: str,
+    progress_path: Optional[str] = None,
 ) -> Tuple[ValidationReport, dict]:
     """Procesa un PDF completo dentro de un worker OCR persistente."""
     # Un estado de página del perfil B puede haber dejado un documento abierto
@@ -2018,13 +2251,46 @@ def _process_pdf_worker(
         date_engine=_WORKER_STATE.get("date_engine"),
         reference_page=reference_page,
     )
+    if progress_path is not None:
+        pipeline.on_progress = _page_counter_writer(Path(progress_path))
     cancellation_flag = Path(cancel_path)
     report = pipeline.process(
         Path(pdf_path),
-        max_pages=max_pages,
+        page_range=page_range,
         should_cancel=cancellation_flag.exists,
     )
     return report, pipeline.vlm_stats
+
+
+def _page_counter_writer(path: Path) -> ProgressCallback:
+    """Publica el avance del worker en un archivo que el padre puede leer.
+
+    Un proceso del pool no puede emitir señales a la GUI, así que deja su
+    contador de páginas en el directorio temporal del pool —el mismo sitio
+    donde ya vive la bandera de cancelación— y el planificador lo consulta
+    mientras espera. Es una línea de texto por página: más barato que una
+    cola compartida y sin proceso extra de ``Manager``.
+    """
+    def write(done: int, total: int, _message: str) -> None:
+        try:
+            path.write_text(f"{done}/{total}", encoding="ascii")
+        except OSError:
+            # Un contador que no se puede escribir no puede tumbar el OCR.
+            pass
+
+    return write
+
+
+def _read_page_counter(path: Optional[Path]) -> Optional[Tuple[int, int]]:
+    """Lee el contador de un worker; ``None`` si aún no hay dato utilizable."""
+    if path is None:
+        return None
+    try:
+        done, _, total = path.read_text(encoding="ascii").partition("/")
+        return int(done), int(total)
+    except (OSError, ValueError):
+        # El padre puede leer justo mientras el worker reescribe el archivo.
+        return None
 
 
 def process_pdf_batch(
@@ -2034,12 +2300,13 @@ def process_pdf_batch(
     process_pool: OcrProcessPool,
     fallback_engine: OcrEngine,
     date_engine: Optional[OcrEngine] = None,
-    max_pages: Optional[int] = None,
+    page_range: Optional[PageRange] = None,
     reference_page: int = 1,
     should_cancel: Optional[Callable[[], bool]] = None,
     on_file_started: Optional[Callable[[int, int, str], None]] = None,
     on_file_finished: Optional[Callable[[int, ValidationReport], None]] = None,
     on_progress: Optional[ProgressCallback] = None,
+    on_file_progress: Optional[Callable[[int, int, int], None]] = None,
 ) -> Tuple[List[ValidationReport], List[dict]]:
     """Procesa un lote con el perfil C siempre activo y cola acotada.
 
@@ -2047,16 +2314,33 @@ def process_pdf_batch(
     PDFs completos cuando hay suficientes archivos para ocupar el pool y, en
     lotes menores, reparte las páginas para no dejar procesos ociosos. En ambos
     casos el pool OCR persiste y las colas permanecen acotadas.
+
+    ``on_file_progress`` recibe ``(archivo 1-based, páginas hechas, páginas
+    del archivo)`` en las dos estrategias, para que el panel de avance se lea
+    igual reparta el planificador páginas o archivos completos.
+
+    ``page_range`` es un rango del lote numerado de corrido: se reparte entre
+    los archivos que lo contienen y los que quedan fuera ni se abren, así que
+    los reportes devueltos cubren solo esos archivos.
     """
     paths = [Path(path) for path in pdf_paths]
     if not paths:
         return [], []
 
-    counts: List[int] = []
+    document_pages: List[int] = []
     for path in paths:
         with PdfPageRenderer(path) as renderer:
-            count = renderer.page_count()
-        counts.append(min(count, max_pages) if max_pages is not None else count)
+            document_pages.append(renderer.page_count())
+    slices = slice_batch(paths, document_pages, page_range)
+    if not slices:
+        logger.warning(
+            f"[Perfil C] El rango {(page_range or PageRange()).label()} no "
+            f"cubre ninguna página de los {len(paths)} archivo(s) del lote"
+        )
+        return [], []
+    paths = [item.path for item in slices]
+    counts = [item.count or 0 for item in slices]
+    ranges = [item.pages for item in slices]
     total_pages = sum(counts)
     done_pages = 0
     total_files = len(paths)
@@ -2073,12 +2357,10 @@ def process_pdf_batch(
         f"[Perfil C] activo | estrategia={strategy} | "
         f"workers={process_pool.max_workers} | archivos={total_files}"
     )
+    # El nombre del perfil es interno (ver README): la barra de estado sigue
+    # hablando de páginas y archivos, que es lo que el usuario mira.
     if on_progress is not None:
-        on_progress(
-            0,
-            total_pages,
-            f"Perfil C activo — paralelismo por {strategy}",
-        )
+        on_progress(0, total_pages, f"Procesando {total_files} archivo(s)…")
 
     if not parallel_by_file:
         sequential_reports: List[ValidationReport] = []
@@ -2088,6 +2370,8 @@ def process_pdf_batch(
                 break
             if on_file_started is not None:
                 on_file_started(index + 1, total_files, path.name)
+            if on_file_progress is not None:
+                on_file_progress(index + 1, 0, count)
             file_config = config_for_pdf(base_config, path)
             pipeline = Pipeline(
                 file_config,
@@ -2102,23 +2386,28 @@ def process_pdf_batch(
 
             def page_progress(
                 done: int,
-                _total: int,
+                total_in_file: int,
                 message: str,
                 *,
                 _offset: int = offset,
+                _index: int = index,
             ) -> None:
+                if on_file_progress is not None:
+                    on_file_progress(_index + 1, done, total_in_file)
                 if on_progress is not None:
                     on_progress(_offset + done, total_pages, message)
 
             pipeline.on_progress = page_progress
             report = pipeline.process(
                 path,
-                max_pages=max_pages,
+                page_range=ranges[index],
                 should_cancel=should_cancel,
             )
             sequential_reports.append(report)
             sequential_stats.append(pipeline.vlm_stats)
             done_pages += len(report.pages)
+            if on_file_progress is not None:
+                on_file_progress(index + 1, len(report.pages), count)
             if on_file_finished is not None:
                 on_file_finished(index + 1, report)
             if report.cancelled:
@@ -2137,6 +2426,8 @@ def process_pdf_batch(
     statistics: List[Optional[dict]] = [None] * total_files
     retry: List[Tuple[int, Exception]] = []
     pending: dict = {}
+    counters: dict = {}
+    submitted: dict = {}
     next_index = 0
     cancelled = False
     cancel_flag = process_pool.temporary_path("cancel_mass_batch.flag")
@@ -2156,17 +2447,59 @@ def process_pdf_batch(
             path = paths[index]
             if on_file_started is not None:
                 on_file_started(index + 1, total_files, path.name)
+            if on_file_progress is not None:
+                on_file_progress(index + 1, 0, counts[index])
+            counter = process_pool.temporary_path(f"pages_{index}.count")
+            counter.unlink(missing_ok=True)
+            counters[index] = counter
+            # El archivo empieza a costar tiempo aquí, no cuando el worker
+            # llega a su primera página: entregarlo al pool es lo que dispara
+            # el arranque del proceso y la carga de los modelos OCR.
+            submitted[index] = time.time()
             future = process_pool.executor.submit(
                 _process_pdf_worker,
                 path,
                 base_config,
                 template,
-                max_pages,
+                ranges[index],
                 reference_page,
                 str(cancel_flag),
+                str(counter),
             )
             pending[future] = index
             next_index += 1
+
+    def publish_live_progress() -> None:
+        """Reparte el avance de los archivos en vuelo, uno por proceso.
+
+        Sin esto la única señal era el fin de cada archivo: con ocho PDFs a la
+        vez las barras se quedaban quietas varios minutos y luego saltaban de
+        golpe, mientras la estrategia por páginas avanzaba página a página.
+        """
+        if on_file_progress is None and on_progress is None:
+            return
+        live = 0
+        for index in pending.values():
+            measured = _read_page_counter(counters.get(index))
+            if measured is None:
+                continue
+            done, total_in_file = measured
+            total_in_file = total_in_file or counts[index]
+            done = min(done, total_in_file) if total_in_file else done
+            live += done
+            if on_file_progress is not None:
+                on_file_progress(index + 1, done, total_in_file)
+        if on_progress is not None:
+            ready = sum(r is not None for r in reports)
+            message = (
+                f"Procesando {len(pending)} archivo(s) en paralelo — "
+                f"{ready}/{total_files} listos"
+                if pending
+                else f"Procesados {ready}/{total_files} archivos"
+            )
+            on_progress(
+                min(done_pages + live, total_pages), total_pages, message
+            )
 
     submit_available()
     while pending:
@@ -2180,6 +2513,9 @@ def process_pdf_batch(
                 future.cancel()
         for future in finished:
             index = pending.pop(future)
+            counter = counters.pop(index, None)
+            if counter is not None:
+                counter.unlink(missing_ok=True)
             if future.cancelled():
                 continue
             try:
@@ -2187,21 +2523,33 @@ def process_pdf_batch(
             except Exception as exc:  # noqa: BLE001 - fallback perfil B
                 retry.append((index, exc))
                 continue
+            # El reloj del worker arranca ya dentro del proceso, con los
+            # modelos cargados; el del padre cubre la espera completa, que es
+            # la que el usuario vio pasar. Sin esto la columna time_ms del
+            # CSV se queda corta justo por el arranque del pool.
+            started_at = submitted.pop(index, 0.0)
+            if started_at > 0:
+                report.processing_ms = round(
+                    max(
+                        report.processing_ms,
+                        (time.time() - started_at) * 1000,
+                    ),
+                    1,
+                )
+                report.started_at = started_at
             reports[index] = report
             statistics[index] = vlm_stats
             done_pages += len(report.pages)
+            if on_file_progress is not None:
+                on_file_progress(index + 1, len(report.pages), counts[index])
             if on_file_finished is not None:
                 on_file_finished(index + 1, report)
-            if on_progress is not None:
-                on_progress(
-                    done_pages,
-                    total_pages,
-                    f"Procesados {sum(r is not None for r in reports)}/"
-                    f"{total_files} archivos",
-                )
         submit_available()
+        publish_live_progress()
 
     cancel_flag.unlink(missing_ok=True)
+    for counter in counters.values():
+        counter.unlink(missing_ok=True)
     if retry and not cancelled:
         logger.warning(
             f"[Perfil C] {len(retry)} archivo(s) reintentarán con perfil B"
@@ -2219,7 +2567,7 @@ def process_pdf_batch(
                     process_pool=process_pool,
                     reference_page=reference_page,
                 )
-                report = pipeline.process(path, max_pages=max_pages)
+                report = pipeline.process(path, page_range=ranges[index])
             except Exception as retry_error:
                 raise RuntimeError(
                     f"Falló {path.name} en perfiles C y B: "
@@ -2228,6 +2576,8 @@ def process_pdf_batch(
             reports[index] = report
             statistics[index] = pipeline.vlm_stats
             done_pages += len(report.pages)
+            if on_file_progress is not None:
+                on_file_progress(index + 1, len(report.pages), counts[index])
             if on_file_finished is not None:
                 on_file_finished(index + 1, report)
             if on_progress is not None:

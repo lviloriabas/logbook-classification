@@ -12,7 +12,7 @@ from app.templates.manager import TemplateManager
 
 _CSV_METADATA_SUFFIXES = ("_conf", "_status", "_comment", "_source")
 _ALWAYS_IMPORTANT_COLUMNS = frozenset(
-    {"file", "page", "dup", "date", "time_ms"}
+    {"file", "page", "dup", "disc", "date", "time_ms"}
 )
 _DATE_COMPONENT_FIELDS = frozenset({"day", "month", "year"})
 _FALLBACK_IMPORTANT_FIELDS = frozenset(
@@ -49,6 +49,32 @@ def infer_important_field_ids(columns: Iterable[str]) -> set[str]:
     if "date" not in column_list:
         important.update(value_columns & _DATE_COMPONENT_FIELDS)
     return important
+
+
+def template_field_ids_for_columns(
+    selected_columns: Iterable[str],
+    template_field_ids: Iterable[str],
+    columns: Iterable[str] = (),
+) -> set[str]:
+    """Traduce columnas marcadas a los campos de plantilla que las producen.
+
+    El selector trabaja con columnas del CSV y el visor dibuja campos de la
+    plantilla. Las columnas de metadatos (``_conf``, ``_status``…) apuntan al
+    mismo campo que su valor, y la columna consolidada ``date`` representa
+    las casillas día/mes/año.
+    """
+    selected = list(selected_columns)
+    column_list = list(columns) or selected
+    available = set(template_field_ids)
+    resolved: set[str] = set()
+    for column in selected:
+        if column == "date":
+            resolved.update(available & _DATE_COMPONENT_FIELDS)
+            continue
+        field_id = csv_field_id(column, column_list)
+        if field_id in available:
+            resolved.add(field_id)
+    return resolved
 
 
 def important_csv_columns(
@@ -110,7 +136,7 @@ def read_csv_file(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     return columns, rows
 
 
-def _template_name_for_csv(path: Path) -> str | None:
+def template_name_for_csv(path: Path) -> str | None:
     companion = path.with_suffix(".json")
     if not companion.is_file():
         return None
@@ -126,7 +152,7 @@ def _template_name_for_csv(path: Path) -> str | None:
 
 def important_field_ids_for_csv(path: Path, columns: Iterable[str]) -> set[str]:
     """Recupera los campos obligatorios desde la plantilla de la corrida."""
-    template_name = _template_name_for_csv(path)
+    template_name = template_name_for_csv(path)
     if template_name:
         manager = TemplateManager()
         for template_path in manager.list_templates_with_fallback():

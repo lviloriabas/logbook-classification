@@ -8,31 +8,60 @@ Después del procesamiento OCR y de la normalización de formato, este
 corrector:
 
 1. Agrupa las páginas en libros (regla de la serie + mitad).
-2. En cada libro, vota la matrícula dominante entre las lecturas
-   fiables (formato OK y confianza >= umbral).
-3. Corrige de forma agresiva a la dominante TODAS las páginas que no
+2. En cada libro, decide la matrícula **dígito a dígito**: cada posición
+   se vota por separado con todas las lecturas del libro, pesadas por su
+   confianza y por lo limpia que fue la lectura.
+3. Corrige de forma agresiva a la ganadora TODAS las páginas que no
    coincidan (ilegibles, de confianza baja o de formato válido pero
    distinto), dejando el valor original en el comentario para
    auditoría: un libro = un avión es una regla dura.
 4. Si el libro no tiene ninguna lectura válida, no hay ganador y las
    páginas quedan sin matrícula (no se detectó).
+
+El voto por posición sustituye a la mayoría sobre la matrícula completa.
+Con la mayoría simple, una sola página confiada pero equivocada (el 7
+manuscrito leído como 3) se imponía a todo un libro, porque las demás
+páginas del libro leían el número de formas distintas entre sí y ninguna
+alcanzaba dos votos. Separando las posiciones, esas lecturas dispersas sí
+coinciden allí donde importa y el dígito correcto gana.
 """
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import defaultdict
 import re
 from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
 
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
-from app.validation.grouping import group_books
+from app.utils.postprocess import (
+    AMBIGUOUS_MATRICULA_NOTE,
+    WEAK_MATRICULA_NOTE,
+    apply_postprocess,
+)
+from app.validation.grouping import group_books, log_number
 
 MATRICULA_FIELD_ID = "matricula"
 
-# Confianza mínima para que una matrícula vote por la dominante.
-MIN_VOTE_CONFIDENCE = 0.5
+# Peso de la evidencia según cómo se obtuvo el número: una tirada limpia de
+# cuatro dígitos vale más que una reconstruida con caracteres confundibles,
+# y esta mucho más que un número recompuesto con dígitos dispersos. La
+# lectura reconstruida se descuenta poco: viene de una ventana anclada entre
+# el prefijo y el sufijo del campo, así que es una matrícula completa, no un
+# resto de texto.
+_EVIDENCE_QUALITY = {
+    "": 1.0,
+    AMBIGUOUS_MATRICULA_NOTE: 0.8,
+    WEAK_MATRICULA_NOTE: 0.25,
+}
+# Piso de peso: una lectura sin confianza sigue siendo evidencia, pero mínima.
+_MIN_WEIGHT = 0.05
+# Valores que ya son resultado de una inferencia: no pueden votarse a sí mismos.
+_DERIVED_SOURCES = frozenset({"book_correction", "inferred"})
+# Valores resueltos por una segunda pasada (Tesseract restringido o VLM):
+# valen más que el texto crudo de la pasada principal, que ya falló.
+_VERIFIED_SOURCES = frozenset({"ocr_fallback", "vlm", "fleet_validation"})
 
 _ORDER = {Status.OK: 0, Status.WARNING: 1, Status.ERROR: 2}
 _CANONICAL_MATRICULA_RE = re.compile(r"^HP-(\d{4})(CMP|WWP)$")
@@ -45,108 +74,120 @@ def _matricula_field(page: PageResult):
     return None
 
 
-def _handwritten_4_7_hint(field) -> Optional[str]:
-    """Recupera una matrícula completa cuando el OCR leyó un 7 como ``F``.
+def _page_evidence(
+    field: FieldResult,
+) -> Optional[Tuple[str, str, float]]:
+    """(número de 4 dígitos, sufijo, peso) con que una página vota.
 
-    Esta equivalencia se limita deliberadamente al recorte manuscrito de
-    matrícula. No se comparte con los campos de fecha ni transforma por sí
-    sola una lectura canónica: solo aporta evidencia al consenso del libro.
+    Se parte del texto crudo del OCR: una página descartada por el formato
+    sigue conteniendo dígitos legibles, y esa evidencia vale igual que la de
+    una lectura que sí pasó. El valor ya normalizado se usa cuando no hay
+    texto crudo o cuando lo resolvió una segunda pasada (que vio el recorte
+    de nuevo), pero nunca si viene de una corrección previa: contaría la
+    inferencia anterior como si fuera una lectura nueva.
     """
-    if field is None or field.confidence < MIN_VOTE_CONFIDENCE:
-        return None
-    raw = re.sub(r"[^A-Z0-9]", "", (field.raw_value or "").upper())
-    match = re.search(r"(?:HP|HR|HD)([A-Z0-9]{4})", raw)
-    if match is None:
-        return None
-    observed = match.group(1)
-    if "F" not in observed:
-        return None
-    number = observed.replace("F", "7")
-    if not number.isdigit():
-        return None
-    suffix = "WWP" if "WWP" in raw else "CMP"
-    return f"HP-{number}{suffix}"
+    confidence = max(float(field.confidence), _MIN_WEIGHT)
+    if field.raw_value and field.source not in _VERIFIED_SOURCES:
+        value, note = apply_postprocess(
+            field.field_id, MATRICULA_FIELD_ID, field.raw_value
+        )
+        match = _CANONICAL_MATRICULA_RE.fullmatch(value)
+        if match is not None:
+            quality = _EVIDENCE_QUALITY.get(
+                note, _EVIDENCE_QUALITY[WEAK_MATRICULA_NOTE]
+            )
+            return match.group(1), match.group(2), confidence * quality
+    if field.value and field.source not in _DERIVED_SOURCES:
+        match = _CANONICAL_MATRICULA_RE.fullmatch(field.value)
+        if match is not None:
+            return match.group(1), match.group(2), confidence
+    if field.raw_value:
+        # Segunda pasada sin valor utilizable: queda el texto crudo.
+        value, note = apply_postprocess(
+            field.field_id, MATRICULA_FIELD_ID, field.raw_value
+        )
+        match = _CANONICAL_MATRICULA_RE.fullmatch(value)
+        if match is not None:
+            quality = _EVIDENCE_QUALITY.get(
+                note, _EVIDENCE_QUALITY[WEAK_MATRICULA_NOTE]
+            )
+            return match.group(1), match.group(2), confidence * quality
+    return None
 
 
-def _repeated_4_read_as_7(winner: str, hint: str) -> bool:
-    """Indica que el candidato solo cambia dos o más ``4`` por ``7``."""
-    winner_match = _CANONICAL_MATRICULA_RE.fullmatch(winner)
-    hint_match = _CANONICAL_MATRICULA_RE.fullmatch(hint)
-    if winner_match is None or hint_match is None:
-        return False
-    if winner_match.group(2) != hint_match.group(2):
-        return False
-    differences = [
-        (left, right)
-        for left, right in zip(winner_match.group(1), hint_match.group(1))
-        if left != right
-    ]
-    return len(differences) >= 2 and all(
-        left == "4" and right == "7" for left, right in differences
-    )
-
-
-def _resolve_repeated_4_7_ambiguity(
+def _unique_evidence(
     entries: List[Tuple[PageResult, FieldResult]],
-    winner: str,
-    winner_count: int,
-) -> Optional[Tuple[str, int, float]]:
-    """Prefiere 1717 frente a 1414 si el mismo libro aporta esa forma.
+) -> List[Tuple[str, str, float]]:
+    """Evidencia del libro con una sola aportación por página física.
 
-    Se exige una matrícula completa reconstruida desde el texto crudo, dos o
-    más posiciones 4→7 y al menos tanta evidencia como votos del candidato
-    1414. Así una única ``F`` aislada no cambia matrículas como 1534.
+    La misma página escaneada en dos PDF distintos llega dos veces con la
+    misma lectura. Contarla dos veces duplicaría un error de OCR y le daría
+    ventaja sobre las páginas que solo aparecen una vez, así que de cada
+    ``log_number`` se conserva la aportación de mayor peso.
     """
-    evidence: Dict[str, List[float]] = {}
-    for _page, field in entries:
-        hint = _handwritten_4_7_hint(field)
-        if hint is None or not _repeated_4_read_as_7(winner, hint):
+    best: Dict[object, Tuple[str, str, float]] = {}
+    for index, (page, field) in enumerate(entries):
+        evidence = _page_evidence(field)
+        if evidence is None:
             continue
-        evidence.setdefault(hint, []).append(float(field.confidence))
-    if not evidence:
-        return None
-    ranked = sorted(
-        evidence.items(),
-        key=lambda item: (len(item[1]), sum(item[1])),
-        reverse=True,
-    )
-    hint, confidences = ranked[0]
-    if (
-        len(confidences) < winner_count
-        or (len(ranked) > 1 and len(ranked[1][1]) == len(confidences))
-    ):
-        return None
-    confidence = round(sum(confidences) / len(confidences), 3)
-    return hint, len(confidences), confidence
+        # Sin log_number legible no se puede saber si dos páginas son la
+        # misma, así que cada una cuenta por separado.
+        key = log_number(page) or f"page-{index}"
+        previous = best.get(key)
+        if previous is None or evidence[2] > previous[2]:
+            best[key] = evidence
+    return list(best.values())
 
 
 def _book_winner(
-    votes: List,
+    entries: List[Tuple[PageResult, FieldResult]],
 ) -> Optional[Tuple[str, int, float]]:
-    """Matrícula dominante del libro: (valor, número de votos, confianza).
+    """Matrícula del libro por consenso dígito a dígito.
 
-    Gana la más frecuente; en empate, la de mayor confianza total.
-    Si cada voto es de una matrícula distinta, no hay ganador.
+    Cada posición se decide por separado sumando el peso de todas las
+    lecturas, de modo que el dígito correcto gana aunque ninguna lectura
+    completa se repita. El número resultante tiene que coincidir además con
+    alguna lectura completa del libro: el consenso elige entre lo que se
+    leyó, nunca inventa una matrícula que no vio ninguna página. Si mezclar
+    posiciones produce un número que nadie leyó, decide la lectura completa
+    de más peso.
+
+    Returns:
+        (matrícula canónica, páginas que la leyeron entera, confianza) o
+        None si el libro no aporta ninguna lectura utilizable.
     """
-    counter: Counter = Counter()
-    total_confidence: Dict[str, float] = {}
-    for field in votes:
-        value = field.value or ""
-        counter[value] += 1
-        total_confidence[value] = total_confidence.get(value, 0.0) + field.confidence
-
-    ranked = sorted(
-        counter.items(),
-        key=lambda item: (item[1], total_confidence[item[0]]),
-        reverse=True,
+    evidence = _unique_evidence(entries)
+    if not evidence:
+        return None
+    votes: List[Dict[str, float]] = [defaultdict(float) for _ in range(4)]
+    observed: Dict[str, float] = defaultdict(float)
+    suffixes: Dict[str, float] = defaultdict(float)
+    for number, suffix, weight in evidence:
+        observed[number] += weight
+        suffixes[suffix] += weight
+        for position, digit in enumerate(number):
+            votes[position][digit] += weight
+    # El desempate se ordena por el propio dígito para que dos corridas del
+    # mismo lote den siempre el mismo resultado: con pesos idénticos no hay
+    # evidencia que distinga, pero la salida no puede depender del orden en
+    # que llegaron las páginas.
+    number = "".join(
+        max(sorted(slot.items()), key=lambda item: item[1])[0]
+        for slot in votes
     )
-    if not ranked:
-        return None
-    winner, count = ranked[0]
-    if count == 1 and len(ranked) > 1:
-        return None
-    winner_confidence = total_confidence[winner] / count
-    return winner, count, round(winner_confidence, 3)
+    if number not in observed:
+        number = max(sorted(observed.items()), key=lambda item: item[1])[0]
+    suffix = max(sorted(suffixes.items()), key=lambda item: item[1])[0]
+    winner = f"HP-{number}{suffix}"
+    matches = [
+        field.confidence for _page, field in entries
+        if field.value == winner and field.source not in _DERIVED_SOURCES
+    ]
+    confidence = (
+        round(sum(matches) / len(matches), 3) if matches
+        else round(min(observed[number], 1.0), 3)
+    )
+    return winner, max(len(matches), 1), confidence
 
 
 def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
@@ -161,26 +202,10 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
     if not entries:
         return 0, 0
 
-    votes = [
-        field
-        for _, field in entries
-        if (field.status is Status.OK
-            and field.value
-            and field.confidence >= MIN_VOTE_CONFIDENCE
-            and field.source not in {"book_correction", "inferred"})
-    ]
-    if not votes:
-        return 0, 0
-
-    winner_info = _book_winner(votes)
+    winner_info = _book_winner(entries)
     if winner_info is None:
         return 0, 0
     winner, count, winner_confidence = winner_info
-    ambiguity = _resolve_repeated_4_7_ambiguity(entries, winner, count)
-    ambiguity_from = None
-    if ambiguity is not None:
-        ambiguity_from = winner
-        winner, count, winner_confidence = ambiguity
 
     corrected = 0
     flagged = 0
@@ -194,23 +219,10 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
         field.confidence = winner_confidence
         field.status = Status.OK
         field.source = "book_correction"
-        field.inference_method = (
-            "book_handwritten_4_7" if ambiguity_from is not None
-            else "book_majority"
-        )
-        if ambiguity_from is not None:
+        field.inference_method = "book_digit_consensus"
+        if original:
             field.comment = (
-                "Corrected handwritten registration 4/7 ambiguity from "
-                f"{original or ambiguity_from!r} to {winner!r} using raw "
-                f"evidence from the same book ({count} vote(s))"
-            )
-            if original:
-                flagged += 1
-            else:
-                corrected += 1
-        elif original:
-            field.comment = (
-                f"Corrected from {original!r} by book majority "
+                f"Corrected from {original!r} by book consensus "
                 f"({count} vote(s))"
             )
             flagged += 1

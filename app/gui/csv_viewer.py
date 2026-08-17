@@ -7,7 +7,17 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from PySide6.QtCore import QRegularExpression, QSize, Qt, QTimer
+from loguru import logger
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QRegularExpression,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QIcon,
@@ -26,7 +36,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
-    QScrollArea,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -42,8 +51,31 @@ from app.gui.csv_utils import (
     important_csv_columns,
     important_field_ids_for_csv,
     read_csv_file,
+    template_name_for_csv,
 )
 from app.gui.field_selector import ImportantFieldsDialog
+from app.gui.table_sort import ColumnSortController
+from app.gui.widgets import (
+    DATA_TABLE_QSS,
+    PANE_BG,
+    PANE_BORDER,
+    PANE_CONTROL_BG,
+    PANE_CONTROL_HOVER,
+    PANE_STATUS_COLORS,
+    PANE_SURFACE_BG,
+    PANE_TEXT,
+    TABLE_SELECTION_BG,
+    ZoomableScrollArea,
+    load_zoom_icon,
+    scrollbars_qss,
+    style_data_table,
+    style_dark_pane,
+    style_pdf_surface,
+)
+from app.utils.important_fields import (
+    IMPORTANT_FIELDS_FILENAME,
+    ImportantFieldsStore,
+)
 
 
 _STATUS_COLORS = {
@@ -51,7 +83,72 @@ _STATUS_COLORS = {
     "WARNING": "#9a6700",
     "ERROR": "#cf222e",
 }
-_ASSETS = Path(__file__).resolve().parents[2] / "assets"
+_PROGRAM_DIR = Path(__file__).resolve().parents[2]
+_ASSETS = _PROGRAM_DIR / "assets"
+_RENDER_DPI = 150
+_MIN_ZOOM = 0.4
+_MAX_ZOOM = 4.0
+# Celdas por tramo al llenar la tabla. Medido: ~16 µs por celda, así que un
+# CSV completo (85 columnas) cuesta ~800 ms de una sentada y la ventana se
+# queda sin responder mientras tanto. El primer tramo se llena en el acto y
+# el resto se reparte, de modo que un CSV corto sigue estando listo al volver.
+_TABLE_CELL_CHUNK = 2000
+# Filas que examina Qt al ajustar el ancho de una columna. Sin tope recorre
+# todas: con miles de filas el ajuste solo costaba más que llenar la tabla.
+_RESIZE_PRECISION = 64
+# El panel se estiliza a sí mismo para verse igual dentro y fuera del visor.
+_PDF_PANE_QSS = (
+    # El panel va en el mismo gris oscuro que la tabla a la que acompaña: en
+    # blanco quedaba como un bloque luminoso al lado de ella.
+    f"#embeddedPdfPane {{ background: {PANE_BG};"
+    f" border: 1px solid {PANE_SURFACE_BG}; border-radius: 6px; }}"
+    f"#pdfSurface {{ background: {PANE_SURFACE_BG};"
+    f" border: 1px solid {PANE_BORDER}; border-radius: 4px; }}"
+    # Sin fondo explícito, la etiqueta pinta el color de ventana y tapa la
+    # superficie oscura justo cuando solo muestra el mensaje de estado.
+    f"#pdfPage {{ color: {PANE_TEXT}; padding: 12px; background: transparent; }}"
+    f"#embeddedPdfPane QLabel {{ color: {PANE_TEXT}; background: transparent; }}"
+    # Los campos suben un escalón sobre el panel para seguir leyéndose como
+    # controles y no como parte del fondo.
+    "#embeddedPdfPane QComboBox, #embeddedPdfPane QLineEdit,"
+    "#embeddedPdfPane QPushButton, #embeddedPdfPane QToolButton {"
+    f" background: {PANE_CONTROL_BG}; color: {PANE_TEXT};"
+    f" border: 1px solid {PANE_BORDER}; border-radius: 4px; padding: 2px 6px; }}"
+    "#embeddedPdfPane QComboBox:hover, #embeddedPdfPane QPushButton:hover,"
+    "#embeddedPdfPane QToolButton:hover {"
+    f" background: {PANE_CONTROL_HOVER}; }}"
+    "#embeddedPdfPane QComboBox:disabled, #embeddedPdfPane QPushButton:disabled,"
+    "#embeddedPdfPane QToolButton:disabled {"
+    f" background: {PANE_BG}; color: #8c959f; }}"
+    # La lista desplegable es una ventana aparte y no hereda el fondo.
+    "#embeddedPdfPane QComboBox QAbstractItemView {"
+    f" background: {PANE_CONTROL_BG}; color: {PANE_TEXT};"
+    f" selection-background-color: {TABLE_SELECTION_BG}; }}"
+    "QToolButton#zoomControl { padding: 0; }"
+    f"QLabel#zoomValue {{ color: {PANE_TEXT}; }}"
+) + scrollbars_qss("#embeddedPdfPane")
+
+
+def _join_names(names: Iterable[str], limit: int = 3) -> str:
+    """Enumera nombres de archivo sin desbordar el indicador."""
+    name_list = list(names)
+    shown = ", ".join(name_list[:limit])
+    return shown if len(name_list) <= limit else f"{shown}…"
+
+
+def _companion_payload(csv_path: Path) -> dict:
+    """Lee el JSON consolidado que acompaña al CSV; ``{}`` si no está."""
+    csv_path = Path(csv_path)
+    companion = csv_path.with_suffix(".json")
+    if not companion.is_file() and csv_path.stem.casefold().endswith("_completo"):
+        companion = csv_path.with_name(
+            f"{csv_path.stem[:-len('_completo')]}.json"
+        )
+    try:
+        payload = json.loads(companion.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def source_pdf_paths_for_rows(
@@ -65,23 +162,16 @@ def source_pdf_paths_for_rows(
     """
     row_list = list(rows)
     csv_path = Path(csv_path)
-    companion = csv_path.with_suffix(".json")
-    if not companion.is_file() and csv_path.stem.casefold().endswith("_completo"):
-        companion = csv_path.with_name(
-            f"{csv_path.stem[:-len('_completo')]}.json"
-        )
     flattened: list[tuple[str, str, Path]] = []
     try:
-        payload = json.loads(companion.read_text(encoding="utf-8"))
-        reports = payload.get("reportes", [])
-        for report in reports:
+        for report in _companion_payload(csv_path).get("reportes", []):
             pdf_path = Path(str(report.get("pdf_path", "")))
             filename = pdf_path.name.casefold()
             for page in report.get("pages", []):
                 flattened.append(
                     (filename, str(page.get("page_number", "")), pdf_path)
                 )
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (TypeError, AttributeError):
         flattened = []
 
     # La escritura consolidada recorre reportes y páginas en este mismo orden.
@@ -102,6 +192,123 @@ def source_pdf_paths_for_rows(
         )
         resolved.append(candidates[0] if len(candidates) == 1 else None)
     return resolved
+
+
+def source_documents_for_csv(csv_path: Path) -> list[Path]:
+    """PDF que originaron el CSV, en el orden en que se procesaron."""
+    documents: list[Path] = []
+    seen: set[str] = set()
+    try:
+        recorded = [
+            str(report.get("pdf_path", ""))
+            for report in _companion_payload(csv_path).get("reportes", [])
+        ]
+    except (TypeError, AttributeError):
+        return []
+    for raw in recorded:
+        if not raw:
+            continue
+        path = Path(raw)
+        key = str(path).casefold()
+        if key not in seen:
+            seen.add(key)
+            documents.append(path)
+    return documents
+
+
+def _documents_from_rows(rows: Iterable[dict[str, str]]) -> list[Path]:
+    """Nombres de PDF declarados por el CSV cuando no hay JSON compañero."""
+    documents: list[Path] = []
+    seen: set[str] = set()
+    for row in rows:
+        name = (row.get("file") or "").strip()
+        if not name.casefold().endswith(".pdf"):
+            continue
+        key = name.casefold()
+        if key not in seen:
+            seen.add(key)
+            documents.append(Path(name))
+    return documents
+
+
+def _locate_document(
+    recorded: Path, folders: Iterable[Path], deep_folders: Iterable[Path]
+) -> Path | None:
+    """Busca un PDF de origen que pudo haberse movido desde el procesamiento.
+
+    ``folders`` se revisa solo por nombre exacto; el recorrido recursivo queda
+    reservado a ``deep_folders``, las carpetas que el usuario indicó a mano.
+    """
+    # Un nombre suelto solo vale relativo a las carpetas de la corrida: no se
+    # resuelve contra el directorio de trabajo, que es arbitrario.
+    if recorded.is_absolute() and recorded.is_file():
+        return recorded
+    name = recorded.name
+    if not name:
+        return None
+    for folder in folders:
+        candidate = Path(folder) / name
+        if candidate.is_file():
+            return candidate
+    for folder in deep_folders:
+        try:
+            match = next(
+                (path for path in Path(folder).rglob(name) if path.is_file()),
+                None,
+            )
+        except OSError:
+            match = None
+        if match is not None:
+            return match
+    return None
+
+
+def resolve_source_documents(
+    csv_path: Path,
+    rows: Iterable[dict[str, str]],
+    extra_folders: Iterable[Path] = (),
+) -> tuple[list[Path | None], list[Path], list[str]]:
+    """Ubica en disco los PDF de origen del CSV.
+
+    Devuelve el PDF de cada fila, los documentos que sí están disponibles y el
+    nombre de los que el CSV declara pero no se encontraron, para que el visor
+    pueda mostrarlos todos o avisar cuáles faltan.
+    """
+    csv_path = Path(csv_path)
+    row_list = list(rows)
+    row_paths = source_pdf_paths_for_rows(csv_path, row_list)
+    recorded = source_documents_for_csv(csv_path) or _documents_from_rows(row_list)
+    extra = [Path(folder) for folder in extra_folders]
+    folders = [csv_path.parent, csv_path.parent.parent, _PROGRAM_DIR / "input"]
+    folders.extend(extra)
+
+    available: list[Path] = []
+    seen: set[str] = set()
+    missing: list[str] = []
+    by_recorded: dict[str, Path] = {}
+    by_name: dict[str, Path | None] = {}
+    for source in recorded:
+        found = _locate_document(source, folders, extra)
+        if found is None:
+            if source.name not in missing:
+                missing.append(source.name)
+            continue
+        key = str(found.resolve()).casefold()
+        if key not in seen:
+            seen.add(key)
+            available.append(found)
+        by_recorded[str(source).casefold()] = found
+        # Un nombre repetido entre documentos distintos no identifica una fila.
+        name = source.name.casefold()
+        by_name[name] = None if name in by_name else found
+
+    resolved: list[Path | None] = []
+    for row, path in zip(row_list, row_paths):
+        if path is not None:
+            resolved.append(by_recorded.get(str(path).casefold()))
+        else:
+            resolved.append(by_name.get((row.get("file") or "").casefold()))
+    return resolved, available, missing
 
 
 def apply_csv_column_visibility(
@@ -161,57 +368,237 @@ class ImportantFieldsButton(QToolButton):
         self.setAutoRaise(True)
 
 
+def _document_labels(documents: list[Path]) -> list[str]:
+    """Etiquetas del selector; desambigua los nombres de archivo repetidos."""
+    counts: dict[str, int] = {}
+    for document in documents:
+        counts[document.name.casefold()] = counts.get(document.name.casefold(), 0) + 1
+    return [
+        document.name
+        if counts[document.name.casefold()] == 1
+        else f"{document.parent.name}\\{document.name}"
+        for document in documents
+    ]
+
+
+class PdfPageLoader(QObject):
+    """Rasteriza páginas del PDF en su propia QThread.
+
+    Es el mismo reparto que ya usa la vista previa de la ventana principal
+    (``PreviewLoader``): rasterizar una página cuesta ~90 ms, y hacerlo en el
+    hilo de interfaz congelaba la ventana una vez por cada fila que el
+    usuario recorría con las flechas.
+    """
+
+    requested = Signal(str, int)
+    ready = Signal(str, int, object)
+
+    def run(self, pdf_path: str, page: int) -> None:
+        import cv2
+
+        from app.vision.pdf_loader import render_page
+
+        try:
+            image = render_page(Path(pdf_path), page, dpi=_RENDER_DPI)
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            height, width, channels = rgb.shape
+            qimage = QImage(
+                rgb.data, width, height, channels * width,
+                QImage.Format.Format_RGB888,
+            ).copy()
+        except Exception as exc:  # noqa: BLE001 - visor no crítico
+            logger.warning(
+                f"No se pudo rasterizar {pdf_path} p. {page}: {exc}"
+            )
+            self.ready.emit(pdf_path, page, None)
+            return
+        self.ready.emit(pdf_path, page, qimage)
+
+
 class EmbeddedPdfViewer(QFrame):
-    """Visor PDF liviano para la ventana de CSV ya procesados."""
+    """Visor de los PDF que originaron el CSV abierto.
+
+    La página se escala al espacio disponible en lugar de mostrarse a tamaño
+    fijo, y el estado de los documentos de origen queda siempre a la vista:
+    cuáles se encontraron y cuáles no.
+    """
+
+    relocateRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("embeddedPdfPane")
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self._paths: list[Path] = []
+        self._documents: list[Path] = []
+        self._missing: list[str] = []
         self._path: Path | None = None
         self._page = 1
         self._total = 0
+        self._zoom = 1.0  # 1.0 = página ajustada al panel
+        self._source: QPixmap | None = None
+        self._refresh_pending = False
+        # Páginas por documento: el recuento reabría el PDF en cada salto.
+        self._page_counts: dict[str, int] = {}
+        self._pending_render: tuple[str, int] | None = None
+        self._loader: PdfPageLoader | None = None
+        self._loader_thread: QThread | None = None
         self._build_ui()
 
+    # ── Render en segundo plano ─────────────────────────────────────────
+
+    def _ensure_loader(self) -> PdfPageLoader:
+        """Cargador vivo en su hilo; se arranca la primera vez que hace falta."""
+        if self._loader is None:
+            self._loader = PdfPageLoader()
+            self._loader_thread = QThread(self)
+            self._loader.moveToThread(self._loader_thread)
+            self._loader.requested.connect(self._loader.run)
+            self._loader.ready.connect(self._on_page_ready)
+        if self._loader_thread is not None and not self._loader_thread.isRunning():
+            self._loader_thread.start()
+        return self._loader
+
+    def shutdown(self) -> None:
+        """Detiene el hilo de render antes de que el panel se destruya.
+
+        Destruir un ``QThread`` en marcha aborta el proceso, así que la
+        ventana que contiene el panel llama aquí al cerrarse.
+        """
+        thread = self._loader_thread
+        if thread is not None and thread.isRunning():
+            thread.quit()
+            thread.wait(5000)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        self.shutdown()
+        super().closeEvent(event)
+
+    def _page_total(self, path: Path) -> int:
+        """Páginas del documento, contadas una sola vez por archivo."""
+        key = str(path)
+        if key not in self._page_counts:
+            from app.vision.pdf_loader import page_count
+
+            try:
+                self._page_counts[key] = max(0, page_count(path))
+            except Exception:  # noqa: BLE001 - visor no crítico
+                self._page_counts[key] = 0
+        return self._page_counts[key]
+
     def _build_ui(self) -> None:
+        self.setStyleSheet(_PDF_PANE_QSS)
+        style_dark_pane(self)
+        self.setMinimumWidth(360)
         layout = QVBoxLayout(self)
-        controls = QHBoxLayout()
-        controls.addWidget(QLabel("PDF:"))
-        self.pdf_name = QLabel("Ninguno")
-        self.pdf_name.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        documents = QHBoxLayout()
+        documents.addWidget(QLabel("PDF de origen:"))
+        self.pdf_combo = QComboBox()
+        self.pdf_combo.setEnabled(False)
+        self.pdf_combo.setAccessibleName("PDF de origen del CSV")
+        self.pdf_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
-        controls.addWidget(self.pdf_name, 1)
-        self.prev = QPushButton("‹")
+        self.pdf_combo.setMinimumContentsLength(16)
+        self.pdf_combo.currentIndexChanged.connect(self._on_document_changed)
+        documents.addWidget(self.pdf_combo, 1)
+        self.locate_button = QPushButton("Ubicar PDF…")
+        self.locate_button.setToolTip(
+            "Indicar la carpeta donde están ahora los PDF que no se encontraron"
+        )
+        self.locate_button.setVisible(False)
+        self.locate_button.clicked.connect(self.relocateRequested)
+        documents.addWidget(self.locate_button)
+        layout.addLayout(documents)
+
+        controls = QHBoxLayout()
+        self.prev = QToolButton()
+        self.prev.setArrowType(Qt.ArrowType.LeftArrow)
         self.prev.setToolTip("Página anterior")
+        self.prev.setAccessibleName("Página anterior")
         self.prev.clicked.connect(lambda: self.show_page(self._page - 1))
         controls.addWidget(self.prev)
         controls.addWidget(QLabel("Página"))
         self.page_edit = QLineEdit()
         self.page_edit.setValidator(QIntValidator(1, 1, self.page_edit))
+        self.page_edit.setAccessibleName("Página del PDF")
         self.page_edit.setFixedWidth(65)
         self.page_edit.editingFinished.connect(self._jump)
         controls.addWidget(self.page_edit)
         self.total_pages = QLabel("de 0")
         controls.addWidget(self.total_pages)
-        self.next = QPushButton("›")
+        self.next = QToolButton()
+        self.next.setArrowType(Qt.ArrowType.RightArrow)
         self.next.setToolTip("Página siguiente")
+        self.next.setAccessibleName("Página siguiente")
         self.next.clicked.connect(lambda: self.show_page(self._page + 1))
         controls.addWidget(self.next)
+        controls.addStretch(1)
+        self.btn_zoom_out = self._zoom_button(
+            "out", "Alejar la página", lambda: self._zoom_by(0.8)
+        )
+        controls.addWidget(self.btn_zoom_out)
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setObjectName("zoomValue")
+        self.zoom_label.setFixedWidth(40)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        controls.addWidget(self.zoom_label)
+        self.btn_zoom_in = self._zoom_button(
+            "in", "Acercar la página", lambda: self._zoom_by(1.25)
+        )
+        controls.addWidget(self.btn_zoom_in)
+        self.btn_zoom_fit = self._zoom_button(
+            "fit", "Ajustar la página al panel", self.fit_page
+        )
+        controls.addWidget(self.btn_zoom_fit)
         layout.addLayout(controls)
 
-        self.scroll = QScrollArea()
+        self.source_status = QLabel()
+        self.source_status.setObjectName("pdfSourceStatus")
+        self.source_status.setWordWrap(True)
+        self.source_status.setAccessibleName("Estado de los PDF de origen")
+        layout.addWidget(self.source_status)
+
+        self.scroll = ZoomableScrollArea()
+        self.scroll.setObjectName("pdfSurface")
+        style_pdf_surface(self.scroll)
+        self.scroll.set_zoom_callback(self._zoom_by)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setWidgetResizable(False)
-        self.image = QLabel("Seleccione un PDF")
+        self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll.setMinimumHeight(260)
+        self.image = QLabel()
+        self.image.setObjectName("pdfPage")
+        self.image.setWordWrap(True)
         self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.scroll.setWidget(self.image)
+        self.scroll.viewport().installEventFilter(self)
         layout.addWidget(self.scroll, 1)
+
+        self._update_source_status()
+        self._show_placeholder(
+            "Seleccione una carpeta procesada o un CSV para ver sus páginas."
+        )
         self._sync_controls()
 
-    def load_paths(self, paths: Iterable[Path]) -> None:
-        unique: list[Path] = []
+    def _zoom_button(self, name: str, tooltip: str, slot) -> QToolButton:
+        button = QToolButton()
+        button.setObjectName("zoomControl")
+        button.setIcon(load_zoom_icon(name))
+        button.setIconSize(QSize(14, 14))
+        button.setFixedSize(28, 28)
+        button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        button.clicked.connect(slot)
+        return button
+
+    def load_paths(
+        self, paths: Iterable[Path], missing: Iterable[str] = ()
+    ) -> None:
+        """Publica los PDF de origen disponibles y los que no se encontraron."""
+        documents: list[Path] = []
         seen: set[str] = set()
         for path in paths:
             path = Path(path)
@@ -220,17 +607,42 @@ class EmbeddedPdfViewer(QFrame):
             key = str(path.resolve()).casefold()
             if key not in seen:
                 seen.add(key)
-                unique.append(path)
-        self._paths = unique
-        if self._paths:
-            self.show_page(1, self._paths[0])
-        else:
-            self._path = None
-            self._page = 1
-            self._total = 0
-            self.image.clear()
-            self.image.setText("No se encontraron PDFs procesados")
-            self._sync_controls()
+                documents.append(path)
+        self._documents = documents
+        self._missing = [str(name) for name in missing]
+        self._path = None
+        self._page = 1
+        self._total = 0
+        self._source = None
+        self._page_counts = {}
+        self._pending_render = None
+
+        labels = _document_labels(documents)
+        self.pdf_combo.blockSignals(True)
+        self.pdf_combo.clear()
+        for index, document in enumerate(documents):
+            self.pdf_combo.addItem(labels[index], str(document))
+            self.pdf_combo.setItemData(
+                index, str(document), Qt.ItemDataRole.ToolTipRole
+            )
+        self.pdf_combo.blockSignals(False)
+        self.pdf_combo.setEnabled(bool(documents))
+        self.locate_button.setVisible(bool(self._missing))
+        self._update_source_status()
+
+        if documents:
+            self.show_page(1, documents[0])
+            return
+        self._show_placeholder(
+            "No se encontraron los PDF de origen de este CSV."
+            if self._missing
+            else "Este CSV no registra los PDF de los que proviene."
+        )
+        self._sync_controls()
+
+    def _on_document_changed(self, index: int) -> None:
+        if 0 <= index < len(self._documents):
+            self.show_page(1, self._documents[index])
 
     def _jump(self) -> None:
         try:
@@ -240,25 +652,29 @@ class EmbeddedPdfViewer(QFrame):
         self.show_page(page)
 
     def show_page(self, page: int, path: Path | None = None) -> None:
+        """Pide una página al hilo de render; ``path`` cambia de documento.
+
+        La navegación (número de página, total, selector y botones) se
+        actualiza en el acto y la página anterior se mantiene a la vista
+        hasta que llega la nueva, igual que en la vista previa principal.
+        """
         path = Path(path) if path is not None else self._path
         if path is None or not path.is_file():
             return
-        try:
-            from app.vision.pdf_loader import page_count, render_page
-            import cv2
-
-            total = page_count(path)
-            page = max(1, min(int(page), total))
-            image = render_page(path, page, dpi=120)
-            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            height, width, channels = rgb.shape
-            qimage = QImage(
-                rgb.data, width, height, channels * width,
-                QImage.Format.Format_RGB888,
-            ).copy()
-        except Exception as exc:  # noqa: BLE001 - visor no crítico
-            self.image.clear()
-            self.image.setText(f"No se pudo mostrar el PDF: {exc}")
+        total = self._page_total(path)
+        if not total:
+            self._path = path
+            self._total = 0
+            self._pending_render = None
+            self._show_placeholder(f"No se pudo mostrar el PDF: {path.name}")
+            self._sync_combo_to(path)
+            self._sync_controls()
+            return
+        page = max(1, min(int(page), total))
+        request = (str(path), page)
+        if self._pending_render == request:
+            return
+        if self._source is not None and path == self._path and page == self._page:
             return
         self._path = path
         self._total = total
@@ -267,16 +683,164 @@ class EmbeddedPdfViewer(QFrame):
         validator = self.page_edit.validator()
         if isinstance(validator, QIntValidator):
             validator.setTop(max(1, total))
-        self.image.setPixmap(QPixmap.fromImage(qimage))
+        self._sync_combo_to(path)
+        self._sync_controls()
+        self._pending_render = request
+        self._ensure_loader().requested.emit(*request)
+
+    def _on_page_ready(
+        self, pdf_path: str, page: int, qimage: QImage | None
+    ) -> None:
+        """Aplica el render solo si sigue siendo la página pedida."""
+        if (pdf_path, page) != self._pending_render:
+            return  # respuesta obsoleta: el usuario ya cambió de fila
+        self._pending_render = None
+        if qimage is None:
+            self._show_placeholder(
+                f"No se pudo mostrar el PDF: {Path(pdf_path).name}"
+            )
+            self._sync_controls()
+            return
+        self._source = QPixmap.fromImage(qimage)
+        self._render_page()
         self._sync_controls()
 
+    def _sync_combo_to(self, path: Path) -> None:
+        index = next(
+            (
+                position
+                for position, document in enumerate(self._documents)
+                if document == path
+            ),
+            -1,
+        )
+        if index >= 0 and index != self.pdf_combo.currentIndex():
+            self.pdf_combo.blockSignals(True)
+            self.pdf_combo.setCurrentIndex(index)
+            self.pdf_combo.blockSignals(False)
+
+    def _fit_scale(self) -> float:
+        """Factor que hace caber la página completa en el panel."""
+        source = self._source
+        if source is None or source.isNull():
+            return 1.0
+        viewport = self.scroll.viewport().size()
+        return max(
+            0.05,
+            min(
+                max(1, viewport.width() - 12) / source.width(),
+                max(1, viewport.height() - 12) / source.height(),
+            ),
+        )
+
+    def _render_page(self) -> None:
+        """Escala la página al panel sin volver a rasterizar el PDF."""
+        source = self._source
+        if source is None or source.isNull():
+            return
+        scale = self._fit_scale() * self._zoom
+        pixmap = source.scaled(
+            max(1, round(source.width() * scale)),
+            max(1, round(source.height() * scale)),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.image.setText("")
+        self.image.setPixmap(pixmap)
+        self.image.setFixedSize(pixmap.size())
+        self._sync_zoom_controls()
+
+    def _show_placeholder(self, text: str) -> None:
+        """Deja el panel con un mensaje centrado y sin página cargada."""
+        self._source = None
+        self.image.setPixmap(QPixmap())
+        self.image.setText(text)
+        self.image.setFixedSize(self.scroll.viewport().size())
+        self._sync_zoom_controls()
+
+    def fit_page(self) -> None:
+        """Vuelve al ajuste de página completa."""
+        self._zoom = 1.0
+        self._render_page()
+
+    def _zoom_by(self, factor: float) -> None:
+        self._zoom = min(_MAX_ZOOM, max(_MIN_ZOOM, self._zoom * factor))
+        self._render_page()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        """Reajusta la página ante cualquier cambio del área visible.
+
+        El panel también cambia de tamaño sin que lo haga la ventana: basta
+        con que el indicador de origen pase de una línea a dos.
+        """
+        if (
+            watched is self.scroll.viewport()
+            and event.type() == QEvent.Type.Resize
+        ):
+            self._schedule_refresh()
+        return super().eventFilter(watched, event)
+
+    def _schedule_refresh(self) -> None:
+        if self._refresh_pending:
+            return
+        self._refresh_pending = True
+        QTimer.singleShot(0, self._refresh_view)
+
+    def _refresh_view(self) -> None:
+        self._refresh_pending = False
+        if self._source is not None:
+            self._render_page()
+        else:
+            self.image.setFixedSize(self.scroll.viewport().size())
+
+    def _update_source_status(self) -> None:
+        """Indicador permanente del origen de las páginas mostradas."""
+        available = len(self._documents)
+        missing = len(self._missing)
+        names = _join_names(self._missing)
+        if not available and not missing:
+            # Vale tanto antes de abrir un CSV como para uno sin PDF anotados;
+            # el detalle lo da el mensaje del área de página.
+            text = "Sin PDF de origen para mostrar."
+            color = "#b0b7c0"
+        elif not available:
+            text = (
+                f"No se encontró el PDF de origen ({names})."
+                if missing == 1
+                else f"No se encontraron los {missing} PDF de origen ({names})."
+            ) + " Use «Ubicar PDF…»."
+            color = PANE_STATUS_COLORS["ERROR"]
+        elif missing:
+            text = (
+                f"{available} de {available + missing} PDF de origen "
+                f"disponibles · {'falta' if missing == 1 else 'faltan'} {names}."
+            )
+            color = PANE_STATUS_COLORS["WARNING"]
+        else:
+            text = (
+                "1 PDF de origen disponible."
+                if available == 1
+                else f"{available} PDF de origen disponibles."
+            )
+            color = PANE_STATUS_COLORS["OK"]
+        self.source_status.setText(text)
+        # Gana a la regla general de QLabel del panel, que va sin id.
+        self.source_status.setStyleSheet(f"#pdfSourceStatus {{ color: {color}; }}")
+
+    def _sync_zoom_controls(self) -> None:
+        has_page = self._source is not None
+        self.btn_zoom_out.setEnabled(has_page and self._zoom > _MIN_ZOOM)
+        self.btn_zoom_in.setEnabled(has_page and self._zoom < _MAX_ZOOM)
+        self.btn_zoom_fit.setEnabled(has_page)
+        self.zoom_label.setText(f"{round(self._zoom * 100)}%")
+
     def _sync_controls(self) -> None:
-        self.pdf_name.setText(self._path.name if self._path else "Ninguno")
-        self.pdf_name.setToolTip(str(self._path) if self._path else "")
+        has_page = self._source is not None
         self.total_pages.setText(f"de {self._total}")
-        self.page_edit.setEnabled(bool(self._path))
-        self.prev.setEnabled(bool(self._path) and self._page > 1)
-        self.next.setEnabled(bool(self._path) and self._page < self._total)
+        self.page_edit.setEnabled(has_page)
+        self.prev.setEnabled(has_page and self._page > 1)
+        self.next.setEnabled(has_page and self._page < self._total)
+        self._sync_zoom_controls()
 
 
 class CsvViewerWindow(QMainWindow):
@@ -290,18 +854,27 @@ class CsvViewerWindow(QMainWindow):
         self._rows: list[dict[str, str]] = []
         self._important_field_ids: set[str] = set()
         self._selected_important_columns: set[str] = set()
+        self._template_name: str | None = None
+        self._important_fields_store = ImportantFieldsStore(
+            _PROGRAM_DIR / IMPORTANT_FIELDS_FILENAME
+        )
         self._row_pdf_paths: list[Path | None] = []
+        self._pdf_search_folders: list[Path] = []
         self._search_matches: list[int] = []
         self._search_position = -1
+        self._splitter_adjusted = False
+        self._pending_rows: list[int] = []
+        self._table_timer = QTimer(self)
+        # Intervalo cero: el siguiente tramo entra cuando la cola de eventos
+        # queda vacía, de modo que la ventana responde entre uno y otro.
+        self._table_timer.setInterval(0)
+        self._table_timer.timeout.connect(self._on_table_chunk)
 
         self.setWindowTitle("Visor de CSV procesados")
-        self.resize(1180, 720)
+        self.resize(1400, 840)
         self.setStyleSheet(
             "QMainWindow, QWidget { font-family: 'Segoe UI', sans-serif; font-size: 10pt; }"
-            "QHeaderView::section { background: #eef2f6; color: #24292f;"
-            " padding: 6px 8px;"
-            " font-weight: 600; border: 0; border-bottom: 1px solid #c9d1d9; }"
-            "QTableWidget { alternate-background-color: #f6f8fa; }"
+            + DATA_TABLE_QSS
         )
         self._build_ui()
 
@@ -311,14 +884,22 @@ class CsvViewerWindow(QMainWindow):
         layout = QVBoxLayout(central)
 
         folder_row = QHBoxLayout()
-        folder_row.addWidget(QLabel("Carpeta procesada:"))
+        folder_row.addWidget(QLabel("Origen:"))
         self.folder_edit = QLineEdit()
         self.folder_edit.setReadOnly(True)
-        self.folder_edit.setPlaceholderText("Seleccione una carpeta de output")
+        self.folder_edit.setPlaceholderText(
+            "Seleccione una carpeta de output o un archivo CSV"
+        )
+        self.folder_edit.setAccessibleName("Origen de los CSV mostrados")
         folder_row.addWidget(self.folder_edit, 1)
         browse = QPushButton("Seleccionar carpeta…")
+        browse.setToolTip("Abrir una carpeta procesada y listar sus CSV")
         browse.clicked.connect(self.browse_for_folder)
         folder_row.addWidget(browse)
+        browse_csv = QPushButton("Seleccionar CSV…")
+        browse_csv.setToolTip("Abrir directamente un archivo CSV procesado")
+        browse_csv.clicked.connect(self.browse_for_csv)
+        folder_row.addWidget(browse_csv)
         layout.addLayout(folder_row)
 
         controls = QHBoxLayout()
@@ -365,25 +946,36 @@ class CsvViewerWindow(QMainWindow):
         search_row.addWidget(self.search_context, 1)
         layout.addLayout(search_row)
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
+        # Horizontal: una página de bitácora es vertical, así aprovecha todo
+        # el alto de la ventana en lugar de una franja de pocos centímetros.
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         self.content_splitter = splitter
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
+        splitter.splitterMoved.connect(self._on_splitter_moved)
         self.table = QTableWidget(0, 0)
         self.table.setAccessibleName("CSV procesado")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setSortingEnabled(True)
+        style_data_table(self.table)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionsMovable(False)
         self.table.horizontalHeader().setFixedHeight(30)
+        self.table.horizontalHeader().setResizeContentsPrecision(_RESIZE_PRECISION)
+        self.table_sort = ColumnSortController(self.table)
+        self.table.currentCellChanged.connect(self._on_current_cell_changed)
         splitter.addWidget(self.table)
         self.pdf_viewer = EmbeddedPdfViewer()
+        self.pdf_viewer.relocateRequested.connect(self._relocate_source_pdfs)
         splitter.addWidget(self.pdf_viewer)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([1, 1])
         layout.addWidget(splitter, 1)
 
-        self.status_label = QLabel("Seleccione una carpeta para visualizar su CSV.")
+        self.status_label = QLabel(
+            "Seleccione una carpeta o un CSV para visualizarlo."
+        )
         self.status_label.setStyleSheet("color: #57606a;")
         layout.addWidget(self.status_label)
 
@@ -396,12 +988,28 @@ class CsvViewerWindow(QMainWindow):
         if hasattr(self, "content_splitter"):
             QTimer.singleShot(0, self._balance_content_splitter)
 
+    def closeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        """Detiene el llenado y el hilo de render antes de cerrar.
+
+        El panel es un hijo de la ventana: cerrarla no le entrega un evento
+        de cierre, y dejar su hilo de render vivo abortaría el proceso al
+        destruir la ventana.
+        """
+        self._table_timer.stop()
+        self.pdf_viewer.shutdown()
+        super().closeEvent(event)
+
+    def _on_splitter_moved(self, _position: int, _index: int) -> None:
+        """Una vez que el usuario reparte el espacio, se respeta su medida."""
+        self._splitter_adjusted = True
+
     def _balance_content_splitter(self) -> None:
-        """Mantiene las dos zonas visuales con la misma altura."""
+        """Reparte el ancho entre tabla y visor mientras nadie lo ajuste."""
+        if self._splitter_adjusted:
+            return
         available = max(
             0,
-            self.content_splitter.height()
-            - self.content_splitter.handleWidth(),
+            self.content_splitter.width() - self.content_splitter.handleWidth(),
         )
         half = available // 2
         self.content_splitter.setSizes([half, available - half])
@@ -414,6 +1022,17 @@ class CsvViewerWindow(QMainWindow):
         if selected:
             self.load_folder(Path(selected))
 
+    def browse_for_csv(self) -> None:
+        initial = self._folder or self._start_folder
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Seleccionar CSV procesado",
+            str(initial),
+            "Reportes CSV (*.csv *.CSV);;Todos los archivos (*)",
+        )
+        if selected:
+            self.load_csv_file(Path(selected))
+
     def load_folder(self, folder: Path) -> bool:
         """Carga los CSV encontrados en ``folder`` y muestra el primero."""
         csv_paths = find_csv_files(folder)
@@ -424,10 +1043,33 @@ class CsvViewerWindow(QMainWindow):
                 "No se encontraron archivos CSV en la carpeta seleccionada.",
             )
             return False
+        self._show_csv_choices(Path(folder), csv_paths, csv_paths[0])
+        return True
 
+    def load_csv_file(self, csv_path: Path) -> bool:
+        """Abre un CSV concreto y deja a mano los demás de su carpeta."""
+        csv_path = Path(csv_path)
+        if not csv_path.is_file():
+            QMessageBox.information(
+                self,
+                "Archivo no disponible",
+                f"No se encontró el archivo CSV:\n{csv_path}",
+            )
+            return False
+        siblings = find_csv_files(csv_path.parent)
+        if not any(path == csv_path for path in siblings):
+            siblings = [csv_path, *siblings]
+        self._show_csv_choices(csv_path.parent, siblings, csv_path)
+        return True
+
+    def _show_csv_choices(
+        self, folder: Path, csv_paths: list[Path], current: Path
+    ) -> None:
+        """Publica los CSV disponibles y abre el indicado."""
         self._folder = Path(folder)
         self.folder_edit.setText(str(self._folder))
         self.folder_edit.setToolTip(str(self._folder))
+        self._pdf_search_folders = []
         self.csv_combo.blockSignals(True)
         self.csv_combo.clear()
         for path in csv_paths:
@@ -436,11 +1078,18 @@ class CsvViewerWindow(QMainWindow):
             except ValueError:
                 label = path.name
             self.csv_combo.addItem(label, str(path))
+        index = next(
+            (
+                position
+                for position, path in enumerate(csv_paths)
+                if path == current
+            ),
+            0,
+        )
+        self.csv_combo.setCurrentIndex(index)
         self.csv_combo.blockSignals(False)
         self.csv_combo.setEnabled(True)
-        self.csv_combo.setCurrentIndex(0)
-        self._load_csv(csv_paths[0])
-        return True
+        self._load_csv(csv_paths[index])
 
     def _on_csv_changed(self, index: int) -> None:
         if index >= 0:
@@ -459,9 +1108,18 @@ class CsvViewerWindow(QMainWindow):
 
         self._columns = columns
         self._rows = rows
+        # Se limpia antes de poblar: la tabla emite selección mientras se
+        # llena y las rutas de la corrida anterior ya no corresponden.
+        self._row_pdf_paths = []
         self._important_field_ids = important_field_ids_for_csv(path, columns)
-        self._selected_important_columns = set(
-            important_csv_columns(columns, self._important_field_ids)
+        # La selección guardada manda sobre la inferida: es la lista que el
+        # usuario editó para esta plantilla, aquí o en la ventana principal.
+        self._template_name = template_name_for_csv(path)
+        stored = self._important_fields_store.load(self._template_name)
+        self._selected_important_columns = (
+            set(stored)
+            if stored is not None
+            else set(important_csv_columns(columns, self._important_field_ids))
         )
         self._populate_table()
         self.column_toggle.setEnabled(True)
@@ -476,14 +1134,36 @@ class CsvViewerWindow(QMainWindow):
         self.setWindowTitle(f"Visor de CSV — {path.name}")
 
     def _populate_table(self) -> None:
+        """Llena la tabla por tramos para no bloquear la ventana.
+
+        El primer tramo se escribe en el acto, así que un CSV corto queda
+        completo al volver de aquí; solo las corridas grandes reparten el
+        resto entre eventos de la interfaz.
+        """
+        self.table_sort.suspend()
+        self.table.clear()
+        self.table.setColumnCount(len(self._columns))
+        self.table.setHorizontalHeaderLabels(self._columns)
+        self.table.setRowCount(len(self._rows))
+        self._pending_rows = list(range(len(self._rows)))
+        self._fill_table_chunk()
+        if self._pending_rows:
+            self._table_timer.start()
+        else:
+            self._finish_table()
+
+    def _rows_per_chunk(self) -> int:
+        """Filas que caben en el presupuesto de celdas de un tramo."""
+        return max(1, _TABLE_CELL_CHUNK // max(1, len(self._columns)))
+
+    def _fill_table_chunk(self) -> None:
+        """Escribe el siguiente tramo de filas pendientes."""
+        batch = self._pending_rows[: self._rows_per_chunk()]
+        del self._pending_rows[: len(batch)]
         self.table.setUpdatesEnabled(False)
-        self.table.setSortingEnabled(False)
         try:
-            self.table.clear()
-            self.table.setColumnCount(len(self._columns))
-            self.table.setHorizontalHeaderLabels(self._columns)
-            self.table.setRowCount(len(self._rows))
-            for row_index, row in enumerate(self._rows):
+            for row_index in batch:
+                row = self._rows[row_index]
                 for column_index, column in enumerate(self._columns):
                     item = QTableWidgetItem(row.get(column, ""))
                     item.setData(Qt.ItemDataRole.UserRole, row_index)
@@ -499,19 +1179,74 @@ class CsvViewerWindow(QMainWindow):
                     self.table.setItem(row_index, column_index, item)
         finally:
             self.table.setUpdatesEnabled(True)
+
+    def _on_table_chunk(self) -> None:
+        if self._pending_rows:
+            self._fill_table_chunk()
+        if not self._pending_rows:
+            self._table_timer.stop()
+            self._finish_table()
+
+    def _finish_table(self) -> None:
+        """Cierra el llenado: columnas visibles, anchos y orden disponibles."""
+        self._apply_column_mode()
         self.table.resizeColumnsToContents()
-        self.table.setSortingEnabled(True)
+        self.table_sort.reset()
 
     def _load_pdf_paths(self, csv_path: Path) -> None:
-        self._row_pdf_paths = source_pdf_paths_for_rows(csv_path, self._rows)
-        paths = list(csv_path.parent.parent.rglob("*.pdf"))
-        paths.extend(csv_path.parent.rglob("*.pdf"))
-        paths.extend(path for path in self._row_pdf_paths if path is not None)
-        for row in self._rows:
-            candidate = Path(row.get("file", ""))
-            if candidate.is_file():
-                paths.append(candidate)
-        self.pdf_viewer.load_paths(paths)
+        """Publica en el visor los PDF de los que proviene el CSV."""
+        self._row_pdf_paths, documents, missing = resolve_source_documents(
+            csv_path, self._rows, self._pdf_search_folders
+        )
+        self.pdf_viewer.load_paths(documents, missing)
+
+    def _relocate_source_pdfs(self) -> None:
+        """Reintenta la búsqueda de los PDF faltantes en otra carpeta."""
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Buscar los PDF de origen",
+            str(self._folder or self._start_folder),
+        )
+        if not selected:
+            return
+        folder = Path(selected)
+        if folder not in self._pdf_search_folders:
+            self._pdf_search_folders.append(folder)
+        csv_path = self._current_csv_path()
+        if csv_path is not None:
+            self._load_pdf_paths(csv_path)
+
+    def _current_csv_path(self) -> Path | None:
+        data = self.csv_combo.currentData()
+        return Path(data) if data else None
+
+    def _on_current_cell_changed(
+        self, row: int, _column: int, _previous_row: int, _previous_column: int
+    ) -> None:
+        """Sigue con el visor la fila activa de la tabla."""
+        item = self.table.item(row, 0) if row >= 0 else None
+        if item is None:
+            return
+        source_row = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(source_row, int) and 0 <= source_row < len(self._rows):
+            self._show_row_in_pdf(source_row)
+
+    def _show_row_in_pdf(self, source_row: int) -> str:
+        """Muestra la página que originó la fila y describe su ubicación."""
+        row = self._rows[source_row]
+        try:
+            page = int(row.get("page", ""))
+        except ValueError:
+            page = 0
+        path = (
+            self._row_pdf_paths[source_row]
+            if source_row < len(self._row_pdf_paths)
+            else None
+        )
+        if path is not None and page > 0 and path.is_file():
+            self.pdf_viewer.show_page(page, path)
+            return f"{path.name}, página {page}"
+        return f"{row.get('file', 'PDF desconocido')}, página {page or '?'}"
 
     def _find_log_number(self) -> None:
         value = self.log_search.text().strip()
@@ -559,21 +1294,7 @@ class CsvViewerWindow(QMainWindow):
             self.table.setCurrentCell(display_row, log_column)
             self.table.scrollToItem(self.table.item(display_row, log_column))
 
-        row = self._rows[source_row]
-        try:
-            page = int(row.get("page", ""))
-        except ValueError:
-            page = 0
-        path = (
-            self._row_pdf_paths[source_row]
-            if source_row < len(self._row_pdf_paths)
-            else None
-        )
-        if path is not None and page > 0 and path.is_file():
-            self.pdf_viewer.show_page(page, path)
-            location = f"{path.name}, página {page}"
-        else:
-            location = f"{row.get('file', 'PDF desconocido')}, página {page or '?'}"
+        location = self._show_row_in_pdf(source_row)
         self.search_context.setText(
             f"Coincidencia {self._search_position + 1} de "
             f"{len(self._search_matches)} · {location}"
@@ -594,6 +1315,7 @@ class CsvViewerWindow(QMainWindow):
 
     def _set_important_columns(self, columns: set[str]) -> None:
         self._selected_important_columns = set(columns)
+        self._important_fields_store.save(self._template_name, columns)
         self._apply_column_mode()
 
     def _status_for(self, row: dict[str, str], column: str) -> str | None:
@@ -622,7 +1344,11 @@ class CsvViewerWindow(QMainWindow):
             self._selected_important_columns,
         )
         visible = (
-            len(important_csv_columns(self._columns, self._important_field_ids))
+            sum(
+                1
+                for column in self._columns
+                if column in self._selected_important_columns
+            )
             if important_only
             else len(self._columns)
         )
