@@ -103,61 +103,68 @@ Solo copie la carpeta completa y ejecute `LogbookClassification.exe`.
 ### Reconstrucción del entorno portable desde el repositorio
 
 El repositorio versiona **solo el código fuente**. La carpeta `portable/`
-(1.9 GB) que contiene el intérprete Python, dependencias, Tesseract y modelos
-OCR **no se incluye** (ni en el repositorio ni en releases por su peso).
-Siga estos pasos para reconstruirla:
-
-1. **Python 3.12 portable (embeddable, sin instalación):**
-
-   Descargue el paquete *embeddable* de 64-bit para Windows desde
-   <https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip>
-   y descomprímalo en `portable\python312`. Edite
-   `portable\python312\python312._pth` y agregue las líneas:
-
-   ```
-   portable\python312\Lib\site-packages
-   .
-   ```
-   (esto permite instalar paquetes con pip dentro del embeddable).
-
-   > Requerimiento: **Python 3.12** exactamente (3.14 no es soportado por
-   > PaddlePaddle). El portable incluye `python.exe` y `pythonw.exe`.
-
-2. **Dependencias de Python:**
-
-   Con el Python portable:
-
-   ```batch
-   portable\python312\tools\python.exe -m pip install --upgrade pip
-   portable\python312\tools\python.exe -m pip install -r requirements.txt
-   ```
-
-3. **Tesseract 5.4.0 + idioma `eng`:**
-
-   Instale Tesseract desde <https://github.com/UB-Mannheim/tesseract/wiki>
-   o copie la carpeta `portable\tesseract\` (binario + `tessdata\eng.traineddata`
-   + `tessdata\osd.traineddata`) de otra instalación portable. La app lo
-   localiza automáticamente en `portable\tesseract\tesseract.exe`.
-
-4. **Modelos PaddleOCR (offline, sin internet en producción):**
-
-   ```batch
-   portable\python312\tools\python.exe tools\precache_paddle.py
-   ```
-   Esto descarga los modelos a `portable\paddlex`. Para usar la app sin
-   internet, copie esa carpeta completa entre máquinas.
-
-5. **(Opcional) Modelos VLM para el verificador:**
-
-   ```batch
-   portable\python312\tools\python.exe tools\precache_vlm.py
-   ```
-   Necesita `portable\llama\bin/llama-server(.exe)` y los GGUF bajo
-   `portable\llama\models/`.
-
-Una vez reconstruida `portable/`, regenere el launcher:
+(unos 2 GB) que contiene el intérprete Python, dependencias, Tesseract y
+modelos OCR **no se incluye** (ni en el repositorio ni en releases por su
+peso). Después de clonar, `setup.ps1` la reconstruye descargando cada pieza:
 
 ```batch
+setup.cmd
+```
+
+o, desde una terminal:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
+
+Necesita internet **solo mientras corre**; al terminar la aplicación ya
+trabaja sin conexión. Es idempotente: lo que ya está completo no se vuelve a
+bajar, así que se puede repetir si una descarga se corta. Los instaladores
+quedan en `portable\.cache` y cada uno se verifica por SHA256.
+
+| Opción | Efecto |
+|---|---|
+| `-Check` | No descarga nada: solo informa qué componentes hay y cuánto pesan. |
+| `-SkipTesseract` | Omite Tesseract (238 MB); el OCR de respaldo por campo queda apagado. |
+| `-Vlm` | Descarga además los modelos del verificador VLM (varios GB). |
+| `-Launcher` | Regenera `LogbookClassification.exe` con PyInstaller. |
+| `-Force` | Rehace los componentes aunque ya estén instalados. |
+| `-CleanCache` | Borra `portable\.cache` al terminar. |
+
+Lo que instala cada paso:
+
+1. **Python 3.12.10 portable** (`portable\python312\tools\python.exe`): el
+   paquete NuGet `python.3.12.10.nupkg`, que trae el intérprete completo sin
+   instalar nada en el sistema; pip se agrega con `ensurepip`.
+
+   > Requerimiento: **Python 3.12** exactamente (3.14 no es soportado por
+   > PaddlePaddle).
+
+2. **Dependencias**: `pip install -r requirements.txt`.
+
+3. **Modelos PaddleOCR** en `portable\paddlex`, con
+   `tools\precache_paddle.py` (detector `PP-OCRv6_medium_det` y reconocedor
+   `PP-OCRv5_mobile_rec`, que son los que fija la aplicación).
+
+4. **Tesseract 5.4.0** en `portable\tesseract`, desde el instalador de
+   UB Mannheim. Si hay 7-Zip se extrae del instalador sin tocar el registro
+   ni el menú inicio; si no, se usa su modo silencioso apuntando a esa
+   carpeta. La app lo localiza en `portable\tesseract\tesseract.exe`.
+
+5. **(Con `-Vlm`) Modelos del verificador** en `portable\llama`, con
+   `tools\precache_vlm.py`. El binario `llama-server.exe` no tiene URL fija:
+   se indica con `BITS_LLAMA_BIN_ZIP` o se copia a mano a
+   `portable\llama\bin\`.
+
+Los PDFs escaneados no se descargan: se copian a `input\`.
+
+Cada paso también se puede correr suelto, con el Python portable ya
+instalado:
+
+```batch
+portable\python312\tools\python.exe -m pip install -r requirements.txt
+portable\python312\tools\python.exe tools\precache_paddle.py
+portable\python312\tools\python.exe tools\precache_vlm.py
 portable\python312\tools\python.exe -m pip install pyinstaller
 portable\python312\tools\python.exe tools\build_launcher.py
 ```
