@@ -71,6 +71,7 @@ from app.vision.alignment import (
 from app.vision.blank_detection import is_blank
 from app.vision.book_background import (
     MIN_BACKGROUND_PAGES,
+    REFERENCE_DPI as BACKGROUND_REFERENCE_DPI,
     build_background,
     confident_band,
 )
@@ -1467,10 +1468,14 @@ class Pipeline:
         # Antes del VLM: las firmas que quedaron inciertas se contrastan con
         # el resto de la bitácora, que es evidencia gratis y no requiere
         # modelo. Lo que ni así se resuelve sigue su camino al verificador.
-        pages = self._review_signatures(
-            pdf_path, pages, reference, anchors, own_transforms,
-            renderer=renderer, first_page=first,
-        )
+        # Tras una cancelación no se entra: la revisión renderiza decenas de
+        # páginas más (medido: 93 ms cada una a 200 DPI, 3 s solo la muestra)
+        # y cancelar tiene que notarse en el acto, no varios segundos después.
+        if not self._is_cancelled():
+            pages = self._review_signatures(
+                pdf_path, pages, reference, anchors, own_transforms,
+                renderer=renderer, first_page=first,
+            )
 
         pages = self._verify_pages(
             pdf_path, pages, reference, anchors, own_transforms,
@@ -2081,10 +2086,27 @@ class Pipeline:
         wanted = {page.page_number for page in sample}
         wanted.update(page.page_number for page, _ in pending)
 
+        if self.config.dpi < BACKGROUND_REFERENCE_DPI:
+            # El recorte se reescala a la escala de calibración, pero
+            # interpolar no devuelve el detalle que no se renderizó: los
+            # trazos flojos pierden profundidad y se resuelven menos dudas.
+            # No es un error —sigue sin equivocarse—, pero conviene saberlo.
+            logger.info(
+                f"[Pipeline] Firmas inciertas: la corrida va a "
+                f"{self.config.dpi} DPI y la revisión está calibrada a "
+                f"{BACKGROUND_REFERENCE_DPI}; se resolverán menos dudas"
+            )
         self._notify(len(pages), len(pages),
                      "Contrastando firmas inciertas con el libro")
         crops: Dict[int, Dict[str, np.ndarray]] = {}
         for page_number in sorted(wanted):
+            if self._is_cancelled():
+                # La revisión es una segunda opinión: si se cancela a mitad,
+                # las páginas se devuelven tal como las dejó el detector.
+                logger.info(
+                    "[Pipeline] Revisión de firmas interrumpida al cancelar"
+                )
+                return pages
             image = (
                 renderer.render_page(page_number, self.config.dpi)
                 if renderer is not None
@@ -2114,7 +2136,7 @@ class Pipeline:
                 crops[page.page_number][field.id] for page in sample
                 if field.id in crops.get(page.page_number, {})
             ]
-            background = build_background(sample_crops)
+            background = build_background(sample_crops, self.config.dpi)
             if background is None:
                 continue
             sample_peaks, sample_verdicts = [], []
@@ -2139,10 +2161,15 @@ class Pipeline:
                 crop = crops.get(page.page_number, {}).get(field.id)
                 if crop is None:
                     continue
-                opinion = review_with_background(
-                    background_peak(crop, background), band
-                )
+                peak = background_peak(crop, background)
+                opinion = review_with_background(peak, band)
                 if opinion is None:
+                    logger.info(
+                        f"[Pipeline] Firma incierta en página "
+                        f"{page.page_number}/{field.id}: densidad {peak:.4f} "
+                        f"cae dentro de la franja de duda del libro "
+                        f"[{band[0]:.4f}, {band[1]:.4f}]; sigue incierta"
+                    )
                     continue
                 value, confidence, comment = opinion
                 result.value = value

@@ -127,7 +127,8 @@ def evaluate_book(
         }
         chosen = _sample_pages(field_samples, size)
         background = (
-            build_background([crops[item.id] for item in chosen])
+            build_background([crops[item.id] for item in chosen],
+                             field_samples[0].dpi)
             if len(field_samples) >= MIN_BACKGROUND_PAGES else None
         )
         band = None

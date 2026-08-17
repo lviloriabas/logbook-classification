@@ -60,25 +60,44 @@ def _ink_channel(region: np.ndarray) -> np.ndarray:
     return np.min(region, axis=2)
 
 
+# DPI en el que están calibrados ``INK_DELTA`` y ``MIN_BAND_WIDTH``, el mismo
+# que usa el detector clásico. El fondo se construye siempre a esta escala y
+# cada recorte se ajusta a él al medirlo, así que el veredicto no depende del
+# DPI de la corrida. Sin esto, los umbrales medidos a 200 dpi se quedaban
+# cortos en la corrida real del CLI, que renderiza a 150: los trazos salen más
+# finos, la apertura morfológica se come una parte y todas las densidades
+# bajan casi a la mitad.
+REFERENCE_DPI = 200
+
+
 def _fit(gray: np.ndarray, shape: Sequence[int]) -> np.ndarray:
     """Lleva un recorte a la forma canónica del campo.
 
     Las páginas de un PDF escaneado no siempre miden lo mismo al píxel, así que
     el mismo campo sale con recortes que difieren en dos o tres píxeles. Se
     reescalan en lugar de recortarse: el contenido es el mismo y lo que importa
-    es que se superpongan.
+    es que se superpongan. Y como el fondo está a la escala canónica, este
+    ajuste es también el que normaliza el DPI de la corrida.
     """
     if gray.shape[:2] == tuple(shape):
         return gray
-    return cv2.resize(gray, (int(shape[1]), int(shape[0])),
-                      interpolation=cv2.INTER_AREA)
+    enlarging = shape[0] * shape[1] > gray.shape[0] * gray.shape[1]
+    return cv2.resize(
+        gray, (int(shape[1]), int(shape[0])),
+        interpolation=cv2.INTER_CUBIC if enlarging else cv2.INTER_AREA,
+    )
 
 
-def build_background(crops: Sequence[np.ndarray]) -> Optional[np.ndarray]:
+def build_background(
+    crops: Sequence[np.ndarray], dpi: int = REFERENCE_DPI
+) -> Optional[np.ndarray]:
     """Casilla vacía de un campo: mediana por píxel de todas sus páginas.
 
     Args:
         crops: Recortes del *mismo* campo en páginas ya alineadas del libro.
+        dpi: Resolución a la que se renderizaron. El fondo se construye a
+            ``REFERENCE_DPI`` para que los umbrales signifiquen lo mismo en
+            cualquier corrida.
 
     Returns:
         Imagen en grises con el fondo, o None si no hay páginas suficientes.
@@ -87,8 +106,9 @@ def build_background(crops: Sequence[np.ndarray]) -> Optional[np.ndarray]:
               if crop is not None and crop.size]
     if len(usable) < MIN_BACKGROUND_PAGES:
         return None
-    shape = (int(np.median([crop.shape[0] for crop in usable])),
-             int(np.median([crop.shape[1] for crop in usable])))
+    scale = REFERENCE_DPI / max(dpi, 1)
+    shape = (int(np.median([crop.shape[0] for crop in usable]) * scale),
+             int(np.median([crop.shape[1] for crop in usable]) * scale))
     if shape[0] < 4 or shape[1] < 4:
         return None
     stack = np.stack([_fit(crop, shape).astype(np.float32)
@@ -120,6 +140,45 @@ def ink_mask(region: np.ndarray, background: np.ndarray,
         mask, cv2.MORPH_OPEN,
         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
     )
+
+
+# Una componente que cruza la casilla de lado a lado y deja su recuadro casi
+# vacío es una raya que atraviesa la página —la X de "anulado", el trazo de un
+# tachón—, no una firma. Los dos números tienen holgura de sobra: sobre dos
+# bitácoras reales el resultado no cambia entre relleno 0.10 y 0.18, ni entre
+# cruce 0.55 y 0.75, lo que dice que las dos poblaciones están lejos y no se
+# está afinando un parámetro contra los datos.
+CROSSING_SPAN = 0.55
+CROSSING_FILL = 0.18
+
+
+def drop_crossing_strokes(mask: np.ndarray) -> np.ndarray:
+    """Quita las rayas que solo pasan por la casilla.
+
+    Una firma llena su recuadro: aunque se extienda a lo ancho, sus trazos se
+    cruzan y vuelven sobre sí mismos. Una raya que atraviesa la hoja lo cruza
+    y se va, dejando un rectángulo enorme casi vacío. Esa diferencia —cuánto
+    del recuadro ocupa la componente— separa las dos cosas sin tener que
+    reconocer la escritura.
+
+    Probado a la inversa también: filtrar además los fragmentos sueltos (motas
+    y restos de sello) no mejoraba el resultado y en cambio se comía dígitos
+    de números de licencia escritos flojo, así que se quedó solo esto.
+    """
+    height, width = mask.shape
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask.astype(np.uint8), connectivity=8
+    )
+    kept = mask.copy()
+    for index in range(1, count):
+        box_width = stats[index, cv2.CC_STAT_WIDTH]
+        box_height = stats[index, cv2.CC_STAT_HEIGHT]
+        area = stats[index, cv2.CC_STAT_AREA]
+        crosses = (box_width >= width * CROSSING_SPAN
+                   or box_height >= height * 0.95)
+        if crosses and area / max(1, box_width * box_height) < CROSSING_FILL:
+            kept[labels == index] = 0
+    return kept
 
 
 def peak_density(mask: np.ndarray) -> float:

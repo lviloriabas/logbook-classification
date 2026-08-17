@@ -27,6 +27,7 @@ from app.vision.book_background import (
     MIN_BACKGROUND_PAGES,
     build_background,
     confident_band,
+    drop_crossing_strokes,
     ink_mask,
     peak_density,
 )
@@ -116,6 +117,61 @@ class TestResiduo(unittest.TestCase):
 
     def test_densidad_de_mascara_vacia(self):
         self.assertEqual(peak_density(np.zeros((10, 10), np.uint8)), 0.0)
+
+
+class TestAtribucionDeTrazos(unittest.TestCase):
+    """Tinta que está en la página pero no es de este campo."""
+
+    def _mascara(self, dibujar) -> np.ndarray:
+        lienzo = np.zeros((ALTO, ANCHO), np.uint8)
+        dibujar(lienzo)
+        return lienzo
+
+    def test_descarta_la_raya_que_cruza_la_casilla(self):
+        """La X de una página anulada: entra por un lado y sale por el otro."""
+        mascara = self._mascara(
+            lambda img: cv2.line(img, (0, 5), (ANCHO - 1, ALTO - 5), 1, 2)
+        )
+        self.assertGreater(mascara.sum(), 0)
+        self.assertEqual(int(drop_crossing_strokes(mascara).sum()), 0)
+
+    def test_descarta_el_arco_largo(self):
+        """No hace falta que sea recta: basta con que deje el recuadro vacío."""
+        mascara = self._mascara(
+            lambda img: cv2.ellipse(img, (ANCHO // 2, ALTO), (ANCHO // 2, 40),
+                                    0, 180, 360, 1, 2)
+        )
+        self.assertEqual(int(drop_crossing_strokes(mascara).sum()), 0)
+
+    def test_conserva_una_firma_ancha(self):
+        """Una rúbrica ocupa todo el ancho, pero llena su recuadro."""
+        def firma(img):
+            for dx in (0, 60, 120, 180):
+                cv2.ellipse(img, (50 + dx, ALTO // 2), (35, 18), 20, 0, 300,
+                            1, 4)
+            cv2.line(img, (10, ALTO - 12), (ANCHO - 10, 14), 1, 3)
+        mascara = self._mascara(firma)
+        conservado = drop_crossing_strokes(mascara)
+        self.assertGreater(int(conservado.sum()), int(mascara.sum()) * 0.8)
+
+    def test_conserva_los_trazos_sueltos(self):
+        """Filtrar fragmentos se probó y se comía dígitos de licencia."""
+        def digitos(img):
+            for x in (20, 70, 120, 170, 220):
+                cv2.rectangle(img, (x, 20), (x + 14, 40), 1, -1)
+        mascara = self._mascara(digitos)
+        self.assertEqual(int(drop_crossing_strokes(mascara).sum()),
+                         int(mascara.sum()))
+
+    def test_la_pagina_anulada_deja_de_parecer_firmada(self):
+        """De punta a punta: el residuo de una casilla vacía tachada."""
+        fondo = build_background(
+            [_firmada(desplazamiento=indice * 7) for indice in range(12)]
+        )
+        tachada = _formulario()
+        cv2.line(tachada, (0, 4), (ANCHO - 1, ALTO - 4), (30,) * 3, 3)
+        cv2.line(tachada, (0, ALTO - 4), (ANCHO - 1, 4), (30,) * 3, 3)
+        self.assertLess(background_peak(tachada, fondo), 0.02)
 
 
 class TestFranjaDeDuda(unittest.TestCase):
@@ -293,6 +349,59 @@ class TestRevisionEnElPipeline(unittest.TestCase):
             )
         render.assert_not_called()
         self.assertEqual(resultado[-1].fields[0].value, UNCLEAR)
+
+    def test_no_renderiza_nada_tras_una_cancelacion(self):
+        """Cancelar tiene que notarse en el acto.
+
+        La revisión renderiza la muestra del libro entera —medido: 93 ms por
+        página a 200 DPI, 3 s solo la muestra— y corre después del bucle de
+        páginas, así que sin esta guarda el botón Cancelar se quedaba varios
+        segundos sin efecto aparente en cada archivo en vuelo.
+        """
+        paginas = [_pagina(numero, "true" if numero % 2 else "false")
+                   for numero in range(1, 14)]
+        paginas.append(_pagina(14, UNCLEAR))
+        self.pipeline._should_cancel = lambda: True
+
+        with patch.object(pipeline_module, "render_page") as render:
+            resultado = self.pipeline._review_signatures(
+                Path("fixture.pdf"), paginas, None, None, None,
+                renderer=None, first_page=1,
+            )
+
+        render.assert_not_called()
+        self.assertEqual(resultado[-1].fields[0].value, UNCLEAR)
+        self.assertEqual(len(resultado), len(paginas))
+
+    def test_una_cancelacion_a_media_revision_deja_las_paginas_como_estaban(self):
+        """A medio muestreo tampoco se sigue: se devuelve lo que ya había."""
+        paginas, imagenes = [], {}
+        for numero in range(1, 15):
+            firmada = numero % 2 == 0
+            paginas.append(_pagina(numero, "true" if firmada else "false"))
+            imagenes[numero] = (_firmada(numero * 3) if firmada
+                                else _formulario())
+        paginas.append(_pagina(15, UNCLEAR))
+        imagenes[15] = _firmada(11)
+
+        renderizadas: list[int] = []
+
+        def render(_ruta, numero, _dpi):
+            renderizadas.append(numero)
+            return imagenes[numero]
+
+        # La cancelación llega cuando ya se muestrearon tres páginas.
+        self.pipeline._should_cancel = lambda: len(renderizadas) >= 3
+        with patch.object(pipeline_module, "render_page", side_effect=render):
+            resultado = self.pipeline._review_signatures(
+                Path("fixture.pdf"), paginas, None, None, None,
+                renderer=None, first_page=1,
+            )
+
+        self.assertEqual(len(renderizadas), 3)
+        self.assertLess(len(renderizadas), len(imagenes))
+        self.assertEqual(resultado[-1].fields[0].value, UNCLEAR)
+        self.assertEqual(resultado[-1].fields[0].inference_method, None)
 
     def test_sin_firmas_inciertas_no_renderiza_nada(self):
         """El coste solo se paga cuando hay algo que resolver."""
