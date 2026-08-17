@@ -30,12 +30,12 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -51,11 +51,15 @@ from app.gui.csv_utils import (
     important_csv_columns,
     important_field_ids_for_csv,
     read_csv_file,
+    template_for_csv,
     template_name_for_csv,
 )
+from app.gui.export_options import ExportOptionsGroup
 from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.table_sort import ColumnSortController
+from app.reports.csv_reporter import CsvReporter
 from app.gui.widgets import (
+    APP_CHROME_QSS,
     DATA_TABLE_QSS,
     PANE_BG,
     PANE_BORDER,
@@ -65,8 +69,9 @@ from app.gui.widgets import (
     PANE_SURFACE_BG,
     PANE_TEXT,
     TABLE_SELECTION_BG,
+    ZOOM_OVERLAY_QSS,
     ZoomableScrollArea,
-    load_zoom_icon,
+    ZoomOverlay,
     scrollbars_qss,
     style_data_table,
     style_dark_pane,
@@ -96,6 +101,10 @@ _TABLE_CELL_CHUNK = 2000
 # Filas que examina Qt al ajustar el ancho de una columna. Sin tope recorre
 # todas: con miles de filas el ajuste solo costaba más que llenar la tabla.
 _RESIZE_PRECISION = 64
+# Reparto del ancho entre el visor de PDF y la tabla, el mismo de la vista
+# previa y la tabla de la ventana principal.
+_PDF_PANE_SHARE = 2
+_TABLE_SHARE = 3
 # El panel se estiliza a sí mismo para verse igual dentro y fuera del visor.
 _PDF_PANE_QSS = (
     # El panel va en el mismo gris oscuro que la tabla a la que acompaña: en
@@ -124,9 +133,9 @@ _PDF_PANE_QSS = (
     "#embeddedPdfPane QComboBox QAbstractItemView {"
     f" background: {PANE_CONTROL_BG}; color: {PANE_TEXT};"
     f" selection-background-color: {TABLE_SELECTION_BG}; }}"
-    "QToolButton#zoomControl { padding: 0; }"
-    f"QLabel#zoomValue {{ color: {PANE_TEXT}; }}"
-) + scrollbars_qss("#embeddedPdfPane")
+    # El recuadro de zoom va al final: sus reglas y las del panel tienen la
+    # misma especificidad y aquí gana la última.
+) + scrollbars_qss("#embeddedPdfPane") + ZOOM_OVERLAY_QSS
 
 
 def _join_names(names: Iterable[str], limit: int = 3) -> str:
@@ -311,6 +320,51 @@ def resolve_source_documents(
     return resolved, available, missing
 
 
+def run_dir_for_csv(csv_path: Path) -> Path:
+    """Carpeta de la corrida a la que pertenece el CSV.
+
+    Las corridas guardan el reporte en ``<corrida>/datos/``; las históricas
+    lo dejaban en la raíz de la corrida.
+    """
+    csv_path = Path(csv_path)
+    parent = csv_path.parent
+    return parent.parent if parent.name.casefold() == "datos" else parent
+
+
+def reports_for_csv(
+    csv_path: Path, extra_folders: Iterable[Path] = ()
+) -> tuple[list, list[str]]:
+    """Reconstruye los reportes de la corrida desde el JSON compañero.
+
+    El JSON consolidado guarda los reportes completos, así que la corrida se
+    puede volver a exportar sin repetir el OCR. Cada reporte apunta al PDF
+    que lo originó: si el archivo se movió, se busca igual que lo hace el
+    visor y el reporte queda apuntando a donde está ahora. Devuelve también
+    el nombre de los PDF que no aparecieron, porque sin ellos no se pueden
+    rehacer las páginas.
+    """
+    from app.models.schemas import ValidationReport
+
+    csv_path = Path(csv_path)
+    extra = [Path(folder) for folder in extra_folders]
+    folders = [csv_path.parent, csv_path.parent.parent, _PROGRAM_DIR / "input"]
+    folders.extend(extra)
+
+    reports = []
+    missing: list[str] = []
+    for entry in _companion_payload(csv_path).get("reportes", []):
+        report = ValidationReport.model_validate(entry)
+        located = _locate_document(Path(report.pdf_path), folders, extra)
+        if located is None:
+            name = Path(report.pdf_path).name
+            if name not in missing:
+                missing.append(name)
+            continue
+        report.pdf_path = str(located)
+        reports.append(report)
+    return reports, missing
+
+
 def apply_csv_column_visibility(
     table: QTableWidget,
     columns: Iterable[str],
@@ -486,6 +540,15 @@ class EmbeddedPdfViewer(QFrame):
         return self._page_counts[key]
 
     def _build_ui(self) -> None:
+        """Misma disposición que la vista previa de la ventana principal.
+
+        La página ocupa el panel entero con el recuadro de zoom flotando
+        sobre ella y la paginación centrada en una barra debajo. El selector
+        de documento se queda en su propia fila: ahí es un control con
+        etiqueta, no el nombre de archivo de la ventana principal, y en el
+        ancho que le toca al panel (dos quintos de la ventana) no cabe junto
+        a una paginación centrada sin montarse encima de ella.
+        """
         self.setStyleSheet(_PDF_PANE_QSS)
         style_dark_pane(self)
         self.setMinimumWidth(360)
@@ -513,7 +576,57 @@ class EmbeddedPdfViewer(QFrame):
         documents.addWidget(self.locate_button)
         layout.addLayout(documents)
 
-        controls = QHBoxLayout()
+        self.scroll = ZoomableScrollArea()
+        self.scroll.setObjectName("pdfSurface")
+        style_pdf_surface(self.scroll)
+        self.scroll.set_zoom_callback(self._zoom_by)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setWidgetResizable(False)
+        self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll.setMinimumHeight(260)
+        self.image = QLabel()
+        self.image.setObjectName("pdfPage")
+        self.image.setWordWrap(True)
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.scroll.setWidget(self.image)
+        self.scroll.viewport().installEventFilter(self)
+
+        viewer_frame = QWidget()
+        viewer_frame_layout = QGridLayout(viewer_frame)
+        viewer_frame_layout.setContentsMargins(0, 0, 0, 0)
+        viewer_frame_layout.addWidget(self.scroll, 0, 0)
+
+        zoom_overlay = ZoomOverlay(
+            ("Acercar la página", "Acercar la página", lambda: self._zoom_by(1.25)),
+            (
+                "Ajustar la página al panel",
+                "Ajustar la página al panel",
+                self.fit_page,
+            ),
+            ("Alejar la página", "Alejar la página", lambda: self._zoom_by(0.8)),
+            viewer_frame,
+        )
+        self.btn_zoom_in = zoom_overlay.btn_in
+        self.btn_zoom_fit = zoom_overlay.btn_fit
+        self.btn_zoom_out = zoom_overlay.btn_out
+        self.zoom_label = zoom_overlay.value_label
+
+        zoom_holder = QWidget(viewer_frame)
+        zoom_holder_layout = QVBoxLayout(zoom_holder)
+        zoom_holder_layout.setContentsMargins(8, 8, 8, 8)
+        zoom_holder_layout.addWidget(zoom_overlay)
+        viewer_frame_layout.addWidget(
+            zoom_holder,
+            0,
+            0,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        )
+        zoom_holder.raise_()
+        layout.addWidget(viewer_frame, 1)
+
+        self.pagination = QWidget()
+        controls = QHBoxLayout(self.pagination)
+        controls.setContentsMargins(0, 0, 0, 0)
         self.prev = QToolButton()
         self.prev.setArrowType(Qt.ArrowType.LeftArrow)
         self.prev.setToolTip("Página anterior")
@@ -535,25 +648,16 @@ class EmbeddedPdfViewer(QFrame):
         self.next.setAccessibleName("Página siguiente")
         self.next.clicked.connect(lambda: self.show_page(self._page + 1))
         controls.addWidget(self.next)
-        controls.addStretch(1)
-        self.btn_zoom_out = self._zoom_button(
-            "out", "Alejar la página", lambda: self._zoom_by(0.8)
+
+        # La paginación se centra sobre todo el ancho de la página, igual que
+        # en la ventana principal.
+        nav_bar = QWidget()
+        nav_bar_layout = QGridLayout(nav_bar)
+        nav_bar_layout.setContentsMargins(0, 0, 0, 0)
+        nav_bar_layout.addWidget(
+            self.pagination, 0, 0, Qt.AlignmentFlag.AlignCenter
         )
-        controls.addWidget(self.btn_zoom_out)
-        self.zoom_label = QLabel("100%")
-        self.zoom_label.setObjectName("zoomValue")
-        self.zoom_label.setFixedWidth(40)
-        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        controls.addWidget(self.zoom_label)
-        self.btn_zoom_in = self._zoom_button(
-            "in", "Acercar la página", lambda: self._zoom_by(1.25)
-        )
-        controls.addWidget(self.btn_zoom_in)
-        self.btn_zoom_fit = self._zoom_button(
-            "fit", "Ajustar la página al panel", self.fit_page
-        )
-        controls.addWidget(self.btn_zoom_fit)
-        layout.addLayout(controls)
+        layout.addWidget(nav_bar)
 
         self.source_status = QLabel()
         self.source_status.setObjectName("pdfSourceStatus")
@@ -561,38 +665,11 @@ class EmbeddedPdfViewer(QFrame):
         self.source_status.setAccessibleName("Estado de los PDF de origen")
         layout.addWidget(self.source_status)
 
-        self.scroll = ZoomableScrollArea()
-        self.scroll.setObjectName("pdfSurface")
-        style_pdf_surface(self.scroll)
-        self.scroll.set_zoom_callback(self._zoom_by)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setWidgetResizable(False)
-        self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.scroll.setMinimumHeight(260)
-        self.image = QLabel()
-        self.image.setObjectName("pdfPage")
-        self.image.setWordWrap(True)
-        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.scroll.setWidget(self.image)
-        self.scroll.viewport().installEventFilter(self)
-        layout.addWidget(self.scroll, 1)
-
         self._update_source_status()
         self._show_placeholder(
             "Seleccione una carpeta procesada o un CSV para ver sus páginas."
         )
         self._sync_controls()
-
-    def _zoom_button(self, name: str, tooltip: str, slot) -> QToolButton:
-        button = QToolButton()
-        button.setObjectName("zoomControl")
-        button.setIcon(load_zoom_icon(name))
-        button.setIconSize(QSize(14, 14))
-        button.setFixedSize(28, 28)
-        button.setToolTip(tooltip)
-        button.setAccessibleName(tooltip)
-        button.clicked.connect(slot)
-        return button
 
     def load_paths(
         self, paths: Iterable[Path], missing: Iterable[str] = ()
@@ -863,6 +940,12 @@ class CsvViewerWindow(QMainWindow):
         self._search_matches: list[int] = []
         self._search_position = -1
         self._splitter_adjusted = False
+        self._outputs_worker = None
+        # El indicador de abajo lleva dos cosas: el resumen de la tabla, que
+        # se rehace en cada cambio de columnas, y el estado de la exportación,
+        # que sobrevive a esos cambios hasta que se abre otro CSV.
+        self._summary = "Seleccione una carpeta o un CSV para visualizarlo."
+        self._export_note = ""
         self._pending_rows: list[int] = []
         self._table_timer = QTimer(self)
         # Intervalo cero: el siguiente tramo entra cuando la cola de eventos
@@ -872,10 +955,9 @@ class CsvViewerWindow(QMainWindow):
 
         self.setWindowTitle("Visor de CSV procesados")
         self.resize(1400, 840)
-        self.setStyleSheet(
-            "QMainWindow, QWidget { font-family: 'Segoe UI', sans-serif; font-size: 10pt; }"
-            + DATA_TABLE_QSS
-        )
+        # La misma hoja que la ventana principal: tipografía, botones y el
+        # radio de los cuadros salen de ahí, no del estilo nativo.
+        self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -946,13 +1028,20 @@ class CsvViewerWindow(QMainWindow):
         search_row.addWidget(self.search_context, 1)
         layout.addLayout(search_row)
 
-        # Horizontal: una página de bitácora es vertical, así aprovecha todo
-        # el alto de la ventana en lugar de una franja de pocos centímetros.
+        self.export_options = ExportOptionsGroup()
+        layout.addWidget(self.export_options)
+
+        # Horizontal, y con el PDF a la izquierda igual que la vista previa de
+        # la ventana principal: una página de bitácora es vertical, así
+        # aprovecha todo el alto en lugar de una franja de pocos centímetros.
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.content_splitter = splitter
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(6)
         splitter.splitterMoved.connect(self._on_splitter_moved)
+        self.pdf_viewer = EmbeddedPdfViewer()
+        self.pdf_viewer.relocateRequested.connect(self._relocate_source_pdfs)
+        splitter.addWidget(self.pdf_viewer)
         self.table = QTableWidget(0, 0)
         self.table.setAccessibleName("CSV procesado")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -965,19 +1054,30 @@ class CsvViewerWindow(QMainWindow):
         self.table_sort = ColumnSortController(self.table)
         self.table.currentCellChanged.connect(self._on_current_cell_changed)
         splitter.addWidget(self.table)
-        self.pdf_viewer = EmbeddedPdfViewer()
-        self.pdf_viewer.relocateRequested.connect(self._relocate_source_pdfs)
-        splitter.addWidget(self.pdf_viewer)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([1, 1])
+        # El mismo reparto de la ventana principal: la tabla lleva muchas
+        # columnas y la página cabe entera en la parte que le toca. Los
+        # factores solo gobiernan el espacio sobrante, así que el reparto se
+        # aplica además a mano: si no, el panel arranca con lo que pida su
+        # contenido y se lleva más de la mitad de la ventana.
+        splitter.setStretchFactor(0, _PDF_PANE_SHARE)
+        splitter.setStretchFactor(1, _TABLE_SHARE)
         layout.addWidget(splitter, 1)
 
-        self.status_label = QLabel(
-            "Seleccione una carpeta o un CSV para visualizarlo."
-        )
+        status_row = QHBoxLayout()
+        self.status_label = QLabel(self._summary)
         self.status_label.setStyleSheet("color: #57606a;")
-        layout.addWidget(self.status_label)
+        status_row.addWidget(self.status_label, 1)
+        self.btn_export = QPushButton("Exportar")
+        self.btn_export.setEnabled(False)
+        self.btn_export.setToolTip(
+            "Volver a generar CSV, JSON y PDFs de esta corrida con las "
+            "opciones actuales, sin reprocesar los archivos. Los PDFs ya "
+            "exportados se conservan: los nuevos se numeran (-2, -3…) si el "
+            "nombre se repite"
+        )
+        self.btn_export.clicked.connect(self._exportar)
+        status_row.addWidget(self.btn_export)
+        layout.addLayout(status_row)
 
     def showEvent(self, event) -> None:  # noqa: N802 - API Qt
         super().showEvent(event)
@@ -988,31 +1088,35 @@ class CsvViewerWindow(QMainWindow):
         if hasattr(self, "content_splitter"):
             QTimer.singleShot(0, self._balance_content_splitter)
 
-    def closeEvent(self, event) -> None:  # noqa: N802 - API Qt
-        """Detiene el llenado y el hilo de render antes de cerrar.
-
-        El panel es un hijo de la ventana: cerrarla no le entrega un evento
-        de cierre, y dejar su hilo de render vivo abortaría el proceso al
-        destruir la ventana.
-        """
-        self._table_timer.stop()
-        self.pdf_viewer.shutdown()
-        super().closeEvent(event)
-
     def _on_splitter_moved(self, _position: int, _index: int) -> None:
         """Una vez que el usuario reparte el espacio, se respeta su medida."""
         self._splitter_adjusted = True
 
     def _balance_content_splitter(self) -> None:
-        """Reparte el ancho entre tabla y visor mientras nadie lo ajuste."""
+        """Reparte el ancho entre visor y tabla mientras nadie lo ajuste."""
         if self._splitter_adjusted:
             return
         available = max(
             0,
             self.content_splitter.width() - self.content_splitter.handleWidth(),
         )
-        half = available // 2
-        self.content_splitter.setSizes([half, available - half])
+        pane = available * _PDF_PANE_SHARE // (_PDF_PANE_SHARE + _TABLE_SHARE)
+        self.content_splitter.setSizes([pane, available - pane])
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        """Detiene el llenado y los hilos antes de cerrar.
+
+        El panel es un hijo de la ventana: cerrarla no le entrega un evento
+        de cierre, y dejar su hilo de render vivo abortaría el proceso al
+        destruir la ventana. La exportación no se puede interrumpir a mitad
+        de escritura, así que se la espera.
+        """
+        self._table_timer.stop()
+        self.pdf_viewer.shutdown()
+        worker = self._outputs_worker
+        if worker is not None and worker.isRunning():
+            worker.wait(30000)
+        super().closeEvent(event)
 
     def browse_for_folder(self) -> None:
         initial = self._folder or self._start_folder
@@ -1106,6 +1210,7 @@ class CsvViewerWindow(QMainWindow):
             )
             return
 
+        self._export_note = ""
         self._columns = columns
         self._rows = rows
         # Se limpia antes de poblar: la tabla emite selección mientras se
@@ -1131,6 +1236,7 @@ class CsvViewerWindow(QMainWindow):
         self._search_matches = []
         self._search_position = -1
         self._sync_search_controls()
+        self._sync_export_button()
         self.setWindowTitle(f"Visor de CSV — {path.name}")
 
     def _populate_table(self) -> None:
@@ -1219,6 +1325,149 @@ class CsvViewerWindow(QMainWindow):
     def _current_csv_path(self) -> Path | None:
         data = self.csv_combo.currentData()
         return Path(data) if data else None
+
+    # ── Exportación ─────────────────────────────────────────────────────
+
+    def _sync_export_button(self) -> None:
+        """Solo se exporta lo que el JSON de la corrida permite rehacer."""
+        csv_path = self._current_csv_path()
+        exportable = bool(
+            csv_path is not None
+            and _companion_payload(csv_path).get("reportes")
+        )
+        self.btn_export.setEnabled(
+            exportable
+            and (self._outputs_worker is None
+                 or not self._outputs_worker.isRunning())
+        )
+        if not exportable:
+            self.btn_export.setToolTip(
+                "Este CSV no viene acompañado del JSON de su corrida, así que "
+                "no se pueden volver a generar las salidas."
+            )
+
+    def _important_columns_for_export(self, template) -> list[str]:
+        """Columnas del CSV mínimo, independientes del dataset completo."""
+        columns = CsvReporter.columns_for_fields(
+            [field.id for field in template.fields],
+            skip_ids=frozenset(
+                field.id
+                for field in template.fields
+                if field.type.value == "signature"
+            ),
+        )
+        return [
+            column
+            for column in columns
+            if column in self._selected_important_columns
+        ]
+
+    def _exportar(self) -> None:
+        """Regenera CSV, JSON y PDFs de la corrida abierta, sin repetir OCR."""
+        if self._outputs_worker is not None and self._outputs_worker.isRunning():
+            return
+        csv_path = self._current_csv_path()
+        if csv_path is None:
+            return
+
+        template = template_for_csv(csv_path)
+        if template is None:
+            QMessageBox.warning(
+                self,
+                "Plantilla no disponible",
+                "No se encontró la plantilla con la que se procesó esta "
+                "corrida, y sin ella no se pueden volver a generar las "
+                "salidas.",
+            )
+            return
+        try:
+            reports, missing = reports_for_csv(csv_path, self._pdf_search_folders)
+        except Exception as exc:  # noqa: BLE001 - se muestra en la GUI
+            logger.error(f"No se pudo leer el JSON de la corrida: {exc}")
+            QMessageBox.critical(
+                self,
+                "No se pudo exportar",
+                f"El JSON de la corrida no se pudo leer:\n\n{exc}",
+            )
+            return
+        if missing or not reports:
+            QMessageBox.warning(
+                self,
+                "Faltan los PDF de origen",
+                "No se encontraron los PDF de los que proviene esta corrida "
+                f"({_join_names(missing) or 'ninguno disponible'}). Las "
+                "páginas se rehacen desde ellos, así que indique dónde están "
+                "con «Ubicar PDF…» antes de exportar.",
+            )
+            return
+
+        from app.gui.worker import OutputsWorker
+
+        worker = OutputsWorker(
+            reports, self._export_options(csv_path, template, reports), parent=self
+        )
+        self._outputs_worker = worker
+        worker.succeeded.connect(self._on_outputs_written)
+        worker.failed.connect(self._on_outputs_failed)
+        worker.progress.connect(self._on_outputs_stage)
+        worker.finished.connect(self._on_outputs_finished)
+        worker.finished.connect(worker.deleteLater)
+        self.btn_export.setEnabled(False)
+        self._export_note = "exportando salidas…"
+        self._refresh_status()
+        worker.start()
+
+    def _export_options(self, csv_path: Path, template, reports: list):
+        """Opciones de salida de la corrida abierta, escritas sobre su carpeta."""
+        from app.core.config import AppConfig, config_for_pdf
+        from app.reports.outputs import OutputOptions
+
+        config = AppConfig()
+        # La resolución se acota al escaneo, igual que al procesar: nunca se
+        # interpola la página por encima del detalle que trae el PDF.
+        dpi = config_for_pdf(config, Path(reports[0].pdf_path)).dpi
+        return OutputOptions(
+            template=template,
+            output_root=_PROGRAM_DIR / "output",
+            dpi=dpi,
+            crop_padding=config.crop_padding,
+            separar_por=tuple(self.export_options.separar_por() or ()),
+            un_solo_pdf=self.export_options.radio_unico.isChecked(),
+            discrepancias=self.export_options.discrepancias_check.isChecked(),
+            debug=False,
+            run_dir=run_dir_for_csv(csv_path),
+            csv_date_mode=self.export_options.csv_date_mode(),
+            important_csv_columns=tuple(
+                self._important_columns_for_export(template)
+            ),
+        )
+
+    def _on_outputs_stage(self, message: str, _percent: int) -> None:
+        self._export_note = f"generando salidas… {message}"
+        self._refresh_status()
+
+    def _on_outputs_written(self, output_dir: Path) -> None:
+        """Recarga el CSV: la exportación acaba de reescribirlo en disco."""
+        logger.info(f"Exportación completada en: {output_dir}")
+        csv_path = self._current_csv_path()
+        if csv_path is not None and csv_path.is_file():
+            self._load_csv(csv_path)
+        self._export_note = f"exportación terminada: {Path(output_dir).name}"
+        self._refresh_status()
+
+    def _on_outputs_failed(self, message: str) -> None:
+        logger.error(f"Error generando outputs: {message}")
+        self._export_note = "error al exportar"
+        self._refresh_status()
+        QMessageBox.critical(
+            self,
+            "Error al exportar",
+            message.splitlines()[0] if message else "Error desconocido",
+        )
+
+    def _on_outputs_finished(self) -> None:
+        self._outputs_worker = None
+        self._sync_export_button()
 
     def _on_current_cell_changed(
         self, row: int, _column: int, _previous_row: int, _previous_column: int
@@ -1352,7 +1601,13 @@ class CsvViewerWindow(QMainWindow):
             if important_only
             else len(self._columns)
         )
-        self.status_label.setText(
+        self._summary = (
             f"{len(self._rows)} fila(s) · {visible} de {len(self._columns)} "
             "columnas visibles · solo lectura"
         )
+        self._refresh_status()
+
+    def _refresh_status(self) -> None:
+        """Resumen de la tabla, con el estado de la exportación al final."""
+        note = f" · {self._export_note}" if self._export_note else ""
+        self.status_label.setText(f"{self._summary}{note}")

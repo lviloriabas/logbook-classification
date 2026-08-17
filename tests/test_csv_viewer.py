@@ -16,7 +16,9 @@ from app.gui.csv_viewer import (
     CsvColumnModeButton,
     CsvViewerWindow,
     EmbeddedPdfViewer,
+    reports_for_csv,
     resolve_source_documents,
+    run_dir_for_csv,
     source_pdf_paths_for_rows,
 )
 from app.gui.widgets import (
@@ -36,6 +38,9 @@ from app.gui.csv_utils import (
     infer_important_field_ids,
     read_csv_file,
 )
+
+
+INPUT = Path(__file__).resolve().parents[1] / "input"
 
 
 def _columns() -> list[str]:
@@ -265,8 +270,12 @@ def test_column_control_is_hidden_until_a_csv_is_loaded(tmp_path: Path):
     assert not viewer.column_toggle.isHidden()
     viewer.show()
     app.processEvents()
-    csv_width, pdf_width = viewer.content_splitter.sizes()
-    assert abs(csv_width - pdf_width) <= 2
+    # El PDF va a la izquierda y la tabla a la derecha, con el mismo reparto
+    # (2:3) que la vista previa y la tabla de la ventana principal.
+    assert viewer.content_splitter.widget(0) is viewer.pdf_viewer
+    assert viewer.content_splitter.widget(1) is viewer.table
+    pdf_width, csv_width = viewer.content_splitter.sizes()
+    assert abs(pdf_width / (pdf_width + csv_width) - 0.4) <= 0.01
 
 
 def test_companion_json_resolves_source_pdf_per_csv_row(tmp_path: Path):
@@ -642,3 +651,133 @@ def test_page_is_scaled_to_fill_the_available_panel(tmp_path: Path, monkeypatch)
     assert viewer.image.pixmap().height() == pixmap.height()
     viewer.close()
     app.processEvents()
+
+
+def _run_with_companion_json(tmp_path: Path, pdf_path: Path) -> tuple[Path, Path]:
+    """Corrida mínima en disco: CSV, CSV completo y su JSON consolidado."""
+    import json
+
+    from app.models.schemas import FieldResult, PageResult, ValidationReport
+    from app.reports.csv_reporter import CsvReporter
+    from app.templates.manager import TemplateManager
+
+    template = TemplateManager().load(
+        Path(__file__).resolve().parents[1] / "template" / "aircraft_log.json"
+    )
+
+    def _page(number: int, log: str, matricula: str) -> PageResult:
+        page = PageResult(page_number=number)
+        for field_id, value in (("log_number", log), ("matricula", matricula)):
+            page.add_field(
+                FieldResult(
+                    page_number=number,
+                    field_id=field_id,
+                    field_type="ocr",
+                    value=value,
+                    confidence=1.0,
+                    status="OK",
+                )
+            )
+        return page
+
+    reports = [
+        ValidationReport(
+            pdf_path=str(pdf_path),
+            template_name=template.name,
+            pages=[_page(1, "2147337", "HP-1534CMP"), _page(2, "2147338", "HP-1538CMP")],
+        )
+    ]
+    run = tmp_path / "BITS 17 AUG 2026 06 00"
+    data = run / "datos"
+    data.mkdir(parents=True)
+    csv_path = data / f"{run.name}.CSV"
+    CsvReporter().write(reports, csv_path, template)
+    (data / f"{run.name}.json").write_text(
+        json.dumps({"reportes": [r.model_dump(mode="json") for r in reports]}),
+        encoding="utf-8",
+    )
+    return run, csv_path
+
+
+def test_run_folder_is_recovered_from_the_csv_location(tmp_path: Path):
+    run = tmp_path / "BITS TEST"
+    assert run_dir_for_csv(run / "datos" / "BITS TEST.CSV") == run
+    # Las corridas históricas dejaban el reporte en la raíz de la corrida.
+    assert run_dir_for_csv(run / "BITS TEST.CSV") == run
+
+
+def test_reports_are_rebuilt_from_the_companion_json(tmp_path: Path):
+    pdf_path = INPUT / "test.pdf"
+    _run, csv_path = _run_with_companion_json(tmp_path, pdf_path)
+
+    reports, missing = reports_for_csv(csv_path)
+
+    assert missing == []
+    assert [Path(report.pdf_path) for report in reports] == [pdf_path]
+    # El JSON guarda los reportes enteros: la corrida se re-exporta sin OCR.
+    assert [page.page_number for page in reports[0].pages] == [1, 2]
+    assert reports[0].pages[0].fields[0].value == "2147337"
+
+
+def test_moved_source_pdfs_are_relocated_or_reported_as_missing(tmp_path: Path):
+    # Un nombre que no exista en input/, donde el visor también busca.
+    moved = tmp_path / "otra carpeta" / "bitacora-movida.pdf"
+    moved.parent.mkdir(parents=True)
+    moved.write_bytes(b"%PDF-1.4\n")
+    _run, csv_path = _run_with_companion_json(
+        tmp_path, tmp_path / "ya no" / moved.name
+    )
+
+    _reports, missing = reports_for_csv(csv_path)
+    assert missing == [moved.name]
+
+    # Con la carpeta indicada a mano («Ubicar PDF…») el reporte vuelve a
+    # apuntar al archivo, que es de donde se rehacen las páginas.
+    reports, missing = reports_for_csv(csv_path, [moved.parent])
+    assert missing == []
+    assert Path(reports[0].pdf_path) == moved
+
+
+def test_export_is_offered_only_when_the_run_can_be_rebuilt(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    _run, csv_path = _run_with_companion_json(tmp_path, INPUT / "test.pdf")
+    viewer = CsvViewerWindow(tmp_path)
+    try:
+        assert viewer.load_csv_file(csv_path) is True
+        assert viewer.btn_export.isEnabled()
+
+        # Un CSV suelto no trae el JSON de su corrida y no se puede rehacer.
+        loose = tmp_path / "suelto.csv"
+        loose.write_text("file,page\na.pdf,1\n", encoding="utf-8")
+        assert viewer.load_csv_file(loose) is True
+        assert not viewer.btn_export.isEnabled()
+        assert "JSON" in viewer.btn_export.toolTip()
+    finally:
+        viewer.close()
+        app.processEvents()
+
+
+def test_exporting_rewrites_the_run_without_reprocessing(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    run, csv_path = _run_with_companion_json(tmp_path, INPUT / "test.pdf")
+    viewer = CsvViewerWindow(tmp_path)
+    try:
+        assert viewer.load_csv_file(csv_path) is True
+        viewer.export_options.matricula_check.setChecked(True)
+        viewer._exportar()
+        worker = viewer._outputs_worker
+        assert worker is not None
+        assert worker.wait(120000)
+        app.processEvents()
+        app.processEvents()
+
+        # Las mismas salidas que produce «Exportar» en la ventana principal,
+        # escritas sobre la carpeta de la corrida abierta.
+        assert (run / "HP-1534CMP.pdf").is_file()
+        assert (run / "HP-1538CMP.pdf").is_file()
+        assert (run / "stats.json").is_file()
+        assert csv_path.is_file()
+        assert "exportación terminada" in viewer.status_label.text()
+    finally:
+        viewer.close()
+        app.processEvents()
