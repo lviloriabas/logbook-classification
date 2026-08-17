@@ -47,6 +47,7 @@ BITS/
 └── app/
     ├── core/
     │   ├── config.py        # Configuración (pydantic)
+    │   ├── page_range.py    # Rango de páginas del lote → tramos por archivo
     │   └── pipeline.py      # Orquestador del pipeline
     ├── ocr/
     │   ├── engine.py        # Motor OCR (PaddleOCR + fallback Tesseract)
@@ -206,11 +207,10 @@ Opciones principales:
 | `--template` | `template/aircraft_log.json` | Plantilla JSON |
 | `--output-dir` | `output/` | Carpeta de resultados |
 | `--dpi` | 200 | DPI máximo de la página completa; se ajusta al DPI nativo de cada PDF |
-| `--max-pages` | — | Procesar solo las primeras N páginas (pruebas) |
-| `--limit-books` | — | Procesar solo las primeras N bitácoras (PDFs ordenados de la carpeta de entrada) |
+| `--pages RANGO` | — | Procesar solo un rango de páginas del lote completo, numerado de corrido sobre los PDFs ordenados de la entrada: `1-40`, `200-` (hasta el final) o `15` (una sola). Los archivos fuera del rango no se abren |
 | `--debug` | — | Generar `debug.pdf` con las páginas originales, sin anotaciones |
 | `--reference-page` | 1 | Página usada como referencia de alineación |
-| `--threads` (`--cpu-threads`) | Todos los disponibles | Hilos totales del procesador; procesos e hilos internos se distribuyen automáticamente (un proceso OCR por núcleo físico) |
+| `--threads` (`--cpu-threads`) | Todos los disponibles | Hilos totales del procesador; procesos e hilos internos se distribuyen automáticamente (un proceso OCR por hilo lógico) |
 | `--no-deskew` | — | Desactivar corrección de inclinación |
 | `--no-align` | — | Desactivar alineación |
 | `--separar-por avion\|mes` | — | Separar las bitácoras en PDFs independientes (repetible y combinable: solo avión, solo mes, o ambos) |
@@ -234,11 +234,17 @@ Opciones principales:
 > └── <PDFs ordenados según --separar-por>
 > ```
 
-Ejemplo con modo debug y límite de bitácoras:
+Ejemplo con modo debug sobre las 40 primeras páginas del lote:
 
 ```batch
-portable\python312\tools\python.exe run_cli.py --debug --limit-books 2
+portable\python312\tools\python.exe run_cli.py --debug --pages 1-40
 ```
+
+El rango numera el lote de corrido, igual que el visor de la GUI: con
+bitácoras de 10, 20 y 5 páginas (35 en total), `--pages 8-22` procesa las
+páginas 8-10 de la primera y 1-12 de la segunda, y ni siquiera abre la
+tercera. Los números de página del CSV, del JSON y de los PDFs siguen siendo
+los reales de cada archivo.
 
 ## Organización en PDFs y discrepancias de firma
 
@@ -283,6 +289,9 @@ portable\python312\tools\python.exe run_cli.py --separar-por avion --separar-por
   matrícula. En un PDF único aparecen al final, después de una hoja blanca
   titulada `POSIBLES DISCREPANCIAS`; al generar varios archivos se escriben en
   `discrepancias.pdf` con la misma portada y el mismo orden.
+- La clasificación se ejecuta siempre, se separen los PDFs o no: el CSV lleva
+  la columna `disc` (`true`/`false`) junto a `dup`, con `true` en las
+  bitácoras marcadas como discrepancia de firmas.
 
 Además, siempre se genera `stats.json` en la carpeta de la corrida con
 las estadísticas de la corrida:
@@ -314,7 +323,7 @@ Con `--recortes-firmas` se vuelcan los recortes de las regiones de firma a
 `recortes_firmas/<campo>/`, con el mismo margen que ve el detector y con el
 veredicto (`true`/`false`/`unclear`) al principio del nombre del archivo:
 ordenando la carpeta por nombre quedan juntos todos los casos inciertos para
-revisarlos de una vez (usar con `--max-pages` para lotes pequeños).
+revisarlos de una vez (usar con `--pages` para lotes pequeños).
 
 ### 2. GUI principal
 
@@ -333,9 +342,15 @@ portable\python312\tools\python.exe run_gui.py
    corridas exportadas; ambos piden confirmación y se bloquean mientras hay
    procesamiento o exportación en curso.
 2. Seleccionar plantilla.
-3. Procesamiento: motor PaddleOCR fijo, "Bitácoras" (primeras N, 0 = todas),
-   "Páginas" por bitácora,
-   corrección de inclinación y alineación.
+3. Procesamiento: motor PaddleOCR fijo, "Páginas" con el rango del lote
+   completo, corrección de inclinación y alineación. Los dos extremos del
+   rango son números de página reales y arrancan en la primera y la última
+   de todos los archivos seleccionados (p. ej. `1` a `573`), así que dejarlo
+   como está procesa todo. El lote se numera de corrido como en el visor, de
+   modo que un rango puede empezar en una bitácora y terminar en otra, y las
+   que quedan fuera no se abren. Al cambiar los archivos el rango vuelve a
+   cubrirlos enteros, y la etiqueta de al lado indica cuántas páginas del
+   total quedan seleccionadas.
 4. Preprocesamiento: **Preprocesar** aplica corrección de inclinación y
    alineación sin ejecutar OCR, para revisar visualmente las páginas antes del
    procesamiento completo.
@@ -350,8 +365,8 @@ portable\python312\tools\python.exe run_gui.py
  6. Opciones avanzadas (colapsable): hilos totales del procesador y página de
     referencia. El motor OCR y los modelos no se exponen como opciones.
     La aplicación detecta los hilos disponibles, selecciona todos por defecto
-    y reparte el trabajo en **un proceso OCR por núcleo físico** (los hilos
-    internos del motor no aceleran la inferencia; ver *Rendimiento*). La
+    y reparte el trabajo en **un proceso OCR por hilo lógico** (un proceso
+    extra rinde mucho más que un hilo interno extra; ver *Rendimiento*). La
     línea de ayuda muestra el reparto resultante, p. ej. `5 proceso(s) OCR x
     2 hilo(s)`. Desmarcar "Reservar un núcleo para la interfaz" libera un
     hilo más y suele habilitar un proceso adicional, a costa de una interfaz
@@ -375,7 +390,9 @@ portable\python312\tools\python.exe run_gui.py
     El botón **Visor de CSV** abre una ventana independiente donde se selecciona
     una carpeta ya procesada y se consulta su CSV con el mismo selector de vista;
     allí también se muestran los PDFs procesados. Las tablas permiten ordenar
-    por encabezado, que permanece visible durante el scroll. El selector de
+    por encabezado, que permanece visible durante el scroll: el primer clic
+    ordena esa columna de mayor a menor, el segundo la invierte y el tercero
+    devuelve la tabla al orden original del CSV. El selector de
     campos importantes solo cambia la vista y se puede abrir en cualquier estado.
     La lista de flota se edita desde **Editar lista…** y se guarda en
     `fleet.json`; **Verificar matrículas** la activa de forma opcional y señala
@@ -561,29 +578,64 @@ programa sobre `input/test2.pdf` en un equipo de 12 hilos lógicos.
 
 ### Reparto de procesos e hilos
 
-Medido sobre los recortes reales del pipeline, **los hilos internos del motor
-OCR no aceleran la inferencia**: el mismo lote tarda lo mismo con 1 hilo que
-con 12 (~170 ms por recorte en ambos casos). Lo que escala es el número de
-procesos, hasta saturar los núcleos físicos:
+Medido sobre la carga OCR real del pipeline (detector v6 medium +
+reconocedor v5 mobile) en un Ryzen 5 3600, en páginas por segundo. Los
+equipos más pequeños se simulan confinando la afinidad de CPU; las parejas
+SMT están verificadas (dos procesos en los lógicos 0 y 1 —el mismo núcleo—
+rinden 0.105; repartidos en dos núcleos, 0.167).
 
-| procesos x hilos | páginas/s |
-|---|---|
-| 1 x 12 | 0.38 |
-| 3 x 4 | 0.87 |
-| 6 x 2 | 1.35 |
-| 12 x 1 | 1.39 |
+| equipo | procesos x hilos | páginas/s |
+|---|---|---|
+| 2 núcleos / 4 hilos | **4 x 1** | **0.221** |
+| | 2 x 1 | 0.169 |
+| | 2 x 2 | 0.158 |
+| 4 núcleos / 8 hilos | **8 x 1** | **0.431** |
+| | 4 x 1 | 0.321 |
+| | 4 x 2 | 0.310 |
+| 6 núcleos / 12 hilos | **12 x 1** | **0.516** |
+| | 8 x 2 | 0.494 |
+| | 8 x 1 | 0.460 |
+| | 6 x 1 | 0.441 |
+| | 6 x 2 | 0.430 |
+| | 4 x 2 | 0.339 |
+| | 4 x 1 | 0.331 |
+| | 3 x 1 | 0.242 |
+| | 2 x 1 | 0.172 |
+| | 1 x 12 | 0.119 |
+| | 1 x 1 | 0.091 |
 
-Por eso `recommended_parallelism()` reparte **un proceso OCR por núcleo
-físico** (estimado como la mitad de los hilos lógicos), con un tope de 8 y
-limitado además por la memoria libre (cada proceso ocupa ~480 MB con el
-detector y el reconocedor cargados).
+La regla es la misma en los tres equipos: **un proceso por hilo lógico, con
+un solo hilo interno**. A igualdad de concurrencia total los procesos ganan
+por 20-40% (`4x1` frente a `2x2`, `8x1` frente a `4x2`, `12x1` frente a
+`6x2`), y pararse en los núcleos físicos deja mucho sobre la mesa: 17% en el
+equipo de 6 núcleos y 34% en el de 4. El SMT sí aporta en esta carga.
 
-El reparto ya no exige que el número de procesos divida exactamente el total
-de hilos. Exigirlo hacía que cualquier total primo colapsara a un solo
-proceso: como la GUI reserva un hilo para la interfaz, un equipo de 12 hilos
-pedía 11 y ejecutaba `1 proceso x 11 hilos`, la configuración más lenta de
-todas. Corregirlo es la mejora de tiempo más grande de esta versión y **no
-cambia ni una celda del reporte**:
+Los hilos internos aceleran un proceso aislado, pero poco y con techo bajo:
+1.31x, ya saturado en 3 hilos (782 → 592 ms por recorte; con 6 y 12 hilos
+mide igual que con 3).
+
+Repartir páginas con **hilos de Python** (un solo proceso, varios hilos)
+está descartado por medición: 6 hilos rinden 0.090 páginas/s, exactamente lo
+mismo que un solo hilo (0.091). El GIL no se suelta durante la inferencia.
+
+Por eso `recommended_parallelism()` reparte **un proceso OCR por hilo lógico
+del presupuesto**, con un tope duro de 16 y limitado sobre todo por la
+memoria libre (cada proceso ocupa ~480 MB con el detector y el reconocedor
+cargados, y el reparto reserva 1.5 GB para el sistema y la GUI). Los hilos
+internos se reparten solo con lo que sobra cuando la memoria impide crear más
+procesos, y nunca pasan de 3.
+
+El presupuesto de hilos que cede el usuario **no** dice cuántos núcleos tiene
+el equipo, y confundirlos era caro. Al estimar los núcleos como la mitad del
+presupuesto, pedir 3 hilos daba `1 proceso x 3 hilos` —como si el equipo
+tuviera un solo núcleo— en vez de 3 procesos: 0.116 frente a 0.239 páginas/s,
+la mitad de velocidad. Con 2 hilos el mismo fallo costaba 1.58x. Tampoco se
+exige ya que los procesos dividan exactamente el total, porque eso hacía que
+cualquier total primo colapsara a un solo proceso: como la GUI reserva un
+hilo para la interfaz, un equipo de 12 hilos pedía 11 y ejecutaba
+`1 proceso x 11 hilos`, la configuración más lenta de todas. Corregirlo es la
+mejora de tiempo más grande de esta versión y **no cambia ni una celda del
+reporte**:
 
 | corrida | antes | después |
 |---|---|---|
@@ -621,13 +673,21 @@ de fecha se detecta y lee sobre una banda regional de alta resolución; no se
 rasteriza la página completa a 600 DPI.
 
 El perfil C está activo automáticamente en todo procesamiento, sin depender del
-tamaño del lote. Con varios workers, el planificador reparte PDFs completos
-cuando hay suficientes para ocupar el pool y reparte páginas cuando el lote es
-pequeño; con un worker se degrada de forma natural a ejecución secuencial. Las
-colas están acotadas (un PDF por worker o hasta tres páginas por worker), el
-buffer de calibración usa un solo canal y cualquier PDF que falle en la ruta
-por archivo se reintenta con el perfil B. El orden final de los reportes y las
-correcciones por libro se mantienen sin cambios.
+tamaño del lote. **No es un modo que el usuario elija ni que se pueda apagar**:
+es el planificador del lote, y su nombre solo existe en el código y en este
+documento. Con varios workers reparte PDFs completos cuando hay suficientes
+para ocupar el pool y reparte páginas cuando el lote es pequeño; con un worker
+se degrada de forma natural a ejecución secuencial. Las colas están acotadas
+(un PDF por worker o hasta tres páginas por worker), el buffer de calibración
+usa un solo canal y cualquier PDF que falle en la ruta por archivo se reintenta
+con el perfil B. El orden final de los reportes y las correcciones por libro se
+mantienen sin cambios.
+
+Las dos estrategias informan el avance igual: `on_file_progress` entrega
+`(archivo, páginas hechas, páginas del archivo)`. En la ruta por archivo el
+worker deja su contador de páginas en un archivo del directorio temporal del
+pool —junto a la bandera de cancelación— y el planificador lo lee mientras
+espera, porque un proceso del pool no puede emitir señales a la GUI.
 
 - **Nuevo motor OCR / VL**: implementar el protocolo `OcrEngine` (p. ej. Qwen VL) y registrarlo en `create_engine()`.
 - **Nuevo tipo de campo**: añadir procesador en `core/pipeline.py` o registry.
