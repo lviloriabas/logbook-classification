@@ -148,11 +148,13 @@ class AppConfig(BaseModel):
     log_dir: Path = Field(default=Path("output/logs"))
     verify_fleet: bool = Field(
         default=False,
-        description="Comparar las matrículas leídas contra fleet.json.",
+        description=(
+            "Reclasificar las matrículas leídas contra la lista de aviones."
+        ),
     )
     fleet_file: Path = Field(
         default=Path("fleet.json"),
-        description="Archivo portable con la lista de matrículas autorizadas.",
+        description="Archivo portable con la lista de aviones de la flota.",
     )
 
 
