@@ -689,6 +689,15 @@ worker deja su contador de páginas en un archivo del directorio temporal del
 pool —junto a la bandera de cancelación— y el planificador lo lee mientras
 espera, porque un proceso del pool no puede emitir señales a la GUI.
 
+El contador global cuenta **páginas terminadas del lote**, no la página que
+acaba de entregar el pool: con un proceso por hilo lógico hay una docena en
+vuelo y terminan desordenadas, así que nombrar la última hacía que el número
+se devolviera (52, 48, 53…). Y el total es el de la corrida, no el del
+documento abierto. El Pipeline no puede componer ese texto —solo ve su PDF—,
+así que emite la etapa sin cifras (`app/core/progress.py`) y el contador lo
+añade quien conoce el par del lote, que es la misma capa que dibuja la barra:
+la ventana o la CLI. Así el texto y la barra no pueden contar cosas distintas.
+
 - **Nuevo motor OCR / VL**: implementar el protocolo `OcrEngine` (p. ej. Qwen VL) y registrarlo en `create_engine()`.
 - **Nuevo tipo de campo**: añadir procesador en `core/pipeline.py` o registry.
 - **AirVault API**: consumir `ValidationReport` (pydantic) desde un cliente HTTP.
