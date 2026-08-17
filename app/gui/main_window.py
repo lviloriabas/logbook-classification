@@ -69,6 +69,7 @@ from PySide6.QtWidgets import (
 from app.core.config import AppConfig
 from app.core.page_range import FileSlice, PageRange, slice_batch, total_pages
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
+from app.core.progress import with_page_counter
 from app.gui.csv_utils import template_field_ids_for_columns
 from app.gui.csv_viewer import (
     CsvColumnModeButton,
@@ -2579,14 +2580,23 @@ class MainWindow(QMainWindow):
                 row["secs"].setText(_format_clock(time.monotonic() - started))
 
     def _on_progress(self, done: int, total: int, message: str) -> None:
+        """Pinta el avance del lote: barra, contador del texto y ETA.
+
+        El total es el del lote, fijado al arrancar la corrida con los
+        recuentos que la ventana ya tenía: el que llega en la señal es el del
+        documento en curso o el de los archivos ya vistos, y encogía la barra
+        al cambiar de archivo. Y el contador solo puede subir, porque con una
+        docena de páginas en vuelo los avisos llegan desordenados.
+        """
+        total = self._total_global or total
         if total > 0:
+            done = max(min(done, total), self._last_done)
+            self._last_done = done
             if self.progress.maximum() != total:
                 self.progress.setRange(0, total)
             self.progress.setValue(done)
-            if done > self._last_done:
-                self._last_done = done
             self._done_global = done
-        self.status_label.setText(message)
+        self.status_label.setText(with_page_counter(done, total, message))
 
     def _on_succeeded(self, reports: list[ValidationReport]) -> None:
         elapsed = (

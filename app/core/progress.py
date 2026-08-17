@@ -1,0 +1,35 @@
+"""Contador de páginas de los mensajes de avance.
+
+Dos cosas iban mal en el texto que acompaña a la barra, y las dos nacen de
+quién pone las cifras.
+
+El total era el del documento abierto, no el del lote: en una corrida de tres
+bitácoras de 100 páginas, la página 52 de la segunda se anunciaba como "52 de
+100" cuando el usuario está mirando la 152 de 300. El Pipeline no puede
+arreglarlo por su cuenta —solo ve el PDF que tiene abierto—, así que la etapa
+de lectura de páginas viaja sin cifras (``PAGES_STAGE``) y el contador lo pone
+quien conoce el par global, que es la misma capa que dibuja la barra. Así el
+texto y la barra no pueden contar cosas distintas.
+
+Y el número se devolvía: la etapa nombraba la última página en llegar, pero
+con un proceso por hilo lógico hay una docena de páginas en vuelo y terminan
+desordenadas, así que el texto iba 52, 48, 53… El contador cuenta páginas
+terminadas, que es una cifra que solo puede subir.
+"""
+
+from __future__ import annotations
+
+# Etiqueta de la etapa que lee páginas. El contador se añade al final, de
+# modo que el prefijo del archivo en curso sigue quedando delante.
+PAGES_STAGE = "Procesando páginas"
+
+
+def with_page_counter(done: int, total: int, message: str) -> str:
+    """Cierra la etapa de páginas con el ``hechas/total`` del lote.
+
+    Los demás mensajes (calibración, generación del reporte, revisión de
+    firmas) hablan de un archivo concreto y pasan intactos.
+    """
+    if total <= 0 or not message.endswith(PAGES_STAGE):
+        return message
+    return f"{message} {done}/{total}"

@@ -36,6 +36,7 @@ from loguru import logger
 
 from app.core.config import AppConfig, config_for_pdf
 from app.core.page_range import PageRange, slice_batch
+from app.core.progress import PAGES_STAGE
 from app.models.schemas import (
     FieldResult,
     PageResult,
@@ -1582,13 +1583,14 @@ class Pipeline:
             renderer: Optional[PdfPageRenderer] = None,
         ) -> List[PageResult]:
         pages: List[PageResult] = []
-        last = first + total - 1
         for index in range(total):
             if self._is_cancelled():
                 break
             page_number = first + index
-            self._notify(index, total,
-                         f"Procesando página {page_number}/{last}")
+            # ``index`` son las páginas ya terminadas de este tramo; el
+            # contador que ve el usuario lo compone la pantalla con las
+            # cifras del lote (ver ``app.core.progress``).
+            self._notify(index, total, PAGES_STAGE)
             image = (
                 renderer.render_page(page_number, self.config.dpi)
                 if renderer is not None
@@ -1684,10 +1686,12 @@ class Pipeline:
                     page_number = futures.pop(future)
                     page = future.result()
                     pages.append((page_number, page))
-                    self._notify(
-                        len(pages), total,
-                        f"Procesando página {page_number}/{last}",
-                    )
+                    # Aquí no hay "página en curso" que anunciar: hay tantas
+                    # en vuelo como workers y terminan desordenadas, así que
+                    # nombrar la última en llegar hacía que el número se
+                    # devolviera (52, 48, 53…). Lo que avanza es el número de
+                    # páginas terminadas.
+                    self._notify(len(pages), total, PAGES_STAGE)
                 if self._is_cancelled():
                     cancelled_pending = dict(futures)
                     for future in cancelled_pending:
@@ -2667,11 +2671,20 @@ def process_pdf_batch(
                 *,
                 _offset: int = offset,
                 _index: int = index,
+                _name: str = path.name,
             ) -> None:
                 if on_file_progress is not None:
                     on_file_progress(_index + 1, done, total_in_file)
                 if on_progress is not None:
-                    on_progress(_offset + done, total_pages, message)
+                    # El nombre del archivo delante, igual que en la ruta
+                    # secuencial: sin él la etapa de un solo PDF y el
+                    # contador del lote se leían como si hablaran de lo mismo.
+                    on_progress(
+                        _offset + done,
+                        total_pages,
+                        f"Archivo {_index + 1}/{total_files}: {_name} — "
+                        f"{message}",
+                    )
 
             pipeline.on_progress = page_progress
             report = pipeline.process(
@@ -2705,6 +2718,7 @@ def process_pdf_batch(
     counters: dict = {}
     submitted: dict = {}
     next_index = 0
+    published = 0
     cancelled = False
     cancel_flag = process_pool.temporary_path("cancel_mass_batch.flag")
     cancel_flag.unlink(missing_ok=True)
@@ -2752,6 +2766,7 @@ def process_pdf_batch(
         vez las barras se quedaban quietas varios minutos y luego saltaban de
         golpe, mientras la estrategia por páginas avanzaba página a página.
         """
+        nonlocal published
         if on_file_progress is None and on_progress is None:
             return
         live = 0
@@ -2767,15 +2782,18 @@ def process_pdf_batch(
                 on_file_progress(index + 1, done, total_in_file)
         if on_progress is not None:
             ready = sum(r is not None for r in reports)
+            # El contador global no puede retroceder: un archivo que sale de
+            # ``pending`` para reintentarse con el perfil B se lleva su avance
+            # en vivo sin haber sumado a ``done_pages``, y sin este tope el
+            # texto daría un paso atrás justo después de un fallo.
+            published = max(published, min(done_pages + live, total_pages))
             message = (
-                f"Procesando {len(pending)} archivo(s) en paralelo — "
-                f"{ready}/{total_files} listos"
+                f"{len(pending)} archivo(s) en paralelo, "
+                f"{ready}/{total_files} listos — {PAGES_STAGE}"
                 if pending
                 else f"Procesados {ready}/{total_files} archivos"
             )
-            on_progress(
-                min(done_pages + live, total_pages), total_pages, message
-            )
+            on_progress(published, total_pages, message)
 
     submit_available()
     while pending:
