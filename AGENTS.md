@@ -1,5 +1,21 @@
 El output del reporte CSV no se debe modificar sin antes preguntar al usuario o sin que él lo pida.
 
+## Reglas de git (no negociables)
+
+- **Cada trabajo terminado se commitea y se sube.** Al cerrar un cambio se
+  hace `git commit` y `git push` de la rama actual sin volver a preguntar;
+  el usuario ya dio esa autorización de forma permanente. Nunca se
+  commitea directo sobre `main`: si esa es la rama activa, primero se crea
+  una rama.
+- **Los commits van a nombre del usuario, como si los escribiera él.** No
+  se agrega ninguna firma, coautoría ni marca de herramienta al mensaje
+  (nada de `Co-Authored-By`, `Generated with` ni similares).
+- **Se copia el estilo de mensaje que ya tiene el historial**: en español,
+  sin acentos, el asunto en presente y en tercera persona diciendo qué hace
+  el cambio (`Cuenta paginas terminadas del lote, no la ultima que entrega
+  el pool`), y el cuerpo explicando el porqué y las consecuencias, no la
+  lista de archivos tocados.
+
 ## Reglas de interfaz (no negociables)
 
 - **Se sigue el estilo que la aplicación ya tiene, al pie de la letra.** Antes
