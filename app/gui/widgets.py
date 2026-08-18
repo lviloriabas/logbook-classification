@@ -81,6 +81,16 @@ DATA_TABLE_QSS = (
     # de scroll y es lo único que no respeta el radio: sin dejarlo
     # transparente, la esquina inferior derecha se queda en pico.
     "QTableView::corner, QTableWidget::corner { background: transparent; }"
+    # El viewport (donde Qt pinta las filas) es un widget aparte que
+    # style_data_table rellena a base de paleta, no de hoja de estilo: ese
+    # relleno cubre el rectangulo completo hasta el borde y tapa el radio de
+    # las esquinas de abajo, aunque las de arriba se ven bien porque las pinta
+    # la cabecera. "qt_scrollarea_viewport" es el nombre que Qt le da por
+    # dentro a ese widget; dandole el mismo radio aqui, en la hoja de estilo,
+    # las cuatro esquinas quedan iguales.
+    "QTableView QWidget#qt_scrollarea_viewport,"
+    "QTableWidget QWidget#qt_scrollarea_viewport {"
+    f" background-color: {TABLE_BASE_BG}; border-radius: {TABLE_RADIUS}px; }}"
 )
 
 # Las barras de desplazamiento son parte de la superficie: dejarlas en el
@@ -303,6 +313,22 @@ def load_zoom_icon(name: str) -> QIcon:
     """Carga un icono de zoom local para que los visores se vean igual en Windows."""
     path = _ASSETS / f"zoom_{name}.svg"
     return QIcon(str(path)) if path.is_file() else QIcon.fromTheme(f"zoom-{name}")
+
+
+# Los iconos de los botones acompañan al texto: van al alto de una letra para
+# que la fila de botones no crezca ni el dibujo pese más que la palabra.
+ICON_SIZE = QSize(16, 16)
+
+
+def load_icon(name: str) -> QIcon:
+    """Carga un icono de ``assets/`` por su nombre, sin extensión.
+
+    Los iconos son locales por la misma razón que los del zoom: el tema de
+    iconos del sistema no existe en Windows y dejar el botón sin dibujo según
+    la máquina es peor que no ponerlo.
+    """
+    path = _ASSETS / f"{name}.svg"
+    return QIcon(str(path)) if path.is_file() else QIcon()
 
 
 class ZoomOverlay(QFrame):
