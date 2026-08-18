@@ -69,6 +69,7 @@ from app.gui.widgets import (
     PANE_STATUS_COLORS,
     PANE_SURFACE_BG,
     PANE_TEXT,
+    TABLE_RADIUS,
     TABLE_SELECTION_BG,
     ZOOM_OVERLAY_QSS,
     ZoomableScrollArea,
@@ -118,9 +119,11 @@ _PDF_PANE_QSS = (
     # El panel va en el mismo gris oscuro que la tabla a la que acompaña: en
     # blanco quedaba como un bloque luminoso al lado de ella.
     f"#embeddedPdfPane {{ background: {PANE_BG};"
-    f" border: 1px solid {PANE_SURFACE_BG}; border-radius: 6px; }}"
+    f" border: 1px solid {PANE_SURFACE_BG}; border-radius: {TABLE_RADIUS}px; }}"
+    # Mismo radio que el marco que la contiene: quedaba en 4px, un cuadro
+    # distinto al del resto de la aplicacion (QGroupBox, tablas, timeSummary).
     f"#pdfSurface {{ background: {PANE_SURFACE_BG};"
-    f" border: 1px solid {PANE_BORDER}; border-radius: 4px; }}"
+    f" border: 1px solid {PANE_BORDER}; border-radius: {TABLE_RADIUS}px; }}"
     # Sin fondo explícito, la etiqueta pinta el color de ventana y tapa la
     # superficie oscura justo cuando solo muestra el mensaje de estado.
     f"#pdfPage {{ color: {PANE_TEXT}; padding: 12px; background: transparent; }}"
@@ -130,7 +133,7 @@ _PDF_PANE_QSS = (
     "#embeddedPdfPane QComboBox, #embeddedPdfPane QLineEdit,"
     "#embeddedPdfPane QPushButton, #embeddedPdfPane QToolButton {"
     f" background: {PANE_CONTROL_BG}; color: {PANE_TEXT};"
-    f" border: 1px solid {PANE_BORDER}; border-radius: 4px; padding: 2px 6px; }}"
+    f" border: 1px solid {PANE_BORDER}; border-radius: {TABLE_RADIUS}px; padding: 2px 6px; }}"
     "#embeddedPdfPane QComboBox:hover, #embeddedPdfPane QPushButton:hover,"
     "#embeddedPdfPane QToolButton:hover {"
     f" background: {PANE_CONTROL_HOVER}; }}"
