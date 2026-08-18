@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.responsive import fit_to_screen
+
 
 class ImportantFieldsDialog(QDialog):
     """Selector de columnas; solo cambia la presentación de la tabla."""
@@ -31,7 +33,9 @@ class ImportantFieldsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Seleccionar campos importantes")
-        self.resize(420, 520)
+        # En una pantalla baja el alto pedido no cabe y los botones de
+        # aceptar y cancelar quedan por debajo del borde.
+        fit_to_screen(self, 420, 520)
         self.columns = list(columns)
         self.checks: dict[str, QCheckBox] = {}
         # Marcar en bloque no debe emitir una selección por casilla: cada
@@ -41,14 +45,16 @@ class ImportantFieldsDialog(QDialog):
 
     def _build_ui(self, selected: set[str]) -> None:
         layout = QVBoxLayout(self)
-        layout.addWidget(
-            QLabel(
-                "Marque las columnas que deben aparecer en la vista de campos "
-                "importantes y como recuadros en la vista previa del PDF. La "
-                "selección se guarda para la plantilla activa; el CSV "
-                "guardado no se modifica."
-            )
+        intro = QLabel(
+            "Marque las columnas que deben aparecer en la vista de campos "
+            "importantes y como recuadros en la vista previa del PDF. La "
+            "selección se guarda para la plantilla activa; el CSV "
+            "guardado no se modifica."
         )
+        # Sin ajuste de línea el párrafo entero era el ancho mínimo del
+        # diálogo: pedía 420 px y se abría con más de 1200.
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
         bulk_row = QHBoxLayout()
         select_all = QPushButton("Marcar todas")
         select_all.setToolTip("Marcar todas las columnas de la lista")

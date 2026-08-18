@@ -56,6 +56,7 @@ from app.gui.csv_utils import (
 )
 from app.gui.export_options import ExportOptionsGroup
 from app.gui.field_selector import ImportantFieldsDialog
+from app.gui.responsive import ROOMY, Density, density_for, fit_to_screen
 from app.gui.table_sort import ColumnSortController
 from app.reports.csv_reporter import CsvReporter
 from app.gui.widgets import (
@@ -496,6 +497,12 @@ class EmbeddedPdfViewer(QFrame):
 
     relocateRequested = Signal()
 
+    def apply_density(self, density: Density) -> None:
+        """Aprieta los mínimos del panel cuando la ventana es baja."""
+        self._density = density
+        self.setMinimumWidth(density.pdf_pane_min_width)
+        self.scroll.setMinimumHeight(density.pdf_pane_min_height)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("embeddedPdfPane")
@@ -506,6 +513,7 @@ class EmbeddedPdfViewer(QFrame):
         self._page = 1
         self._total = 0
         self._zoom = 1.0  # 1.0 = página ajustada al panel
+        self._density = ROOMY
         self._source: QPixmap | None = None
         self._refresh_pending = False
         # Páginas por documento: el recuento reabría el PDF en cada salto.
@@ -568,7 +576,7 @@ class EmbeddedPdfViewer(QFrame):
         """
         self.setStyleSheet(_PDF_PANE_QSS)
         style_dark_pane(self)
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(self._density.pdf_pane_min_width)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
@@ -600,7 +608,7 @@ class EmbeddedPdfViewer(QFrame):
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setWidgetResizable(False)
         self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.scroll.setMinimumHeight(260)
+        self.scroll.setMinimumHeight(self._density.pdf_pane_min_height)
         self.image = QLabel()
         self.image.setObjectName("pdfPage")
         self.image.setWordWrap(True)
@@ -971,11 +979,15 @@ class CsvViewerWindow(QMainWindow):
         self._table_timer.timeout.connect(self._on_table_chunk)
 
         self.setWindowTitle("Visor de CSV procesados")
-        self.resize(1400, 840)
+        # Como la ventana principal: el tamaño lo pone la pantalla. Pedía
+        # 1400x840 y en un portátil de 1366x768 se abría más grande que el
+        # escritorio, con la fila de exportación fuera de la vista.
+        self._density = fit_to_screen(self, 1400, 840)
         # La misma hoja que la ventana principal: tipografía, botones y el
         # radio de los cuadros salen de ahí, no del estilo nativo.
-        self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS)
+        self._apply_density_stylesheet()
         self._build_ui()
+        self.pdf_viewer.apply_density(self._density)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -1091,13 +1103,28 @@ class CsvViewerWindow(QMainWindow):
         status_row.addWidget(self.btn_export)
         layout.addLayout(status_row)
 
+    def _apply_density_stylesheet(self) -> None:
+        """Hoja de la ventana con el fragmento de medidas de la densidad."""
+        self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS + self._density.qss)
+
+    def _update_responsive_layout(self) -> None:
+        """Aprieta o suelta las medidas según el alto que tenga la ventana."""
+        density = density_for(self.height(), self._density)
+        if density is self._density:
+            return
+        self._density = density
+        self._apply_density_stylesheet()
+        self.pdf_viewer.apply_density(density)
+
     def showEvent(self, event) -> None:  # noqa: N802 - API Qt
         super().showEvent(event)
+        self._update_responsive_layout()
         QTimer.singleShot(0, self._balance_content_splitter)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - API Qt
         super().resizeEvent(event)
         if hasattr(self, "content_splitter"):
+            self._update_responsive_layout()
             QTimer.singleShot(0, self._balance_content_splitter)
 
     def _on_splitter_moved(self, _position: int, _index: int) -> None:
