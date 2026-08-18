@@ -130,8 +130,21 @@ class AppConfig(BaseModel):
     ocr_engine: str = "paddle"
     ocr_lang: str = "en"
     date_engine_name: str = ""
-    date_dpi: int = Field(default=600, ge=72, le=600,
-                          description="DPI del renderizado para regiones de fecha")
+    date_dpi: int = Field(
+        default=300, ge=72, le=600,
+        description="DPI del renderizado de la banda manuscrita de fecha. "
+                    "Más resolución no es mejor: el reconocedor reescala el "
+                    "recorte de todas formas, y a 600 DPI también se amplifica "
+                    "el grano del escaneo. Medido sobre 40 páginas de un libro "
+                    "real, comparando con la regla de que las fechas no "
+                    "retroceden dentro del libro: a 300 DPI se resuelven 30 "
+                    "fechas de 40 con 5 retrocesos de 29 pares, y a 600 se "
+                    "resuelven 28 con 6 de 27; sobre las 10 páginas etiquetadas "
+                    "300 acierta el año 8 veces y 600 lo acierta 7. Bajar hasta "
+                    "200 sí perjudica: aparecen años inventados (2006, 2024) y "
+                    "los retrocesos suben a 9 de 29. Además 300 cuesta un 20% "
+                    "menos de tiempo y un cuarto de los píxeles que 600.",
+    )
     ocr_rec_model: Optional[str] = Field(
         default="PP-OCRv5_mobile_rec",
         description="Modelo fijo de reconocimiento manuscrito de PaddleOCR.",
