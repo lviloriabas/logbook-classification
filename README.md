@@ -223,7 +223,20 @@ Opciones principales:
 | `--no-align` | — | Desactivar alineación |
 | `--separar-por avion\|mes` | — | Separar las bitácoras en PDFs independientes (repetible y combinable: solo avión, solo mes, o ambos) |
 | `--discrepancias` | — | Separar las posibles discrepancias: sección final en el PDF único o `discrepancias.pdf` al generar varios archivos |
+| `--errores` | — | Generar `errores.pdf` con las páginas cuya matrícula, fecha o número de bitácora quedaron sin resolver, para indexarlas a mano |
+| `--verificar-flota` | — | Clasificar cada matrícula contra la lista de aviones: la que no esté en la lista se reclasifica como la más parecida de la flota |
+| `--lista-flota ARCHIVO` | `fleet.json` de la carpeta del programa | Lista de aviones a usar en esa verificación |
+| `--fecha-csv especifica\|fin-de-mes` | `especifica` | Fecha representada en el CSV: el día leído (con caída a fin de mes cuando falta) o siempre el último día del mes |
+| `--campos-importantes COLUMNAS` | Selección guardada | Columnas del CSV mínimo, separadas por coma; sin la opción se usa la misma selección que aplica la interfaz |
 | `--recortes-firmas` | — | Volcar los recortes de las regiones de firma a `recortes_firmas/` para auditar bounding boxes |
+
+> **Las dos superficies entregan lo mismo.** La línea de comandos y la
+> ventana escriben sus salidas con la misma función (`write_outputs`), así
+> que sobre la misma entrada y las mismas opciones producen la misma carpeta
+> de corrida: mismo CSV mínimo y completo, mismo JSON, mismos PDFs y mismas
+> estadísticas. Lo único que no tiene equivalente son las dos cosas que solo
+> existen de un lado: cancelar un lote a mitad de camino (solo la ventana) y
+> `--recortes-firmas` (solo la línea de comandos).
 
 > **Salida**: todos los outputs de la corrida se generan dentro de una
 > carpeta con el nombre del CSV (sin extensión), p. ej.
@@ -237,6 +250,7 @@ Opciones principales:
 > │   └── BITS 03 AUG 2026 19 40.json    # JSON consolidado (mismo nombre)
 > ├── stats.json                         # estadísticas de la corrida
 > ├── discrepancias.pdf                  # (opcional, --discrepancias)
+> ├── errores.pdf                        # (opcional, --errores)
 > ├── debug.pdf                          # (opcional, --debug)
 > ├── logs/
 > └── <PDFs ordenados según --separar-por>
@@ -364,7 +378,9 @@ portable\python312\tools\python.exe run_gui.py
    procesamiento completo.
 5. Salidas: casillas "Matrícula" y "Mes" para separar los PDFs por esos
    criterios (con ambas, separado por matrícula y mes), "Discrepancias"
-   (sección final en el PDF único o archivo propio en modo varios) y
+   (sección final en el PDF único o archivo propio en modo varios),
+   "Errores" (`errores.pdf` con las páginas cuya matrícula, fecha o número
+   de bitácora quedaron sin resolver, para indexarlas a mano) y
    "Visualizar campos" (los bounding boxes se muestran solo en la vista
    previa; no genera `debug.pdf` ni modifica los PDFs exportados). El selector
    **Fecha del CSV** alterna entre día específico y último día del mes; después

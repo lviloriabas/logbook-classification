@@ -1477,6 +1477,7 @@ class CsvViewerWindow(QMainWindow):
             separar_por=tuple(self.export_options.separar_por() or ()),
             un_solo_pdf=self.export_options.radio_unico.isChecked(),
             discrepancias=self.export_options.discrepancias_check.isChecked(),
+            errores=self.export_options.errores_check.isChecked(),
             debug=False,
             run_dir=run_dir_for_csv(csv_path),
             csv_date_mode=self.export_options.csv_date_mode(),
