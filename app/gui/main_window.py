@@ -1376,6 +1376,13 @@ class MainWindow(QMainWindow):
         self.csv_columns_toggle = CsvColumnModeButton()
         self.csv_columns_toggle.setEnabled(False)
         self.csv_columns_toggle.setVisible(False)
+        # Oculto no debe encoger la fila: sin esto, la barra de abajo de la
+        # tabla queda mas baja que la de la vista previa (que siempre tiene
+        # botones) y el panel derecho se ve mas corto que el izquierdo hasta
+        # que se procesa un lote.
+        toggle_policy = self.csv_columns_toggle.sizePolicy()
+        toggle_policy.setRetainSizeWhenHidden(True)
+        self.csv_columns_toggle.setSizePolicy(toggle_policy)
         self.csv_columns_toggle.toggled.connect(self._apply_csv_table_view)
         table_controls.addWidget(self.csv_columns_toggle)
         table_layout.addLayout(table_controls)
