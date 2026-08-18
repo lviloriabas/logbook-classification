@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QBrush, QColor, QIcon, QPalette
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -315,20 +315,46 @@ def load_zoom_icon(name: str) -> QIcon:
     return QIcon(str(path)) if path.is_file() else QIcon.fromTheme(f"zoom-{name}")
 
 
-# Los iconos de los botones acompañan al texto: van al alto de una letra para
-# que la fila de botones no crezca ni el dibujo pese más que la palabra.
-ICON_SIZE = QSize(16, 16)
+# Los iconos de los botones acompañan al texto: van al alto de una letra, la
+# misma medida que ya usan los controles de zoom, para que la fila de botones
+# no crezca ni el dibujo pese más que la palabra.
+ICON_SIZE = QSize(14, 14)
+# Tamaños que se guardan del dibujo: el del botón y el doble, para que se vea
+# igual de limpio en una pantalla al 200 %.
+_ICON_RENDER_SIZES = (ICON_SIZE.width(), ICON_SIZE.width() * 2)
 
 
-def load_icon(name: str) -> QIcon:
+def load_icon(name: str, color: QColor | str | None = None) -> QIcon:
     """Carga un icono de ``assets/`` por su nombre, sin extensión.
 
     Los iconos son locales por la misma razón que los del zoom: el tema de
     iconos del sistema no existe en Windows y dejar el botón sin dibujo según
     la máquina es peor que no ponerlo.
+
+    Con ``color`` el dibujo se pinta de ese color entero. Los botones normales
+    los pinta el estilo de Windows, que en tema claro los da con texto negro
+    y en tema oscuro con texto blanco: un icono de color fijo se pierde en uno
+    de los dos. Pintado del color del texto del botón, se lee en ambos y
+    pertenece al botón en vez de estar pegado encima.
     """
     path = _ASSETS / f"{name}.svg"
-    return QIcon(str(path)) if path.is_file() else QIcon()
+    if not path.is_file():
+        return QIcon()
+    icon = QIcon(str(path))
+    if color is None:
+        return icon
+    tinted = QIcon()
+    for size in _ICON_RENDER_SIZES:
+        pixmap = icon.pixmap(QSize(size, size))
+        painter = QPainter(pixmap)
+        # SourceIn conserva la transparencia del dibujo y sustituye el color:
+        # el trazo queda del color pedido y los bordes suavizados se
+        # mantienen, sin el recuadro que dejaría rellenar sin más.
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), QColor(color))
+        painter.end()
+        tinted.addPixmap(pixmap)
+    return tinted
 
 
 class ZoomOverlay(QFrame):

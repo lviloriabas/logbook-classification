@@ -34,6 +34,7 @@ BITS/
 ├── requirements.txt         # Solo referencia (todo ya está instalado en portable)
 ├── README.md
 ├── input/                   # PDFs escaneados a procesar (test.pdf, test5.tif)
+│   └── processed/           # Los que ya se procesaron; salen de input/ al terminar
 ├── template/                # Plantillas JSON (aircraft_log.json)
 ├── output/                  # Reportes CSV/JSON, logs, imágenes de verificación
 ├── assets/                  # Iconos de la app (icon.png, icon.ico, icon.svg)
@@ -362,7 +363,13 @@ portable\python312\tools\python.exe run_gui.py
    hasta 600 DPI nativos mediante render regional. **Vaciar input** mueve sus
    archivos a la Papelera de reciclaje y **Vaciar output** mueve todas las
    corridas exportadas; ambos piden confirmación y se bloquean mientras hay
-   procesamiento o exportación en curso.
+   procesamiento o exportación en curso. Al terminar una corrida, los PDF que
+   estaban en `input/` pasan a `input/processed/`: la entrada queda solo con
+   lo que falta por procesar y **Vaciar input** no toca lo ya apartado. Los
+   archivos elegidos de otras carpetas con "Seleccionar archivos…" no se
+   mueven. La ventana sigue apuntando a la ubicación nueva, así que la vista
+   previa y **Exportar** siguen funcionando sobre la corrida recién hecha, y
+   el visor también los busca ahí.
 2. Seleccionar plantilla.
 3. Procesamiento: motor PaddleOCR fijo, "Páginas" con el rango del lote
    completo, corrección de inclinación y alineación. Los dos extremos del
@@ -376,11 +383,13 @@ portable\python312\tools\python.exe run_gui.py
 4. Preprocesamiento: **Preprocesar** aplica corrección de inclinación y
    alineación sin ejecutar OCR, para revisar visualmente las páginas antes del
    procesamiento completo.
-5. Salidas: casillas "Matrícula" y "Mes" para separar los PDFs por esos
-   criterios (con ambas, separado por matrícula y mes), "Discrepancias"
-   (sección final en el PDF único o archivo propio en modo varios),
-   "Errores" (`errores.pdf` con las páginas cuya matrícula, fecha o número
-   de bitácora quedaron sin resolver, para indexarlas a mano) y
+5. Salidas: arranca en "Un solo PDF" separado por matrícula y con las
+   posibles discrepancias marcadas, que es la entrega habitual; el resto de
+   combinaciones sigue disponible. Casillas "Matrícula" y "Mes" para separar
+   los PDFs por esos criterios (con ambas, separado por matrícula y mes),
+   "Posibles discrepancias" (sección final en el PDF único o archivo propio
+   en modo varios), "Errores" (`errores.pdf` con las páginas cuya matrícula,
+   fecha o número de bitácora quedaron sin resolver, para indexarlas a mano) y
    "Visualizar campos" (los bounding boxes se muestran solo en la vista
    previa; no genera `debug.pdf` ni modifica los PDFs exportados). El selector
    **Fecha del CSV** alterna entre día específico y último día del mes; después
@@ -411,9 +420,11 @@ portable\python312\tools\python.exe run_gui.py
    y desplazarse por la página. La tabla de resultados usa las mismas columnas
    del CSV y muestra una sola línea por página. Su botón de vista alterna entre
    los campos importantes y el CSV completo, sin modificar el reporte guardado.
-    El botón **Visor de CSV** abre una ventana independiente donde se selecciona
-    una carpeta ya procesada y se consulta su CSV con el mismo selector de vista;
-    allí también se muestran los PDFs procesados. Las tablas permiten ordenar
+    El botón **Visor de CSV** abre una ventana independiente con el historial de
+    corridas: el selector **Historial** lista las últimas corridas de `output/`,
+    de la más reciente a la más antigua, y al elegir una carga sus CSV. También
+    se puede seleccionar cualquier carpeta o CSV a mano, y se consulta con el
+    mismo selector de vista; allí también se muestran los PDFs procesados. Las tablas permiten ordenar
     por encabezado, que permanece visible durante el scroll: el primer clic
     ordena esa columna de mayor a menor, el segundo la invierte y el tercero
     devuelve la tabla al orden original del CSV. El selector de

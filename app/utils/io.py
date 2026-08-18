@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
+
+
+# Los archivos ya procesados salen de input/ y se guardan aquí, dentro de la
+# misma carpeta: la entrada queda con lo que falta por procesar y lo anterior
+# no se pierde ni se confunde con lo nuevo.
+PROCESSED_DIRNAME = "processed"
 
 
 def ensure_dir(path: Path) -> Path:
@@ -48,6 +54,60 @@ def output_paths(
         output_dir / f"resultado_{safe}.json",
         output_dir / f"resultado_{safe}.csv",
     )
+
+
+def archive_processed_files(
+    paths: Iterable[Path], input_dir: Path
+) -> tuple[dict[Path, Path], list[tuple[Path, Exception]]]:
+    """Aparta a ``input/processed`` los archivos que ya se procesaron.
+
+    Solo se mueve lo que está suelto en ``input_dir``: los PDF que el usuario
+    eligió de sus propias carpetas se quedan donde están, porque esa carpeta
+    no es del programa. El nombre repetido no pisa al anterior, se numera
+    igual que las salidas (``bitacora-2.pdf``).
+
+    Devuelve a dónde fue a parar cada archivo movido y los que no se pudieron
+    mover, para que quien llame pueda seguir apuntando al sitio correcto.
+    """
+    import shutil
+
+    input_dir = Path(input_dir)
+    archive = input_dir / PROCESSED_DIRNAME
+    pending: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        path = Path(path)
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        key = str(resolved).casefold()
+        if key in seen or not resolved.is_file():
+            continue
+        # Solo la carpeta input/ en sí: lo que ya está apartado no se vuelve
+        # a mover, y un PDF de otra carpeta del usuario no se toca.
+        if str(resolved.parent).casefold() != str(input_dir.resolve()).casefold():
+            continue
+        seen.add(key)
+        pending.append(resolved)
+
+    moved: dict[Path, Path] = {}
+    failed: list[tuple[Path, Exception]] = []
+    if not pending:
+        return moved, failed
+    try:
+        ensure_dir(archive)
+    except OSError as exc:
+        return moved, [(path, exc) for path in pending]
+    for path in pending:
+        destination = unique_path(archive / path.name)
+        try:
+            shutil.move(str(path), str(destination))
+        except Exception as exc:  # noqa: BLE001 - se informa por archivo
+            failed.append((path, exc))
+            continue
+        moved[path] = destination
+    return moved, failed
 
 
 def send_to_trash(
