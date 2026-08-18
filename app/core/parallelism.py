@@ -69,13 +69,23 @@ _MAX_WORKERS = 32
 # Techo de hilos internos por motor: la inferencia satura en 3 (782 -> 592 ms
 # por recorte; con 6 y 12 hilos mide lo mismo que con 3).
 _MAX_ENGINE_THREADS = 3
-# Memoria residente medida por proceso worker, con margen. Desglose medido en
-# un worker real: 77 MB de intérprete con numpy y OpenCV, +329 MB al cargar el
-# reconocedor, +107 MB al cargar además el detector (515 MB en total de
-# modelos) y el resto son los búferes de página. El cache interno de MuPDF
-# llegaba a sumar 266 MB, pero desde que ``PdfPageRenderer`` lo purga por el
-# camino el pico se queda en ~39 MB sobre la base.
-_WORKER_MEMORY_MB = 620
+# Memoria residente por proceso worker, medida durante una corrida real y no
+# en un proceso aislado: los picos por proceso llegan a 842-898 MB y la media
+# ronda 815-823 MB (0001.pdf y test2.pdf, 8 y 12 procesos). Desglose de lo que
+# lo compone: 77 MB de intérprete con numpy y OpenCV, +329 MB al cargar el
+# reconocedor, +107 MB al cargar además el detector —515 MB de modelos, que
+# son el suelo mientras cada proceso necesite su propia copia— y el resto son
+# búferes de página y el arena de Paddle.
+#
+# Medir esto en un proceso suelto engaña: ahí da ~690 MB, y con ese número se
+# crean más procesos de los que caben. En un equipo de 16 GB eso es justo el
+# fallo de paginación que hay que evitar.
+#
+# El valor queda entre la media (823) y el pico por proceso (898) porque lo
+# que puede tumbar el equipo es la suma en un instante, y los procesos no
+# llegan a su pico a la vez: con 12 workers la suma medida se quedó en
+# 9042 MB, es decir 753 MB de media en el momento de mayor consumo.
+_WORKER_MEMORY_MB = 850
 # Memoria que se deja libre para el sistema, la GUI y las salidas PDF. Escala
 # con el equipo entre un suelo y un techo: en uno de 16 GB el suelo de 1,5 GB
 # deja el margen demasiado corto en cuanto el usuario abre el visor de CSV o un
