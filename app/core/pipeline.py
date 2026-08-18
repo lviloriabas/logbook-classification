@@ -36,6 +36,12 @@ from loguru import logger
 
 from app.core.config import AppConfig, config_for_pdf
 from app.core.page_range import PageRange, slice_batch
+from app.core.parallelism import (
+    available_memory_mb,
+    core_topology,
+    reserved_memory_mb,
+    total_memory_mb,
+)
 from app.core.progress import PAGES_STAGE
 from app.models.schemas import (
     FieldResult,
@@ -2636,6 +2642,14 @@ def process_pdf_batch(
     logger.info(
         f"[Perfil C] activo | estrategia={strategy} | "
         f"workers={process_pool.max_workers} | archivos={total_files}"
+    )
+    # El equipo que ejecuta manda sobre el reparto, y no se parece al de las
+    # mediciones: dejar constancia de lo que se detectó permite entender un
+    # rendimiento distinto sin tener que reproducirlo.
+    logger.info(
+        f"[Equipo] {core_topology().describe()} | "
+        f"memoria libre {available_memory_mb()} MB de "
+        f"{total_memory_mb()} MB | reservados {reserved_memory_mb()} MB"
     )
     # El nombre del perfil es interno (ver README): la barra de estado sigue
     # hablando de páginas y archivos, que es lo que el usuario mira.

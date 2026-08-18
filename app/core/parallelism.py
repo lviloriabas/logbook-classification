@@ -57,30 +57,173 @@ from __future__ import annotations
 import ctypes
 import os
 from ctypes import wintypes
+from dataclasses import dataclass
 
 # Tope duro de procesos. No es el punto donde la curva se aplana —medido,
 # sigue subiendo hasta un proceso por hilo lógico— sino un seguro contra
 # equipos con muchísimos hilos, donde cada proceso cuesta una copia de los
-# modelos y el límite real pasa a ser la memoria.
-_MAX_WORKERS = 16
+# modelos y el límite real pasa a ser la memoria. Se fija por encima de los
+# equipos previstos (20 hilos) para que quien decida sea la memoria, medida
+# en la máquina que ejecuta, y no una constante escrita en otra.
+_MAX_WORKERS = 32
 # Techo de hilos internos por motor: la inferencia satura en 3 (782 -> 592 ms
 # por recorte; con 6 y 12 hilos mide lo mismo que con 3).
 _MAX_ENGINE_THREADS = 3
-# Memoria residente medida por proceso worker, con margen. No son solo los
-# modelos: medido, un worker llega a 808 MB = 540 MB de detector +
-# reconocedor cargados, más ~268 MB de cache interno de MuPDF por renderizar
-# páginas (se estabiliza ahí y no crece; ``store_shrink`` lo devuelve entero).
-# El valor anterior, 620 MB, contaba solo los modelos y subestimaba el pico un
-# 30%: con un proceso por hilo lógico eso llegó a reventar un lote de 12
-# workers con un fallo de paginación al importar numpy.
-_WORKER_MEMORY_MB = 850
-# Memoria que se deja libre para el sistema, la GUI y las salidas PDF.
+# Memoria residente medida por proceso worker, con margen. Desglose medido en
+# un worker real: 77 MB de intérprete con numpy y OpenCV, +329 MB al cargar el
+# reconocedor, +107 MB al cargar además el detector (515 MB en total de
+# modelos) y el resto son los búferes de página. El cache interno de MuPDF
+# llegaba a sumar 266 MB, pero desde que ``PdfPageRenderer`` lo purga por el
+# camino el pico se queda en ~39 MB sobre la base.
+_WORKER_MEMORY_MB = 620
+# Memoria que se deja libre para el sistema, la GUI y las salidas PDF. Escala
+# con el equipo entre un suelo y un techo: en uno de 16 GB el suelo de 1,5 GB
+# deja el margen demasiado corto en cuanto el usuario abre el visor de CSV o un
+# navegador, y quedarse sin memoria a mitad de un lote cuesta mucho más que un
+# proceso menos. El techo evita el error contrario: en un equipo de 32 GB una
+# fracción fija reservaría casi 5 GB y renunciaría a procesos sin motivo, ya
+# que lo que hay que cubrir —sistema, interfaz, salidas— no crece con la RAM.
 _RESERVED_MEMORY_MB = 1536
+_RESERVED_MEMORY_RATIO = 0.15
+_MAX_RESERVED_MEMORY_MB = 3072
+
+
+@dataclass(frozen=True)
+class CoreTopology:
+    """Cómo son los núcleos de esta máquina, no de la del desarrollo.
+
+    ``performance`` y ``efficiency`` cuentan núcleos *físicos* de cada clase.
+    En un procesador homogéneo todos caen en ``performance`` y ``efficiency``
+    queda en cero.
+    """
+
+    logical: int
+    physical: int
+    performance: int
+    efficiency: int
+
+    @property
+    def hybrid(self) -> bool:
+        return self.efficiency > 0
+
+    def describe(self) -> str:
+        if not self.hybrid:
+            return (
+                f"{self.physical} núcleos / {self.logical} hilos (homogéneo)"
+            )
+        return (
+            f"{self.performance} núcleos de rendimiento + "
+            f"{self.efficiency} de eficiencia / {self.logical} hilos"
+        )
 
 
 def available_cpu_threads() -> int:
     """Devuelve el número de hilos lógicos disponibles para la aplicación."""
     return max(1, os.cpu_count() or 1)
+
+
+def total_memory_mb() -> int:
+    """Memoria física total del equipo en MB (0 si no se puede determinar)."""
+    status = _memory_status()
+    return int(status.ullTotalPhys // (1024 * 1024)) if status else 0
+
+
+def core_topology() -> CoreTopology:
+    """Núcleos físicos por clase de rendimiento e hilos lógicos.
+
+    Los equipos donde corre esto no son el equipo donde se midió: un i7 de
+    12ª generación reparte sus 20 hilos entre núcleos de rendimiento (con SMT,
+    dos hilos cada uno) y núcleos de eficiencia (uno), que no rinden igual.
+    Windows lo expone en ``EfficiencyClass``; la clase más alta es la de
+    rendimiento. Si la API no está disponible se supone homogéneo, que es lo
+    que el cálculo asumía antes.
+    """
+    logical = available_cpu_threads()
+    try:
+        cores = _enumerate_cores()
+    except (AttributeError, OSError, ValueError):
+        cores = []
+    if not cores:
+        return CoreTopology(logical, logical, logical, 0)
+    best = max(efficiency for efficiency, _threads in cores)
+    performance = sum(1 for efficiency, _t in cores if efficiency == best)
+    counted = sum(threads for _e, threads in cores)
+    return CoreTopology(
+        logical=counted or logical,
+        physical=len(cores),
+        performance=performance,
+        efficiency=len(cores) - performance,
+    )
+
+
+def _enumerate_cores() -> list[tuple[int, int]]:
+    """(clase de eficiencia, hilos) de cada núcleo físico, vía Win32."""
+    relation_processor_core = 0
+    kernel32 = ctypes.windll.kernel32
+    length = wintypes.DWORD(0)
+    kernel32.GetLogicalProcessorInformationEx(
+        relation_processor_core, None, ctypes.byref(length)
+    )
+    if not length.value:
+        return []
+    buffer = (ctypes.c_byte * length.value)()
+    if not kernel32.GetLogicalProcessorInformationEx(
+        relation_processor_core, buffer, ctypes.byref(length)
+    ):
+        return []
+
+    cores: list[tuple[int, int]] = []
+    address = ctypes.addressof(buffer)
+    offset = 0
+    while offset < length.value:
+        relationship = ctypes.c_uint32.from_address(address + offset).value
+        size = ctypes.c_uint32.from_address(address + offset + 4).value
+        if size <= 0:
+            break
+        if relationship == relation_processor_core:
+            # PROCESSOR_RELATIONSHIP: Flags(1) EfficiencyClass(1)
+            # Reserved[20] GroupCount(2) GroupMask[]; GROUP_AFFINITY mide 16.
+            base = address + offset + 8
+            efficiency = ctypes.c_ubyte.from_address(base + 1).value
+            groups = ctypes.c_uint16.from_address(base + 22).value
+            threads = 0
+            for group in range(max(1, groups)):
+                mask = ctypes.c_size_t.from_address(
+                    base + 24 + group * 16
+                ).value
+                threads += bin(mask).count("1")
+            cores.append((efficiency, threads))
+        offset += size
+    return cores
+
+
+class _MemoryStatus(ctypes.Structure):
+    _fields_ = [
+        ("dwLength", wintypes.DWORD),
+        ("dwMemoryLoad", wintypes.DWORD),
+        ("ullTotalPhys", ctypes.c_ulonglong),
+        ("ullAvailPhys", ctypes.c_ulonglong),
+        ("ullTotalPageFile", ctypes.c_ulonglong),
+        ("ullAvailPageFile", ctypes.c_ulonglong),
+        ("ullTotalVirtual", ctypes.c_ulonglong),
+        ("ullAvailVirtual", ctypes.c_ulonglong),
+        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+    ]
+
+
+def _memory_status() -> "_MemoryStatus | None":
+    """Lee el estado de memoria de Windows, o None fuera de Windows."""
+    try:
+        status = _MemoryStatus()
+        status.dwLength = ctypes.sizeof(status)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(
+            ctypes.byref(status)
+        ):
+            return None
+        return status
+    except (AttributeError, OSError):
+        # Cualquier plataforma sin esta API (pruebas fuera de Windows).
+        return None
 
 
 def available_memory_mb() -> int:
@@ -89,30 +232,23 @@ def available_memory_mb() -> int:
     Usa solo la API de Windows a través de ``ctypes`` para no añadir
     dependencias al paquete portable.
     """
-    class MemoryStatus(ctypes.Structure):
-        _fields_ = [
-            ("dwLength", wintypes.DWORD),
-            ("dwMemoryLoad", wintypes.DWORD),
-            ("ullTotalPhys", ctypes.c_ulonglong),
-            ("ullAvailPhys", ctypes.c_ulonglong),
-            ("ullTotalPageFile", ctypes.c_ulonglong),
-            ("ullAvailPageFile", ctypes.c_ulonglong),
-            ("ullTotalVirtual", ctypes.c_ulonglong),
-            ("ullAvailVirtual", ctypes.c_ulonglong),
-            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-        ]
+    status = _memory_status()
+    return int(status.ullAvailPhys // (1024 * 1024)) if status else 0
 
-    try:
-        status = MemoryStatus()
-        status.dwLength = ctypes.sizeof(status)
-        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(
-            ctypes.byref(status)
-        ):
-            return 0
-        return int(status.ullAvailPhys // (1024 * 1024))
-    except (AttributeError, OSError):
-        # Cualquier plataforma sin esta API (pruebas fuera de Windows).
-        return 0
+
+def reserved_memory_mb() -> int:
+    """Memoria que no se reparte: sistema, interfaz y salidas.
+
+    Proporcional al equipo, con un suelo. En uno de 16 GB el suelo fijo de
+    1,5 GB dejaba el margen demasiado corto —basta con que el usuario abra el
+    visor de CSV o un navegador— y quedarse sin memoria a mitad de un lote
+    cuesta mucho más que renunciar a un proceso.
+    """
+    total = total_memory_mb()
+    if total <= 0:
+        return _RESERVED_MEMORY_MB
+    scaled = int(total * _RESERVED_MEMORY_RATIO)
+    return min(max(_RESERVED_MEMORY_MB, scaled), _MAX_RESERVED_MEMORY_MB)
 
 
 def _memory_worker_cap() -> int:
@@ -120,7 +256,7 @@ def _memory_worker_cap() -> int:
     available = available_memory_mb()
     if available <= 0:
         return _MAX_WORKERS
-    usable = available - _RESERVED_MEMORY_MB
+    usable = available - reserved_memory_mb()
     if usable <= 0:
         return 1
     return max(1, usable // _WORKER_MEMORY_MB)
