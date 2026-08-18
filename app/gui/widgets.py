@@ -372,3 +372,79 @@ class ZoomableScrollArea(QScrollArea):
             event.accept()
             return
         super().wheelEvent(event)
+
+
+class ElidedLabel(QLabel):
+    """Etiqueta informativa que se recorta con «…» en vez de ensanchar.
+
+    Una ``QLabel`` normal pide de ancho mínimo todo su texto, así que cada
+    frase larga —la estimación de tiempo, el reparto de hilos, el estado del
+    procesamiento— se convertía en ancho mínimo de la ventana, y encima uno
+    que crecía en marcha en cuanto se escribía un mensaje más largo que el
+    anterior. Aquí el texto se pinta recortado a lo que haya de sitio y queda
+    entero en el tooltip, igual que ya hacen los nombres de archivo del panel
+    de avance.
+
+    ``text()`` sigue devolviendo el texto completo, no el recortado: el
+    recorte es cosa de cómo se ve la etiqueta, no de lo que dice.
+    """
+
+    # Con menos que esto el recorte no deja ni una palabra y solo se ve «…».
+    MIN_ELIDED_WIDTH = 60
+    # Holgura del ancho natural, para que la última letra no roce el borde.
+    _TEXT_PADDING = 4
+
+    def __init__(
+        self,
+        text: str = "",
+        mode: Qt.TextElideMode = Qt.TextElideMode.ElideRight,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self._elide_mode = mode
+        # El tooltip automático es el texto completo, pero solo mientras nadie
+        # ponga uno propio: varias de estas etiquetas llevan una explicación
+        # que no se puede perder al escribirles el valor.
+        self._custom_tooltip = False
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - API Qt
+        self._full_text = text or ""
+        if not self._custom_tooltip:
+            QLabel.setToolTip(self, self._full_text)
+        self._apply_elide()
+
+    def text(self) -> str:
+        return self._full_text
+
+    def setToolTip(self, text: str) -> None:  # noqa: N802 - API Qt
+        self._custom_tooltip = bool(text)
+        QLabel.setToolTip(self, text)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - API Qt
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), self.MIN_ELIDED_WIDTH), hint.height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - API Qt
+        # Sobre el texto ya recortado el alto natural encogería y la etiqueta
+        # no volvería a estirarse al ensanchar la ventana.
+        hint = super().sizeHint()
+        natural = self.fontMetrics().horizontalAdvance(self._full_text)
+        return QSize(max(hint.width(), natural + self._TEXT_PADDING), hint.height())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self) -> None:
+        width = self.width()
+        if width <= 0:
+            # Antes del primer reparto no hay ancho contra el que recortar; se
+            # deja entero y el ``resizeEvent`` que llega después lo ajusta.
+            QLabel.setText(self, self._full_text)
+            return
+        QLabel.setText(
+            self,
+            self.fontMetrics().elidedText(self._full_text, self._elide_mode, width),
+        )

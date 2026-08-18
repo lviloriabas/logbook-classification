@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.responsive import fit_to_screen
 from app.utils.fleet import FLEET_FILENAME, load_fleet, normalise_matricula
 
 
@@ -51,7 +52,7 @@ class FleetEditorDialog(QDialog):
         super().__init__(parent)
         self.store = store
         self.setWindowTitle("Lista de flota")
-        self.resize(430, 440)
+        fit_to_screen(self, 430, 440)
         self._build_ui()
         self._load_values()
 

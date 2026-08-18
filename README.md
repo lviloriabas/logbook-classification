@@ -75,6 +75,7 @@ BITS/
     ├── gui/
     │   ├── worker.py        # QThread del pipeline
     │   ├── main_window.py   # Ventana principal
+    │   ├── responsive.py    # Ajuste de las ventanas a la pantalla del equipo
     │   └── editor_window.py # Editor de plantillas
     ├── models/
     │   └── schemas.py       # Modelos de dominio
@@ -422,6 +423,31 @@ portable\python312\tools\python.exe run_gui.py
     El botón Exportar queda disponible en cuanto termina el OCR, aunque
     la generación de salidas de fondo siga en curso (en ese caso el
     re-export se ejecuta apenas termine).
+
+#### Adaptación a la pantalla
+
+Las ventanas se abren con el tamaño que dé el escritorio del equipo, nunca con
+uno fijo: se pide una medida cómoda y `app/gui/responsive.py` la recorta a lo
+que quepa en el área de trabajo —ya sin la barra de tareas— descontando el
+marco de la ventana. Así la misma carpeta funciona igual en un portátil de
+1366x768, en un 1080p con el escalado de Windows al 125% o al 150% (que dejan
+un escritorio lógico de 1536x864 y de 1280x720) y en un monitor 4K.
+
+Cuando la ventana principal no llega a 820 px de alto pasa a medidas
+compactas: se aprietan márgenes, separaciones y altos mínimos, y los cuadros
+de arriba se reparten en dos columnas —«Entrada» y «Salidas» una al lado de la
+otra, «Procesamiento» cruzando por debajo— en lugar de apilarse. El bloque de
+controles pasa de 435 a 243 px y el sitio que se ahorra va a la vista previa y
+a la tabla, sin desplazamiento en ninguna parte. Los colores, las tipografías
+y el radio de 6 px de los cuadros son los mismos en las dos densidades, y en
+una pantalla holgada la ventana se dibuja exactamente igual que siempre.
+
+El reparto se decide con el tamaño real de la ventana, no solo con el de la
+pantalla: maximizar, restaurar o arrastrarla a otro monitor la vuelve a
+ajustar. Los dos límites que lo gobiernan —hasta dónde se puede encoger y a
+partir de qué ancho caben dos columnas— se **miden** al arrancar en lugar de
+estar escritos en el código, porque dependen de la tipografía del sistema y
+del escalado de Windows del equipo que ejecuta.
 
 ### 3. Editor de plantillas
 

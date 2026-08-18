@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.responsive import fit_to_screen
 from app.gui.widgets import load_zoom_icon
 from app.templates.manager import TEMPLATES_DIR, TemplateManager
 from app.templates.schema import FieldTemplate, FieldType, Template
@@ -304,7 +305,9 @@ class EditorWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Logbook Classification - Editor de Plantillas")
-        self.resize(1200, 800)
+        # El tamaño lo pone la pantalla: 1200x800 no entra en un portátil de
+        # 1366x768 y la fila de botones de abajo se quedaba fuera.
+        self._density = fit_to_screen(self, 1200, 800)
         self.setWindowIcon(_load_icon())
 
         self._pdf_path: Optional[Path] = None
@@ -411,7 +414,7 @@ class EditorWindow(QMainWindow):
         self.view.set_zoom_callback(self._zoom_editor)
         self.view.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.view.setRenderHints(QPainter.RenderHint.Antialiasing)
-        self.view.setMinimumWidth(600)
+        self.view.setMinimumWidth(self._density.editor_view_min_width)
         view_container = QWidget()
         view_layout = QGridLayout(view_container)
         view_layout.setContentsMargins(0, 0, 0, 0)
@@ -543,7 +546,7 @@ class EditorWindow(QMainWindow):
 
         layout.addStretch()
         splitter.addWidget(panel)
-        panel.setMaximumWidth(340)
+        panel.setMaximumWidth(self._density.editor_panel_max_width)
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 0)
         splitter.setSizes([900, 320])

@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     QObject,
     QProcess,
     QRectF,
+    QSize,
     Qt,
     QThread,
     QTimer,
@@ -47,6 +48,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -78,10 +80,12 @@ from app.gui.eta import estimate_remaining_seconds, wall_ms_per_page
 from app.gui.export_options import ExportOptionsGroup
 from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.fleet_editor import FLEET_FILENAME, FleetEditorDialog, FleetStore
+from app.gui.responsive import COMPACT, Density, density_for, fit_to_screen
 from app.gui.table_sort import ColumnSortController
 from app.gui.widgets import (
     APP_CHROME_QSS,
     DATA_TABLE_QSS,
+    ElidedLabel,
     ZoomableScrollArea,
     ZoomOverlay,
     style_data_table,
@@ -117,10 +121,18 @@ _SHUTDOWN_POLL_MS = 150
 _PREVIEW_RESIZE_MS = 80
 _DUP_COLUMN = "dup"
 _DISC_COLUMN = "disc"
-# Alto de la consola y del panel de avance: caben seis archivos sin desplazar.
-_BOTTOM_PANE_HEIGHT = 190
-# Columna del nombre en el panel de avance; el resto de la fila es la barra.
-_NAME_COLUMN_WIDTH = 220
+# Tamaño con el que se pide abrir la ventana principal. No es una promesa: la
+# pantalla manda y ``fit_to_screen`` lo recorta a lo que haya de sitio.
+_PREFERRED_WIDTH = 1280
+_PREFERRED_HEIGHT = 900
+# Columnas de una fila del panel de avance. El nombre lo fija la densidad
+# (es lo único que se aprieta en pantallas bajas); el resto son medidas de
+# texto que no dan de sí, y juntas son el ancho mínimo del panel: por debajo
+# aparecería un desplazamiento lateral dentro de la propia fila.
+_BAR_MIN_WIDTH = 140
+_PAGES_COLUMN_WIDTH = 86
+_SECS_COLUMN_WIDTH = 70
+_FILE_ROW_SPACING = 8
 
 
 _COLORS = {
@@ -221,6 +233,20 @@ def _save_ms_per_page(ms_per_page: float) -> None:
         logger.warning(f"No se pudo guardar el cálculo de rendimiento: {exc}")
 
 
+def _layout_spacing(layout: QLayout) -> int:
+    """Separación entre filas del layout, sea rejilla o pila."""
+    if isinstance(layout, QGridLayout):
+        return layout.verticalSpacing()
+    return layout.spacing()
+
+
+def _layout_column_spacing(layout: QLayout) -> int:
+    """Separación entre columnas; solo la tienen las rejillas."""
+    if isinstance(layout, QGridLayout):
+        return layout.horizontalSpacing()
+    return layout.spacing()
+
+
 def _clear_layout(layout) -> None:
     while layout.count():
         item = layout.takeAt(0)
@@ -306,8 +332,26 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Logbook Classification")
-        self.resize(1280, 800)
-        self.setStyleSheet(_QSS)
+        # La ventana se abre con lo que dé la pantalla, no con una medida
+        # fija: en un portátil de 1366x768 el alto que pedía no existe y la
+        # franja de abajo se quedaba fuera del escritorio. La densidad que
+        # devuelve es la de ese alto y hay que tenerla antes de construir
+        # nada, porque de ella salen todos los márgenes.
+        self._density = fit_to_screen(self, _PREFERRED_WIDTH, _PREFERRED_HEIGHT)
+        self._controls_columns = 0
+        self._density_layouts: list[tuple] = []
+        # Ancho a partir del cual caben dos columnas de cuadros. Se mide con
+        # la ventana ya construida; hasta entonces vale el que se pidió, que
+        # solo decide el reparto con el que se dibuja la primera vez.
+        self._two_column_width = _PREFERRED_WIDTH
+        self._stacked_minimum = QSize(0, 0)
+        self._side_by_side_minimum = QSize(0, 0)
+        # Mientras se mide el reparto compacto la ventana cambia de medidas
+        # varias veces; los eventos de tamaño que eso provoca no deben
+        # volver a entrar a decidir nada.
+        self._measuring_layout = False
+        self._shown_once = False
+        self._apply_density_stylesheet()
         self.setWindowIcon(_load_app_icon())
 
         self._pdf_paths: list[Path] = []
@@ -423,6 +467,8 @@ class MainWindow(QMainWindow):
         self._file_page_counts: list[int] = []
 
         self._build_ui()
+        self._refresh_minimum_size()
+        self._grow_to_fit_content()
         # Si la aplicación termina sin pasar por el cierre de la ventana
         # (cierre de sesión, ``quit()`` desde otro sitio), los hilos se paran
         # igual: destruirlos en marcha aborta el proceso.
@@ -438,14 +484,197 @@ class MainWindow(QMainWindow):
         """Carga los datos del disco después de mostrar la ventana."""
         self._load_default_input()
 
+    # ── Adaptación a la pantalla ────────────────────────────────────────
+
+    def _apply_density_stylesheet(self) -> None:
+        """Hoja de la ventana con el fragmento de medidas de la densidad.
+
+        El fragmento va al final para ganarle a las reglas de la hoja base,
+        que tienen su misma especificidad, y solo toca espacios y altos: los
+        colores, las tipografías y el radio de 6 px salen de la base y son los
+        mismos en las dos densidades.
+        """
+        self.setStyleSheet(_QSS + self._density.qss)
+
+    def _register_density_layout(self, layout: QLayout, stacked: bool) -> None:
+        """Anota un layout de cuadro para re-medirlo al cambiar la densidad.
+
+        Se guarda de paso lo que el cuadro pide por su cuenta, que es lo que
+        vale con las medidas holgadas: la densidad solo aprieta, nunca separa
+        más de lo que el cuadro ya tenía. Así la ventana grande se dibuja
+        exactamente igual que antes de que existiera todo esto.
+
+        ``stacked`` distingue los cuadros que apilan filas —a los que hay que
+        apretarles también la separación vertical— de los que llevan sus
+        controles en una sola línea.
+        """
+        entry = (
+            layout,
+            stacked,
+            layout.contentsMargins(),
+            _layout_spacing(layout),
+            _layout_column_spacing(layout),
+        )
+        self._density_layouts.append(entry)
+        self._apply_layout_density(*entry)
+
+    def _apply_layout_density(
+        self,
+        layout: QLayout,
+        stacked: bool,
+        margins,
+        spacing: int,
+        column_spacing: int,
+    ) -> None:
+        limit = self._density.group_margin_v
+        layout.setContentsMargins(
+            margins.left(),
+            min(margins.top(), limit),
+            margins.right(),
+            min(margins.bottom(), limit),
+        )
+        if not stacked:
+            return
+        tight = min(spacing, self._density.group_row_spacing)
+        if isinstance(layout, QGridLayout):
+            layout.setVerticalSpacing(tight)
+            # Los seis botones de «Entrada» en una fila son buena parte del
+            # ancho mínimo de la ventana; juntarlos un poco es lo que hace
+            # que los dos cuadros quepan uno al lado del otro en 1280 px.
+            layout.setHorizontalSpacing(
+                min(column_spacing, self._density.group_column_spacing)
+            )
+        else:
+            layout.setSpacing(tight)
+
+    def _apply_density(self, density: Density) -> None:
+        """Pasa la ventana entera al juego de medidas ``density``."""
+        self._density = density
+        self._apply_density_stylesheet()
+        margin = density.window_margin
+        self._root_layout.setContentsMargins(margin, margin, margin, margin)
+        self._root_layout.setSpacing(density.root_spacing)
+        self._controls_grid.setSpacing(density.group_spacing)
+        for entry in self._density_layouts:
+            self._apply_layout_density(*entry)
+        self.preview_scroll.setMinimumSize(
+            density.preview_min_width, density.preview_min_height
+        )
+        self.log_view.setMaximumHeight(density.bottom_pane_height)
+        self.log_view.setMinimumWidth(density.log_min_width)
+        self.times_scroll.setMaximumHeight(density.bottom_pane_height)
+        self.times_pane.setMinimumWidth(self._times_pane_min_width())
+        self.bottom_splitter.setMinimumHeight(density.bottom_min_height)
+        for row in self._file_rows.values():
+            label = row["name"]
+            label.setFixedWidth(density.name_column_width)
+            # El nombre completo vive en el tooltip: es de donde se vuelve a
+            # recortar, porque el texto visible ya viene con sus puntos.
+            self._set_row_name(row, label.toolTip())
+
+    def _refresh_minimum_size(self) -> None:
+        """Mide los dos números que gobiernan el reparto y fija el suelo.
+
+        Se miden en vez de escribirse porque dependen de la tipografía del
+        sistema y del escalado de Windows, que no se conocen hasta que la
+        aplicación corre en el equipo:
+
+        * el mínimo con las medidas compactas apiladas, que es el suelo al
+          que se puede encoger la ventana. Qt le pondría como mínimo el del
+          reparto que tenga montado, y con las medidas holgadas eso son 905
+          px de alto: la ventana no se dejaba arrastrar por debajo y nunca
+          llegaba al alto en el que tenía que apretarse, así que quien la
+          abría en un monitor grande no podía ponerla en media pantalla. El
+          mínimo explícito manda sobre el del reparto y de apretarla a
+          tiempo se encarga ``_update_responsive_layout``.
+        * el ancho a partir del cual el reparto en dos columnas cabe.
+        """
+        density, columns = self._density, self._controls_columns
+        self._measuring_layout = True
+        try:
+            self._apply_density(COMPACT)
+            stacked = self._layout_minimum(1)
+            side_by_side = self._layout_minimum(2)
+            self._apply_controls_columns(columns)
+            self._apply_density(density)
+        finally:
+            self._measuring_layout = False
+        self._stacked_minimum = stacked
+        self._side_by_side_minimum = side_by_side
+        self._two_column_width = side_by_side.width()
+        self._apply_minimum_size()
+
+    def _apply_minimum_size(self) -> None:
+        """Suelo de la ventana para el reparto que tiene montado ahora.
+
+        El ancho es siempre el del reparto apilado, que es hasta donde se
+        puede estrechar: al hacerlo los cuadros vuelven a una columna. El
+        alto es el del reparto en curso, porque el de dos columnas necesita
+        cien píxeles menos y sería una pena no dejar aprovecharlos.
+        """
+        floor = (
+            self._side_by_side_minimum
+            if self._controls_columns == 2
+            else self._stacked_minimum
+        )
+        self.setMinimumSize(self._stacked_minimum.width(), floor.height())
+
+    def _layout_minimum(self, columns: int) -> QSize:
+        """Lo que pide el contenido con los cuadros repartidos así.
+
+        El layout guarda el mínimo que calculó la última vez; sin invalidarlo
+        devuelve el del reparto anterior y la medida no vale de nada.
+        """
+        self._apply_controls_columns(columns)
+        # Invalidar solo el layout raíz no basta: el mínimo que devolvería
+        # sigue siendo el que la rejilla calculó para el reparto anterior.
+        self._controls_grid.invalidate()
+        self._controls_grid.parentWidget().updateGeometry()
+        layout = self.centralWidget().layout()
+        layout.invalidate()
+        layout.activate()
+        return layout.minimumSize()
+
+    def _grow_to_fit_content(self) -> None:
+        """Estira la ventana si el tamaño pedido se queda corto.
+
+        El tamaño de apertura es una preferencia, no una medida del
+        contenido: según la tipografía del sistema el reparto puede pedir
+        algún píxel más. Se le da, sin salirse del escritorio, que es el
+        único límite que no se negocia.
+        """
+        needed = self.centralWidget().layout().minimumSize()
+        fit_to_screen(
+            self,
+            max(self.width(), needed.width()),
+            max(self.height(), needed.height()),
+        )
+
+    def _update_responsive_layout(self) -> None:
+        """Ajusta medidas y reparto de los cuadros al tamaño de la ventana.
+
+        Se llama en cada cambio de tamaño, así que además del tamaño con el
+        que se abre cubre lo que venga después: maximizar, restaurar o
+        arrastrar la ventana a un monitor con otra resolución.
+        """
+        if self._measuring_layout:
+            return
+        density = density_for(self.height(), self._density)
+        if density is not self._density:
+            self._apply_density(density)
+        self._apply_controls_columns(self._controls_columns_for(self.width()))
+        self._apply_minimum_size()
+
     # ── UI ──────────────────────────────────────────────────────────────
 
     def _build_ui(self) -> None:
         central = QWidget(self)
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(5)
+        margin = self._density.window_margin
+        root.setContentsMargins(margin, margin, margin, margin)
+        root.setSpacing(self._density.root_spacing)
+        self._root_layout = root
 
         controls = self._build_controls()
         root.addWidget(controls, 0)
@@ -455,20 +684,80 @@ class MainWindow(QMainWindow):
 
         bottom = self._build_bottom_splitter()
         # Cuatro archivos visibles sin desplazar: por debajo de esto el panel
-        # se queda en dos filas y deja de servir para seguir un lote.
-        bottom.setMinimumHeight(150)
+        # se queda en dos filas y deja de servir para seguir un lote. En
+        # pantallas bajas se conforma con menos, que es preferible a no
+        # caber.
+        bottom.setMinimumHeight(self._density.bottom_min_height)
         root.addWidget(bottom)
 
     def _build_controls(self) -> QWidget:
         panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-        layout.addWidget(self._build_input_group())
-        layout.addWidget(self._build_process_group())
-        layout.addWidget(self._build_options_group())
-        layout.addWidget(self._build_advanced_panel())
+        grid = QGridLayout(panel)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(self._density.group_spacing)
+        # El ancho de sobra se lo queda «Entrada», que es quien tiene el campo
+        # de archivos; «Salidas» son casillas y no gana nada estirándose.
+        grid.setColumnStretch(0, 1)
+        self._controls_grid = grid
+        self._input_group = self._build_input_group()
+        self._process_group = self._build_process_group()
+        self._options_group = self._build_options_group()
+        self._advanced_group = self._build_advanced_panel()
+        # El reparto se decide antes del primer dibujado. Empezar siempre en
+        # una columna y corregir después dejaba a la ventana estirada al alto
+        # de la versión apilada, que es justo el que no cabía.
+        self._apply_controls_columns(self._controls_columns_for(self.width()))
         return panel
+
+    def _apply_controls_columns(self, columns: int) -> None:
+        """Coloca los cuadros de arriba en una columna o en dos.
+
+        Apilados ocupan más de la mitad del alto que da un portátil de
+        1366x768 y no dejan sitio para la vista previa ni para la tabla.
+        Cuando el alto escasea y el ancho sobra —que es exactamente lo que
+        pasa en esas pantallas— «Entrada» y «Salidas» se ponen una al lado de
+        la otra y el bloque pasa a medir lo que mide el más alto de los dos.
+
+        «Procesamiento» cruza entero por debajo en vez de ir en una columna:
+        su fila de controles no se parte, mide más que cualquiera de los
+        otros dos cuadros y metida en una columna obligaba a la ventana a ser
+        50 px más ancha de lo que da un escritorio de 1280 px. Cruzando cabe,
+        y además queda pegada a la fila del botón de procesar. Las opciones
+        avanzadas siguen debajo del todo, que es donde han estado siempre.
+        """
+        if columns == self._controls_columns:
+            return
+        self._controls_columns = columns
+        grid = self._controls_grid
+        for widget in (
+            self._input_group,
+            self._process_group,
+            self._options_group,
+            self._advanced_group,
+        ):
+            grid.removeWidget(widget)
+        if columns == 1:
+            grid.addWidget(self._input_group, 0, 0, 1, 2)
+            grid.addWidget(self._process_group, 1, 0, 1, 2)
+            grid.addWidget(self._options_group, 2, 0, 1, 2)
+            grid.addWidget(self._advanced_group, 3, 0, 1, 2)
+        else:
+            grid.addWidget(self._input_group, 0, 0)
+            grid.addWidget(self._options_group, 0, 1)
+            grid.addWidget(self._process_group, 1, 0, 1, 2)
+            grid.addWidget(self._advanced_group, 2, 0, 1, 2)
+
+    def _controls_columns_for(self, width: int) -> int:
+        """Columnas que le tocan a los cuadros de arriba con este ancho.
+
+        Dos solo cuando el alto aprieta y el ancho llega al que se midió para
+        ese reparto: en una ventana alta no hay nada que ganar moviéndolos de
+        sitio, y en una estrecha el reparto en dos columnas pediría más ancho
+        del que hay y volvería a sacar contenido fuera.
+        """
+        if not self._density.compact:
+            return 1
+        return 2 if width >= self._two_column_width else 1
 
     def _build_input_group(self) -> QGroupBox:
         group = QGroupBox("Entrada")
@@ -477,6 +766,7 @@ class MainWindow(QMainWindow):
         grid.setColumnStretch(1, 1)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
+        self._register_density_layout(grid, stacked=True)
 
         grid.addWidget(QLabel("Archivos:"), 0, 0)
         self.input_edit = QLineEdit()
@@ -536,7 +826,7 @@ class MainWindow(QMainWindow):
         self.btn_csv_viewer.clicked.connect(self._open_csv_viewer)
         grid.addWidget(self.btn_csv_viewer, 1, 4)
 
-        self.estimate_label = QLabel("")
+        self.estimate_label = ElidedLabel("")
         self.estimate_label.setStyleSheet("color: #667085;")
         self.estimate_label.setToolTip(
             "Estimación del tiempo total para procesar la entrada actual"
@@ -549,6 +839,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout(group)
         row.setContentsMargins(8, 5, 8, 5)
         row.setSpacing(8)
+        self._register_density_layout(row, stacked=False)
 
         engine_label = QLabel("OCR: Paddle v5 (CPU)")
         engine_label.setToolTip(
@@ -586,7 +877,7 @@ class MainWindow(QMainWindow):
         self.page_to_spin.valueChanged.connect(self._on_page_to_changed)
         row.addWidget(self.page_to_spin)
 
-        self.page_range_label = QLabel("")
+        self.page_range_label = ElidedLabel("")
         self.page_range_label.setStyleSheet("color: #667085;")
         self.page_range_label.setToolTip(range_tip)
         row.addWidget(self.page_range_label)
@@ -618,6 +909,7 @@ class MainWindow(QMainWindow):
         # se le añaden las opciones que solo tienen sentido al procesar.
         group = self.export_options = ExportOptionsGroup()
         layout = group.layout()
+        self._register_density_layout(layout, stacked=True)
         self.modo_grupo = group.modo_grupo
         self.radio_varios = group.radio_varios
         self.radio_unico = group.radio_unico
@@ -646,7 +938,7 @@ class MainWindow(QMainWindow):
         )
         self.fields_check.toggled.connect(self._on_fields_toggled)
         info_row.addWidget(self.fields_check)
-        self.important_fields_check = QCheckBox("Solo importantes")
+        self.important_fields_check = QCheckBox("Mostrar solo columnas importantes")
         self.important_fields_check.setEnabled(False)
         self.important_fields_check.setToolTip(
             "Mostrar únicamente los campos marcados en la lista de campos "
@@ -673,6 +965,7 @@ class MainWindow(QMainWindow):
         fleet_label.setStyleSheet("font-weight: 600;")
         fleet_row.addWidget(fleet_label)
         self.fleet_check = QCheckBox("Verificar matrículas")
+        self.fleet_check.setChecked(True)
         self.fleet_check.setToolTip(
             "Compara las matrículas leídas contra la lista de aviones. La "
             "lectura que no esté en la lista se reclasifica como la "
@@ -681,20 +974,14 @@ class MainWindow(QMainWindow):
             "tener todos los aviones para que la clasificación sea correcta."
         )
         fleet_row.addWidget(self.fleet_check)
-        fleet_button = QPushButton("Editar lista…")
+        fleet_button = QPushButton("Editar lista de matrículas…")
         fleet_button.setToolTip(
-            "Editar la lista de aviones de la flota; debe incluirlos todos "
-            "y mantenerse al día con las altas y las bajas."
+            "Abre la lista de matrículas de la flota. Debe incluir todos "
+            "los aviones y mantenerse al día con las altas y las bajas; se "
+            f"guarda en {FLEET_FILENAME}, en la carpeta del programa."
         )
         fleet_button.clicked.connect(self._open_fleet_editor)
         fleet_row.addWidget(fleet_button)
-        fleet_row.addWidget(
-            ElidedLabel(
-                "La lista debe tener todos los aviones "
-                f"({FLEET_FILENAME} en la carpeta del programa)"
-            ),
-            1,
-        )
         fleet_row.addStretch()
         layout.addLayout(fleet_row)
         return group
@@ -761,19 +1048,6 @@ class MainWindow(QMainWindow):
         self.reserve_core_check.toggled.connect(self._update_parallelism_hint)
         self._update_parallelism_hint()
 
-        check_row = QHBoxLayout()
-        self.remove_printed_check = QCheckBox("Mapear fondo impreso (recomendado)")
-        self.remove_printed_check.setChecked(True)
-        self.remove_printed_check.setToolTip(
-            "Construye un mapa de etiquetas, separadores y líneas de grilla "
-            "idénticos en todas las páginas para firmas y ranuras de fecha. "
-            "El OCR conserva la imagen original para no borrar escritura "
-            "repetida."
-        )
-        check_row.addWidget(self.remove_printed_check)
-        check_row.addStretch()
-        adv.addLayout(check_row)
-
         date_info = ElidedLabel(
             "OCR fijo en CPU: Paddle PP-OCRv5 mobile + detector v6 medium, "
             "sin cadena de motores de respaldo ni VLM."
@@ -824,8 +1098,13 @@ class MainWindow(QMainWindow):
         self.advanced_btn.setArrowType(
             Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
         )
+        # El panel desplegado pide más sitio del que se midió al abrir.
+        self._refresh_minimum_size()
         if checked and self.height() < self.minimumSizeHint().height():
-            self.resize(self.width(), self.minimumSizeHint().height())
+            # Crecer lo que pida el panel, pero nunca más allá del escritorio:
+            # en una pantalla baja esto dejaba la ventana con la franja de
+            # abajo fuera y sin forma de recuperarla.
+            fit_to_screen(self, self.width(), self.minimumSizeHint().height())
 
     def _build_progress_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -944,7 +1223,9 @@ class MainWindow(QMainWindow):
         self.preview_scroll.set_zoom_callback(self._zoom_preview)
         self.preview_scroll.setWidgetResizable(False)
         self.preview_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_scroll.setMinimumSize(300, 220)
+        self.preview_scroll.setMinimumSize(
+            self._density.preview_min_width, self._density.preview_min_height
+        )
         self.preview_scroll.setWidget(self.preview_label)
 
         self.preview_pagination = QWidget()
@@ -1109,9 +1390,9 @@ class MainWindow(QMainWindow):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setAccessibleName("Registro de eventos")
-        self.log_view.setMaximumHeight(_BOTTOM_PANE_HEIGHT)
+        self.log_view.setMaximumHeight(self._density.bottom_pane_height)
         self.log_view.document().setMaximumBlockCount(2000)
-        self.log_view.setMinimumWidth(340)
+        self.log_view.setMinimumWidth(self._density.log_min_width)
         splitter.addWidget(self.log_view)
 
         times = QWidget()
@@ -1137,7 +1418,7 @@ class MainWindow(QMainWindow):
         self.times_scroll = QScrollArea()
         self.times_scroll.setWidgetResizable(True)
         self.times_scroll.setWidget(self.times_container)
-        self.times_scroll.setMaximumHeight(_BOTTOM_PANE_HEIGHT)
+        self.times_scroll.setMaximumHeight(self._density.bottom_pane_height)
         times_layout.addWidget(self.times_scroll, 1)
 
         self.empty_times_label = QLabel("Sin archivos procesados aún.")
@@ -1146,7 +1427,8 @@ class MainWindow(QMainWindow):
         # Mitad y mitad, como la tabla y el visor del Visor de CSV: el panel
         # lleva cuatro columnas por archivo y la consola no necesita el resto.
         # El mínimo es la fila completa, para que nunca haya scroll lateral.
-        times.setMinimumWidth(560)
+        self.times_pane = times
+        times.setMinimumWidth(self._times_pane_min_width())
         splitter.addWidget(times)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
@@ -1168,21 +1450,34 @@ class MainWindow(QMainWindow):
         half = available // 2
         self.bottom_splitter.setSizes([half, available - half])
 
+    def _times_pane_min_width(self) -> int:
+        """Ancho de una fila completa del panel de avance, con sus márgenes."""
+        margins = self.times_pane.layout().contentsMargins()
+        return (
+            self._density.name_column_width
+            + _BAR_MIN_WIDTH
+            + _PAGES_COLUMN_WIDTH
+            + _SECS_COLUMN_WIDTH
+            + 3 * _FILE_ROW_SPACING
+            + margins.left()
+            + margins.right()
+        )
+
     def _make_file_row(self) -> dict:
         """Fila del panel: nombre, barra con porcentaje, páginas y reloj."""
         row = QHBoxLayout()
-        row.setSpacing(8)
+        row.setSpacing(_FILE_ROW_SPACING)
         name = QLabel("")
         # Anchos fijos en las tres columnas de texto: con anchos mínimos cada
         # fila empezaba la barra en un sitio distinto según lo largo que
         # fuera el nombre, y el panel dejaba de leerse como una tabla.
-        name.setFixedWidth(_NAME_COLUMN_WIDTH)
+        name.setFixedWidth(self._density.name_column_width)
         bar = QProgressBar()
         bar.setObjectName("timeBar")
         # La barra de 14 px recortaba el texto y el porcentaje no llegaba a
         # verse; con la altura de una línea cabe dentro de la propia barra.
         bar.setFixedHeight(20)
-        bar.setMinimumWidth(140)
+        bar.setMinimumWidth(_BAR_MIN_WIDTH)
         bar.setRange(0, 100)
         bar.setValue(0)
         bar.setTextVisible(True)
@@ -1190,12 +1485,12 @@ class MainWindow(QMainWindow):
         bar.setFormat("%p %")
         pages = QLabel("–")
         pages.setObjectName("filePages")
-        pages.setFixedWidth(86)
+        pages.setFixedWidth(_PAGES_COLUMN_WIDTH)
         pages.setAlignment(Qt.AlignmentFlag.AlignRight
                            | Qt.AlignmentFlag.AlignVCenter)
         pages.setToolTip("Páginas procesadas de las que tiene el archivo")
         secs = QLabel("–")
-        secs.setFixedWidth(70)
+        secs.setFixedWidth(_SECS_COLUMN_WIDTH)
         secs.setAlignment(Qt.AlignmentFlag.AlignRight
                           | Qt.AlignmentFlag.AlignVCenter)
         secs.setToolTip("Tiempo que lleva el archivo")
@@ -1213,7 +1508,7 @@ class MainWindow(QMainWindow):
         label.setToolTip(tooltip or name)
         label.setText(
             label.fontMetrics().elidedText(
-                name, Qt.TextElideMode.ElideMiddle, _NAME_COLUMN_WIDTH - 2
+                name, Qt.TextElideMode.ElideMiddle, label.maximumWidth() - 2
             )
         )
 
@@ -2054,7 +2349,7 @@ class MainWindow(QMainWindow):
             date_engine_name="",
             ocr_rec_model="PP-OCRv5_mobile_rec",
             ocr_det_model="PP-OCRv6_medium_det",
-            remove_printed=self.remove_printed_check.isChecked(),
+            remove_printed=True,  # mapa del fondo impreso: siempre activo
             crop_preprocess=self.crop_preprocess_check.isChecked(),
             date_ocr_fallback=False,
             date_slot_ocr=False,
@@ -3231,6 +3526,15 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:  # noqa: N802 - API Qt
         super().showEvent(event)
+        if not self._shown_once:
+            self._shown_once = True
+            # Parte de lo que pide el contenido solo es cierto con la ventana
+            # ya pulida por el estilo: unos veinte píxeles de alto que antes
+            # de mostrarla nadie declara. Se vuelve a medir aquí, que es la
+            # primera vez que el número es el definitivo.
+            self._refresh_minimum_size()
+            self._grow_to_fit_content()
+        self._update_responsive_layout()
         QTimer.singleShot(0, self._balance_bottom_splitter)
 
     def resizeEvent(self, event) -> None:
@@ -3242,6 +3546,7 @@ class MainWindow(QMainWindow):
         en pantalla, estirada por el propio layout.
         """
         super().resizeEvent(event)
+        self._update_responsive_layout()
         QTimer.singleShot(0, self._balance_bottom_splitter)
         if self._preview_source_pixmap is not None:
             self._resize_preview_timer.start()
