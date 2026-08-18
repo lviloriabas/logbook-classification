@@ -85,6 +85,7 @@ from app.gui.table_sort import ColumnSortController
 from app.gui.widgets import (
     APP_CHROME_QSS,
     DATA_TABLE_QSS,
+    TABLE_RADIUS,
     ElidedLabel,
     ZoomableScrollArea,
     ZoomOverlay,
@@ -1216,7 +1217,8 @@ class MainWindow(QMainWindow):
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(0, 0)
         self.preview_label.setStyleSheet(
-            "border: 1px solid #bbb; background: transparent;"
+            f"border: 1px solid #bbb; border-radius: {TABLE_RADIUS}px;"
+            " background: transparent;"
         )
         self.preview_label.setAccessibleName("Vista previa de la página")
 
