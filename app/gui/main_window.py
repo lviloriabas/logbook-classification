@@ -98,6 +98,7 @@ from app.templates.schema import Template
 from app.utils.important_fields import (
     IMPORTANT_FIELDS_FILENAME,
     ImportantFieldsStore,
+    default_important_columns,
 )
 from app.utils.io import send_to_trash
 from app.validation.duplicates import DuplicateLogPage, detect_duplicate_log_pages
@@ -1879,13 +1880,7 @@ class MainWindow(QMainWindow):
 
     def _default_important_columns(self, columns: list[str]) -> set[str]:
         """Incluye los identificadores y campos críticos disponibles."""
-        important = {
-            "file", "page", "date", "time_ms", "dup", "disc", "log_number",
-            "matricula", "flight_number", "pilot_signature",
-            "captain_signature", "captain_license",
-        }
-        important.update(column for column in columns if column.endswith("_signature"))
-        return set(columns).intersection(important)
+        return default_important_columns(columns)
 
     def _detect_dpi(self) -> None:
         """Lee DPI y número de páginas de la entrada en una sola apertura.
@@ -2305,6 +2300,7 @@ class MainWindow(QMainWindow):
             separar_por=tuple(self._separator_value() or ()),
             un_solo_pdf=self.radio_unico.isChecked(),
             discrepancias=self.discrepancias_check.isChecked(),
+            errores=self.export_options.errores_check.isChecked(),
             # "Visualizar campos" pertenece únicamente a la vista previa.
             debug=False,
             run_dir=self._corrida_dir if reuse_dir else None,

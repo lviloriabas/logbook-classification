@@ -39,6 +39,8 @@ class OutputOptions:
     separar_por: tuple[str, ...] = ()
     un_solo_pdf: bool = False
     discrepancias: bool = False
+    errores: bool = False
+    recortes_firmas: bool = False
     debug: bool = False
     run_dir: Path | None = None
     skip_pdfs: bool = False
@@ -57,6 +59,27 @@ def run_csv_name() -> str:
     now = datetime.now()
     stamp = now.strftime(f"%d {_MONTHS[now.month - 1]} %Y %H %M").upper()
     return f"BITS {stamp}.CSV"
+
+
+def new_run_dir(output_root: Path) -> Path:
+    """Carpeta de una corrida nueva, sin pisar ninguna anterior.
+
+    Dos corridas lanzadas dentro del mismo minuto comparten nombre, así que
+    la segunda se desempata con un sufijo. La carpeta se crea aquí porque la
+    línea de comandos necesita el sitio de los logs antes de procesar, y
+    tiene que ser exactamente la misma carpeta donde luego se escriban las
+    salidas.
+    """
+    output_root = Path(output_root)
+    base = Path(run_csv_name()).stem
+    corrida = base
+    n = 2
+    while (output_root / corrida).exists():
+        corrida = f"{base}-{n}"
+        n += 1
+    run_dir = output_root / corrida
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
 
 
 def _clean_stale_artifacts(run_dir: Path) -> None:
@@ -122,19 +145,17 @@ def write_outputs(
         run_dir.mkdir(parents=True, exist_ok=True)
         corrida = run_dir.name
         csv_name = f"{corrida}.CSV"
+        # La carpeta puede venir recién creada (la línea de comandos la abre
+        # antes de procesar, para dejar ahí los logs) o traer una entrega
+        # anterior. Solo lo segundo es un re-export.
+        reexport = (run_dir / "datos").is_dir()
         _clean_stale_artifacts(run_dir)
-        logger.info(f"Re-export sobre la corrida existente: {run_dir}")
+        if reexport:
+            logger.info(f"Re-export sobre la corrida existente: {run_dir}")
     else:
-        csv_name = run_csv_name()
-        corrida = Path(csv_name).stem
-        base_corrida = corrida
-        n = 2
-        while (output_root / corrida).exists():
-            corrida = f"{base_corrida}-{n}"
-            n += 1
+        run_dir = new_run_dir(output_root)
+        corrida = run_dir.name
         csv_name = f"{corrida}.CSV"
-        run_dir = output_root / corrida
-        run_dir.mkdir(parents=True, exist_ok=True)
 
     datos_dir = run_dir / "datos"
     datos_dir.mkdir(parents=True, exist_ok=True)
@@ -174,6 +195,24 @@ def write_outputs(
             dpi=options.dpi,
             crop_padding=options.crop_padding,
         )
+
+    if options.errores and not skip_pdfs:
+        stage("Generando errores.pdf…", 38)
+        from app.reports.organize import escribir_pdf_errores
+
+        errores_path = escribir_pdf_errores(
+            reports, template, run_dir, dpi=options.dpi
+        )
+        logger.info(f"Errores (indexación manual): {errores_path}")
+
+    if options.recortes_firmas and not skip_pdfs:
+        stage("Volcando recortes de firmas…", 41)
+        from app.reports.organize import escribir_recortes_firmas
+
+        recortes_dir = escribir_recortes_firmas(
+            reports, template, run_dir, dpi=options.dpi
+        )
+        logger.info(f"Recortes de firmas: {recortes_dir}")
 
     separar = list(options.separar_por) or None
     pdf_unico = options.un_solo_pdf or not separar

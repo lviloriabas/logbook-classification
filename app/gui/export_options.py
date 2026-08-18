@@ -79,6 +79,14 @@ class ExportOptionsGroup(QGroupBox):
             "discrepancias'. Varios PDF: genera discrepancias.pdf."
         )
         sep_row.addWidget(self.discrepancias_check)
+
+        self.errores_check = QCheckBox("Errores")
+        self.errores_check.setToolTip(
+            "Genera errores.pdf con las páginas cuya matrícula, fecha o "
+            "número de bitácora quedaron sin resolver, para indexarlas a "
+            "mano."
+        )
+        sep_row.addWidget(self.errores_check)
         sep_row.addStretch()
         layout.addLayout(sep_row)
 

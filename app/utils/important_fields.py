@@ -12,6 +12,25 @@ from loguru import logger
 IMPORTANT_FIELDS_FILENAME = "important_fields.json"
 _DEFAULT_KEY = "__default__"
 
+# Columnas que se marcan solas mientras nadie edite la selección: los
+# identificadores de la página y los campos críticos de indexación. Vive aquí
+# y no en la ventana porque el CSV mínimo lo escriben las dos superficies, y
+# una corrida de línea de comandos tiene que dar el mismo archivo que la
+# interfaz sobre la misma plantilla.
+_DEFAULT_IMPORTANT = frozenset({
+    "file", "page", "date", "time_ms", "dup", "disc", "log_number",
+    "matricula", "flight_number", "pilot_signature",
+    "captain_signature", "captain_license",
+})
+
+
+def default_important_columns(columns: Iterable[str]) -> set[str]:
+    """Incluye los identificadores y campos críticos disponibles."""
+    available = list(columns)
+    important = set(_DEFAULT_IMPORTANT)
+    important.update(name for name in available if name.endswith("_signature"))
+    return set(available).intersection(important)
+
 
 class ImportantFieldsStore:
     """Guarda por plantilla las columnas marcadas en el selector.

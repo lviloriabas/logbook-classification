@@ -27,7 +27,27 @@ def test_cli_uses_validated_fixed_ocr_configuration():
     assert "date_ocr_fallback=False" in CLI_SOURCE
     assert "date_slot_ocr=False" in CLI_SOURCE
     assert "complete_csv_path(csv_path)" in CLI_SOURCE
-    assert "write_minimal_csv(full_csv_path, csv_path)" in CLI_SOURCE
+
+
+def test_cli_writes_its_outputs_with_the_same_function_as_the_window():
+    """El CSV doble, los PDFs y las stats salen de ``write_outputs``.
+
+    Escribir las salidas por separado en cada superficie era lo que hacía
+    que una corrida de línea de comandos y una de la interfaz entregaran
+    carpetas distintas. Si vuelve a aparecer aquí una escritura propia, la
+    divergencia vuelve con ella.
+    """
+    assert "write_outputs(" in CLI_SOURCE
+    for propio in (
+        "CsvReporter().write(",
+        "write_minimal_csv(",
+        "JsonReporter().write_consolidated(",
+        "escribir_stats(",
+        "escribir_pdf_unico(",
+        "generar_pdfs(",
+        "write_debug_pdf(",
+    ):
+        assert propio not in CLI_SOURCE
 
 
 def test_application_engine_has_no_alternative_model_fallback_names():

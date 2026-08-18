@@ -24,7 +24,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent
@@ -42,13 +41,26 @@ from app.core.parallelism import available_cpu_threads, recommended_parallelism
 from app.core.progress import with_page_counter
 from app.models.schemas import Status
 from app.ocr.engine import create_engine
-from app.reports.csv_reporter import CsvReporter
-from app.reports.json_reporter import JsonReporter
+from app.reports.csv_reporter import (
+    CSV_DATE_MONTH_END,
+    CSV_DATE_SPECIFIC,
+    CsvReporter,
+)
+from app.reports.outputs import (
+    OutputOptions,
+    complete_csv_path,
+    new_run_dir,
+    write_outputs,
+)
 from app.templates.manager import TemplateManager
+from app.templates.schema import Template
+from app.utils.fleet import FLEET_FILENAME
+from app.utils.important_fields import (
+    IMPORTANT_FIELDS_FILENAME,
+    ImportantFieldsStore,
+    default_important_columns,
+)
 from app.utils.logging import setup_logging
-
-_MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-           "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -148,6 +160,30 @@ def parse_args() -> argparse.Namespace:
              "(matrícula, fechas, log_number) quedaron sin resolver tras "
              "los correctores, sin anotaciones.",
     )
+    parser.add_argument(
+        "--verificar-flota", action="store_true",
+        help="Clasificar cada matrícula leída contra la lista de aviones: "
+             "la que no esté en la lista se reclasifica como la más "
+             "parecida de la flota. La lista debe tener todos los aviones.",
+    )
+    parser.add_argument(
+        "--lista-flota", default=None, metavar="ARCHIVO",
+        help=f"Lista de aviones de la flota (default: {FLEET_FILENAME} en "
+             "la carpeta del programa).",
+    )
+    parser.add_argument(
+        "--fecha-csv", choices=["especifica", "fin-de-mes"],
+        default="especifica",
+        help="Fecha representada en el CSV: 'especifica' usa el día leído y "
+             "cae al fin de mes cuando falta; 'fin-de-mes' usa siempre el "
+             "último día del mes (default: especifica).",
+    )
+    parser.add_argument(
+        "--campos-importantes", default=None, metavar="COLUMNAS",
+        help="Columnas del CSV mínimo, separadas por coma. Sin esta opción "
+             "se usa la selección guardada en la carpeta del programa, la "
+             "misma que aplica la interfaz.",
+    )
     parser.add_argument("--verbose", action="store_true", help="Logs detallados")
     return parser.parse_args()
 
@@ -188,11 +224,36 @@ def _resolve_pdfs(args: argparse.Namespace) -> list[Path]:
     return pdfs
 
 
-def _csv_name() -> str:
-    now = datetime.now()
-    month = _MONTHS[now.month - 1]
-    stamp = now.strftime(f"%d {month} %Y %H %M").upper()
-    return f"BITS {stamp}.CSV"
+def _important_columns(
+    template: Template, seleccion: str | None
+) -> tuple[str, ...]:
+    """Columnas del CSV mínimo, las mismas que aplicaría la interfaz.
+
+    Sin ``--campos-importantes`` se lee la selección que el selector de la
+    ventana dejó guardada en la carpeta del programa, y si esa plantilla
+    nunca se editó se usa el mismo conjunto por defecto. Así una corrida de
+    línea de comandos y una de la interfaz escriben el mismo CSV mínimo.
+    """
+    columns = CsvReporter.columns_for_fields(
+        [field.id for field in template.fields],
+        skip_ids=frozenset(
+            field.id
+            for field in template.fields
+            if field.type.value == "signature"
+        ),
+    )
+    if seleccion is not None:
+        elegidas = {
+            name.strip() for name in seleccion.split(",") if name.strip()
+        }
+    else:
+        store = ImportantFieldsStore(_ROOT / IMPORTANT_FIELDS_FILENAME)
+        guardadas = store.load(template.name)
+        elegidas = (
+            set(guardadas) if guardadas is not None
+            else default_important_columns(columns)
+        )
+    return tuple(column for column in columns if column in elegidas)
 
 
 def _print_pdf_result(
@@ -243,6 +304,11 @@ def _run(args: argparse.Namespace) -> int:
         date_ocr_fallback=False,
         date_slot_ocr=False,
         vlm_enabled=False,
+        verify_fleet=args.verificar_flota,
+        fleet_file=(
+            Path(args.lista_flota) if args.lista_flota
+            else _ROOT / FLEET_FILENAME
+        ),
     )
 
     page_range = PageRange()
@@ -257,9 +323,7 @@ def _run(args: argparse.Namespace) -> int:
         return 1
 
     # ── Carpeta de la corrida: nombre del CSV (sin extensión) ──────────
-    csv_name = _csv_name()
-    run_dir = Path(args.output_dir) / Path(csv_name).stem
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = new_run_dir(Path(args.output_dir))
     setup_logging(run_dir / "logs",
                   level="DEBUG" if args.verbose else "INFO")
 
@@ -394,105 +458,59 @@ def _run(args: argparse.Namespace) -> int:
           f"{stats['flagged']} discrepante(s) marcada(s), "
           f"{stats['regressions']} regresión(es) de fecha")
 
-    # ── Clasificación de discrepancias (para stats y PDFs) ─────────────
-    from app.validation.discrepancias import clasificar_lote
+    # ── Lista de flota: lo que no sea un avión conocido se reclasifica ──
+    if config.verify_fleet:
+        from app.validation.fleet import verify_reports_against_fleet
 
-    entradas = clasificar_lote(reports, template)
-    excluidas = None
-    pdf_unico = args.un_solo_pdf or not args.separar_por
-    if args.discrepancias and entradas:
-        excluidas = {
-            (Path(e.pdf_path).name, e.page_number) for e in entradas
-        }
+        verify_reports_against_fleet(reports, config.fleet_file)
+        print(f"Lista de aviones: {config.fleet_file}")
 
-    # ── PDF de errores: campos OCR sin resolver (indexación manual) ────
-    if args.errores:
-        from app.reports.organize import escribir_pdf_errores
+    # ── Salidas de la corrida ───────────────────────────────────────────
+    # Se escriben con la misma función que usa la interfaz. Tenerlas
+    # duplicadas era lo que hacía que las dos superficies entregaran
+    # carpetas distintas sobre la misma corrida.
+    def on_stage(message: str, percent: int) -> None:
+        print(f"[{percent:3d}%] {message}")
 
-        errores_path = escribir_pdf_errores(reports, template, run_dir,
-                                            dpi=args.dpi)
-        print(f"  Errores (indexación manual): {errores_path}")
-
-    # ── Reportes (carpeta datos/ de la corrida) ─────────────────────────
-    corrida = Path(csv_name).stem
-    datos_dir = run_dir / "datos"
-    csv_path = datos_dir / csv_name
-    from app.reports.dual_csv import write_minimal_csv
-    from app.reports.outputs import complete_csv_path
-
-    full_csv_path = complete_csv_path(csv_path)
-    CsvReporter().write(reports, full_csv_path, template)
-    write_minimal_csv(full_csv_path, csv_path)
-    json_path = datos_dir / f"{corrida}.json"
-    JsonReporter().write_consolidated(reports, json_path, corrida=corrida)
-
-    total_ms = sum(r.processing_ms for r in reports)
-    print(f"\nReportes generados:")
-    print(f"  CSV mínimo : {csv_path}")
-    print(f"  CSV completo: {full_csv_path}")
-    print(f"  JSON: {json_path} ({len(reports)} archivo(s))")
-
-    # ── Organización: PDFs por avión/mes y discrepancias ────────────────
-    if args.recortes_firmas:
-        from app.reports.organize import escribir_recortes_firmas
-
-        recortes_dir = escribir_recortes_firmas(
-            reports, template, run_dir, dpi=args.dpi
-        )
-        print(f"  Recortes de firmas: {recortes_dir}")
-
-    if args.discrepancias and entradas and not pdf_unico:
-        from app.reports.organize import escribir_pdf_discrepancias
-
-        discrepancias_path = escribir_pdf_discrepancias(
-            entradas, template, run_dir, dpi=args.dpi
-        )
-        faltantes = sum(1 for e in entradas
-                        if e.categoria.value == "missing")
-        inciertas = len(entradas) - faltantes
-        print(f"  Discrepancias: {discrepancias_path} "
-              f"({len(entradas)} página(s): {faltantes} faltante(s), "
-              f"{inciertas} para revisar)")
-    elif args.discrepancias and not entradas and not pdf_unico:
-        print("  Discrepancias: no hay páginas para exportar")
-
-    if pdf_unico:
-        from app.reports.organize import escribir_pdf_unico
-
-        pdf_path = escribir_pdf_unico(
-            reports, run_dir, args.separar_por or [],
-            excluidas, dpi=args.dpi,
-            discrepancias_al_final=args.discrepancias,
-        )
-        print(f"  PDF único: {pdf_path.relative_to(run_dir)}")
-    elif args.separar_por:
-        from app.reports.organize import generar_pdfs
-
-        pdf_paths = generar_pdfs(
-            reports, run_dir, args.separar_por, excluidas, dpi=args.dpi
-        )
-        print(f"  PDFs separados ({len(pdf_paths)}):")
-        for pdf_path in pdf_paths:
-            print(f"    - {pdf_path.relative_to(run_dir)}")
-
-    # ── Estadísticas de la corrida (siempre) ────────────────────────────
-    from app.reports.stats import escribir_stats
-
-    stats_path = escribir_stats(
-        reports, run_dir, corrida=corrida,
-        separar_por=args.separar_por, entradas=entradas,
-        excluidas=excluidas,
+    print()
+    run_dir = write_outputs(
+        reports,
+        OutputOptions(
+            template=template,
+            output_root=Path(args.output_dir),
+            dpi=args.dpi,
+            crop_padding=config.crop_padding,
+            separar_por=tuple(args.separar_por or ()),
+            un_solo_pdf=args.un_solo_pdf,
+            discrepancias=args.discrepancias,
+            errores=args.errores,
+            recortes_firmas=args.recortes_firmas,
+            debug=args.debug,
+            run_dir=run_dir,
+            csv_date_mode=(
+                CSV_DATE_MONTH_END if args.fecha_csv == "fin-de-mes"
+                else CSV_DATE_SPECIFIC
+            ),
+            important_csv_columns=_important_columns(
+                template, args.campos_importantes
+            ),
+        ),
         vlm_stats=vlm_stats,
+        on_stage=on_stage,
     )
-    print(f"  Stats: {stats_path}")
 
-    if args.debug:
-        from app.reports.debug_pdf import write_debug_pdf
-
-        debug_path = run_dir / "debug.pdf"
-        write_debug_pdf(reports, template, debug_path, dpi=args.dpi,
-                        crop_padding=config.crop_padding)
-        print(f"  Debug: {debug_path}")
+    corrida = run_dir.name
+    datos_dir = run_dir / "datos"
+    csv_path = datos_dir / f"{corrida}.CSV"
+    json_path = datos_dir / f"{corrida}.json"
+    total_ms = sum(r.processing_ms for r in reports)
+    print(f"\nSalidas en: {run_dir}")
+    print(f"  CSV mínimo  : {csv_path}")
+    print(f"  CSV completo: {complete_csv_path(csv_path)}")
+    print(f"  JSON        : {json_path} ({len(reports)} archivo(s))")
+    print(f"  Stats       : {run_dir / 'stats.json'}")
+    for pdf_path in sorted(run_dir.rglob("*.pdf")):
+        print(f"  PDF         : {pdf_path.relative_to(run_dir)}")
     print(f"Tiempo total: {total_ms / 1000:.2f} s")
     return 0
 
