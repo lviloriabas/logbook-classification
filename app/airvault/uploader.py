@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from loguru import logger
 
@@ -80,13 +80,23 @@ class SubidorQuickUpload:
         self.sesion = sesion
         self.repo_id = repo_id
 
-    def subir(self, ruta: Path | str, valores: Mapping[int, str]
-              ) -> ResultadoSubida:
+    def subir(
+        self, ruta: Path | str, valores: Mapping[int, str],
+        avisar: Optional[Callable[[str, int, int], None]] = None,
+    ) -> ResultadoSubida:
+        """Sube un archivo y confirma sus valores de indice.
+
+        Los PDF de una corrida completa pesan casi dos gigas y viajan en
+        trozos de un mega, asi que sin ``avisar`` la subida parece colgada
+        durante media hora.
+        """
         archivo = Path(ruta)
         if not archivo.is_file():
             return ResultadoSubida(str(archivo), False, "no existe")
         base = self.sesion.config.url("/quickuploadex/Home/Upload/")
         for indice, total, datos in trozos(archivo):
+            if avisar is not None:
+                avisar(f"Subiendo {archivo.name}", indice, total)
             respuesta = self.sesion.http.post(
                 base,
                 data={

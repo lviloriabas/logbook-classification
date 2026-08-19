@@ -32,7 +32,7 @@ def test_plan_marca_todo_escribible_en_lote_limpio():
     cliente = ClienteFalso(page_count=2)
     plan = Indexador(cliente, manifiesto(), PICKLIST).planificar(2)
     assert plan.resumen() == {"total": 2, "escribibles": 2, "bloqueadas": 0,
-                              "avisos_globales": 0}
+                              "separadores": 0, "avisos_globales": 0}
 
 
 def test_plan_no_escribe_nada():

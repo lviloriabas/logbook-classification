@@ -45,11 +45,17 @@ def verificar_cantidad(
     Es la guarda mas importante: si sobran o faltan paginas, la
     correspondencia por posicion esta rota y cualquier escritura cae en la
     bitacora de al lado.
+
+    Los separadores cuentan: en el lote ocupan una pagina cada uno, igual
+    que en el PDF que se subio.
     """
     if paginas_lote != len(registros):
+        separadores = sum(1 for r in registros if r.es_separador)
+        detalle = f", {separadores} de ellos separadores" if separadores else ""
         raise ErrorDeGuarda(
             f"El lote tiene {paginas_lote} paginas y el manifiesto "
-            f"{len(registros)}. No se escribe nada hasta que coincidan."
+            f"{len(registros)}{detalle}. No se escribe nada hasta que "
+            f"coincidan."
         )
 
 
@@ -60,6 +66,8 @@ def verificar_matriculas(
     validas = {str(v).strip().upper() for v in picklist if str(v).strip()}
     avisos: List[Aviso] = []
     for registro in registros:
+        if registro.es_separador:
+            continue
         if not registro.matricula:
             avisos.append(Aviso(
                 registro.seq, "matricula_vacia",
@@ -140,7 +148,7 @@ def verificar_duplicados(registros: Sequence[Registro]) -> List[Aviso]:
     vistos: dict[str, int] = {}
     avisos: List[Aviso] = []
     for registro in registros:
-        if not registro.log_number:
+        if registro.es_separador or not registro.log_number:
             continue
         anterior = vistos.get(registro.log_number)
         if anterior is not None:

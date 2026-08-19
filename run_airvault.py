@@ -49,22 +49,14 @@ from app.airvault.discovery import (  # noqa: E402
     esperar,
 )
 from app.airvault.indexer import Indexador, verificar_lote  # noqa: E402
+from app.airvault.flujo import ErrorDeCorrida, Trabajo  # noqa: E402
 from app.airvault.mapping import (  # noqa: E402
     FLOTA_CACHE_FILENAME,
     ResolutorFlota,
-    leer_csv_corrida,
-    registros_desde_csv,
     valores_de_indice,
 )
-from app.airvault.model import (  # noqa: E402
-    EstadoEtapa,
-    EstadoRegistro,
-    Manifiesto,
-)
-from app.airvault.naming import (  # noqa: E402
-    PREFIJO_POR_DEFECTO,
-    nombre_desde_corrida,
-)
+from app.airvault.model import EstadoEtapa, Manifiesto  # noqa: E402
+from app.airvault.naming import PREFIJO_POR_DEFECTO  # noqa: E402
 from app.airvault.report import (  # noqa: E402
     escribir_csv,
     escribir_html,
@@ -200,34 +192,41 @@ def abrir_sesion(config: AirVaultConfig, args) -> SesionAirVault:
 # ── etapas ─────────────────────────────────────────────────────────
 
 def etapa_preparar(args, config: AirVaultConfig) -> int:
+    """Arma el manifiesto del trabajo a partir de la corrida.
+
+    Pasa por el mismo camino que la ventana para que las dos lean igual el
+    indice de paginas del PDF: si la linea de comandos contara solo las
+    bitacoras y el PDF llevara separadores, escribiria cada dato una pagina
+    mas alla de donde va.
+    """
     carpeta = carpeta_job(args.job)
     resolutor = ResolutorFlota.load(_ROOT / FLOTA_CACHE_FILENAME)
-    filas = leer_csv_corrida(args.csv)
-    registros = registros_desde_csv(filas, resolutor)
-    if not registros:
-        print("El CSV no tiene ninguna bitacora utilizable", file=sys.stderr)
+    try:
+        trabajo = Trabajo.preparar(
+            config, carpeta, args.csv,
+            nombre_lote=args.lote or "",
+            prefijo=getattr(args, "prefijo", PREFIJO_POR_DEFECTO),
+            resolutor=resolutor,
+        )
+    except ErrorDeCorrida as exc:
+        print(str(exc), file=sys.stderr)
         return 1
-    nombre_batch = args.lote or nombre_desde_corrida(
-        args.csv, getattr(args, "prefijo", PREFIJO_POR_DEFECTO)
-    )
-    manifiesto = Manifiesto(
-        job_id=args.job,
-        nombre_batch=nombre_batch,
-        repo_id=config.repo_id,
-        csv_origen=str(Path(args.csv).resolve()),
-        doc_type=args.doc_type or config.doc_type,
-        audit_status=args.audit_status or config.audit_status,
-        registros=registros,
-    )
-    manifiesto.etapa("procesar").marcar(EstadoEtapa.HECHA, args.csv)
-    manifiesto.etapa("preparar").marcar(
-        EstadoEtapa.HECHA, f"{len(registros)} bitacoras"
-    )
-    manifiestos.guardar(manifiesto, carpeta)
-    inferidas = sum(1 for r in registros if r.fleet_inferido)
+    manifiesto = trabajo.manifiesto
+    if args.doc_type:
+        manifiesto.doc_type = args.doc_type
+    if args.audit_status:
+        manifiesto.audit_status = args.audit_status
+    trabajo.guardar()
+
+    bitacoras = manifiesto.bitacoras()
+    separadores = manifiesto.separadores()
+    inferidas = sum(1 for r in bitacoras if r.fleet_inferido)
     print(f"Manifiesto creado en {manifiestos.ruta_manifiesto(carpeta)}")
-    print(f"  bitacoras: {len(registros)}")
-    print(f"  lote:      {nombre_batch}")
+    print(f"  bitacoras: {len(bitacoras)}")
+    if separadores:
+        print(f"  separadores del PDF: {len(separadores)} "
+              f"(ocupan pagina en el lote y no se indexan)")
+    print(f"  lote:      {manifiesto.nombre_batch}")
     print("  el lote debe subirse a AirVault con ese mismo nombre")
     if inferidas:
         print(f"  flota inferida por regla en {inferidas} bitacoras "

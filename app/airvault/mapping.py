@@ -185,30 +185,108 @@ def registros_desde_csv(
     registros: List[Registro] = []
     seq = 0
     for fila in elegidas:
-        matricula = normalizar_matricula(fila.get("matricula", ""))
-        log_number = normalizar_log_number(fila.get("log_number", ""))
-        fecha = str(fila.get("date", "")).strip()
-        if not matricula and not log_number and not fecha:
+        if _en_blanco(fila):
             continue
         seq += 1
-        fleet, lessor, inferido = resolutor.resolver(matricula)
-        registros.append(
-            Registro(
-                seq=seq,
-                archivo_origen=str(fila.get("file", "")).strip(),
-                pagina_origen=int(str(fila.get("page", "0")).strip() or 0),
-                matricula=matricula,
-                log_number=log_number,
-                fecha=fecha,
-                fleet=fleet if matricula else "",
-                lessor=lessor,
-                fleet_inferido=inferido and bool(matricula),
-                duplicado=str(fila.get("dup", "")).strip().lower() == "true",
-                discrepancia=(
-                    str(fila.get("disc", "")).strip().lower() == "true"
-                ),
-            )
-        )
+        registros.append(_registro_de_fila(seq, fila, resolutor))
+    return registros
+
+
+def _en_blanco(fila: Mapping[str, str]) -> bool:
+    """La pagina no aporta ningun dato de indice, asi que no llega al PDF."""
+    return not any((
+        normalizar_matricula(fila.get("matricula", "")),
+        normalizar_log_number(fila.get("log_number", "")),
+        str(fila.get("date", "")).strip(),
+    ))
+
+
+def _registro_de_fila(
+    seq: int, fila: Mapping[str, str], resolutor: ResolutorFlota
+) -> Registro:
+    """Traduce una fila del CSV al registro que viaja en el manifiesto."""
+    matricula = normalizar_matricula(fila.get("matricula", ""))
+    fleet, lessor, inferido = resolutor.resolver(matricula)
+    return Registro(
+        seq=seq,
+        archivo_origen=str(fila.get("file", "")).strip(),
+        pagina_origen=int(str(fila.get("page", "0")).strip() or 0),
+        matricula=matricula,
+        log_number=normalizar_log_number(fila.get("log_number", "")),
+        fecha=str(fila.get("date", "")).strip(),
+        fleet=fleet if matricula else "",
+        lessor=lessor,
+        fleet_inferido=inferido and bool(matricula),
+        duplicado=str(fila.get("dup", "")).strip().lower() == "true",
+        discrepancia=str(fila.get("disc", "")).strip().lower() == "true",
+    )
+
+
+def leer_indice_paginas(path: Path | str) -> List[dict]:
+    """Lee el indice del PDF de entrega que escribe la corrida.
+
+    Devuelve la lista de paginas en el orden en que estan en el archivo.
+    Sin indice devuelve una lista vacia, y quien llame decide si puede
+    seguir sin el.
+    """
+    ruta = Path(path)
+    if not ruta.is_file():
+        return []
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(datos, Mapping):
+        return []
+    paginas = datos.get("paginas")
+    return [p for p in paginas if isinstance(p, Mapping)] if paginas else []
+
+
+def registros_desde_entrega(
+    filas: Iterable[Mapping[str, str]],
+    indice: Sequence[Mapping[str, object]],
+    resolutor: ResolutorFlota | None = None,
+) -> List[Registro]:
+    """Construye los registros siguiendo el PDF que se sube, no el CSV.
+
+    El lote de AirVault tiene una pagina por cada pagina del PDF, y el PDF
+    lleva separadores que el CSV no tiene. Recorrer el indice en vez del
+    CSV es lo que mantiene ``seq`` igual a la pagina del lote: los
+    separadores ocupan su sitio y quedan marcados para que nadie les
+    escriba nada.
+    """
+    resolutor = resolutor or ResolutorFlota()
+    por_clave: Dict[tuple[str, int], Mapping[str, str]] = {}
+    for fila in filas:
+        archivo = str(fila.get("file", "")).strip()
+        try:
+            pagina = int(str(fila.get("page", "")).strip())
+        except ValueError:
+            continue
+        por_clave[(archivo, pagina)] = fila
+
+    registros: List[Registro] = []
+    for seq, entrada in enumerate(indice, start=1):
+        etiqueta = str(entrada.get("separador", "") or "").strip()
+        if etiqueta:
+            registros.append(Registro(seq=seq, separador=etiqueta))
+            continue
+        archivo = str(entrada.get("archivo", "") or "").strip()
+        try:
+            pagina = int(str(entrada.get("pagina", 0)))
+        except (TypeError, ValueError):
+            pagina = 0
+        fila = por_clave.get((archivo, pagina))
+        if fila is None:
+            registros.append(Registro(
+                seq=seq, archivo_origen=archivo, pagina_origen=pagina,
+                avisos=[
+                    f"[sin_fila] la pagina {pagina} de {archivo} esta en el "
+                    f"PDF pero no en el CSV"
+                ],
+            ))
+            continue
+        registros.append(_registro_de_fila(seq, fila, resolutor))
     return registros
 
 
