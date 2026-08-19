@@ -180,53 +180,55 @@ def test_sin_cookie_explicita_se_usa_la_del_entorno(monkeypatch):
     assert sesion.origen == "cookie pegada"
 
 
-def test_sin_cookie_se_intenta_el_perfil_de_edge(monkeypatch):
+def test_sin_cookie_se_toma_del_navegador(monkeypatch):
     _sin_entorno(monkeypatch)
-    from app.airvault import edge
+    from app.airvault import navegador
 
     monkeypatch.setattr(
-        edge, "leer_cookies", lambda *a, **k: {"FedAuth": "de-edge"}
+        navegador, "obtener_cookies",
+        lambda *a, **k: {"FedAuth": "del-navegador"},
     )
     sesion = abrir_sesion(AirVaultConfig())
-    assert sesion.http.cookies.get("FedAuth") == "de-edge"
-    assert sesion.origen == "perfil de Edge"
+    assert sesion.http.cookies.get("FedAuth") == "del-navegador"
+    assert sesion.origen == "navegador"
 
 
-def test_edge_no_se_toca_cuando_se_pide_que_no(monkeypatch):
+def test_el_navegador_no_se_abre_cuando_se_pide_que_no(monkeypatch):
+    """Nadie quiere que le salte una ventana sin haberla pedido."""
     _sin_entorno(monkeypatch)
-    from app.airvault import edge
+    from app.airvault import navegador
 
     def no_deberia(*_a, **_k):
-        raise AssertionError("no habia que mirar el navegador")
+        raise AssertionError("no habia que abrir el navegador")
 
-    monkeypatch.setattr(edge, "leer_cookies", no_deberia)
+    monkeypatch.setattr(navegador, "obtener_cookies", no_deberia)
     with pytest.raises(ErrorDeSesion):
         abrir_sesion(AirVaultConfig(), usar_edge=False)
 
 
-def test_si_edge_falla_se_explica_por_que(monkeypatch):
+def test_si_el_navegador_falla_se_explica_por_que(monkeypatch):
     """Sin el motivo, 'no hay sesion' no le dice nada a nadie."""
     _sin_entorno(monkeypatch)
-    from app.airvault import edge
+    from app.airvault import navegador
 
-    def atado(*_a, **_k):
-        raise edge.CifradoNoSoportado("va cifrada con la identidad de Edge")
+    def sin_edge(*_a, **_k):
+        raise navegador.ErrorDeNavegador("no se encontro Microsoft Edge")
 
-    monkeypatch.setattr(edge, "leer_cookies", atado)
+    monkeypatch.setattr(navegador, "obtener_cookies", sin_edge)
     with pytest.raises(ErrorDeSesion) as fallo:
         abrir_sesion(AirVaultConfig())
-    assert "identidad de Edge" in str(fallo.value)
+    assert "no se encontro Microsoft Edge" in str(fallo.value)
     assert "AIRVAULT_COOKIE" in str(fallo.value)
 
 
 def test_sin_ninguna_fuente_se_dice_como_conseguir_la_cookie(monkeypatch):
     _sin_entorno(monkeypatch)
-    from app.airvault import edge
+    from app.airvault import navegador
 
     monkeypatch.setattr(
-        edge, "leer_cookies",
+        navegador, "obtener_cookies",
         lambda *a, **k: (_ for _ in ()).throw(
-            edge.ErrorDeNavegador("sin perfiles")
+            navegador.ErrorDeNavegador("no arranco")
         ),
     )
     with pytest.raises(ErrorDeSesion) as fallo:

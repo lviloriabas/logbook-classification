@@ -2,6 +2,18 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-19 — La sesión de AirVault se resuelve sola
+
+Indexar empezaba por un trámite a mano: entrar a AirVault en el navegador, abrir las herramientas de desarrollo, copiar la cookie de sesión y pegarla en el campo **Sesión**. Cada vez que se abría el programa, otra vez. El atajo que iba a evitarlo —leer la cookie del perfil de Edge— casi nunca funcionaba: hay que cerrar Edge para que suelte su base de cookies, y un Edge moderno las cifra con la identidad del navegador (`v20`), que no se deshace desde fuera.
+
+Ahora el programa abre Edge él mismo, con un perfil propio dentro de `portable/`, apuntando al enlace de acceso federado. La primera vez se ve la ventana y alguien entra con su usuario de Microsoft y su segundo factor; en cuanto AirVault suelta sus cookies, la ventana se cierra sola. De ahí en adelante el perfil conserva la sesión, así que el navegador se abre sin ventana, entrega la cookie y se cierra. El campo **Sesión** sigue ahí, vacío, como respaldo por si eso falla.
+
+El segundo factor lo sigue haciendo una persona: existe justamente para eso. Lo que se automatizó es lo de alrededor —encontrar la cookie, copiarla y volver a pegarla cada vez—, que no protegía nada.
+
+Las cookies se le piden al navegador por su protocolo de depuración, no leyendo su archivo. El navegador sí sabe descifrar las suyas y por ese camino las entrega en claro, así que no hay ningún cifrado que rodear. No se instala ni se descarga nada: Edge ya viene con Windows y el perfil es una carpeta más de `portable/`, que viaja con el programa.
+
+Se entra por el enlace federado y no por la raíz del sitio, que es el que dispara la redirección a Microsoft. Por la raíz la sesión queda a medias, con `ASP.NET_SessionId` pero sin la cookie que autentica; esa cookie sola dejó de contar como sesión abierta, porque la pone el servidor al primer contacto, antes de saber quién eres, y darla por buena arrancaba un lote que moría en la primera página.
+
 ## 2026-08-19 — Indexado en AirVault desde la ventana, y los PDF se generan al exportar
 
 ### Sección «Indexar en AirVault»

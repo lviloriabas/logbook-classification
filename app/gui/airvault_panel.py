@@ -116,7 +116,10 @@ class TrabajoAirVaultWorker(QThread):
             )
 
         self._avisar("Entrando a AirVault", 0, 0)
-        sesion = abrir_sesion(config, cookie=estado.get("cookie") or None)
+        sesion = abrir_sesion(
+            config, cookie=estado.get("cookie") or None,
+            avisar=lambda texto: self._avisar(texto, 0, 0),
+        )
         sesion.comprobar()
         cliente = ClienteHttp(sesion, config)
 
@@ -246,16 +249,20 @@ class AirVaultPanel(QWidget):
     def _fila_sesion(self) -> QHBoxLayout:
         fila = QHBoxLayout()
         fila.addWidget(QLabel("Sesión:"))
+        # El campo queda por si el navegador no puede: el camino normal es
+        # que la sesión se resuelva sola.
         self.cookie_edit = QLineEdit()
         self.cookie_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.cookie_edit.setPlaceholderText(
-            "Cookie de AirVault copiada del navegador"
+            "Se resuelve sola; solo si el navegador falla"
         )
         self.cookie_edit.setToolTip(
-            "AirVault entra por Microsoft, que pide segundo factor, así que "
-            "el programa reutiliza la sesión ya abierta en el navegador. "
-            "Copiar aquí la cookie de AirVault. No se guarda en el disco: "
-            "hay que volver a pegarla cada vez que se abre el programa."
+            "Normalmente no hay que escribir nada aquí. El programa abre "
+            "Edge con un perfil propio y toma de ahí la sesión: la primera "
+            "vez se entra a AirVault en esa ventana, y a partir de entonces "
+            "se abre sola y sin ventana. Este campo es el respaldo por si "
+            "eso falla: se pega la cookie de AirVault copiada del navegador. "
+            "No se guarda en el disco."
         )
         fila.addWidget(self.cookie_edit)
         return fila

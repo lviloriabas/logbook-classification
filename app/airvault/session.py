@@ -9,8 +9,11 @@ Lo que si se puede es **reutilizar la sesion que el usuario ya abrio**. Por
 orden de preferencia:
 
 1. La cookie que se pasa a mano (``--cookie`` o ``AIRVAULT_COOKIE``).
-2. La misma cookie leida del perfil de Edge, para no tener que copiarla.
-   Es un atajo con condiciones; ver :mod:`app.airvault.edge`.
+2. **El navegador que abre el propio programa.** Edge con un perfil propio
+   dentro de ``portable/``: la persona entra una vez con su segundo factor y
+   el programa le pide la sesion al navegador. Despues el perfil la
+   conserva, asi que las veces siguientes no hay que teclear nada. Ver
+   :mod:`app.airvault.navegador`.
 3. El formulario propio de AirVault en ``/signin2/``, que solo sirve para
    las cuentas locales que no pasan por Entra ID. Es un respaldo, no el
    camino normal.
@@ -30,7 +33,7 @@ import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 import requests
 from loguru import logger
@@ -45,7 +48,7 @@ ENV_COOKIE = "AIRVAULT_COOKIE"
 # De donde salio la sesion, para poder decirlo en el reporte y en la
 # interfaz sin que el usuario tenga que adivinarlo.
 ORIGEN_COOKIE = "cookie pegada"
-ORIGEN_EDGE = "perfil de Edge"
+ORIGEN_EDGE = "navegador"
 ORIGEN_FORMULARIO = "formulario de AirVault"
 
 _AYUDA_COOKIE = (
@@ -187,9 +190,9 @@ class SesionAirVault:
             self.http.cookies.set(nombre, valor, domain=host, path="/")
         if not galletas.sostienen_sesion(cookies):
             logger.warning(
-                "Entre las cookies no viene ninguna de sesion ({}). Si "
+                "Entre las cookies no viene ninguna que autentique ({}). Si "
                 "AirVault pide acceso, revisar lo que se copio.",
-                ", ".join(galletas.PREFIJOS_DE_SESION),
+                ", ".join(galletas.PREFIJOS_DE_AUTENTICACION),
             )
         self._autenticada = True
         self._origen = origen
@@ -211,12 +214,20 @@ class SesionAirVault:
             )
         return self.usar_cookies(analizadas, ORIGEN_COOKIE)
 
-    def usar_edge(self, perfil: Optional[Path] = None) -> "SesionAirVault":
-        """Adopta las cookies de AirVault guardadas por Edge."""
-        from app.airvault import edge
+    def usar_navegador(
+        self, perfil: Optional[Path] = None,
+        avisar: Optional[Callable[[str], None]] = None,
+    ) -> "SesionAirVault":
+        """Toma la sesion del navegador que abre el propio programa."""
+        from app.airvault import navegador
 
-        host = galletas.dominio(self.config.base_url)
-        return self.usar_cookies(edge.leer_cookies(host, perfil), ORIGEN_EDGE)
+        return self.usar_cookies(
+            navegador.obtener_cookies(
+                self.config.base_url, perfil, self.config.url_sso,
+                espera_login_s=self.config.espera_login_s, avisar=avisar,
+            ),
+            ORIGEN_EDGE,
+        )
 
     def iniciar_sesion(self, credenciales: Credenciales) -> "SesionAirVault":
         """Autentica contra el formulario propio de AirVault.
@@ -409,6 +420,7 @@ def abrir_sesion(
     perfil: Optional[Path] = None,
     usar_edge: bool = True,
     credenciales: Optional[Credenciales] = None,
+    avisar: Optional[Callable[[str], None]] = None,
 ) -> SesionAirVault:
     """Arma la sesion con la primera fuente disponible.
 
@@ -428,23 +440,29 @@ def abrir_sesion(
 
     motivo_edge = ""
     if usar_edge:
-        from app.airvault import edge
+        from app.airvault import navegador
 
         try:
-            return sesion.usar_edge(perfil)
-        except edge.ErrorDeNavegador as exc:
+            return sesion.usar_navegador(
+                Path(perfil) if perfil else _perfil(config), avisar
+            )
+        except navegador.ErrorDeNavegador as exc:
             motivo_edge = str(exc)
-            logger.info("No se pudo tomar la cookie de Edge: {}", exc)
+            logger.info("No se pudo tomar la sesion del navegador: {}", exc)
 
     credenciales = credenciales or Credenciales.desde_entorno()
     if credenciales is not None:
         return sesion.iniciar_sesion(credenciales)
 
-    detalle = f" Edge: {motivo_edge}" if motivo_edge else ""
+    detalle = f" Navegador: {motivo_edge}" if motivo_edge else ""
     raise ErrorDeSesion(
         f"No hay ninguna sesion de AirVault disponible. {_AYUDA_COOKIE}"
         f"{detalle}"
     )
+
+
+def _perfil(config: AirVaultConfig) -> Optional[Path]:
+    return Path(config.perfil_navegador) if config.perfil_navegador else None
 
 
 def _buscar_campo(campos: Dict[str, str], claves: Tuple[str, ...]
