@@ -168,3 +168,86 @@ def test_un_csv_suelto_no_es_una_corrida_de_la_que_borrar(tmp_path: Path):
         viewer.pdf_viewer.shutdown()
         viewer.close()
         app.processEvents()
+
+
+def _run_with_two_pdfs_named_alike(tmp_path: Path) -> tuple[Path, Path]:
+    """Corrida con dos PDF distintos que se llaman igual, uno por carpeta."""
+    from app.models.schemas import FieldResult, PageResult, ValidationReport
+    from app.reports.csv_reporter import CsvReporter
+    from app.templates.manager import TemplateManager
+
+    template = TemplateManager().load(
+        Path(__file__).resolve().parents[1] / "template" / "aircraft_log.json"
+    )
+
+    def _page(number: int, log: str) -> PageResult:
+        page = PageResult(page_number=number)
+        page.add_field(
+            FieldResult(
+                page_number=number,
+                field_id="log_number",
+                field_type="ocr",
+                value=log,
+                confidence=1.0,
+                status="OK",
+            )
+        )
+        return page
+
+    reports = []
+    for carpeta, log in (("lote_a", "2147337"), ("lote_b", "2147437")):
+        pdf = tmp_path / carpeta / "bitacora.pdf"
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf.write_text("%PDF-1.4\n", encoding="utf-8")
+        reports.append(
+            ValidationReport(
+                pdf_path=str(pdf),
+                template_name=template.name,
+                pages=[_page(1, log), _page(2, str(int(log) + 1))],
+            )
+        )
+
+    run = tmp_path / "BITS 19 AUG 2026 06 00"
+    data = run / "datos"
+    data.mkdir(parents=True)
+    csv_path = data / f"{run.name}.CSV"
+    CsvReporter().write(reports, csv_path, template)
+    (data / f"{run.name}.json").write_text(
+        json.dumps({"reportes": [r.model_dump(mode="json") for r in reports]}),
+        encoding="utf-8",
+    )
+    return run, csv_path
+
+
+def test_el_nombre_repetido_no_borra_la_pagina_del_otro_pdf(tmp_path: Path):
+    """Dos PDF con el mismo nombre: se borra el de la fila, no los dos."""
+    app = QApplication.instance() or QApplication([])
+    _run, csv_path = _run_with_two_pdfs_named_alike(tmp_path)
+    viewer = CsvViewerWindow(tmp_path)
+    try:
+        assert viewer.load_csv_file(csv_path)
+        assert _pages_in_json(csv_path) == [1, 2, 1, 2]
+        # La primera fila es la página 1 del PDF de lote_a.
+        viewer.table.selectRow(0)
+
+        with patch(
+            "app.gui.csv_viewer.QMessageBox.warning",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            viewer._delete_selected_pages()
+        _wait_for_outputs(viewer, app)
+
+        payload = json.loads(
+            csv_path.with_suffix(".json").read_text(encoding="utf-8")
+        )
+        por_pdf = {
+            Path(report["pdf_path"]).parent.name: [
+                page["page_number"] for page in report["pages"]
+            ]
+            for report in payload["reportes"]
+        }
+        assert por_pdf == {"lote_a": [2], "lote_b": [1, 2]}
+    finally:
+        viewer.pdf_viewer.shutdown()
+        viewer.close()
+        app.processEvents()
