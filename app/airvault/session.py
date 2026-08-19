@@ -26,6 +26,7 @@ de un lote.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -56,6 +57,21 @@ _AYUDA_COOKIE = (
 
 class ErrorDeSesion(RuntimeError):
     """No se pudo autenticar o la sesion caduco."""
+
+
+class ErrorDeConexion(RuntimeError):
+    """No se pudo hablar con AirVault, ni siquiera reintentando."""
+
+
+# Respuestas que no significan que algo este mal, sino que el servidor
+# estaba ocupado: reintentar tiene sentido. Un 404 o un 403, no.
+ESTADOS_TRANSITORIOS = frozenset({408, 429, 500, 502, 503, 504})
+
+_AYUDA_LOTE_ABIERTO = (
+    "Si el lote esta abierto en el navegador, AirVault deja la peticion "
+    "esperando sin contestar: hay que cerrarlo alli antes de indexarlo "
+    "desde aqui."
+)
 
 
 class _FormParser(HTMLParser):
@@ -141,6 +157,8 @@ class SesionAirVault:
         })
         self._autenticada = False
         self._origen = ""
+        # Inyectable para que las pruebas no esperen de verdad.
+        self.dormir = time.sleep
 
     @property
     def autenticada(self) -> bool:
@@ -304,44 +322,85 @@ class SesionAirVault:
 
     # ── peticiones ─────────────────────────────────────────────────
 
-    def get(self, ruta: str, params: Dict[str, object] | None = None,
-            json_esperado: bool = True):
-        """GET con reintentos. Devuelve el JSON o el texto de la respuesta."""
+    def _pedir(self, metodo: str, ruta: str, **extra) -> requests.Response:
+        """Hace la peticion, reintentando lo que se puede reintentar.
+
+        Un lote son cientos de peticiones y una subida completa casi dos
+        mil: a esa escala un corte de red momentaneo o un servidor ocupado
+        dejan de ser raros, y sin reintentos cualquiera de los dos tira el
+        trabajo entero. Se reintenta lo que puede arreglarse solo —un
+        tiempo agotado, una conexion cortada, un servidor que responde que
+        esta ocupado— y nada mas: un 404 no mejora por insistir.
+
+        La espera crece con cada intento; reintentar al instante contra un
+        servidor que se esta ahogando solo lo empeora.
+        """
         if not self._autenticada:
             raise ErrorDeSesion("La sesion no esta autenticada")
         url = self.config.url(ruta)
-        ultimo: Exception | None = None
-        for intento in range(1, self.config.reintentos + 1):
+        intentos = max(1, self.config.reintentos)
+        ultimo = ""
+        for intento in range(1, intentos + 1):
             try:
-                respuesta = self.http.get(
-                    url, params=params, timeout=self.config.timeout_s
+                respuesta = self.http.request(
+                    metodo, url, timeout=self.config.timeout_s, **extra
+                )
+            except requests.Timeout as exc:
+                ultimo = (
+                    f"no contesto en {self.config.timeout_s:.0f}s ({exc})"
                 )
             except requests.RequestException as exc:
-                ultimo = exc
-                logger.warning(
-                    "Fallo la peticion a {} (intento {}/{}): {}",
-                    ruta, intento, self.config.reintentos, exc,
-                )
-                continue
-            if respuesta.status_code == 401 or self._pide_login(
-                respuesta.text[:2000], respuesta.url
-            ):
-                raise ErrorDeSesion(
-                    f"La sesion de AirVault caduco. {_AYUDA_COOKIE}"
-                )
-            respuesta.raise_for_status()
-            if not json_esperado:
-                return respuesta.text
-            try:
-                return respuesta.json()
-            except ValueError as exc:
-                raise ErrorDeSesion(
-                    f"AirVault devolvio algo que no es JSON en {ruta}"
-                ) from exc
-        raise ErrorDeSesion(
-            f"No se pudo contactar {ruta} tras "
-            f"{self.config.reintentos} intentos"
-        ) from ultimo
+                ultimo = f"no se pudo conectar ({exc})"
+            else:
+                if respuesta.status_code not in ESTADOS_TRANSITORIOS:
+                    return respuesta
+                ultimo = f"el servidor respondio {respuesta.status_code}"
+            logger.warning(
+                "AirVault {} en {} (intento {}/{})",
+                ultimo, ruta, intento, intentos,
+            )
+            if intento < intentos:
+                self.dormir(self.config.espera_reintento_s * intento)
+        raise ErrorDeConexion(
+            f"No se pudo completar {ruta} tras {intentos} intentos: "
+            f"{ultimo}. {_AYUDA_LOTE_ABIERTO}"
+        )
+
+    def get(self, ruta: str, params: Dict[str, object] | None = None,
+            json_esperado: bool = True):
+        """GET con reintentos. Devuelve el JSON o el texto de la respuesta."""
+        respuesta = self._pedir("GET", ruta, params=params)
+        if respuesta.status_code == 401 or self._pide_login(
+            respuesta.text[:2000], respuesta.url
+        ):
+            raise ErrorDeSesion(
+                f"La sesion de AirVault caduco. {_AYUDA_COOKIE}"
+            )
+        respuesta.raise_for_status()
+        if not json_esperado:
+            return respuesta.text
+        try:
+            return respuesta.json()
+        except ValueError as exc:
+            raise ErrorDeSesion(
+                f"AirVault devolvio algo que no es JSON en {ruta}"
+            ) from exc
+
+    def post(self, ruta: str, **extra) -> requests.Response:
+        """POST con los mismos reintentos que el GET.
+
+        Lo usa la subida, que manda el archivo en trozos de un mega: sin
+        reintentar, un solo trozo perdido obliga a repetir la subida entera.
+        """
+        respuesta = self._pedir("POST", ruta, **extra)
+        if respuesta.status_code == 401 or self._pide_login(
+            respuesta.text[:2000], respuesta.url
+        ):
+            raise ErrorDeSesion(
+                f"La sesion de AirVault caduco. {_AYUDA_COOKIE}"
+            )
+        respuesta.raise_for_status()
+        return respuesta
 
 
 def abrir_sesion(

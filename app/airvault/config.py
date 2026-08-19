@@ -75,6 +75,10 @@ class AirVaultConfig:
     # asi que sin limite el proceso se queda esperando para siempre.
     timeout_s: float = 60.0
     reintentos: int = 3
+    # Espera antes de reintentar, multiplicada por el numero de intento. Un
+    # corte de red o un servidor ocupado no se arreglan reintentando al
+    # instante; darle aire evita convertir un tropiezo en un fallo.
+    espera_reintento_s: float = 5.0
     usuario: str = ""
 
     @classmethod

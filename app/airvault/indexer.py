@@ -31,6 +31,11 @@ from app.airvault.guards import (
 )
 from app.airvault.mapping import ResolutorFlota, valores_de_indice
 from app.airvault.model import EstadoRegistro, Manifiesto, Registro
+from app.airvault.session import ErrorDeConexion, ErrorDeSesion
+
+# Fallos que no son de una pagina sino del camino entero: insistir con la
+# siguiente solo sirve para marcar cuatrocientas paginas con el mismo error.
+FALLOS_DE_CAMINO = (ErrorDeSesion, ErrorDeConexion)
 
 
 @dataclass
@@ -89,6 +94,9 @@ class Resultado:
     omitidas: int = 0
     fallidas: int = 0
     detalles: List[str] = field(default_factory=list)
+    # Motivo por el que se corto el lote entero, si se corto. Lo que queda
+    # sin escribir sigue pendiente en el manifiesto y se retoma despues.
+    interrumpido: str = ""
 
 
 class Indexador:
@@ -137,6 +145,7 @@ class Indexador:
         # tiene resuelta; asi los registros cuya flota veniamos infiriendo se
         # corrigen antes de construir los valores que se van a escribir.
         remotas: Dict[int, object] = {}
+        ilegibles: Dict[int, str] = {}
         for indice, registro in enumerate(registros, start=1):
             if registro.es_separador:
                 # Una divisoria no se lee: no tiene indices que aprender ni
@@ -144,7 +153,24 @@ class Indexador:
                 # servidor.
                 continue
             pagina = registro.pagina_batch or indice
-            remotas[registro.seq] = self.cliente.leer_pagina(batch_id, pagina)
+            try:
+                remotas[registro.seq] = self.cliente.leer_pagina(
+                    batch_id, pagina
+                )
+            except FALLOS_DE_CAMINO:
+                # La sesion o la red se cayeron: leer las demas no va a ir
+                # mejor y el mensaje que importa es este.
+                raise
+            except Exception as exc:  # noqa: BLE001 - se anota y se sigue
+                # Una pagina que no carga bloquea solo a esa pagina. Sin
+                # poder leerla no se puede comprobar que el lote y el
+                # manifiesto hablan de la misma bitacora, asi que no se
+                # escribe; el resto del lote no tiene por que esperarla.
+                ilegibles[registro.seq] = str(exc)
+                logger.warning(
+                    "No se pudo leer la pagina {} del lote {}: {}",
+                    pagina, batch_id, exc,
+                )
         self._aprender_flota(remotas.values())
         self._corregir_flota_inferida()
 
@@ -170,11 +196,18 @@ class Indexador:
             avisos = list(por_seq.get(registro.seq, ()))
             avisos.extend(verificar_obligatorios(registro, valores))
 
-            remota = remotas[registro.seq]
-            avisos.extend(verificar_alineacion(registro, remota.valores))
-            avisos.extend(
-                verificar_no_pisar(registro, remota.estado, self.sobrescribir)
-            )
+            remota = remotas.get(registro.seq)
+            if remota is None:
+                avisos.append(Aviso(
+                    registro.seq, "no_cargo",
+                    f"AirVault no devolvio la pagina {pagina}: "
+                    f"{ilegibles.get(registro.seq, 'sin respuesta')}",
+                ))
+            else:
+                avisos.extend(verificar_alineacion(registro, remota.valores))
+                avisos.extend(verificar_no_pisar(
+                    registro, remota.estado, self.sobrescribir
+                ))
 
             plan.paginas.append(PlanPagina(
                 seq=registro.seq,
@@ -182,7 +215,9 @@ class Indexador:
                 registro=registro,
                 valores=valores,
                 avisos=avisos,
-                ya_indexada=remota.estado == ESTADO_VALIDO,
+                ya_indexada=(
+                    remota is not None and remota.estado == ESTADO_VALIDO
+                ),
             ))
 
         plan.avisos_globales = [
@@ -252,6 +287,20 @@ class Indexador:
                     ESTADO_VALIDO,
                     entrada.pagina_batch,
                 )
+            except FALLOS_DE_CAMINO as exc:
+                # Se cayo la sesion o la red. Seguir escribiendo marcaria
+                # como fallidas paginas que nadie llego a intentar; se para
+                # y lo que queda sigue pendiente para retomarlo.
+                resultado.interrumpido = str(exc)
+                resultado.detalles.append(
+                    f"pagina {entrada.pagina_batch}: {exc}"
+                )
+                logger.error(
+                    "Se corto el indexado en la pagina {}: {}",
+                    entrada.pagina_batch, exc,
+                )
+                self._persistir()
+                break
             except Exception as exc:  # noqa: BLE001 - se anota y se sigue
                 registro.estado = EstadoRegistro.ERROR
                 registro.avisos = [f"[error_escritura] {exc}"]
@@ -296,7 +345,15 @@ def verificar_lote(
     bitacoras = [r for r in manifiesto.registros if not r.es_separador]
     for registro in bitacoras:
         pagina = registro.pagina_batch or registro.seq
-        remota = cliente.leer_pagina(batch_id, pagina)
+        try:
+            remota = cliente.leer_pagina(batch_id, pagina)
+        except FALLOS_DE_CAMINO:
+            raise
+        except Exception as exc:  # noqa: BLE001 - se anota y se sigue
+            # Comprobar es leer: una pagina que no carga se cuenta como no
+            # comprobada, no como mal escrita.
+            problemas.append(f"pagina {pagina}: no se pudo leer ({exc})")
+            continue
         if remota.estado == ESTADO_VALIDO:
             validas += 1
         else:
