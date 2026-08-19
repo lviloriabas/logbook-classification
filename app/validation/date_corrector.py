@@ -12,8 +12,11 @@ La politica de inferencia es deliberadamente asimetrica:
 * en los extremos se permite una extrapolacion corta con dos anclas locales;
 * una lectura mensual posicional clara puede actuar como ancla aun si su
   confianza aislada es baja;
-* el día OCR no se sustituye ni se inventa. La política de representación del
-  CSV (día específico o fin de mes) se aplica al escribir el reporte.
+* el día leído no se sustituye nunca; el día que no se leyó se completa con
+  el último que cabe en la secuencia del libro (como mucho, el último del
+  mes), porque una página sin día es una bitácora entera por indexar a mano
+  aunque todo lo demás se haya leído. La política del CSV (día específico o
+  fin de mes) sigue decidiendo cómo se representa la fecha.
 
 Una inferencia conserva su procedencia en ``FieldResult`` y queda en WARNING,
 nunca se presenta como una lectura OCR directa en estado OK.
@@ -22,6 +25,7 @@ nunca se presenta como una lectura OCR directa en estado OK.
 from __future__ import annotations
 
 import re
+from calendar import monthrange
 from collections import Counter
 from datetime import date
 from itertools import product
@@ -577,6 +581,139 @@ def _infer_edges(
     return filled
 
 
+def _fill_from_book_consensus(
+    book: Sequence[PageResult],
+    field_id: str,
+    normalize: Normalizer,
+    anchors: Sequence[Anchor],
+) -> int:
+    """Completa un componente cuando todo el libro coincide en su valor.
+
+    Un libro es un solo avión llenado de corrido. Si todas las lecturas
+    confiables del libro dicen el mismo mes (o el mismo año), no queda otra
+    opción posible para las páginas que no se dejaron leer: no hay tramo que
+    interpolar ni extremo que extrapolar, hay un único valor. Antes esas
+    páginas se quedaban sin fecha porque la inferencia pedía una ancla a cada
+    lado, y una página sin fecha es una bitácora que hay que indexar a mano.
+
+    ``anchors`` se calcula **antes** de interpolar: la interpolación marca
+    como "en conflicto" las lecturas que contradicen un intervalo, y esas
+    lecturas dejan de ser anclas. Recalcularlas aquí haría unánime un libro
+    que no lo era y llenaría el hueco con el mes equivocado.
+
+    La página queda en WARNING y con la procedencia escrita, igual que
+    cualquier otra inferencia: nunca se presenta como lectura directa.
+    """
+    if len(anchors) < MIN_ANCHORS:
+        return 0
+    values = {anchor[1] for anchor in anchors}
+    if len(values) != 1:
+        return 0
+    value = values.pop()
+    numbers = [anchor[0] for anchor in anchors]
+    filled = 0
+    for page in book:
+        if page.blank:
+            continue
+        field = _field(page, field_id)
+        if field is None or normalize(field.value) is not None:
+            continue
+        filled += int(_set_inferred_component(
+            page, field_id, value, "book_consensus", numbers
+        ))
+    return filled
+
+
+def _resolved_date(page: PageResult) -> Optional[Tuple[int, int, int]]:
+    """(año, mes, día) de la página cuando los tres están resueltos."""
+    day = _day_normalize(_field(page, "day").value if _field(page, "day") else None)
+    month = _month_number(
+        _field(page, "month").value if _field(page, "month") else None
+    )
+    year = _year_normalize(
+        _field(page, YEAR_FIELD_ID).value
+        if _field(page, YEAR_FIELD_ID) else None
+    )
+    if day is None or month is None or year is None:
+        return None
+    return (2000 + int(year), month, int(day))
+
+
+def _neighbour_day(
+    dates: Sequence[Optional[Tuple[int, int, int]]],
+    index: int,
+    step: int,
+    month: Tuple[int, int],
+) -> Optional[int]:
+    """Día de la página resuelta más cercana que cae en el mismo mes."""
+    position = index + step
+    while 0 <= position < len(dates):
+        neighbour = dates[position]
+        if neighbour is not None:
+            return neighbour[2] if neighbour[:2] == month else None
+        position += step
+    return None
+
+
+def _fill_days_to_month_end(book: Sequence[PageResult]) -> int:
+    """Completa el día ilegible con el último que cabe en la secuencia.
+
+    Una página con mes y año resueltos pero sin día se quedaba sin fecha, y
+    con ella la bitácora entera había que indexarla a mano aunque todo lo
+    demás se hubiera leído. Como el libro se llena de corrido, ese día no
+    puede ser anterior al de la página previa ni posterior al de la
+    siguiente: se escribe el último día que cabe en ese hueco y, si no hay
+    página posterior del mismo mes, el último del mes.
+
+    El día queda en WARNING, con su procedencia y su comentario, así que en
+    el CSV se distingue de un día leído de la casilla.
+    """
+    ordered = sorted(
+        (page for page in book if not page.blank),
+        key=lambda page: (
+            log_number(page) if log_number(page) is not None else 1 << 30,
+            page.page_number,
+        ),
+    )
+    dates = [_resolved_date(page) for page in ordered]
+    filled = 0
+    for index, page in enumerate(ordered):
+        field = _field(page, "day")
+        if field is None or _day_normalize(field.value) is not None:
+            continue
+        month = _month_number(
+            _field(page, "month").value if _field(page, "month") else None
+        )
+        year = _year_normalize(
+            _field(page, YEAR_FIELD_ID).value
+            if _field(page, YEAR_FIELD_ID) else None
+        )
+        if month is None or year is None:
+            continue
+        full_year = 2000 + int(year)
+        last_day = monthrange(full_year, month)[1]
+        same_month = (full_year, month)
+        after = _neighbour_day(dates, index, 1, same_month)
+        before = _neighbour_day(dates, index, -1, same_month)
+        day = min(last_day, after if after is not None else last_day)
+        if before is not None:
+            day = max(day, before)
+        previous = field.value
+        if previous and previous not in field.alternatives:
+            field.alternatives.append(previous)
+        field.value = f"{day:02d}"
+        field.status = Status.WARNING
+        field.confidence = _inferred_confidence(1)
+        field.source = "inferred"
+        field.inference_method = "month_end_fallback"
+        field.comment = (
+            f"Day not read; last day that fits the book sequence: {day:02d}"
+        )
+        dates[index] = (full_year, month, day)
+        filled += 1
+    return filled
+
+
 def _recombine(page: PageResult) -> None:
     """Combina la fecha solo si dia, mes y ano son validos."""
     day = _field(page, "day")
@@ -647,11 +784,11 @@ def _flag_unresolved(book: Sequence[PageResult]) -> int:
             day.inference_method = "date_incomplete"
             day.comment = "Day unresolved; date left incomplete"
         if month is not None and _month_number(month.value) is None:
-            month.status = Status.ERROR
+            month.status = Status.WARNING
             month.inference_method = "date_unresolved"
             month.comment = "Month unresolved after log_number inference"
         if year is not None and _year_normalize(year.value) is None:
-            year.status = Status.ERROR
+            year.status = Status.WARNING
             year.inference_method = "date_unresolved"
             year.comment = "Year unresolved after log_number inference"
         if (
@@ -662,7 +799,7 @@ def _flag_unresolved(book: Sequence[PageResult]) -> int:
             and _month_number(month.value) is not None
             and _year_normalize(year.value) is not None
         ):
-            year.status = Status.ERROR
+            year.status = Status.WARNING
             year.inference_method = "invalid_calendar_date"
             year.comment = "Date is not a valid calendar date"
     return unresolved
@@ -675,7 +812,8 @@ def correct_dates_by_book(
 
     El resultado ``corrected`` cuenta componentes inferidos o corregidos,
     no paginas.
-    ``days_filled`` permanece en cero: el fin de mes es una política del CSV.
+    ``days_filled`` cuenta los días completados con el último día que cabe en
+    la secuencia del libro.
     """
     books = group_books(reports)
     stats: Dict[str, int] = {
@@ -700,15 +838,30 @@ def correct_dates_by_book(
         sequence_candidates = _resolve_sequence_alternatives(book)
         stats["sequence_candidates"] += sequence_candidates
 
+        # Las anclas del libro se fotografían antes de interpolar: después,
+        # una lectura en conflicto con un intervalo ya no cuenta como ancla
+        # y el libro parecería unánime sin serlo.
+        year_anchors = _anchors(book, YEAR_FIELD_ID, _year_normalize)
+        month_anchors = _anchors(book, "month", _month_number)
+
         years, year_flags = _infer_between_anchors(
             book, YEAR_FIELD_ID, _year_normalize
         )
         years += _infer_edges(book, YEAR_FIELD_ID, _year_normalize)
+        years += _fill_from_book_consensus(
+            book, YEAR_FIELD_ID, _year_normalize, year_anchors
+        )
         months, month_flags = _infer_between_anchors(
             book, "month", _month_number
         )
         months += _infer_edges(book, "month", _month_number)
+        months += _fill_from_book_consensus(
+            book, "month", _month_number, month_anchors
+        )
 
+        for page in book:
+            _recombine(page)
+        days = _fill_days_to_month_end(book)
         for page in book:
             _recombine(page)
         regressions = _check_regressions(book)
@@ -716,8 +869,9 @@ def correct_dates_by_book(
 
         stats["years_filled"] += years
         stats["months_filled"] += months
+        stats["days_filled"] += days
         stats["corrected"] += (
-            years + months + year_consensus + sequence_candidates
+            years + months + days + year_consensus + sequence_candidates
         )
         stats["flagged"] += year_flags + month_flags
         stats["regressions"] += regressions
