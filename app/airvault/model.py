@@ -57,6 +57,13 @@ class Registro(BaseModel):
     archivo_origen: str = ""
     pagina_origen: int = 0
 
+    # Etiqueta del separador cuando esta posicion del lote no es una
+    # bitacora sino una pagina divisoria del PDF de entrega («REVISAR»,
+    # «POSIBLES DISCREPANCIAS», la matricula de un grupo). Ocupa su lugar en
+    # el lote para que la correspondencia por posicion siga en pie, pero no
+    # se le escribe nada: no es un documento que indexar.
+    separador: str = ""
+
     matricula: str = ""
     log_number: str = ""
     # Fecha en el formato del CSV de la corrida (YYYY/MM/dd). La conversion
@@ -74,7 +81,13 @@ class Registro(BaseModel):
     estado: EstadoRegistro = EstadoRegistro.PENDIENTE
     avisos: List[str] = Field(default_factory=list)
 
+    @property
+    def es_separador(self) -> bool:
+        return bool(self.separador)
+
     def listo_para_escribir(self) -> bool:
+        if self.es_separador:
+            return False
         return self.estado is EstadoRegistro.PENDIENTE and not self.avisos
 
 
@@ -124,7 +137,8 @@ class Manifiesto(BaseModel):
 
     def pendientes(self) -> List[Registro]:
         return [r for r in self.registros
-                if r.estado is EstadoRegistro.PENDIENTE]
+                if r.estado is EstadoRegistro.PENDIENTE
+                and not r.es_separador]
 
     def escritos(self) -> List[Registro]:
         return [r for r in self.registros
@@ -133,9 +147,17 @@ class Manifiesto(BaseModel):
     def con_avisos(self) -> List[Registro]:
         return [r for r in self.registros if r.avisos]
 
+    def bitacoras(self) -> List[Registro]:
+        """Registros que son documentos, sin las paginas divisorias."""
+        return [r for r in self.registros if not r.es_separador]
+
+    def separadores(self) -> List[Registro]:
+        return [r for r in self.registros if r.es_separador]
+
     def resumen(self) -> Dict[str, int]:
         return {
             "registros": len(self.registros),
+            "separadores": len(self.separadores()),
             "pendientes": len(self.pendientes()),
             "escritos": len(self.escritos()),
             "con_avisos": len(self.con_avisos()),

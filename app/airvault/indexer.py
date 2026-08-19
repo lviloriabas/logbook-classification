@@ -46,7 +46,8 @@ class PlanPagina:
 
     @property
     def escribible(self) -> bool:
-        return not self.avisos
+        """Una divisoria nunca se escribe: no es un documento que indexar."""
+        return not self.avisos and not self.registro.es_separador
 
 
 @dataclass
@@ -63,13 +64,19 @@ class Plan:
 
     @property
     def bloqueadas(self) -> List[PlanPagina]:
-        return [p for p in self.paginas if not p.escribible]
+        return [p for p in self.paginas
+                if not p.escribible and not p.registro.es_separador]
+
+    @property
+    def separadores(self) -> List[PlanPagina]:
+        return [p for p in self.paginas if p.registro.es_separador]
 
     def resumen(self) -> Dict[str, int]:
         return {
             "total": len(self.paginas),
             "escribibles": len(self.escribibles),
             "bloqueadas": len(self.bloqueadas),
+            "separadores": len(self.separadores),
             "avisos_globales": len(self.avisos_globales),
         }
 
@@ -131,6 +138,11 @@ class Indexador:
         # corrigen antes de construir los valores que se van a escribir.
         remotas: Dict[int, object] = {}
         for indice, registro in enumerate(registros, start=1):
+            if registro.es_separador:
+                # Una divisoria no se lee: no tiene indices que aprender ni
+                # con que contrastar, y son peticiones de mas contra el
+                # servidor.
+                continue
             pagina = registro.pagina_batch or indice
             remotas[registro.seq] = self.cliente.leer_pagina(batch_id, pagina)
         self._aprender_flota(remotas.values())
@@ -143,6 +155,12 @@ class Indexador:
 
         for indice, registro in enumerate(registros, start=1):
             pagina = registro.pagina_batch or indice
+            if registro.es_separador:
+                plan.paginas.append(PlanPagina(
+                    seq=registro.seq, pagina_batch=pagina, registro=registro,
+                    valores={}, avisos=[], ya_indexada=False,
+                ))
+                continue
             valores = valores_de_indice(
                 registro,
                 self.manifiesto.doc_type,
@@ -184,6 +202,8 @@ class Indexador:
     def _corregir_flota_inferida(self) -> None:
         """Reemplaza la flota adivinada por la que AirVault confirma."""
         for registro in self.manifiesto.registros:
+            if registro.es_separador:
+                continue
             if not registro.fleet_inferido or not registro.matricula:
                 continue
             fleet, lessor, inferido = self.resolutor.resolver(
@@ -196,15 +216,26 @@ class Indexador:
 
     # ── escritura ──────────────────────────────────────────────────
 
-    def aplicar(self, plan: Plan, detener_en_error: bool = True) -> Resultado:
+    def aplicar(
+        self, plan: Plan, detener_en_error: bool = True,
+        al_avanzar: Optional[Callable[[int, int], None]] = None,
+    ) -> Resultado:
         """Escribe las paginas escribibles del plan.
 
         Las paginas con avisos se saltan siempre: el plan ya decidio que no
         se pueden tocar y aqui no se vuelve a opinar.
+
+        ``al_avanzar`` recibe cuantas paginas se llevan escritas de cuantas
+        habia previstas, para que la interfaz pueda mover la barra sin que
+        el indexador sepa que existe una interfaz.
         """
         resultado = Resultado()
+        previstas = len(plan.escribibles)
         for entrada in plan.paginas:
             registro = entrada.registro
+            if registro.es_separador:
+                # No cuenta como omitida: nunca hubo nada que escribirle.
+                continue
             if not entrada.escribible:
                 registro.estado = EstadoRegistro.OMITIDA
                 registro.avisos = [str(a) for a in entrada.avisos]
@@ -241,6 +272,8 @@ class Indexador:
             registro.avisos = []
             resultado.escritas += 1
             self._persistir()
+            if al_avanzar is not None:
+                al_avanzar(resultado.escritas, previstas)
         return resultado
 
     def _persistir(self) -> None:
@@ -260,7 +293,8 @@ def verificar_lote(
     batch_id = manifiesto.batch_id or ""
     validas = 0
     problemas: List[str] = []
-    for registro in manifiesto.registros:
+    bitacoras = [r for r in manifiesto.registros if not r.es_separador]
+    for registro in bitacoras:
         pagina = registro.pagina_batch or registro.seq
         remota = cliente.leer_pagina(batch_id, pagina)
         if remota.estado == ESTADO_VALIDO:
@@ -269,4 +303,4 @@ def verificar_lote(
             problemas.append(
                 f"pagina {pagina}: estado {remota.estado}"
             )
-    return validas, len(manifiesto.registros), problemas
+    return validas, len(bitacoras), problemas

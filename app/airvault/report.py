@@ -38,14 +38,18 @@ def _fila(entrada) -> dict:
         "archivo_origen": registro.archivo_origen,
         "pagina_origen": registro.pagina_origen,
         "doc_type": valores.get(CAMPO_DOC_TYPE, ""),
-        "matricula": valores.get(CAMPO_MATRICULA, ""),
+        "matricula": registro.separador or valores.get(CAMPO_MATRICULA, ""),
         "fleet": valores.get(CAMPO_FLEET, ""),
         "fleet_inferido": "si" if registro.fleet_inferido else "",
         "log_number": valores.get(CAMPO_LOG_NUMBER, ""),
         "audit_status": valores.get(CAMPO_AUDIT_STATUS, ""),
         "end_date": valores.get(CAMPO_END_DATE, ""),
         "ya_indexada": "si" if entrada.ya_indexada else "",
-        "accion": "escribir" if entrada.escribible else "bloqueada",
+        "accion": (
+            "separador" if registro.es_separador
+            else "escribir" if entrada.escribible
+            else "bloqueada"
+        ),
         "avisos": " | ".join(str(a) for a in entrada.avisos),
     }
 
@@ -74,7 +78,12 @@ def escribir_html(plan: Plan, destino: Path | str, titulo: str = "") -> Path:
     filas = []
     for entrada in plan.paginas:
         datos = _fila(entrada)
-        clase = "bloqueada" if not entrada.escribible else ""
+        if entrada.registro.es_separador:
+            clase = "separador"
+        elif not entrada.escribible:
+            clase = "bloqueada"
+        else:
+            clase = ""
         celdas = "".join(
             f"<td>{html.escape(str(datos[col]))}</td>" for col in COLUMNAS
         )
@@ -93,6 +102,7 @@ def escribir_html(plan: Plan, destino: Path | str, titulo: str = "") -> Path:
  th, td {{ border: 1px solid #d8d8d8; padding: 4px 8px; text-align: left; }}
  th {{ background: #f2f2f2; position: sticky; top: 0; }}
  tr.bloqueada {{ background: #fff4f4; }}
+ tr.separador {{ background: #f4f4f4; color: #6a6a6a; }}
  tr:nth-child(even):not(.bloqueada) {{ background: #fafafa; }}
 </style></head><body>
 <h1>{html.escape(titulo or 'Revision de indexado')}</h1>
@@ -101,6 +111,7 @@ def escribir_html(plan: Plan, destino: Path | str, titulo: str = "") -> Path:
  <span>Paginas: <b>{resumen['total']}</b></span>
  <span>Se escribirian: <b>{resumen['escribibles']}</b></span>
  <span>Bloqueadas: <b>{resumen['bloqueadas']}</b></span>
+ <span>Separadores: <b>{resumen['separadores']}</b></span>
 </div>
 <table><thead><tr>{encabezados}</tr></thead>
 <tbody>{''.join(filas)}</tbody></table>
@@ -117,6 +128,7 @@ def resumen_texto(plan: Plan) -> str:
         f"Lote {plan.batch_id}: {datos['total']} paginas",
         f"  se escribirian: {datos['escribibles']}",
         f"  bloqueadas:     {datos['bloqueadas']}",
+        f"  separadores:    {datos['separadores']}",
     ]
     motivos: dict[str, int] = {}
     for entrada in plan.bloqueadas:
