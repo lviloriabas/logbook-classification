@@ -1600,12 +1600,18 @@ class CsvViewerWindow(QMainWindow):
         return keys
 
     @staticmethod
-    def _page_matches(pdf_path: Path, page_number: int, keys: set) -> bool:
-        """¿Esta página del reporte es una de las elegidas?"""
-        return (
-            (_folder_key(pdf_path), page_number) in keys
-            or (pdf_path.name.casefold(), page_number) in keys
-        )
+    def _page_matches(
+        pdf_path: Path, page_number: int, keys: set, by_name: bool = True
+    ) -> bool:
+        """¿Esta página del reporte es una de las elegidas?
+
+        Por la ruta cuando coincide, y si no por el nombre del archivo, que
+        es lo único que guarda el CSV: el JSON conserva la ruta con la que se
+        proceso y el original pudo haberse movido desde entonces.
+        """
+        if (_folder_key(pdf_path), page_number) in keys:
+            return True
+        return by_name and (pdf_path.name.casefold(), page_number) in keys
 
     def _delete_selected_pages(self) -> None:
         """Quita de la corrida las páginas seleccionadas en la tabla.
@@ -1666,14 +1672,26 @@ class CsvViewerWindow(QMainWindow):
             return
 
         keys = self._page_keys(source_rows)
+        # Dos PDF distintos que se llaman igual no se distinguen por nombre,
+        # así que a esos solo los identifica su ruta. Si el archivo se movió
+        # y la ruta ya no coincide no se borra nada, que es preferible a
+        # quitarle la página al otro.
+        repeated = {
+            name
+            for name in (Path(report.pdf_path).name.casefold() for report in reports)
+            if [Path(r.pdf_path).name.casefold() for r in reports].count(name) > 1
+        }
         remaining = []
         removed = 0
         for report in reports:
             pdf_path = Path(report.pdf_path)
+            by_name = pdf_path.name.casefold() not in repeated
             pages = [
                 page
                 for page in report.pages
-                if not self._page_matches(pdf_path, page.page_number, keys)
+                if not self._page_matches(
+                    pdf_path, page.page_number, keys, by_name
+                )
             ]
             removed += len(report.pages) - len(pages)
             if not pages:
