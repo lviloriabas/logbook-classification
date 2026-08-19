@@ -2397,6 +2397,7 @@ class MainWindow(QMainWindow):
             ),
             separar_por=tuple(self._separator_value() or ()),
             un_solo_pdf=self.radio_unico.isChecked(),
+            paginas_por_parte=self._paginas_por_parte(),
             discrepancias=self.discrepancias_check.isChecked(),
             errores=self.export_options.errores_check.isChecked(),
             # "Visualizar campos" pertenece únicamente a la vista previa.
@@ -2408,6 +2409,13 @@ class MainWindow(QMainWindow):
                 self._important_columns_for_export(template)
             ),
         )
+
+    def _paginas_por_parte(self) -> int:
+        """Tope de páginas por parte, o cero si la entrega no se reparte."""
+        grupo = self.export_options
+        if not (self.radio_unico.isChecked() and grupo.partes_check.isChecked()):
+            return 0
+        return int(grupo.partes_spin.value())
 
     def _important_columns_for_export(self, template: Template) -> list[str]:
         """Columnas del CSV mínimo, independientes del dataset completo."""
@@ -3726,9 +3734,16 @@ class MainWindow(QMainWindow):
     def _running_workers(self) -> list[QThread]:
         """Hilos de trabajo todavía en marcha, si los hay."""
         running: list[QThread] = []
+        # El panel puede haberse destruido ya: el cierre se aplaza y vuelve a
+        # preguntar, y para entonces su objeto de C++ puede no estar.
+        panel = getattr(self, "airvault_panel", None)
+        try:
+            indexado = panel.hilo() if panel is not None else None
+        except RuntimeError:
+            indexado = None
         for worker in (
             self._worker, self._preprocess_worker, self._outputs_worker,
-            self.airvault_panel.hilo(),
+            indexado,
         ):
             if worker is None:
                 continue
