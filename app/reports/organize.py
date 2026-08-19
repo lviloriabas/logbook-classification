@@ -43,6 +43,7 @@ sufijo numérico (``HP-XXXXCMP-2.pdf``, ``-3``…).
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -477,9 +478,11 @@ def _claves_en_orden_seccion(
 
 def _tamano_horizontal_fuente(
     sources: PdfDocumentCache,
-    ref: PaginaRef,
+    ref: Optional[PaginaRef],
 ) -> Tuple[float, float]:
     """Tamaño horizontal de la bitácora que sigue al separador."""
+    if ref is None:
+        return (842.0, 595.0)
     page = sources.get(ref.pdf_path).load_page(ref.page.page_number - 1)
     return max(page.rect.width, page.rect.height), min(
         page.rect.width, page.rect.height
@@ -497,6 +500,104 @@ def _insertar_pagina_fuente(
         from_page=ref.page.page_number - 1,
         to_page=ref.page.page_number - 1,
     )
+
+
+@dataclass(frozen=True)
+class EntradaPdf:
+    """Una página del PDF de entrega: una bitácora o un separador.
+
+    El PDF no es solo las bitácoras: entre ellas van páginas divisorias que
+    el CSV no tiene. Quien después empareje ese PDF con el CSV —el indexado
+    en AirVault— necesita saber en qué posiciones están, porque si las
+    cuenta como bitácoras escribe cada dato una página más allá de donde va.
+    """
+
+    separador: str = ""
+    ref: Optional[PaginaRef] = None
+
+    @property
+    def es_separador(self) -> bool:
+        return self.ref is None
+
+
+def secuencia_pdf_unico(
+    reports: Sequence[ValidationReport],
+    separar_por: Sequence[str] = (),
+    excluidas: Optional[set[Tuple[str, int]]] = None,
+    discrepancias_al_final: bool = False,
+) -> List[EntradaPdf]:
+    """Páginas del PDF único en el orden exacto en que se escriben.
+
+    Es la única descripción del orden de entrega: la escritura del PDF
+    recorre esta lista, así que no hay forma de que el archivo y lo que
+    aquí se declara se separen.
+    """
+    criterios = list(separar_por or [])
+    grupos: Dict[Tuple[str, ...], List[PaginaRef]] = {}
+    secuencia: List[EntradaPdf] = []
+
+    if not criterios:
+        secuencia.extend(
+            EntradaPdf(ref=ref)
+            for ref in _preparar_paginas(reports, excluidas)
+        )
+    else:
+        grupos = agrupar_paginas(reports, criterios, excluidas)
+        for clave in _claves_en_orden_seccion(grupos, criterios):
+            secuencia.append(
+                EntradaPdf(separador=_etiqueta_grupo(clave, criterios))
+            )
+            secuencia.extend(EntradaPdf(ref=ref) for ref in grupos[clave])
+
+    if discrepancias_al_final:
+        discrepantes = _preparar_paginas_incluidas(reports, excluidas)
+        if discrepantes:
+            secuencia.append(EntradaPdf(separador="POSIBLES DISCREPANCIAS"))
+            secuencia.extend(EntradaPdf(ref=ref) for ref in discrepantes)
+
+    revisar = paginas_para_revisar(reports)
+    if revisar:
+        secuencia.append(EntradaPdf(separador=ETIQUETA_REVISAR))
+        secuencia.extend(EntradaPdf(ref=ref) for ref in revisar)
+
+    # Un separador sin ninguna bitácora detrás no llega a escribirse: la
+    # divisoria toma su tamaño de la página que la sigue.
+    if secuencia and all(entrada.es_separador for entrada in secuencia):
+        return []
+    return secuencia
+
+
+NOMBRE_INDICE_PAGINAS = "_paginas.json"
+
+
+def escribir_indice_paginas(
+    secuencia: Sequence[EntradaPdf], destino: Path, pdf: str = ""
+) -> Path:
+    """Deja escrito qué hay en cada página del PDF de entrega.
+
+    El CSV describe las bitácoras; este archivo describe el PDF, que además
+    lleva separadores. Sin él, emparejar el PDF con el CSV por posición se
+    desalinea en el primer separador, y una bitácora terminaría indexada
+    con los datos de otra.
+    """
+    ruta = Path(destino)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    paginas = [
+        {"separador": entrada.separador} if entrada.ref is None
+        else {
+            "archivo": Path(entrada.ref.pdf_path).name,
+            "pagina": entrada.ref.page.page_number,
+        }
+        for entrada in secuencia
+    ]
+    ruta.write_text(
+        json.dumps(
+            {"version": 1, "pdf": pdf, "paginas": paginas},
+            indent=2, ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return ruta
 
 
 def escribir_pdf_unico(
@@ -531,57 +632,33 @@ def escribir_pdf_unico(
     run_dir.mkdir(parents=True, exist_ok=True)
     base_path = run_dir / f"{run_dir.name}.pdf"
 
-    criterios = list(separar_por or [])
-    refs = _preparar_paginas(reports, excluidas) if not criterios else []
-    grupos: Dict[Tuple[str, ...], List[PaginaRef]] = {}
-    if criterios:
-        grupos = agrupar_paginas(reports, criterios, excluidas)
-        refs = [ref for grupo in grupos.values() for ref in grupo]
-    refs_discrepancias = (
-        _preparar_paginas_incluidas(reports, excluidas)
-        if discrepancias_al_final
-        else []
+    secuencia = secuencia_pdf_unico(
+        reports, separar_por, excluidas, discrepancias_al_final
     )
-    refs_revisar = paginas_para_revisar(reports)
-    todas_las_refs = refs + refs_discrepancias + refs_revisar
-
-    if not todas_las_refs:
+    if not secuencia:
         logger.info(f"[Organize] No hay páginas para exportar: {base_path}")
         return base_path
 
     output_path = unique_path(base_path)
     doc = fitz.open()
     try:
-        with PdfDocumentCache(ref.pdf_path for ref in todas_las_refs) as sources:
-            if not criterios:
-                for ref in refs:
-                    _insertar_pagina_fuente(doc, sources, ref)
-            else:
-                for clave in _claves_en_orden_seccion(grupos, criterios):
-                    grupo = grupos[clave]
-                    _pagina_divisoria(
-                        doc,
-                        _etiqueta_grupo(clave, criterios),
-                        _tamano_horizontal_fuente(sources, grupo[0]),
-                    )
-                    for ref in grupo:
-                        _insertar_pagina_fuente(doc, sources, ref)
-            if refs_discrepancias:
+        fuentes = [e.ref.pdf_path for e in secuencia if e.ref is not None]
+        with PdfDocumentCache(fuentes) as sources:
+            for indice, entrada in enumerate(secuencia):
+                if entrada.ref is not None:
+                    _insertar_pagina_fuente(doc, sources, entrada.ref)
+                    continue
+                # La divisoria copia el tamaño de la bitácora que abre, para
+                # que la sección no cambie de formato al pasar la página.
+                siguiente = next(
+                    (e.ref for e in secuencia[indice + 1:] if e.ref is not None),
+                    None,
+                )
                 _pagina_divisoria(
                     doc,
-                    "POSIBLES DISCREPANCIAS",
-                    _tamano_horizontal_fuente(sources, refs_discrepancias[0]),
+                    entrada.separador,
+                    _tamano_horizontal_fuente(sources, siguiente),
                 )
-                for ref in refs_discrepancias:
-                    _insertar_pagina_fuente(doc, sources, ref)
-            if refs_revisar:
-                _pagina_divisoria(
-                    doc,
-                    ETIQUETA_REVISAR,
-                    _tamano_horizontal_fuente(sources, refs_revisar[0]),
-                )
-                for ref in refs_revisar:
-                    _insertar_pagina_fuente(doc, sources, ref)
         doc.save(str(output_path), deflate=True)
     finally:
         doc.close()

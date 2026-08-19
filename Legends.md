@@ -2,6 +2,40 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-19 — Indexado en AirVault desde la ventana, y los PDF se generan al exportar
+
+### Sección «Indexar en AirVault»
+
+Escribir los índices de un lote era teclear en el Web Index de AirVault entre 300 y 500 páginas a mano, comprobando matrícula, número de bitácora y fecha una por una, con todos los datos ya leídos y guardados en el CSV de la corrida.
+
+La ventana principal gana una sección desplegable, junto a «Opciones avanzadas», que hace ese recorrido: sube el PDF de la corrida, espera a que el lote aparezca en AirVault, calcula qué escribiría en cada página y —solo después de que alguien mire el reporte— lo escribe. El avance sale por la barra y la etiqueta de estado que ya existían; no se añadieron indicadores.
+
+Su flecha comparte fila con la de «Opciones avanzadas». Apilada debajo le costaba 15 px de alto a la ventana, que en una pantalla de 1024x768 se abría fuera del escritorio.
+
+La misma función existe en `run_airvault.py` para la línea de comandos.
+
+### Los separadores del PDF ya no cuentan como bitácoras
+
+El indexado emparejaba el CSV con el lote por posición, dando por hecho que la página *n* del lote era la bitácora *n* del CSV. El PDF de entrega no cumple eso: entre las secciones lleva páginas divisorias —la matrícula o el mes de cada grupo, **POSIBLES DISCREPANCIAS**, **REVISAR**— que el CSV no tiene y que en AirVault ocupan una página igual que cualquier otra. Con un solo separador delante, todo lo que iba detrás se habría escrito una página corrido: la bitácora de la página 40 indexada con los datos de la 39.
+
+La exportación pasa a escribir junto al CSV un índice, `<corrida>_paginas.json`, que declara qué hay en cada página del PDF. Ese archivo, y no el CSV, fija el orden del manifiesto. Los separadores entran como registros propios —así la correspondencia por posición se sostiene— y no se les escribe nada: ni se leen del servidor, ni cuentan como omitidos, ni se espera que queden en `Valid` al verificar.
+
+Una corrida exportada antes de que existiera el índice sigue el orden del CSV y se avisa; si aquel PDF llevaba separadores, la guarda de cantidad detiene el trabajo antes de escribir nada.
+
+### La sesión de AirVault sale del navegador
+
+El acceso está federado con Microsoft Entra ID y pide segundo factor, que no se completa desde un script, así que el formulario de usuario y contraseña no servía para la cuenta con la que se trabaja.
+
+La sesión se reutiliza del navegador: la cookie que se pega, o la del perfil de Edge cuando se deja leer. La cookie va al tarro de peticiones y no a una cabecera fija, porque el primer `Set-Cookie` del servidor se habría comido la puesta a mano y el lote habría muerto a media escritura. Antes de empezar se comprueba la sesión con una petición, para no descubrir en la página 250 de 400 que había caducado.
+
+El atajo de Edge sirve poco en la práctica: hay que cerrar Edge para que suelte su base de cookies, y un Edge moderno las cifra con la identidad del navegador (`v20`), que no se deshace desde fuera. Cuando no se puede, se dice por qué y se sigue con la cookie pegada.
+
+### Los PDF se generan al exportar, no al procesar
+
+Terminado el OCR, el programa generaba siempre los PDF de entrega. Componerlos vuelve a abrir cada original y tarda, y lo pagaba también quien iba a cambiar la separación y a exportar otra vez de todos modos.
+
+**Procesar** guarda ahora los datos —CSV, JSON y estadísticas— y nada más. La entrega se arma al pulsar **Exportar**, con la separación marcada en ese momento. Los archivos de entrada se siguen apartando a `input/processed/` al terminar, y la ventana reapunta sus resultados allí, así que exportar después encuentra las páginas originales.
+
 ## 2026-08-18 — Indexación automática: vuelo, fechas, matrículas sin confirmar y sección «Revisar»
 
 Corrida de referencia: 884 páginas de `input/Image_001..003.pdf`.

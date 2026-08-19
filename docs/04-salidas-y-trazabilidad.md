@@ -10,7 +10,8 @@ output/
     ├── datos/
     │   ├── BITS DD MON YYYY HH MM.CSV
     │   ├── BITS DD MON YYYY HH MM_completo.CSV
-    │   └── BITS DD MON YYYY HH MM.json
+    │   ├── BITS DD MON YYYY HH MM.json
+    │   └── BITS DD MON YYYY HH MM_paginas.json
     ├── stats.json
     ├── BITS DD MON YYYY HH MM.pdf
     └── otros PDF opcionales

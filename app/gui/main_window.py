@@ -83,6 +83,7 @@ from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.fleet_editor import FLEET_FILENAME, FleetEditorDialog, FleetStore
 from app.gui.responsive import COMPACT, Density, density_for, fit_to_screen
 from app.gui.table_sort import ColumnSortController
+from app.gui.airvault_panel import AirVaultPanel
 from app.gui.widgets import (
     APP_CHROME_QSS,
     DATA_TABLE_QSS,
@@ -1032,7 +1033,15 @@ class MainWindow(QMainWindow):
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
         self.advanced_btn.toggled.connect(self._toggle_advanced)
-        layout.addWidget(self.advanced_btn)
+
+        # Las dos flechas comparten fila. Apiladas, la segunda le costaba a
+        # la ventana 15 px de alto y en una pantalla de 1024x768 la sacaba
+        # del escritorio.
+        self._desplegables_row = QHBoxLayout()
+        self._desplegables_row.setSpacing(12)
+        self._desplegables_row.addWidget(self.advanced_btn)
+        self._desplegables_row.addStretch()
+        layout.addLayout(self._desplegables_row)
 
         self.advanced_panel = QWidget()
         self.advanced_panel.setVisible(False)
@@ -1089,7 +1098,48 @@ class MainWindow(QMainWindow):
         adv.addWidget(date_info)
 
         layout.addWidget(self.advanced_panel)
+
+        # El indexado cuelga del mismo cuadro: su flecha entra en la fila de
+        # arriba y su contenido debajo del panel avanzado.
+        airvault = self._build_airvault_panel()
+        self._desplegables_row.insertWidget(1, airvault.boton_desplegar)
+        layout.addWidget(airvault)
         return panel
+
+    def _build_airvault_panel(self) -> QWidget:
+        """Panel del indexado en AirVault, debajo de las opciones avanzadas.
+
+        Va desplegable por lo mismo que las opciones avanzadas: se usa una
+        vez al final de la corrida y cerrado no le quita alto a la vista
+        previa, que es lo que escasea en las pantallas de portátil.
+        """
+        panel = AirVaultPanel(SCRIPT_DIR)
+        # La etiqueta de estado y la barra nacen despues que los cuadros de
+        # arriba, asi que se enganchan por metodo y no directamente: el
+        # nombre se resuelve al emitir, no al construir.
+        panel.estado_cambiado.connect(self._on_airvault_status)
+        panel.progreso_cambiado.connect(self._on_airvault_progress)
+        panel.desplegado.connect(self._on_airvault_toggled)
+        self.airvault_panel = panel
+        return panel
+
+    def _on_airvault_status(self, message: str) -> None:
+        self.status_label.setText(message)
+
+    def _on_airvault_progress(self, done: int, total: int) -> None:
+        """Mueve la barra que ya existe; el panel no dibuja la suya."""
+        if total > 0:
+            self.progress.setRange(0, total)
+            self.progress.setValue(min(done, total))
+        else:
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+
+    def _on_airvault_toggled(self, expanded: bool) -> None:
+        """Deja sitio al panel desplegado sin sacar la ventana de la pantalla."""
+        self._refresh_minimum_size()
+        if expanded and self.height() < self.minimumSizeHint().height():
+            fit_to_screen(self, self.width(), self.minimumSizeHint().height())
 
     def _effective_threads(self, selected: int) -> int:
         """Hilos efectivos del pipeline según la reserva para la interfaz."""
@@ -2862,9 +2912,12 @@ class MainWindow(QMainWindow):
             self._show_preview_page(
                 reports[0].pages[0].page_number, Path(reports[0].pdf_path)
             )
-        self.status_label.setText("Generando salidas…")
+        # Solo se guardan los datos. Los PDFs son la entrega, y componerlos
+        # vuelve a abrir cada original y tarda tanto como para no imponerlo a
+        # quien todavia va a cambiar la separacion: se hacen al exportar.
+        self.status_label.setText("Guardando datos…")
         self._timer.start()
-        self._start_outputs(reports, context="proceso")
+        self._start_outputs(reports, context="proceso", skip_pdfs=True)
 
     def _start_outputs(
         self,
@@ -2924,6 +2977,11 @@ class MainWindow(QMainWindow):
     def _on_outputs_written(self, output_dir: Path) -> None:
         """Actualiza la interfaz cuando termina una exportación."""
         self._corrida_dir = Path(output_dir)
+        # El indexado trabaja sobre el CSV mínimo de la corrida recién
+        # escrita, que es el que lleva las columnas que van a AirVault.
+        self.airvault_panel.fijar_corrida(
+            Path(output_dir) / "datos" / f"{Path(output_dir).name}.CSV"
+        )
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         if self._outputs_context == "export":
@@ -2937,8 +2995,9 @@ class MainWindow(QMainWindow):
             logger.info(f"Corrida cancelada guardada (datos sin PDF) en: {output_dir}")
         else:
             # Los archivos ya dieron todo lo que tenían que dar: el OCR está
-            # hecho y las salidas escritas. Se apartan aquí, no al terminar el
-            # OCR, porque generar los PDFs vuelve a abrir cada original.
+            # hecho y los datos escritos. Se apartan aquí, y la ventana
+            # reapunta los resultados a su nueva ruta, así que exportar
+            # después sigue encontrando las páginas originales.
             self._archive_processed_inputs()
             self.status_label.setText(
                 "Procesamiento terminado. Puede cambiar la separación y exportar."
@@ -3668,7 +3727,8 @@ class MainWindow(QMainWindow):
         """Hilos de trabajo todavía en marcha, si los hay."""
         running: list[QThread] = []
         for worker in (
-            self._worker, self._preprocess_worker, self._outputs_worker
+            self._worker, self._preprocess_worker, self._outputs_worker,
+            self.airvault_panel.hilo(),
         ):
             if worker is None:
                 continue
