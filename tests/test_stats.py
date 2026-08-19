@@ -136,7 +136,7 @@ class TestConstruirStats(unittest.TestCase):
                 "HP-1534CMP_2026-JUL.pdf": 2,
                 "HP-1534CMP_sf.pdf": 1,
                 "HP-1538CMP_2026-AUG.pdf": 1,
-                "sin_matricula_2026-AUG.pdf": 1,
+                "revisar.pdf": 1,
             },
         )
         self.assertEqual(sep["total_pdfs"], 4)
@@ -155,7 +155,7 @@ class TestConstruirStats(unittest.TestCase):
         self.assertEqual(
             archivos,
             {"HP-1534CMP.pdf": 1, "HP-1538CMP.pdf": 1,
-             "sin_matricula.pdf": 1},
+             "revisar.pdf": 1},
         )
 
     def test_sin_separacion_no_hay_bloque(self):
