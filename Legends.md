@@ -53,3 +53,11 @@ La normalización pasa a ajustar la lectura a las formas que de verdad se escrib
 Las letras que el reconocedor devuelve en lugar de una cifra manuscrita se recuperan cuando el tramo conserva evidencia numérica (`7S8` es 758, `CMIO3` es CM103). Un `CM` leído entero sostiene por sí solo la lectura de lo que va detrás (`CMPlOS` es CM105). Lo que no encaja en ninguna forma se deja vacío.
 
 Resultado: 775 páginas con vuelo (antes 737) y ninguna con un valor fuera de esas formas.
+
+### Vocabulario del casillero de vuelo
+
+Revisados uno a uno los recortes de las 89 lecturas que seguían quedando vacías, aparecen dos palabras más escritas con claridad —`SUP`, en dos páginas, y `MTC`— y una constante: el reconocedor devuelve la P de `SPV` como `9`, `D`, `R` o `2`, y la T de `TCK` como `J`. Comparar el código letra a letra dejaba fuera `S9V`, `SDV`, `SRV`, `52V` y `JCK`, que en la página dicen `SPV` y `TCK`.
+
+La comparación pasa a hacerse por clase de trazo sobre la lectura entera, con un solo trazo de diferencia admitido y con preferencia por el código de la misma longitud. No se afloja la distancia, porque a dos trazos `ZCC` —que es un `700` manuscrito— se confundiría con `CCK`.
+
+Resultado: 782 páginas con vuelo y 91 códigos reconocidos (`TCK` 44, `SPV` 27, `SV` y sus variantes numeradas 14, `SVC` 4, `MTC` y `SUP` 1 cada uno).

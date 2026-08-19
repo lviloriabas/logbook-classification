@@ -262,10 +262,32 @@ class TestFlightNumber(unittest.TestCase):
             ("TLK", "TCK"),
             ("CCk", "CCK"),
             ("SPV", "SPV"),
+            ("SUP", "SUP"),
+            ("MTC", "MTC"),
             ("SVC VISIT", "SVC"),
             ("9643TCK", "TCK"),
         ):
             self.assertEqual(self._valor(value), expected)
+
+    def test_el_codigo_se_reconoce_por_el_trazo_no_por_la_letra(self):
+        """La P vuelve como 9, D o R, y la S como 5: sigue siendo SPV."""
+        for value, expected in (
+            ("S9V", "SPV"),
+            ("SDv", "SPV"),
+            ("SRV", "SPV"),
+            ("52V", "SPV"),
+            ("JCK", "TCK"),
+        ):
+            self.assertEqual(self._valor(value), expected)
+
+    def test_la_cifra_del_codigo_se_conserva(self):
+        self.assertEqual(self._valor("SV3"), "SV3")
+        self.assertEqual(self._valor("5U#2"), "SV2")
+
+    def test_el_trazo_parecido_no_alcanza_para_dos_letras(self):
+        """``ZCC`` es un 700 escrito a mano, no un CCK."""
+        for value in ("ZCC", "CDV", "GK", "CK"):
+            self.assertEqual(self._valor(value), "")
 
     def test_un_CM_limpio_sostiene_un_vuelo_de_dos_cifras(self):
         self.assertEqual(self._valor("CM 40"), "CM40")
