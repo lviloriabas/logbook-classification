@@ -1,0 +1,460 @@
+#!/usr/bin/env python3
+"""Indexado automatico de lotes de bitacoras en AirVault.
+
+Cada etapa se corre por separado o todas de corrido. El estado vive en el
+manifiesto del trabajo, asi que se puede preparar hoy, subir manana e
+indexar despues sin repetir nada.
+
+    python run_airvault.py preparar  --job varias24 --csv "output/.../BITS.CSV" --lote "DP | BITS VARIAS 24"
+    python run_airvault.py subir     --job varias24 --pdf "output/.../HP-1848CMP.pdf"
+    python run_airvault.py descubrir --job varias24 --esperar
+    python run_airvault.py plan      --job varias24
+    python run_airvault.py indexar   --job varias24 --revisar
+    python run_airvault.py verificar --job varias24
+    python run_airvault.py todo      --job varias24 --auto
+
+Modos de ``indexar``:
+    --revisar  escribe el reporte y espera aprobacion antes de tocar nada
+    --auto     escribe sin detenerse
+    sin nada   equivale a un dry run: deja el reporte y no escribe
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(_ROOT))
+
+from app.utils.portable import ensure_portable_env  # noqa: E402
+
+ensure_portable_env()
+os.chdir(_ROOT)
+
+from loguru import logger  # noqa: E402
+
+from app.airvault.config import (  # noqa: E402
+    AIRVAULT_FILENAME,
+    AirVaultConfig,
+)
+from app.airvault import manifest as manifiestos  # noqa: E402
+from app.airvault.client import ClienteHttp  # noqa: E402
+from app.airvault.discovery import (  # noqa: E402
+    LoteAmbiguo,
+    LoteNoEncontrado,
+    buscar,
+    esperar,
+)
+from app.airvault.indexer import Indexador, verificar_lote  # noqa: E402
+from app.airvault.mapping import (  # noqa: E402
+    FLOTA_CACHE_FILENAME,
+    ResolutorFlota,
+    leer_csv_corrida,
+    registros_desde_csv,
+    valores_de_indice,
+)
+from app.airvault.model import (  # noqa: E402
+    EstadoEtapa,
+    EstadoRegistro,
+    Manifiesto,
+)
+from app.airvault.naming import (  # noqa: E402
+    PREFIJO_POR_DEFECTO,
+    nombre_desde_corrida,
+)
+from app.airvault.report import (  # noqa: E402
+    escribir_csv,
+    escribir_html,
+    resumen_texto,
+)
+from app.airvault.session import (  # noqa: E402
+    Credenciales,
+    ErrorDeSesion,
+    SesionAirVault,
+)
+from app.airvault.session import abrir_sesion as _abrir_sesion  # noqa: E402
+
+CARPETA_TRABAJOS = Path("output") / "airvault"
+
+
+def carpeta_job(job: str) -> Path:
+    return CARPETA_TRABAJOS / job
+
+
+# ── argumentos ─────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="airvault",
+        description="Indexa en AirVault los lotes de bitacoras ya "
+                    "procesados por Logbook Classification.",
+    )
+    parser.add_argument("--verbose", action="store_true",
+                        help="Logs detallados")
+    sub = parser.add_subparsers(dest="etapa", required=True)
+
+    comun = argparse.ArgumentParser(add_help=False)
+    comun.add_argument("--job", required=True,
+                       help="Nombre del trabajo (carpeta en output/airvault)")
+
+    p = sub.add_parser("preparar", parents=[comun],
+                       help="Arma el manifiesto a partir del CSV de la corrida")
+    p.add_argument("--csv", required=True, help="CSV de la corrida")
+    p.add_argument("--lote", default=None,
+                   help="Nombre del lote. Sin esta opcion se arma solo con "
+                        "el prefijo y la marca de tiempo de la corrida.")
+    p.add_argument("--prefijo", default=PREFIJO_POR_DEFECTO,
+                   help=f"Prefijo del nombre del lote "
+                        f"(default: {PREFIJO_POR_DEFECTO})")
+    p.add_argument("--doc-type", default=None,
+                   help="Tipo de documento a escribir")
+    p.add_argument("--audit-status", default=None, help="Audit Status")
+
+    p = sub.add_parser("subir", parents=[comun],
+                       help="Sube los PDFs del lote por Quick Upload")
+    p.add_argument("--pdf", action="append", required=True,
+                   help="PDF a subir (repetible)")
+
+    p = sub.add_parser("descubrir", parents=[comun],
+                       help="Ubica el lote en AirVault por su nombre")
+    p.add_argument("--esperar", action="store_true",
+                   help="Sondear hasta que el lote aparezca")
+    p.add_argument("--batch-id", default=None,
+                   help="Saltarse la busqueda y fijar el lote a mano")
+
+    p = sub.add_parser("plan", parents=[comun],
+                       help="Dry run: calcula todo y no escribe nada")
+
+    p = sub.add_parser("indexar", parents=[comun],
+                       help="Escribe los indices en el lote")
+    grupo = p.add_mutually_exclusive_group()
+    grupo.add_argument("--revisar", action="store_true",
+                       help="Pedir aprobacion antes de escribir")
+    grupo.add_argument("--auto", action="store_true",
+                       help="Escribir sin detenerse a preguntar")
+    p.add_argument("--sobrescribir", action="store_true",
+                   help="Tambien reescribir las paginas ya validadas")
+    p.add_argument("--continuar-con-errores", action="store_true",
+                   help="No detenerse en la primera pagina que falle")
+
+    p = sub.add_parser("verificar", parents=[comun],
+                       help="Relee el lote y confirma como quedo")
+
+    p = sub.add_parser("todo", parents=[comun],
+                       help="Descubrir, planificar, indexar y verificar")
+    p.add_argument("--auto", action="store_true",
+                   help="Escribir sin pedir aprobacion")
+    p.add_argument("--sobrescribir", action="store_true")
+
+    for nombre in ("subir", "descubrir", "plan", "indexar", "verificar",
+                   "todo"):
+        sp = _subparser(sub, nombre)
+        sp.add_argument("--cookie", default=None,
+                        help="Cookie de sesion ya obtenida en el navegador")
+        sp.add_argument("--perfil-edge", default=None,
+                        help="Carpeta del perfil de Edge del que leer la "
+                             "cookie (por defecto se buscan todos)")
+        sp.add_argument("--sin-edge", action="store_true",
+                        help="No intentar leer la cookie del perfil de Edge")
+        sp.add_argument("--usuario", default=None,
+                        help="Usuario de una cuenta local de AirVault; las "
+                             "cuentas de Microsoft entran por cookie")
+    return parser.parse_args()
+
+
+def _subparser(sub, nombre: str) -> argparse.ArgumentParser:
+    return sub.choices[nombre]
+
+
+# ── sesion ─────────────────────────────────────────────────────────
+
+def abrir_sesion(config: AirVaultConfig, args) -> SesionAirVault:
+    """Abre la sesion con la primera fuente disponible y la comprueba.
+
+    La comprobacion es una peticion de mas al principio que evita el peor
+    final posible: descubrir que la cookie habia caducado a mitad de un
+    lote de cuatrocientas paginas.
+    """
+    usuario = getattr(args, "usuario", "") or config.usuario
+    credenciales = Credenciales.desde_entorno()
+    if credenciales is None and getattr(args, "usuario", ""):
+        # Solo se pregunta cuando alguien pide expresamente entrar con una
+        # cuenta local: la cuenta federada no tiene formulario que llenar.
+        credenciales = Credenciales.preguntar(usuario)
+    perfil = getattr(args, "perfil_edge", None)
+    sesion = _abrir_sesion(
+        config,
+        cookie=getattr(args, "cookie", None),
+        perfil=Path(perfil) if perfil else None,
+        usar_edge=not getattr(args, "sin_edge", False),
+        credenciales=credenciales,
+    )
+    lotes = sesion.comprobar()
+    print(f"Sesion de AirVault lista ({sesion.origen}); {lotes} lotes en la cola")
+    return sesion
+
+
+# ── etapas ─────────────────────────────────────────────────────────
+
+def etapa_preparar(args, config: AirVaultConfig) -> int:
+    carpeta = carpeta_job(args.job)
+    resolutor = ResolutorFlota.load(_ROOT / FLOTA_CACHE_FILENAME)
+    filas = leer_csv_corrida(args.csv)
+    registros = registros_desde_csv(filas, resolutor)
+    if not registros:
+        print("El CSV no tiene ninguna bitacora utilizable", file=sys.stderr)
+        return 1
+    nombre_batch = args.lote or nombre_desde_corrida(
+        args.csv, getattr(args, "prefijo", PREFIJO_POR_DEFECTO)
+    )
+    manifiesto = Manifiesto(
+        job_id=args.job,
+        nombre_batch=nombre_batch,
+        repo_id=config.repo_id,
+        csv_origen=str(Path(args.csv).resolve()),
+        doc_type=args.doc_type or config.doc_type,
+        audit_status=args.audit_status or config.audit_status,
+        registros=registros,
+    )
+    manifiesto.etapa("procesar").marcar(EstadoEtapa.HECHA, args.csv)
+    manifiesto.etapa("preparar").marcar(
+        EstadoEtapa.HECHA, f"{len(registros)} bitacoras"
+    )
+    manifiestos.guardar(manifiesto, carpeta)
+    inferidas = sum(1 for r in registros if r.fleet_inferido)
+    print(f"Manifiesto creado en {manifiestos.ruta_manifiesto(carpeta)}")
+    print(f"  bitacoras: {len(registros)}")
+    print(f"  lote:      {nombre_batch}")
+    print("  el lote debe subirse a AirVault con ese mismo nombre")
+    if inferidas:
+        print(f"  flota inferida por regla en {inferidas} bitacoras "
+              f"(revisar en el reporte)")
+    return 0
+
+
+def etapa_subir(args, config: AirVaultConfig) -> int:
+    from app.airvault.uploader import SubidorQuickUpload
+
+    carpeta = carpeta_job(args.job)
+    manifiesto = manifiestos.cargar(carpeta)
+    sesion = abrir_sesion(config, args)
+    subidor = SubidorQuickUpload(sesion, config.repo_id)
+    plantilla = valores_de_indice(
+        manifiesto.registros[0], manifiesto.doc_type,
+        manifiesto.audit_status, manifiesto.nombre_batch,
+    )
+    fallos = 0
+    for ruta in args.pdf:
+        resultado = subidor.subir(Path(ruta), plantilla)
+        estado = "ok" if resultado.ok else f"error: {resultado.detalle}"
+        print(f"  {resultado.archivo}: {estado}")
+        fallos += 0 if resultado.ok else 1
+    manifiesto.etapa("subir").marcar(
+        EstadoEtapa.HECHA if not fallos else EstadoEtapa.ERROR,
+        f"{len(args.pdf)} archivo(s)",
+    )
+    manifiestos.guardar(manifiesto, carpeta)
+    return 1 if fallos else 0
+
+
+def etapa_descubrir(args, config: AirVaultConfig,
+                    manifiesto: Manifiesto | None = None) -> int:
+    carpeta = carpeta_job(args.job)
+    manifiesto = manifiesto or manifiestos.cargar(carpeta)
+    sesion = abrir_sesion(config, args)
+    cliente = ClienteHttp(sesion, config)
+    esperadas = len(manifiesto.registros)
+    if getattr(args, "batch_id", None):
+        manifiesto.batch_id = args.batch_id
+        manifiesto.etapa("descubrir").marcar(
+            EstadoEtapa.HECHA, f"fijado a mano: {args.batch_id}"
+        )
+        manifiestos.guardar(manifiesto, carpeta)
+        print(f"Lote fijado a mano: {args.batch_id}")
+        return 0
+    try:
+        if getattr(args, "esperar", False):
+            lote = esperar(
+                cliente.listar_lotes, manifiesto.nombre_batch,
+                config.repo_id, esperadas,
+                config.espera_descubrimiento_s, config.espera_maxima_s,
+            )
+        else:
+            lote = buscar(
+                cliente.listar_lotes(), manifiesto.nombre_batch,
+                config.repo_id, esperadas,
+            )
+    except (LoteNoEncontrado, LoteAmbiguo) as exc:
+        manifiesto.etapa("descubrir").marcar(EstadoEtapa.ERROR, str(exc))
+        manifiestos.guardar(manifiesto, carpeta)
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    manifiesto.batch_id = lote.batch_id
+    manifiesto.etapa("descubrir").marcar(
+        EstadoEtapa.HECHA, f"{lote.batch_id} ({lote.paginas} paginas)"
+    )
+    manifiestos.guardar(manifiesto, carpeta)
+    print(f"Lote encontrado: {lote.batch_id} - {lote.nombre} "
+          f"({lote.paginas} paginas)")
+    if lote.paginas != esperadas:
+        print(f"AVISO: el lote tiene {lote.paginas} paginas y el manifiesto "
+              f"{esperadas}. El indexado no va a escribir hasta que "
+              f"coincidan.")
+    return 0
+
+
+def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
+    carpeta = carpeta_job(args.job)
+    manifiesto = manifiestos.cargar(carpeta)
+    if not manifiesto.batch_id:
+        raise SystemExit(
+            "El trabajo todavia no tiene lote. Correr 'descubrir' primero."
+        )
+    sesion = abrir_sesion(config, args)
+    cliente = ClienteHttp(sesion, config)
+    info = cliente.abrir_lote(manifiesto.batch_id)
+    paginas = int(info.get("pageCount", 0) or 0)
+    try:
+        picklist = cliente.picklist_matriculas()
+    except Exception as exc:  # noqa: BLE001 - el catalogo no es critico
+        logger.warning("No se pudo leer el picklist de matriculas: {}", exc)
+        picklist = []
+    resolutor = ResolutorFlota.load(_ROOT / FLOTA_CACHE_FILENAME)
+    indexador = Indexador(
+        cliente, manifiesto, picklist, sobrescribir,
+        al_guardar=lambda m: manifiestos.guardar(m, carpeta),
+        resolutor=resolutor,
+    )
+    plan = indexador.planificar(paginas)
+    # Lo aprendido del lote sirve para los siguientes: se guarda siempre,
+    # tambien en dry run, porque no toca nada de AirVault.
+    resolutor.guardar(_ROOT / FLOTA_CACHE_FILENAME)
+    manifiestos.guardar(manifiesto, carpeta)
+    escribir_csv(plan, carpeta / "revision.csv")
+    escribir_html(plan, carpeta / "revision.html",
+                  f"{manifiesto.nombre_batch} ({manifiesto.batch_id})")
+    return manifiesto, indexador, plan, carpeta
+
+
+def etapa_plan(args, config: AirVaultConfig) -> int:
+    _manifiesto, _indexador, plan, carpeta = _planificar(args, config)
+    print(resumen_texto(plan))
+    print(f"\nReporte: {carpeta / 'revision.html'}")
+    print("Nada fue escrito. Para escribir: indexar --revisar o --auto")
+    return 0
+
+
+def etapa_indexar(args, config: AirVaultConfig) -> int:
+    manifiesto, indexador, plan, carpeta = _planificar(
+        args, config, getattr(args, "sobrescribir", False)
+    )
+    print(resumen_texto(plan))
+    print(f"\nReporte: {carpeta / 'revision.html'}")
+
+    if not (args.revisar or args.auto):
+        print("Dry run: nada fue escrito.")
+        return 0
+    if args.revisar:
+        respuesta = input(
+            f"\nEscribir {len(plan.escribibles)} paginas en "
+            f"{plan.batch_id}? [escribir/no]: "
+        ).strip().lower()
+        if respuesta != "escribir":
+            print("Cancelado. Nada fue escrito.")
+            return 0
+
+    manifiesto.etapa("indexar").marcar(EstadoEtapa.EN_CURSO)
+    manifiestos.guardar(manifiesto, carpeta)
+    resultado = indexador.aplicar(
+        plan, detener_en_error=not getattr(args, "continuar_con_errores", False)
+    )
+    estado = (EstadoEtapa.HECHA if not resultado.fallidas
+              else EstadoEtapa.ERROR)
+    manifiesto.etapa("indexar").marcar(
+        estado,
+        f"escritas {resultado.escritas}, omitidas {resultado.omitidas}, "
+        f"fallidas {resultado.fallidas}",
+    )
+    manifiestos.guardar(manifiesto, carpeta)
+    print(f"\nEscritas:  {resultado.escritas}")
+    print(f"Omitidas:  {resultado.omitidas}")
+    print(f"Fallidas:  {resultado.fallidas}")
+    for detalle in resultado.detalles[:10]:
+        print(f"  {detalle}")
+    return 1 if resultado.fallidas else 0
+
+
+def etapa_verificar(args, config: AirVaultConfig) -> int:
+    carpeta = carpeta_job(args.job)
+    manifiesto = manifiestos.cargar(carpeta)
+    if not manifiesto.batch_id:
+        print("El trabajo no tiene lote asignado", file=sys.stderr)
+        return 1
+    sesion = abrir_sesion(config, args)
+    cliente = ClienteHttp(sesion, config)
+    validas, total, problemas = verificar_lote(cliente, manifiesto)
+    manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.HECHA if validas == total else EstadoEtapa.ERROR,
+        f"{validas}/{total} en Valid",
+    )
+    manifiestos.guardar(manifiesto, carpeta)
+    print(f"Paginas en Valid: {validas} de {total}")
+    for problema in problemas[:20]:
+        print(f"  {problema}")
+    if len(problemas) > 20:
+        print(f"  ... y {len(problemas) - 20} mas")
+    return 0 if validas == total else 1
+
+
+def etapa_todo(args, config: AirVaultConfig) -> int:
+    args.esperar = True
+    args.batch_id = None
+    codigo = etapa_descubrir(args, config)
+    if codigo:
+        return codigo
+    args.revisar = not args.auto
+    args.continuar_con_errores = False
+    codigo = etapa_indexar(args, config)
+    if codigo:
+        return codigo
+    return etapa_verificar(args, config)
+
+
+ETAPAS = {
+    "preparar": etapa_preparar,
+    "subir": etapa_subir,
+    "descubrir": etapa_descubrir,
+    "plan": etapa_plan,
+    "indexar": etapa_indexar,
+    "verificar": etapa_verificar,
+    "todo": etapa_todo,
+}
+
+
+def main() -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    args = parse_args()
+    logger.remove()
+    logger.add(sys.stderr, level="DEBUG" if args.verbose else "INFO")
+    config = AirVaultConfig.load(_ROOT / AIRVAULT_FILENAME)
+    try:
+        return ETAPAS[args.etapa](args, config)
+    except (ErrorDeSesion, FileNotFoundError, ValueError) as exc:
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - CLI amigable
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        if args.verbose:
+            import traceback
+
+            traceback.print_exc()
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

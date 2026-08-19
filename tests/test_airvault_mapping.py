@@ -1,0 +1,132 @@
+"""Traduccion del CSV de la corrida a los valores de AirVault."""
+
+from __future__ import annotations
+
+from app.airvault.config import (
+    CAMPO_AUDIT_STATUS,
+    CAMPO_DOC_TYPE,
+    CAMPO_END_DATE,
+    CAMPO_FLEET,
+    CAMPO_LOG_NUMBER,
+    CAMPO_MATRICULA,
+)
+from app.airvault.mapping import (
+    ResolutorFlota,
+    fecha_airvault,
+    normalizar_log_number,
+    normalizar_matricula,
+    registros_desde_csv,
+    valores_de_indice,
+)
+
+
+def test_fecha_del_csv_a_airvault():
+    assert fecha_airvault("2026/08/31") == "08/31/2026"
+
+
+def test_fecha_invalida_queda_vacia():
+    # Mejor un obligatorio vacio que la guarda acuse, a inventar una fecha.
+    for valor in ("", "31/08/2026", "2026-08-31", "basura", None):
+        assert fecha_airvault(valor) == ""
+
+
+def test_matricula_se_normaliza():
+    assert normalizar_matricula(" hp-1848cmp ") == "HP-1848CMP"
+    assert normalizar_matricula("HK-4453") == "HK-4453"
+
+
+def test_matricula_invalida_queda_vacia():
+    for valor in ("", "1848", "HP-184CMP", "XX-1848CMP"):
+        assert normalizar_matricula(valor) == ""
+
+
+def test_log_number_de_siete_digitos():
+    assert normalizar_log_number("2287325") == "2287325"
+    assert normalizar_log_number(" 2287325 ") == "2287325"
+    assert normalizar_log_number("228732") == ""
+    assert normalizar_log_number("22873250") == ""
+
+
+def test_flota_conocida_no_se_infiere():
+    resolutor = ResolutorFlota({"HP-1848CMP": {"fleet": "NG",
+                                               "lessor": "SMBC A.C"}})
+    fleet, lessor, inferido = resolutor.resolver("HP-1848CMP")
+    assert (fleet, lessor, inferido) == ("NG", "SMBC A.C", False)
+
+
+def test_flota_desconocida_se_infiere_y_se_avisa():
+    fleet, _lessor, inferido = ResolutorFlota().resolver("HP-9924CMP")
+    assert fleet == "MAX"
+    assert inferido is True
+
+
+def test_aprender_deja_de_inferir():
+    resolutor = ResolutorFlota()
+    resolutor.aprender("HP-9812CMP", "MAX", "COPA")
+    fleet, lessor, inferido = resolutor.resolver("HP-9812CMP")
+    assert (fleet, lessor, inferido) == ("MAX", "COPA", False)
+
+
+def test_matricula_vacia_no_resuelve_flota():
+    assert ResolutorFlota().resolver("") == ("", "", False)
+
+
+def _fila(**kwargs):
+    base = {"file": "Image_001.pdf", "page": "1", "log_number": "2287325",
+            "matricula": "HP-1848CMP", "date": "2026/08/31", "dup": "false",
+            "disc": "false"}
+    base.update(kwargs)
+    return base
+
+
+def test_registros_conservan_el_orden_del_csv():
+    filas = [_fila(page="1"), _fila(page="2", log_number="2287326")]
+    registros = registros_desde_csv(filas)
+    assert [r.seq for r in registros] == [1, 2]
+    assert [r.log_number for r in registros] == ["2287325", "2287326"]
+
+
+def test_paginas_en_blanco_no_entran():
+    # Si entraran, la correspondencia con las paginas del lote se correria.
+    filas = [_fila(page="1"),
+             _fila(page="2", log_number="", matricula="", date=""),
+             _fila(page="3", log_number="2287327")]
+    registros = registros_desde_csv(filas)
+    assert [r.seq for r in registros] == [1, 2]
+    assert [r.pagina_origen for r in registros] == [1, 3]
+
+
+def test_orden_explicito_manda_sobre_el_csv():
+    filas = [_fila(page="1", log_number="2287325"),
+             _fila(page="2", log_number="2287326")]
+    registros = registros_desde_csv(
+        filas, orden=[("Image_001.pdf", 2), ("Image_001.pdf", 1)]
+    )
+    assert [r.log_number for r in registros] == ["2287326", "2287325"]
+
+
+def test_banderas_del_csv_viajan():
+    registros = registros_desde_csv([_fila(dup="true", disc="true")])
+    assert registros[0].duplicado is True
+    assert registros[0].discrepancia is True
+
+
+def test_valores_de_indice_llevan_los_seis_obligatorios():
+    registro = registros_desde_csv([_fila()])[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+    assert valores[CAMPO_DOC_TYPE] == "Log Page"
+    assert valores[CAMPO_MATRICULA] == "HP-1848CMP"
+    assert valores[CAMPO_FLEET] == "NG"
+    assert valores[CAMPO_LOG_NUMBER] == "2287325"
+    assert valores[CAMPO_AUDIT_STATUS] == "PUBLISHED"
+    assert valores[CAMPO_END_DATE] == "08/31/2026"
+
+
+def test_no_se_mandan_campos_que_el_sistema_no_controla():
+    # Lo que no se manda, AirVault lo conserva: asi un indexado no pisa lo
+    # que alguien puso a mano.
+    registro = registros_desde_csv([_fila()])[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+    assert 9752 not in valores  # Description
+    assert 9625 not in valores  # WO #
+    assert 9594 not in valores  # Start Date
