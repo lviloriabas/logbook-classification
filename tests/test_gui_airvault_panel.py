@@ -75,7 +75,7 @@ def test_apunta_a_la_corrida_y_propone_el_nombre_del_lote(panel, tmp_path):
     csv = corrida(tmp_path)
     panel.fijar_corrida(csv)
     assert panel.corrida_edit.text() == str(csv)
-    assert panel.lote_edit.text() == "DP | BIT 18 AUG 2026 05 42"
+    assert panel.lote_edit.text() == "DP | BITS 18 AUG 2026 05 42"
 
 
 def test_el_campo_de_la_corrida_no_se_teclea(panel):
