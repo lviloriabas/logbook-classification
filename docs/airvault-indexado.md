@@ -16,7 +16,7 @@ avanzadas», cerrada hasta que se despliega. Trabaja en dos tiempos:
 |---|---|
 | `Corrida:` | CSV de la corrida. Se rellena solo con la que acaba de exportarse; con `Buscar…` se elige otra. |
 | `Lote:` | Nombre con el que el lote queda en AirVault. Viene propuesto con la fecha y la hora de la corrida. |
-| `Sesion:` | Cookie de AirVault copiada del navegador. No se guarda en el disco. |
+| `Sesion:` | Respaldo, normalmente vacio: la sesion la resuelve el navegador. Lo que se pegue aqui no se guarda en el disco. |
 | `Subir y revisar` | Sube el PDF, espera a que aparezca el lote y calcula que se escribiria. No indexa nada. |
 | `Indexar` | Escribe. Solo se habilita cuando ya hay una revision que mirar. |
 | `Ver reporte…` | Abre el detalle pagina por pagina. |
@@ -199,35 +199,58 @@ el reporte para que alguien la confirme.
 
 ## Autenticacion
 
-El programa es portable, asi que no hay navegador ni dependencias nuevas:
-la sesion se resuelve con `requests` y la libreria estandar.
-
 **Este acceso esta federado con Microsoft Entra ID**
-(`login.microsoftonline.com/9767f0dc-.../wsfed`), asi que el camino
-realista es la cookie de sesion, no el usuario y la contrasena: un login
-federado con segundo factor no se puede completar desde un script.
+(`login.microsoftonline.com/9767f0dc-.../wsfed`) y pide segundo factor. Eso
+no se automatiza, ni se debe: el segundo factor existe justamente para que
+lo haga una persona. Lo que si se automatiza es todo lo que viene despues.
+
+El programa **abre Edge con un perfil propio**, dentro de `portable/`,
+apuntando al enlace de acceso federado. La primera vez se ve la ventana y
+alguien entra con su usuario de Microsoft; en cuanto AirVault suelta sus
+cookies, la ventana se cierra sola. De ahi en adelante el perfil conserva
+la sesion, asi que el navegador se abre **sin ventana**, entrega la cookie
+y se cierra. Nadie copia nada ni teclea nada.
+
+Nada de esto instala ni descarga nada: Edge ya viene con Windows y el
+perfil es una carpeta mas dentro de `portable/`, que viaja con el programa.
+
+Las cookies se le piden al navegador por su protocolo de depuracion
+(`Storage.getCookies`), no leyendo su archivo. Un Edge moderno las cifra
+con la identidad del navegador (prefijo `v20`, clave
+`app_bound_encrypted_key`), que no se deshace desde fuera, y ademas
+mantiene su base abierta en exclusiva mientras corre. El navegador si sabe
+descifrar las suyas, y por el protocolo las entrega ya en claro; nunca se
+intenta rodear ese cifrado.
+
+Se entra por el enlace federado y no por la raiz del sitio: es el que
+dispara la redireccion a Microsoft. Por la raiz la sesion queda a medias,
+con `ASP.NET_SessionId` pero sin la cookie que autentica. Por eso esa
+cookie sola no se da por buena: la pone el servidor al primer contacto,
+antes de saber quien eres, y darla por buena hacia arrancar un lote que
+moria en la primera pagina.
 
 La sesion se toma de la primera fuente disponible, en este orden:
 
-1. La cookie que se pasa a mano: el campo `Sesion:` de la ventana,
+1. La cookie pasada a mano, si la hay: el campo `Sesion:` de la ventana,
    `--cookie "..."` en cualquier subcomando, o la variable de entorno.
 
    ```batch
    set AIRVAULT_COOKIE=FedAuth=...; FedAuth1=...
    ```
 
-2. La misma cookie leida del perfil de Edge, para no tener que copiarla.
-   Es un atajo con dos condiciones que hoy casi nunca se cumplen: **Edge
-   tiene que estar cerrado**, porque mientras corre no suelta su base de
-   cookies, y las cookies no pueden ir cifradas con la identidad del
-   navegador (prefijo `v20`, la clave `app_bound_encrypted_key`), que es lo
-   que hace un Edge moderno. Cuando no se puede, se dice por que y se sigue
-   con la cookie pegada; nunca se intenta rodear ese cifrado. Con
-   `--sin-edge` no se mira el navegador.
+   Es el respaldo por si el navegador no puede; el camino normal es dejarlo
+   vacio.
+
+2. El navegador, como acaba de describirse. Con `--sin-edge` no se abre;
+   con `--perfil-edge` se usa otra carpeta de perfil.
 
 3. El formulario propio de AirVault (`AIRVAULT_USER` / `AIRVAULT_PASSWORD`,
    o `--usuario`), que solo sirve para las cuentas locales que no pasan por
    Entra ID.
+
+Si nadie entra en la ventana dentro del plazo (cinco minutos, `espera_login_s`)
+se dice y se puede reintentar o pegar la cookie. Si en la maquina no hay
+Edge, tambien se dice y se sigue a mano.
 
 La cookie va al tarro de peticiones y no a una cabecera fija: en cuanto el
 servidor devuelve su primera cookie, `requests` reconstruye la cabecera
@@ -235,7 +258,9 @@ desde el tarro y se comeria cualquier valor puesto a mano, dejando el lote
 a medio escribir.
 
 Ni las cookies ni las contrasenas se guardan en disco ni se escriben en el
-log: de una cookie solo se registra el nombre y cuanto mide.
+log: de una cookie solo se registra el nombre y cuanto mide. Lo unico que
+queda guardado es el perfil del navegador, igual que cualquier sesion
+abierta en un navegador.
 
 Antes de empezar se comprueba la sesion con una peticion, para no descubrir
 en la pagina 250 de 400 que habia caducado. Si caduca a mitad, se detecta
