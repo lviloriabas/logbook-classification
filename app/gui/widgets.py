@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPalette
+from PySide6.QtCore import QEvent, QObject, QRectF, QSize, Qt
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QRegion,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -81,16 +89,6 @@ DATA_TABLE_QSS = (
     # de scroll y es lo único que no respeta el radio: sin dejarlo
     # transparente, la esquina inferior derecha se queda en pico.
     "QTableView::corner, QTableWidget::corner { background: transparent; }"
-    # El viewport (donde Qt pinta las filas) es un widget aparte que
-    # style_data_table rellena a base de paleta, no de hoja de estilo: ese
-    # relleno cubre el rectangulo completo hasta el borde y tapa el radio de
-    # las esquinas de abajo, aunque las de arriba se ven bien porque las pinta
-    # la cabecera. "qt_scrollarea_viewport" es el nombre que Qt le da por
-    # dentro a ese widget; dandole el mismo radio aqui, en la hoja de estilo,
-    # las cuatro esquinas quedan iguales.
-    "QTableView QWidget#qt_scrollarea_viewport,"
-    "QTableWidget QWidget#qt_scrollarea_viewport {"
-    f" background-color: {TABLE_BASE_BG}; border-radius: {TABLE_RADIUS}px; }}"
 )
 
 # Las barras de desplazamiento son parte de la superficie: dejarlas en el
@@ -242,6 +240,45 @@ class FlatSelectionDelegate(QStyledItemDelegate):
         option.palette = palette
 
 
+class _RoundedCornerClip(QObject):
+    """Recorta un widget a esquinas redondas por fuera, con una máscara.
+
+    ``border-radius`` en la hoja de estilo solo redondea el fondo/borde que
+    pinta el propio widget: una tabla dibuja las filas directamente sobre su
+    viewport (no como hijos), así que ese contenido llega en escuadra hasta
+    el borde y tapa el radio de las esquinas de abajo aunque las de arriba
+    se vean bien (las pinta la cabecera, que sí respeta el radio). La única
+    forma de que las cuatro esquinas queden iguales pase lo que pinte
+    adentro es recortar el widget entero desde fuera, con una máscara que se
+    recalcula cada vez que cambia de tamaño.
+    """
+
+    def __init__(self, radius: int, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._radius = radius
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        if event.type() == QEvent.Type.Resize:
+            self._apply(watched)
+        return False
+
+    def _apply(self, widget: QWidget) -> None:
+        if widget.width() <= 0 or widget.height() <= 0:
+            return
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(widget.rect()), self._radius, self._radius)
+        widget.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+
+def round_corners(widget: QWidget, radius: int = TABLE_RADIUS) -> None:
+    """Mantiene ``widget`` recortado a esquinas redondas mientras cambia de tamaño."""
+    widget.installEventFilter(_RoundedCornerClip(radius, widget))
+    if widget.width() > 0 and widget.height() > 0:
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(widget.rect()), radius, radius)
+        widget.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+
 def style_data_table(table: QAbstractItemView) -> None:
     """Deja la tabla en el gris oscuro de la aplicación.
 
@@ -267,6 +304,7 @@ def style_data_table(table: QAbstractItemView) -> None:
     viewport.setPalette(palette)
     viewport.setAutoFillBackground(True)
     table.setItemDelegate(FlatSelectionDelegate(table))
+    round_corners(table)
 
 
 def style_dark_pane(pane: QWidget) -> None:
