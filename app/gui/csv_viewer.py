@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
 from app.gui.csv_utils import (
     csv_field_id,
     find_csv_files,
+    find_run_dirs,
     important_csv_columns,
     important_field_ids_for_csv,
     read_csv_file,
@@ -69,6 +70,7 @@ from app.gui.widgets import (
     PANE_STATUS_COLORS,
     PANE_SURFACE_BG,
     PANE_TEXT,
+    TABLE_RADIUS,
     TABLE_SELECTION_BG,
     ZOOM_OVERLAY_QSS,
     ZoomableScrollArea,
@@ -82,6 +84,7 @@ from app.utils.important_fields import (
     IMPORTANT_FIELDS_FILENAME,
     ImportantFieldsStore,
 )
+from app.utils.io import PROCESSED_DIRNAME
 
 
 _STATUS_COLORS = {
@@ -106,6 +109,9 @@ _RESIZE_PRECISION = 64
 # previa y la tabla de la ventana principal.
 _PDF_PANE_SHARE = 2
 _TABLE_SHARE = 3
+# Corridas que lista el historial. Es la ventana de trabajo de un turno: lo
+# de más atrás sigue estando en output/ y se abre con «Seleccionar carpeta».
+_HISTORY_LIMIT = 25
 # El mismo texto que en la ventana principal; el botón lo recupera cuando
 # deja de explicar por qué no se puede exportar.
 _EXPORT_TOOLTIP = (
@@ -118,9 +124,11 @@ _PDF_PANE_QSS = (
     # El panel va en el mismo gris oscuro que la tabla a la que acompaña: en
     # blanco quedaba como un bloque luminoso al lado de ella.
     f"#embeddedPdfPane {{ background: {PANE_BG};"
-    f" border: 1px solid {PANE_SURFACE_BG}; border-radius: 6px; }}"
+    f" border: 1px solid {PANE_SURFACE_BG}; border-radius: {TABLE_RADIUS}px; }}"
+    # Mismo radio que el marco que la contiene: quedaba en 4px, un cuadro
+    # distinto al del resto de la aplicacion (QGroupBox, tablas, timeSummary).
     f"#pdfSurface {{ background: {PANE_SURFACE_BG};"
-    f" border: 1px solid {PANE_BORDER}; border-radius: 4px; }}"
+    f" border: 1px solid {PANE_BORDER}; border-radius: {TABLE_RADIUS}px; }}"
     # Sin fondo explícito, la etiqueta pinta el color de ventana y tapa la
     # superficie oscura justo cuando solo muestra el mensaje de estado.
     f"#pdfPage {{ color: {PANE_TEXT}; padding: 12px; background: transparent; }}"
@@ -130,7 +138,7 @@ _PDF_PANE_QSS = (
     "#embeddedPdfPane QComboBox, #embeddedPdfPane QLineEdit,"
     "#embeddedPdfPane QPushButton, #embeddedPdfPane QToolButton {"
     f" background: {PANE_CONTROL_BG}; color: {PANE_TEXT};"
-    f" border: 1px solid {PANE_BORDER}; border-radius: 4px; padding: 2px 6px; }}"
+    f" border: 1px solid {PANE_BORDER}; border-radius: {TABLE_RADIUS}px; padding: 2px 6px; }}"
     "#embeddedPdfPane QComboBox:hover, #embeddedPdfPane QPushButton:hover,"
     "#embeddedPdfPane QToolButton:hover {"
     f" background: {PANE_CONTROL_HOVER}; }}"
@@ -144,6 +152,11 @@ _PDF_PANE_QSS = (
     # El recuadro de zoom va al final: sus reglas y las del panel tienen la
     # misma especificidad y aquí gana la última.
 ) + scrollbars_qss("#embeddedPdfPane") + ZOOM_OVERLAY_QSS
+
+
+def _folder_key(path: Path | str) -> str:
+    """Identidad de una carpeta, para compararla venga de donde venga."""
+    return str(Path(path).resolve()).casefold()
 
 
 def _join_names(names: Iterable[str], limit: int = 3) -> str:
@@ -248,6 +261,23 @@ def _documents_from_rows(rows: Iterable[dict[str, str]]) -> list[Path]:
     return documents
 
 
+def _source_search_folders(csv_path: Path) -> list[Path]:
+    """Carpetas donde puede estar el PDF de origen de una corrida.
+
+    La de la corrida y la entrada del programa, y también la de los archivos
+    ya procesados: al terminar una corrida sus PDF salen de ``input/`` para
+    no confundirse con lo que falta, y ahí es donde están desde entonces.
+    """
+    csv_path = Path(csv_path)
+    entrada = _PROGRAM_DIR / "input"
+    return [
+        csv_path.parent,
+        csv_path.parent.parent,
+        entrada,
+        entrada / PROCESSED_DIRNAME,
+    ]
+
+
 def _locate_document(
     recorded: Path, folders: Iterable[Path], deep_folders: Iterable[Path]
 ) -> Path | None:
@@ -296,7 +326,7 @@ def resolve_source_documents(
     row_paths = source_pdf_paths_for_rows(csv_path, row_list)
     recorded = source_documents_for_csv(csv_path) or _documents_from_rows(row_list)
     extra = [Path(folder) for folder in extra_folders]
-    folders = [csv_path.parent, csv_path.parent.parent, _PROGRAM_DIR / "input"]
+    folders = _source_search_folders(csv_path)
     folders.extend(extra)
 
     available: list[Path] = []
@@ -365,7 +395,7 @@ def reports_for_csv(
 
     csv_path = Path(csv_path)
     extra = [Path(folder) for folder in extra_folders]
-    folders = [csv_path.parent, csv_path.parent.parent, _PROGRAM_DIR / "input"]
+    folders = _source_search_folders(csv_path)
     folders.extend(extra)
 
     reports = []
@@ -503,7 +533,17 @@ class EmbeddedPdfViewer(QFrame):
         self.setMinimumWidth(density.pdf_pane_min_width)
         self.scroll.setMinimumHeight(density.pdf_pane_min_height)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, parent: QWidget | None = None, density: Density = ROOMY
+    ) -> None:
+        """La densidad se recibe hecha, no se aplica después de construir.
+
+        Los mínimos del panel entran en el cálculo del alto de la ventana, y
+        cambiarlos con el panel ya montado deja el mínimo anterior guardado en
+        el layout hasta el primer dibujado: la ventana se abría con el alto
+        del panel holgado —cien píxeles de más— en una pantalla que ya se
+        había medido como baja.
+        """
         super().__init__(parent)
         self.setObjectName("embeddedPdfPane")
         self.setFrameShape(QFrame.Shape.StyledPanel)
@@ -513,7 +553,7 @@ class EmbeddedPdfViewer(QFrame):
         self._page = 1
         self._total = 0
         self._zoom = 1.0  # 1.0 = página ajustada al panel
-        self._density = ROOMY
+        self._density = density
         self._source: QPixmap | None = None
         self._refresh_pending = False
         # Páginas por documento: el recuento reabría el PDF en cada salto.
@@ -978,7 +1018,7 @@ class CsvViewerWindow(QMainWindow):
         self._table_timer.setInterval(0)
         self._table_timer.timeout.connect(self._on_table_chunk)
 
-        self.setWindowTitle("Visor de CSV procesados")
+        self.setWindowTitle("Visor de CSV e historial de procesados")
         # Como la ventana principal: el tamaño lo pone la pantalla. Pedía
         # 1400x840 y en un portátil de 1366x768 se abría más grande que el
         # escritorio, con la fila de exportación fuera de la vista.
@@ -986,13 +1026,31 @@ class CsvViewerWindow(QMainWindow):
         # La misma hoja que la ventana principal: tipografía, botones y el
         # radio de los cuadros salen de ahí, no del estilo nativo.
         self._apply_density_stylesheet()
+        # El panel de PDF recibe la densidad al construirse, dentro de
+        # _build_ui: apretarlo después dejaba el mínimo holgado guardado en el
+        # layout y la ventana se abría cien píxeles más alta de lo que pedía.
         self._build_ui()
-        self.pdf_viewer.apply_density(self._density)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
+
+        history_row = QHBoxLayout()
+        history_row.addWidget(QLabel("Historial:"))
+        self.history_combo = QComboBox()
+        self.history_combo.setToolTip(
+            "Corridas ya procesadas, de la más reciente a la más antigua. "
+            "Al elegir una se cargan sus CSV; las anteriores siguen "
+            "disponibles con «Seleccionar carpeta…»"
+        )
+        self.history_combo.setAccessibleName("Corridas procesadas recientes")
+        # «activated» solo lo emite quien elige con el ratón o el teclado, así
+        # que volver a elegir la corrida que ya está abierta la recarga y
+        # sincronizar la lista desde el código no dispara una carga.
+        self.history_combo.activated.connect(self._on_history_activated)
+        history_row.addWidget(self.history_combo, 1)
+        layout.addLayout(history_row)
 
         folder_row = QHBoxLayout()
         folder_row.addWidget(QLabel("Origen:"))
@@ -1068,7 +1126,7 @@ class CsvViewerWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(6)
         splitter.splitterMoved.connect(self._on_splitter_moved)
-        self.pdf_viewer = EmbeddedPdfViewer()
+        self.pdf_viewer = EmbeddedPdfViewer(density=self._density)
         self.pdf_viewer.relocateRequested.connect(self._relocate_source_pdfs)
         splitter.addWidget(self.pdf_viewer)
         self.table = QTableWidget(0, 0)
@@ -1103,6 +1161,10 @@ class CsvViewerWindow(QMainWindow):
         status_row.addWidget(self.btn_export)
         layout.addLayout(status_row)
 
+        # Al final: el historial se sincroniza con lo que hay abierto y para
+        # eso necesita el resto de los controles ya construidos.
+        self._refresh_history()
+
     def _apply_density_stylesheet(self) -> None:
         """Hoja de la ventana con el fragmento de medidas de la densidad."""
         self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS + self._density.qss)
@@ -1118,6 +1180,7 @@ class CsvViewerWindow(QMainWindow):
 
     def showEvent(self, event) -> None:  # noqa: N802 - API Qt
         super().showEvent(event)
+        self._refresh_history()
         self._update_responsive_layout()
         QTimer.singleShot(0, self._balance_content_splitter)
 
@@ -1156,6 +1219,44 @@ class CsvViewerWindow(QMainWindow):
         if worker is not None and worker.isRunning():
             worker.wait(30000)
         super().closeEvent(event)
+
+    def _refresh_history(self) -> None:
+        """Rellena el historial con las últimas corridas de la carpeta base.
+
+        Se rehace cada vez que la ventana se muestra: el visor vive abierto
+        mientras se procesa, y una corrida recién terminada tiene que estar
+        en la lista sin cerrar nada.
+        """
+        runs = find_run_dirs(self._start_folder, _HISTORY_LIMIT)
+        self.history_combo.clear()
+        for run in runs:
+            self.history_combo.addItem(run.name, str(run))
+        if not runs:
+            # Un desplegable vacío no dice nada; así se lee que todavía no
+            # hay nada procesado, no que la lista falló.
+            self.history_combo.addItem("No hay corridas procesadas todavía")
+        self.history_combo.setEnabled(bool(runs))
+        self._sync_history_selection()
+
+    def _sync_history_selection(self) -> None:
+        """Deja marcada en el historial la corrida que se está viendo."""
+        csv_path = self._current_csv_path()
+        current = run_dir_for_csv(csv_path) if csv_path is not None else None
+        current = current or self._folder
+        if current is None:
+            return
+        key = _folder_key(current)
+        for index in range(self.history_combo.count()):
+            data = self.history_combo.itemData(index)
+            if data and _folder_key(data) == key:
+                self.history_combo.setCurrentIndex(index)
+                return
+
+    def _on_history_activated(self, index: int) -> None:
+        """Abre la corrida elegida en el historial."""
+        run = self.history_combo.itemData(index)
+        if run:
+            self.load_folder(Path(run))
 
     def browse_for_folder(self) -> None:
         initial = self._folder or self._start_folder
@@ -1233,6 +1334,7 @@ class CsvViewerWindow(QMainWindow):
         self.csv_combo.blockSignals(False)
         self.csv_combo.setEnabled(True)
         self._load_csv(csv_paths[index])
+        self._sync_history_selection()
 
     def _on_csv_changed(self, index: int) -> None:
         if index >= 0:

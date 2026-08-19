@@ -52,6 +52,11 @@ DENSITY_HYSTERESIS = 40
 
 _COMPACT_QSS = """
 QPushButton { min-height: 20px; padding: 2px 8px; }
+/* El botón con dibujo cede el aire de los lados, que el icono ya llena: la
+   fila de «Entrada» es la más ancha de la ventana y, si crece, los cuadros de
+   arriba dejan de caber en dos columnas justo en el escritorio de 1280 px,
+   que es donde ese reparto hace falta. */
+QPushButton#iconButton { padding-left: 4px; padding-right: 6px; }
 QToolButton { padding: 1px 4px; }
 QGroupBox { margin-top: 6px; padding: 4px 6px 3px 6px; }
 QSpinBox, QComboBox, QLineEdit { padding: 1px; }

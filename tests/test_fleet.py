@@ -2,6 +2,11 @@ from pathlib import Path
 
 from app.gui.fleet_editor import FleetStore, normalise_matricula
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
+from app.reports.organize import (
+    clave_avion,
+    paginas_para_revisar,
+    por_revisar,
+)
 from app.utils.fleet import load_fleet
 from app.utils.postprocess import WWP_ONLY
 from app.validation.fleet import verify_reports_against_fleet
@@ -103,27 +108,54 @@ def test_fleet_decides_the_suffix_when_only_it_differs(tmp_path: Path):
     assert field.value == "HP-1522WWP"
 
 
-def test_tied_fleet_matches_do_not_reclassify(tmp_path: Path):
-    """Dos aviones igual de parecidos: elegir uno sería adivinar."""
+def test_tied_fleet_matches_leave_the_page_without_registration(tmp_path: Path):
+    """Dos aviones igual de parecidos: elegir uno sería adivinar.
+
+    La lectura tampoco puede quedarse escrita: no es ninguno de los dos y,
+    puesta en el CSV, abre una bitácora de un avión que no existe. La página
+    se queda sin matrícula y cae en «Revisar», con la lectura guardada.
+    """
     store = FleetStore(tmp_path / "fleet.json")
     store.save(["HP-1717CMP", "HP-7217CMP"])
-    report, field, _ = _report("HP-1217CMP")
+    report, field, page = _report("HP-1217CMP")
 
     verify_reports_against_fleet([report], store.path)
 
-    assert field.value == "HP-1217CMP"
-    assert field.source == "direct"
-    assert "misma distancia" in field.comment
+    assert field.value is None
+    assert field.alternatives == ["HP-1217CMP"]
+    assert field.inference_method == "fleet_unconfirmed"
+    assert "sin confirmar" in field.comment
     assert "HP-1717CMP" in field.comment and "HP-7217CMP" in field.comment
+    assert page.status is not Status.OK
 
 
-def test_reading_without_registration_format_is_only_flagged(tmp_path: Path):
+def test_reading_without_registration_format_is_not_kept(tmp_path: Path):
     store = FleetStore(tmp_path / "fleet.json")
     store.save(["HP-1717CMP"])
     report, field, _ = _report("HP-17CMP")
 
     verify_reports_against_fleet([report], store.path)
 
-    assert field.value == "HP-17CMP"
-    assert field.source == "direct"
-    assert "no encontrada" in field.comment
+    assert field.value is None
+    assert field.alternatives == ["HP-17CMP"]
+    assert "sin confirmar" in field.comment
+
+
+def test_an_unconfirmed_registration_never_opens_a_group_of_its_own(
+    tmp_path: Path,
+):
+    """El caso que reportó la corrida: aviones que no existen en la entrega.
+
+    Con la verificación activa, una lectura que no es ningún avión de la
+    flota se quedaba escrita y abría su propia sección en el PDF y su
+    propia clave en las estadísticas, como si ese avión existiera.
+    """
+    store = FleetStore(tmp_path / "fleet.json")
+    store.save(["HP-1717CMP", "HP-7217CMP"])
+    report, _field, page = _report("HP-1217CMP")
+
+    verify_reports_against_fleet([report], store.path)
+
+    assert clave_avion(page) == "sin_matricula"
+    assert por_revisar(page)
+    assert [ref.page for ref in paginas_para_revisar([report])] == [page]
