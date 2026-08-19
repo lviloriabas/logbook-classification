@@ -77,6 +77,18 @@ def nombre_desde_corrida(
     return nombre_de_lote(prefijo, momento)
 
 
+def nombre_de_parte(base: str, indice: int, total: int) -> str:
+    """Nombre del lote de una parte: ``<base> (2 de 5)``.
+
+    Con una sola parte devuelve el nombre a secas, que es el de siempre.
+    El sufijo hace falta porque cada parte es un lote distinto y los lotes
+    se localizan por nombre: dos con el mismo no habria forma de separarlos.
+    """
+    if total <= 1:
+        return base
+    return f"{base} ({indice} de {total})"
+
+
 def limpiar_nombre_remoto(nombre: str) -> str:
     """Deshace el escapado HTML con el que AirVault devuelve los nombres.
 
