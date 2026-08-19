@@ -39,3 +39,7 @@ desktop.ini
 important_fields.json
 
 .claude/
+.vscode/
+img/
+# Cache de flota que arma el indexado de AirVault
+airvault_flota.json
