@@ -147,10 +147,10 @@ def parse_args() -> argparse.Namespace:
         sp.add_argument("--cookie", default=None,
                         help="Cookie de sesion ya obtenida en el navegador")
         sp.add_argument("--perfil-edge", default=None,
-                        help="Carpeta del perfil de Edge del que leer la "
-                             "cookie (por defecto se buscan todos)")
+                        help="Carpeta del perfil de Edge que usa el programa "
+                             "para entrar (por defecto, portable/)")
         sp.add_argument("--sin-edge", action="store_true",
-                        help="No intentar leer la cookie del perfil de Edge")
+                        help="No abrir el navegador; usar solo la cookie")
         sp.add_argument("--usuario", default=None,
                         help="Usuario de una cuenta local de AirVault; las "
                              "cuentas de Microsoft entran por cookie")
@@ -183,6 +183,7 @@ def abrir_sesion(config: AirVaultConfig, args) -> SesionAirVault:
         perfil=Path(perfil) if perfil else None,
         usar_edge=not getattr(args, "sin_edge", False),
         credenciales=credenciales,
+        avisar=print,
     )
     lotes = sesion.comprobar()
     print(f"Sesion de AirVault lista ({sesion.origen}); {lotes} lotes en la cola")

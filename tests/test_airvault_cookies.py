@@ -40,11 +40,22 @@ def test_ida_y_vuelta_de_la_cabecera():
     assert galletas.parsear(galletas.formatear(original)) == original
 
 
-def test_reconoce_las_cookies_que_abren_sesion():
+def test_reconoce_las_cookies_que_autentican():
     assert galletas.sostienen_sesion({"FedAuth": "x"})
     assert galletas.sostienen_sesion({"FedAuth1": "x"})
-    assert galletas.sostienen_sesion({"ASP.NET_SessionId": "x"})
     assert galletas.sostienen_sesion({".ASPXAUTH": "x"})
+
+
+def test_el_numero_de_sesion_solo_no_autentica():
+    """AirVault lo pone al primer contacto, antes de saber quien eres.
+
+    Darlo por bueno hacia pasar por sesion abierta una que seguia en la
+    pagina de Microsoft, y el lote moria en la primera pagina.
+    """
+    assert not galletas.sostienen_sesion({"ASP.NET_SessionId": "x"})
+    assert galletas.sostienen_sesion(
+        {"ASP.NET_SessionId": "x", "FedAuth": "y"}
+    )
 
 
 def test_una_cookie_cualquiera_no_abre_sesion():

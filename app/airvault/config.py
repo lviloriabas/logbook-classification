@@ -59,6 +59,13 @@ class AirVaultConfig:
     """Parametros de conexion y valores por defecto del indexado."""
 
     base_url: str = "https://airvault.criticaltech.com"
+    # Enlace de acceso federado. Es el que dispara la redireccion a Entra ID;
+    # entrar por la raiz deja la sesion sin la cookie de federacion.
+    url_sso: str = (
+        "https://airvault.criticaltech.com/zfp/?whr="
+        "https://login.microsoftonline.com/"
+        "9767f0dc-e83f-4cc1-94e1-0d5f9d287d32/wsfed"
+    )
     repo_id: int = 3209
     index_scheme_id: int = 137
     # El picklist de Doc Type contiene "Log Page"; los lotes cargados hasta
@@ -79,6 +86,11 @@ class AirVaultConfig:
     # corte de red o un servidor ocupado no se arreglan reintentando al
     # instante; darle aire evita convertir un tropiezo en un fallo.
     espera_reintento_s: float = 5.0
+    # Cuanto se espera a que alguien entre a AirVault en la ventana que abre
+    # el programa. Cinco minutos dan de sobra para un segundo factor.
+    espera_login_s: float = 300.0
+    # Perfil de Edge propio del programa. Vacio usa el de portable/.
+    perfil_navegador: str = ""
     usuario: str = ""
 
     @classmethod

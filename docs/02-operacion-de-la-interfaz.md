@@ -163,8 +163,11 @@ avance sobre el total de la corrida.
    exportar; con **Buscar…** elija otra.
 2. Revise el nombre en **Lote**. Lleva la fecha y la hora de la corrida
    porque en la cola de AirVault conviven lotes con nombres repetidos.
-3. Entre a AirVault en el navegador y copie la cookie de la sesión en
-   **Sesión**. No se guarda: hay que pegarla cada vez que abre el programa.
+3. **Sesión** se deja vacío. La primera vez que pulse **Subir y revisar**
+   se abre una ventana de Edge para que entre a AirVault con su usuario de
+   Microsoft; se cierra sola al terminar y las veces siguientes no vuelve a
+   aparecer. El campo es el respaldo por si eso falla: se pega ahí la cookie
+   de la sesión copiada del navegador, y no se guarda.
 4. Pulse **Subir y revisar**. El programa sube el PDF, espera a que el lote
    aparezca en AirVault y calcula qué escribiría en cada página. No indexa
    nada todavía.
