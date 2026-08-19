@@ -41,6 +41,7 @@ from app.utils.postprocess import (
     apply_postprocess,
 )
 from app.validation.grouping import group_books, log_number
+from app.validation.page_status import recompute_page_status
 
 MATRICULA_FIELD_ID = "matricula"
 
@@ -242,18 +243,16 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
 
 
 def _recompute_page_status(page: PageResult) -> None:
-    """Recalcula el estado de una página a partir de sus campos."""
-    if not page.fields or page.blank:
+    """Recalcula el estado de una página con la política de indexación.
+
+    La política vive en ``app.validation.page_status`` porque la comparten
+    los tres correctores y la validación de la plantilla: si cada uno
+    contara los campos a su manera, activar la verificación de matrículas
+    cambiaba el estado de páginas que nadie había tocado.
+    """
+    if page.blank:
         return
-    # Las siete lecturas de celda son evidencia auxiliar. Su ausencia o baja
-    # confianza no degrada la página si day/month/year ya quedaron resueltos.
-    decisive = [
-        field for field in page.fields
-        if not re.fullmatch(r"(?:day|month|year)_\d", field.field_id)
-    ]
-    worst = max((f.status for f in decisive), key=_ORDER.get,
-                default=Status.OK)
-    page.status = worst
+    recompute_page_status(page)
 
 
 def _recompute_summary(report: ValidationReport) -> None:
