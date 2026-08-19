@@ -1,34 +1,30 @@
 #!/usr/bin/env python3
-"""Arma una corrida de prueba con unas pocas bitacoras de una corrida real.
+"""Arma un PDF de prueba con unas pocas paginas al azar de ``input/``.
 
-Sirve para probar el indexado en AirVault de punta a punta sin arriesgar un
-lote de cuatrocientas paginas: se sacan veinte bitacoras al azar de un PDF
-de entrada, se arma con ellas una carpeta de corrida con la misma forma que
-deja una corrida de verdad —CSV, indice de paginas y PDF de entrega— y se
-indexa esa.
+Sirve para probar el recorrido completo —procesar, exportar, indexar en
+AirVault— sin arriesgar un lote de cuatrocientas paginas ni esperar el OCR
+de un escaneo de setecientos megas.
 
-    portable\\python312\\tools\\python.exe tools\\muestra_bitacoras.py ^
-        --csv "output\\BITS 18 AUG 2026 05 42\\datos\\BITS 18 AUG 2026 05 42.CSV" ^
-        --pdf "input\\Image_001.pdf" ^
-        --cuantas 20
+    portable\\python312\\tools\\python.exe tools\\muestra_bitacoras.py
 
-La entrega se escribe con la exportacion de verdad, asi que la muestra sale
-con sus paginas separadoras y su indice igual que una corrida completa: es
-justo lo que hay que probar antes de soltar el indexado sobre un lote real.
-Con ``--paginas-por-parte`` la muestra se reparte en varios archivos, uno
-por lote, para probar tambien ese camino.
+Sin argumentos toma veinte paginas al azar de los PDF que haya en
+``input/`` y deja ``input\\MUESTRA.pdf``. Ese archivo se procesa como
+cualquier otro: es una entrada de verdad, no una corrida reconstruida, asi
+que la prueba pasa por el mismo OCR, la misma exportacion y el mismo
+indexado que un lote real.
 
-Los PDF de entrada pesan cientos de megas, asi que esto se corre en la
-maquina que los tiene y nunca se commitea lo que produce: la carpeta
-``output/`` esta fuera del repositorio.
+Las paginas salen al azar a proposito: entre ellas caen bitacoras buenas,
+alguna en blanco y alguna que el OCR no va a poder leer, que es justo lo
+que hay que ver antes de soltar el indexado sobre un lote de verdad.
+
+Esto se corre en la maquina que tiene los escaneos y nunca se commitea lo
+que produce: ``input/`` esta fuera del repositorio.
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import random
-import shutil
 import sys
 from pathlib import Path
 
@@ -41,166 +37,97 @@ ensure_portable_env()
 
 import pymupdf as fitz  # noqa: E402
 
-from app.models.schemas import FieldResult, PageResult, ValidationReport  # noqa: E402
-from app.reports.organize import (  # noqa: E402
-    NOMBRE_INDICE_PAGINAS,
-    escribir_entrega,
-    escribir_indice_paginas,
-)
-
-COLUMNAS = (
-    "file", "page", "log_number", "dup", "disc", "matricula",
-    "flight_number", "pilot_signature", "captain_signature",
-    "captain_license", "technician_signature", "date", "time_ms",
-)
+ENTRADA = _ROOT / "input"
+SALIDA = ENTRADA / "MUESTRA.pdf"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Corrida de prueba con unas pocas bitacoras al azar."
+        description="PDF de prueba con paginas al azar de input/."
     )
-    parser.add_argument("--csv", required=True,
-                        help="CSV de la corrida (el minimo, no el _completo)")
-    parser.add_argument("--pdf", required=True,
-                        help="PDF de entrada del que se sacan las paginas")
     parser.add_argument("--cuantas", type=int, default=20,
-                        help="Cuantas bitacoras (default: 20)")
+                        help="Cuantas paginas (default: 20)")
     parser.add_argument("--semilla", type=int, default=None,
                         help="Semilla, para repetir exactamente la misma "
                              "muestra")
-    parser.add_argument("--paginas-por-parte", type=int, default=0,
-                        metavar="N",
-                        help="Reparte la entrega en partes de a lo sumo N "
-                             "paginas, una por lote")
-    parser.add_argument("--sin-separadores", action="store_true",
-                        help="No agrupar por matricula; entrega sin paginas "
-                             "divisorias")
-    parser.add_argument("--salida", default="output/PRUEBA INDEXADO",
-                        help="Carpeta de la corrida de prueba")
+    parser.add_argument("--pdf", default=None,
+                        help="Sacar las paginas de un solo PDF, en vez de "
+                             "todos los de input/")
+    parser.add_argument("--salida", default=str(SALIDA),
+                        help="PDF de prueba a escribir")
     return parser.parse_args()
 
 
-def elegir(filas, nombre_pdf: str, cuantas: int, semilla: int | None):
-    """Toma al azar bitacoras utilizables del PDF indicado."""
-    candidatas = [
-        fila for fila in filas
-        if fila.get("file") == nombre_pdf
-        and fila.get("log_number")
-        and fila.get("matricula")
-        and fila.get("date")
+def origenes(uno: str | None, salida: Path) -> list[Path]:
+    """Los PDF de los que se puede sacar paginas.
+
+    Se mira solo el primer nivel de ``input/``: lo de ``processed/`` ya se
+    proceso una vez y la propia muestra se excluye, o cada corrida se
+    alimentaria de la anterior.
+    """
+    if uno:
+        return [Path(uno)]
+    encontrados = [
+        pdf for pdf in sorted(ENTRADA.glob("*.pdf"))
+        if pdf.resolve() != salida.resolve()
     ]
-    if len(candidatas) < cuantas:
+    if not encontrados:
+        raise SystemExit(f"No hay ningun PDF en {ENTRADA}")
+    return encontrados
+
+
+def elegir(fuentes: list[Path], cuantas: int, semilla: int | None):
+    """Toma paginas al azar del conjunto, y las devuelve en su orden."""
+    canasta: list[tuple[Path, int]] = []
+    for pdf in fuentes:
+        with fitz.open(pdf) as documento:
+            canasta.extend((pdf, numero) for numero in range(len(documento)))
+    if len(canasta) < cuantas:
         raise SystemExit(
-            f"Solo hay {len(candidatas)} bitacoras utilizables de "
-            f"{nombre_pdf}; se pidieron {cuantas}."
+            f"Entre todos los PDF hay {len(canasta)} paginas; se pidieron "
+            f"{cuantas}."
         )
     semilla = semilla if semilla is not None else random.randrange(1, 10 ** 6)
     random.seed(semilla)
-    muestra = sorted(
-        random.sample(candidatas, cuantas),
-        key=lambda fila: int(fila["page"]),
-    )
+    muestra = sorted(random.sample(canasta, cuantas),
+                     key=lambda par: (par[0].name, par[1]))
     return muestra, semilla
 
 
-def copiar_paginas(origen: Path, muestra, destino: Path) -> None:
-    """Escribe un PDF con solo las paginas elegidas, en el mismo orden."""
-    fuente = fitz.open(origen)
+def copiar(muestra, destino: Path) -> None:
+    """Escribe el PDF de prueba con solo las paginas elegidas."""
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    abiertos: dict[Path, fitz.Document] = {}
     copia = fitz.open()
     try:
-        for fila in muestra:
-            indice = int(fila["page"]) - 1
-            copia.insert_pdf(fuente, from_page=indice, to_page=indice)
+        for pdf, numero in muestra:
+            if pdf not in abiertos:
+                abiertos[pdf] = fitz.open(pdf)
+            copia.insert_pdf(abiertos[pdf], from_page=numero, to_page=numero)
         copia.save(str(destino), garbage=4, deflate=True)
     finally:
         copia.close()
-        fuente.close()
-
-
-def reportes_de_la_muestra(muestra, pdf: Path) -> list[ValidationReport]:
-    """Reconstruye lo que la corrida habia leido, para poder reexportarlo.
-
-    Se arman los mismos objetos que produce el procesamiento porque la
-    entrega se escribe con la exportacion de verdad: asi la muestra sale con
-    las mismas divisorias, el mismo orden y el mismo indice que una corrida
-    completa, y la prueba vale para algo.
-    """
-    paginas = []
-    for numero, fila in enumerate(muestra, start=1):
-        pagina = PageResult(page_number=numero, date=fila.get("date") or None)
-        for campo in ("log_number", "matricula", "flight_number"):
-            valor = (fila.get(campo) or "").strip()
-            if valor:
-                pagina.add_field(FieldResult(
-                    page_number=numero, field_id=campo, field_type="ocr",
-                    value=valor, confidence=1.0, status="OK",
-                ))
-        paginas.append(pagina)
-    return [ValidationReport(
-        pdf_path=str(pdf), template_name="muestra", pages=paginas
-    )]
-
-
-def escribir_csv(muestra, destino: Path, nombre_pdf: str) -> None:
-    """CSV con el mismo formato que produce una corrida."""
-    destino.parent.mkdir(parents=True, exist_ok=True)
-    with destino.open("w", encoding="utf-8-sig", newline="") as handle:
-        escritor = csv.DictWriter(handle, fieldnames=list(COLUMNAS))
-        escritor.writeheader()
-        for numero, fila in enumerate(muestra, start=1):
-            copia = {col: fila.get(col, "") for col in COLUMNAS}
-            copia["file"] = nombre_pdf
-            copia["page"] = numero
-            escritor.writerow(copia)
+        for documento in abiertos.values():
+            documento.close()
 
 
 def main() -> int:
     args = parse_args()
     salida = Path(args.salida)
-    if salida.exists():
-        shutil.rmtree(salida)
-    (salida / "datos").mkdir(parents=True)
-
-    with Path(args.csv).open(encoding="utf-8-sig", newline="") as handle:
-        filas = list(csv.DictReader(handle))
     muestra, semilla = elegir(
-        filas, Path(args.pdf).name, args.cuantas, args.semilla
+        origenes(args.pdf, salida), args.cuantas, args.semilla
     )
-
-    # Las paginas elegidas, en un PDF aparte que hace de original: la
-    # exportacion copia de ahi igual que copiaria del escaneo entero.
-    fuente = salida / "datos" / "paginas.pdf"
-    copiar_paginas(Path(args.pdf), muestra, fuente)
-
-    escribir_csv(muestra, salida / "datos" / f"{salida.name}.CSV",
-                 fuente.name)
-
-    reportes = reportes_de_la_muestra(muestra, fuente)
-    partes = escribir_entrega(
-        reportes, salida,
-        separar_por=() if args.sin_separadores else ("avion",),
-        paginas_por_parte=args.paginas_por_parte,
-    )
-    escribir_indice_paginas(
-        partes, salida / "datos" / f"{salida.name}{NOMBRE_INDICE_PAGINAS}"
-    )
+    copiar(muestra, salida)
 
     print(f"Semilla: {semilla}  (repetible con --semilla {semilla})")
-    print(f"Corrida de prueba en {salida}")
-    print(f"  CSV:     datos/{salida.name}.CSV  ({len(muestra)} bitacoras)")
-    print(f"  Indice:  datos/{salida.name}{NOMBRE_INDICE_PAGINAS}")
-    for archivo in partes:
-        divisorias = sum(1 for e in archivo.paginas if e.es_separador)
-        marca = " [para indexar a mano]" if archivo.revisar else ""
-        print(f"  Entrega: {archivo.ruta.name}  "
-              f"({len(archivo.paginas)} paginas, {divisorias} separadoras, "
-              f"{archivo.ruta.stat().st_size / 1_048_576:.1f} MB){marca}")
-    print("\nPaginas tomadas del original:")
-    for numero, fila in enumerate(muestra, start=1):
-        print(f"  {numero:2d} <- pagina {fila['page']:>4}  "
-              f"{fila['matricula']}  {fila['log_number']}  {fila['date']}")
-    print("\nPara indexarla, apuntar la seccion de AirVault a "
-          f"{salida / 'datos' / (salida.name + '.CSV')}")
+    print(f"Muestra en {salida}  "
+          f"({len(muestra)} paginas, "
+          f"{salida.stat().st_size / 1_048_576:.1f} MB)")
+    print("\nPaginas tomadas:")
+    for orden, (pdf, numero) in enumerate(muestra, start=1):
+        print(f"  {orden:2d} <- {pdf.name}  pagina {numero + 1}")
+    print(f"\nProcesar {salida.name} desde la ventana como cualquier otro "
+          "PDF, exportar en un solo PDF e indexar esa corrida.")
     return 0
 
 
