@@ -1,0 +1,12 @@
+{
+  "base_url": "https://airvault.criticaltech.com",
+  "repo_id": 3209,
+  "index_scheme_id": 137,
+  "doc_type": "Log Page",
+  "audit_status": "PUBLISHED",
+  "espera_descubrimiento_s": 20,
+  "espera_maxima_s": 900,
+  "timeout_s": 60,
+  "reintentos": 3,
+  "usuario": ""
+}

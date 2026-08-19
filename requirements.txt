@@ -18,3 +18,6 @@ Send2Trash>=1.8.0
 # Núcleo
 pydantic>=2.6.0
 loguru>=0.7.2
+
+# Indexado en AirVault (ya venía instalado como dependencia de paddlex)
+requests>=2.31.0

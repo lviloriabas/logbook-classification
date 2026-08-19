@@ -92,9 +92,14 @@ Esta tarea aplica inclinación y alineación. No ejecuta OCR ni genera una corri
 3. Confirme las opciones de salida.
 4. Pulse **Procesar**.
 5. Vigile la barra, el contador global y el avance por archivo.
-6. Espere a que el estado indique que las salidas terminaron.
+6. Espere a que el estado indique que los datos quedaron guardados.
 7. Revise la tabla, los duplicados y las páginas marcadas.
-8. Abra la carpeta de la corrida desde el historial o desde `output/`.
+8. Ajuste la separación si hace falta y pulse **Exportar**.
+9. Abra la carpeta de la corrida desde el historial o desde `output/`.
+
+**Procesar** guarda los datos de la corrida —CSV, JSON y estadísticas— y no
+genera los PDF. La entrega se arma al pulsar **Exportar**, con la separación
+que esté marcada en ese momento.
 
 La barra cuenta páginas terminadas del lote. Las páginas pueden finalizar fuera de orden por el procesamiento paralelo; el contador nunca representa el número de la última página entregada por un proceso.
 
@@ -108,7 +113,7 @@ El indicador **Duplicados** cuenta las páginas marcadas desde la segunda aparic
 
 ## 2.10 Terminación y archivo de entrada
 
-Cuando el OCR y las salidas terminan correctamente, los PDF que estaban directamente en `input/` pasan a `input/processed/`. Un nombre repetido recibe el sufijo `-2`, `-3`, etc. Los PDF seleccionados desde otras carpetas no se mueven.
+Cuando el OCR termina correctamente y los datos quedan guardados, los PDF que estaban directamente en `input/` pasan a `input/processed/`. Un nombre repetido recibe el sufijo `-2`, `-3`, etc. Los PDF seleccionados desde otras carpetas no se mueven.
 
 La ventana actualiza sus referencias después del traslado. La vista previa y la reexportación continúan disponibles.
 
@@ -127,15 +132,43 @@ Al cancelar **Preprocesar**, se conserva únicamente la geometría terminada en 
 
 > **PRECAUCIÓN:** No use una corrida cancelada como entrega ni la reexporte desde el visor histórico. El visor puede abrir sus datos parciales, pero no los convierte en una corrida completa.
 
-## 2.12 Reexportación
+## 2.12 Exportación y reexportación
 
-Después del OCR puede cambiar separación o formato de PDF y pulsar **Exportar**. La operación reutiliza los resultados en memoria; no ejecuta OCR otra vez.
+Después del OCR, elija separación y formato de PDF y pulse **Exportar**. La operación reutiliza los resultados en memoria; no ejecuta OCR otra vez. Puede exportar tantas veces como quiera.
 
 Cambiar solo **Fecha del CSV** repuebla la tabla y reescribe automáticamente los dos CSV. No pulse **Exportar** salvo que también necesite regenerar JSON, estadísticas o PDF. En el visor histórico, la nueva política de fecha sí se aplica al exportar.
 
 La reexportación usa la misma carpeta de corrida. Reescribe el CSV, el JSON y `stats.json`. Conserva los PDF existentes y añade un sufijo numérico a cualquier PDF nuevo cuyo nombre ya exista.
 
-## 2.13 Visor de CSV e historial
+## 2.13 Indexado en AirVault
+
+La sección **Indexar en AirVault** está junto a **Opciones avanzadas** y se
+despliega con su flecha. Escribe en el Web Index de AirVault los datos que
+la corrida ya leyó, en lugar de teclearlos página por página.
+
+Requiere una corrida exportada **en un solo PDF**.
+
+1. Despliegue la sección. **Corrida** viene puesta con la que acaba de
+   exportar; con **Buscar…** elija otra.
+2. Revise el nombre en **Lote**. Lleva la fecha y la hora de la corrida
+   porque en la cola de AirVault conviven lotes con nombres repetidos.
+3. Entre a AirVault en el navegador y copie la cookie de la sesión en
+   **Sesión**. No se guarda: hay que pegarla cada vez que abre el programa.
+4. Pulse **Subir y revisar**. El programa sube el PDF, espera a que el lote
+   aparezca en AirVault y calcula qué escribiría en cada página. No indexa
+   nada todavía.
+5. Pulse **Ver reporte…** y revise las páginas bloqueadas.
+6. Pulse **Indexar**. El avance sale por la barra de la ventana.
+
+Las páginas separadoras del PDF —la matrícula de cada grupo, **POSIBLES
+DISCREPANCIAS**, **REVISAR**— ocupan su página en el lote y no se indexan.
+
+Si el trabajo se corta, vuelva a pulsar **Subir y revisar**: las páginas ya
+escritas no se repiten y el PDF no se vuelve a subir.
+
+La descripción técnica está en [el manual del indexado](airvault-indexado.md).
+
+## 2.14 Visor de CSV e historial
 
 Pulse **Visor de CSV…** para abrir una corrida anterior.
 
@@ -151,6 +184,6 @@ El visor puede regenerar salidas de una corrida sin repetir el OCR. Desactiva **
 
 Para localizar un original, el visor comprueba la ruta del JSON, la carpeta del CSV, la carpeta de la corrida, `input/` e `input/processed/`. Use **Ubicar PDF…** si el documento cambió de lugar. Para reexportar una corrida histórica, use el CSV principal en su carpeta original; su nombre base debe coincidir con el de la corrida. También deben existir el JSON consolidado, la plantilla usada y todos los PDF fuente.
 
-## 2.14 Adaptación a la pantalla
+## 2.15 Adaptación a la pantalla
 
 Las ventanas se limitan al área útil del escritorio y consideran el escalado de Windows. En pantallas bajas, la ventana principal reduce márgenes y reorganiza los grupos superiores para conservar la vista previa y la tabla. Maximizar, restaurar o mover la ventana a otro monitor vuelve a calcular la distribución.
