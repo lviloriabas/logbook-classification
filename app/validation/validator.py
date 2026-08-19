@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.core.config import AppConfig
 from app.models.schemas import PageResult, Status
 from app.templates.schema import Template
+from app.validation.page_status import recompute_page_status
 from app.validation.rules import apply_rules
 
 
@@ -28,13 +29,5 @@ def validate_page(page: PageResult, template: Template,
             continue
         apply_rules(field_result, field_template, config)
 
-    order = {Status.OK: 0, Status.WARNING: 1, Status.ERROR: 2}
-    non_char = [
-        f for f in page.fields
-        if template.field(f.field_id) is None
-        or template.field(f.field_id).postprocess != "char"
-    ]
-    worst = max((f.status for f in non_char),
-                key=order.get, default=Status.OK)
-    page.status = worst
+    recompute_page_status(page)
     return page
