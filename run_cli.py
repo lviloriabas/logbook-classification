@@ -136,6 +136,12 @@ def parse_args() -> argparse.Namespace:
              "único PDF con el mismo nombre que la carpeta de salida.",
     )
     parser.add_argument(
+        "--paginas-por-parte", type=int, default=0, metavar="N",
+        help="Reparte el PDF unico en partes de a lo sumo N paginas. Cada "
+             "parte es un lote aparte en AirVault. Cero deja un solo "
+             "archivo.",
+    )
+    salida.add_argument(
         "--un-solo-pdf", action="store_true",
         help="Generar un único PDF con el mismo nombre que la carpeta de "
              "salida: con --separar-por se "
@@ -482,6 +488,7 @@ def _run(args: argparse.Namespace) -> int:
             crop_padding=config.crop_padding,
             separar_por=tuple(args.separar_por or ()),
             un_solo_pdf=args.un_solo_pdf,
+            paginas_por_parte=args.paginas_por_parte,
             discrepancias=args.discrepancias,
             errores=args.errores,
             recortes_firmas=args.recortes_firmas,

@@ -84,59 +84,84 @@ class TrabajoAirVaultWorker(QThread):
 
     def _revisar(self) -> None:
         from app.airvault.client import ClienteHttp
-        from app.airvault.flujo import Trabajo, pdf_unico_de_corrida
+        from app.airvault.flujo import (
+            comprobar_entrega,
+            descubrir_partes,
+            planificar_partes,
+            preparar_partes,
+            subir_partes,
+        )
         from app.airvault.mapping import FLOTA_CACHE_FILENAME, ResolutorFlota
-        from app.airvault.report import escribir_csv, escribir_html
+        from app.airvault.report import (
+            escribir_csv_de_partes,
+            escribir_html_de_partes,
+        )
         from app.airvault.session import abrir_sesion
 
         estado = self.estado
         config = estado["config"]
         csv = Path(estado["csv"])
         raiz = Path(estado["raiz"])
+        carpeta = Path(estado["carpeta_job"])
 
         self._avisar("Leyendo la corrida", 0, 0)
-        pdf = pdf_unico_de_corrida(csv)
+        entrega = comprobar_entrega(csv)
         resolutor = ResolutorFlota.load(raiz / FLOTA_CACHE_FILENAME)
-        trabajo = Trabajo.abrir_o_preparar(
-            config, estado["carpeta_job"], csv, estado["nombre_lote"],
-            resolutor=resolutor,
+        trabajos = preparar_partes(
+            config, carpeta, csv, estado["nombre_lote"], resolutor=resolutor,
         )
+        if len(trabajos) > 1:
+            self._avisar(
+                f"La corrida va en {len(entrega)} partes, una por lote", 0, 0
+            )
 
         self._avisar("Entrando a AirVault", 0, 0)
         sesion = abrir_sesion(config, cookie=estado.get("cookie") or None)
         sesion.comprobar()
         cliente = ClienteHttp(sesion, config)
 
-        trabajo.subir(sesion, pdf, avisar=self._avisar)
-        trabajo.descubrir(
-            cliente, esperar=True, dormir=self._dormir, avisar=self._avisar
+        subir_partes(trabajos, sesion, avisar=self._avisar)
+        descubrir_partes(
+            trabajos, cliente, esperar=True, dormir=self._dormir,
+            avisar=self._avisar,
         )
-        plan, indexador = trabajo.planificar(
-            cliente, resolutor, avisar=self._avisar
+        planes = planificar_partes(
+            trabajos, cliente, resolutor, avisar=self._avisar
         )
         resolutor.guardar(raiz / FLOTA_CACHE_FILENAME)
 
-        escribir_csv(plan, trabajo.carpeta / "revision.csv")
-        reporte = escribir_html(
-            plan, trabajo.carpeta / "revision.html",
-            f"{trabajo.manifiesto.nombre_batch} ({trabajo.manifiesto.batch_id})",
+        # Un solo reporte para toda la corrida: se aprueba de una vez, no
+        # lote por lote.
+        partes = [
+            (t.manifiesto.nombre_batch, plan)
+            for t, (plan, _indexador) in zip(trabajos, planes)
+        ]
+        escribir_csv_de_partes(partes, carpeta / "revision.csv")
+        reporte = escribir_html_de_partes(
+            partes, carpeta / "revision.html",
+            f"Indexado de {carpeta.name}",
         )
         self.revisado.emit({
-            "trabajo": trabajo, "plan": plan, "indexador": indexador,
+            "trabajos": trabajos, "planes": planes, "partes": partes,
             "cliente": cliente, "sesion": sesion, "reporte": reporte,
             "origen": sesion.origen,
         })
 
     def _indexar(self) -> None:
+        from app.airvault.flujo import indexar_partes, verificar_partes
+
         estado = self.estado
-        trabajo = estado["trabajo"]
-        resultado = trabajo.indexar(
-            estado["indexador"], estado["plan"], avisar=self._avisar
+        trabajos = estado["trabajos"]
+        resultado = indexar_partes(
+            trabajos, estado["planes"], avisar=self._avisar
         )
-        self._avisar("Comprobando como quedo el lote", 0, 0)
-        validas, total, _problemas = trabajo.verificar(estado["cliente"])
+        self._avisar("Comprobando como quedaron los lotes", 0, 0)
+        validas, total, _problemas = verificar_partes(
+            trabajos, estado["cliente"]
+        )
         self.indexado.emit({
             "resultado": resultado, "validas": validas, "total": total,
+            "lotes": len(trabajos),
         })
 
 
@@ -354,13 +379,19 @@ class AirVaultPanel(QWidget):
         self.progreso_cambiado.emit(hechas, total)
 
     def _al_revisar(self, datos: dict) -> None:
-        plan = datos["plan"]
-        resumen = plan.resumen()
+        from app.airvault.report import _resumen_sumado
+
+        partes = datos["partes"]
+        resumen = _resumen_sumado(partes)
         self._revision = datos
         self.boton_indexar.setEnabled(True)
         self.boton_reporte.setEnabled(True)
+        donde = (
+            f"{len(partes)} lotes" if len(partes) > 1
+            else f"Lote {partes[0][0] or partes[0][1].batch_id}"
+        )
         self.resumen.setText(
-            f"Lote {plan.batch_id}: {resumen['total']} páginas, "
+            f"{donde}: {resumen['total']} páginas, "
             f"{resumen['escribibles']} se escribirían y "
             f"{resumen['bloqueadas']} quedan bloqueadas. "
             f"Nada se ha escrito todavía."
@@ -369,11 +400,23 @@ class AirVaultPanel(QWidget):
 
     def _al_indexar(self, datos: dict) -> None:
         resultado = datos["resultado"]
-        self.resumen.setText(
+        lotes = datos.get("lotes", 1)
+        donde = f" en {lotes} lotes" if lotes > 1 else ""
+        cuenta = (
             f"Escritas {resultado.escritas}, omitidas {resultado.omitidas} "
             f"y fallidas {resultado.fallidas}. En AirVault quedaron "
-            f"{datos['validas']} de {datos['total']} páginas válidas."
+            f"{datos['validas']} de {datos['total']} páginas válidas{donde}."
         )
+        if resultado.interrumpido:
+            self.resumen.setText(
+                f"{cuenta} El indexado se cortó: {resultado.interrumpido} "
+                f"Lo que falta queda pendiente; al volver a revisar se "
+                f"retoma sin repetir lo escrito."
+            )
+            self.estado_cambiado.emit("El indexado se cortó a medio camino")
+            self.progreso_cambiado.emit(0, 0)
+            return
+        self.resumen.setText(cuenta)
         self.estado_cambiado.emit("Indexado terminado")
         self.progreso_cambiado.emit(0, 0)
 

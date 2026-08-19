@@ -117,20 +117,42 @@ def test_el_indice_describe_separadores_y_bitacoras(tmp_path):
         _page(2, "2147338", None),
     )
     destino = escribir_indice_paginas(
-        secuencia_pdf_unico([reporte]), tmp_path / "corrida_paginas.json",
-        "corrida.pdf",
+        [(Path("corrida.pdf"), secuencia_pdf_unico([reporte]))],
+        tmp_path / "corrida_paginas.json",
     )
     datos = json.loads(Path(destino).read_text(encoding="utf-8"))
 
-    assert datos["version"] == 1 and datos["pdf"] == "corrida.pdf"
-    assert datos["paginas"] == [
+    assert datos["version"] == 2
+    assert len(datos["partes"]) == 1
+    assert datos["partes"][0]["pdf"] == "corrida.pdf"
+    assert datos["partes"][0]["paginas"] == [
         {"archivo": "fixture.pdf", "pagina": 1},
         {"separador": ETIQUETA_REVISAR},
         {"archivo": "fixture.pdf", "pagina": 2},
     ]
 
 
+def test_el_indice_nombra_cada_parte_con_su_archivo(tmp_path):
+    """Cada archivo es un lote distinto: hay que saber que lleva cada uno."""
+    reporte = _reporte(
+        _page(1, "2147337", "HP-1534CMP"),
+        _page(2, "2147338", "HP-1534CMP"),
+    )
+    secuencia = secuencia_pdf_unico([reporte])
+    destino = escribir_indice_paginas(
+        [(Path("corrida (1 de 2).pdf"), secuencia[:1]),
+         (Path("corrida (2 de 2).pdf"), secuencia[1:])],
+        tmp_path / "corrida_paginas.json",
+    )
+    datos = json.loads(Path(destino).read_text(encoding="utf-8"))
+
+    assert [p["pdf"] for p in datos["partes"]] == [
+        "corrida (1 de 2).pdf", "corrida (2 de 2).pdf"
+    ]
+    assert [len(p["paginas"]) for p in datos["partes"]] == [1, 1]
+
+
 def test_el_indice_se_escribe_aunque_no_exista_la_carpeta(tmp_path):
     destino = escribir_indice_paginas([], tmp_path / "datos" / "x.json")
     assert Path(destino).is_file()
-    assert json.loads(Path(destino).read_text(encoding="utf-8"))["paginas"] == []
+    assert json.loads(Path(destino).read_text(encoding="utf-8"))["partes"] == []

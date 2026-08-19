@@ -569,20 +569,123 @@ def secuencia_pdf_unico(
 
 NOMBRE_INDICE_PAGINAS = "_paginas.json"
 
+# Paginas por parte cuando se pide repartir la entrega y no se dice cuantas.
+# Con los escaneos de siempre —unos 2 MB por pagina— deja partes de medio
+# giga, que suben sin sobresaltos y se revisan de una sentada.
+PAGINAS_POR_PARTE = 200
+
+
+def _secciones(secuencia: Sequence[EntradaPdf]) -> List[List[EntradaPdf]]:
+    """Parte la secuencia en tramos que abren con su separador."""
+    secciones: List[List[EntradaPdf]] = []
+    actual: List[EntradaPdf] = []
+    for entrada in secuencia:
+        if entrada.es_separador and actual:
+            secciones.append(actual)
+            actual = []
+        actual.append(entrada)
+    if actual:
+        secciones.append(actual)
+    return secciones
+
+
+def _cortar_seccion(
+    seccion: Sequence[EntradaPdf], maximo: int
+) -> List[List[EntradaPdf]]:
+    """Trocea una seccion que no cabe entera en una parte.
+
+    La continuacion repite el separador de la seccion: sin el, la parte
+    siguiente abriria con bitacoras sueltas y nadie sabria de que avion son.
+    """
+    cabecera = seccion[0] if seccion and seccion[0].es_separador else None
+    cuerpo = list(seccion[1:]) if cabecera is not None else list(seccion)
+    repetir = cabecera is not None and maximo > 1
+    paso = maximo - 1 if repetir else maximo
+    trozos: List[List[EntradaPdf]] = []
+    for inicio in range(0, len(cuerpo), paso):
+        tramo = cuerpo[inicio:inicio + paso]
+        trozos.append([cabecera] + tramo if repetir else tramo)
+    return trozos or [list(seccion)]
+
+
+def partir_secuencia(
+    secuencia: Sequence[EntradaPdf], paginas_por_parte: int = 0
+) -> List[List[EntradaPdf]]:
+    """Reparte la entrega en partes de a lo sumo ``paginas_por_parte``.
+
+    Se corta entre secciones siempre que se pueda, para que las bitacoras de
+    un mismo avion no queden repartidas entre dos archivos sin necesidad.
+    Una seccion que por si sola no cabe se trocea, y cada trozo vuelve a
+    abrir con su separador.
+
+    Con cero o con una entrega que ya cabe, devuelve una sola parte: es el
+    mismo camino de siempre, no un caso aparte.
+    """
+    entradas = list(secuencia)
+    if not entradas:
+        return []
+    if paginas_por_parte <= 0 or len(entradas) <= paginas_por_parte:
+        return [entradas]
+
+    partes: List[List[EntradaPdf]] = []
+    actual: List[EntradaPdf] = []
+    for seccion in _secciones(entradas):
+        if len(seccion) > paginas_por_parte:
+            if actual:
+                partes.append(actual)
+                actual = []
+            trozos = _cortar_seccion(seccion, paginas_por_parte)
+            partes.extend(trozos[:-1])
+            actual = list(trozos[-1])
+            continue
+        if actual and len(actual) + len(seccion) > paginas_por_parte:
+            partes.append(actual)
+            actual = []
+        actual.extend(seccion)
+    if actual:
+        partes.append(actual)
+    return partes
+
+
+def nombre_de_parte(base: str, indice: int, total: int) -> str:
+    """Nombre de una parte: ``<base> (2 de 5)``, o ``<base>`` si va sola.
+
+    El sufijo no es decoracion. Cada parte es un lote distinto en AirVault y
+    los lotes se localizan por nombre; dos con el mismo nombre no habria
+    forma de distinguirlos.
+    """
+    if total <= 1:
+        return base
+    return f"{base} ({indice} de {total})"
+
 
 def escribir_indice_paginas(
-    secuencia: Sequence[EntradaPdf], destino: Path, pdf: str = ""
+    partes: Sequence[Tuple[Path, Sequence[EntradaPdf]]], destino: Path
 ) -> Path:
-    """Deja escrito qué hay en cada página del PDF de entrega.
+    """Deja escrito qué hay en cada página de cada PDF de entrega.
 
-    El CSV describe las bitácoras; este archivo describe el PDF, que además
-    lleva separadores. Sin él, emparejar el PDF con el CSV por posición se
-    desalinea en el primer separador, y una bitácora terminaría indexada
-    con los datos de otra.
+    El CSV describe las bitácoras; este archivo describe los PDF, que además
+    llevan separadores y pueden venir repartidos en partes. Sin él,
+    emparejar un PDF con el CSV por posición se desalinea en el primer
+    separador, y una bitácora terminaría indexada con los datos de otra.
     """
     ruta = Path(destino)
     ruta.parent.mkdir(parents=True, exist_ok=True)
-    paginas = [
+    ruta.write_text(
+        json.dumps(
+            {"version": 2, "partes": [
+                {"pdf": Path(archivo).name, "paginas": _paginas_json(tramo)}
+                for archivo, tramo in partes
+            ]},
+            indent=2, ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return ruta
+
+
+def _paginas_json(secuencia: Sequence[EntradaPdf]) -> List[dict]:
+    return [
         {"separador": entrada.separador} if entrada.ref is None
         else {
             "archivo": Path(entrada.ref.pdf_path).name,
@@ -590,14 +693,6 @@ def escribir_indice_paginas(
         }
         for entrada in secuencia
     ]
-    ruta.write_text(
-        json.dumps(
-            {"version": 1, "pdf": pdf, "paginas": paginas},
-            indent=2, ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    return ruta
 
 
 def escribir_pdf_unico(
@@ -628,42 +723,91 @@ def escribir_pdf_unico(
       o no separar por avión: son las únicas bitácoras que nadie puede
       archivar, así que siempre tienen que quedar juntas y señaladas.
     """
+    escritas = escribir_entrega(
+        reports, run_dir, separar_por, excluidas, dpi,
+        discrepancias_al_final,
+    )
+    if not escritas:
+        return Path(run_dir) / f"{Path(run_dir).name}.pdf"
+    return escritas[0][0]
+
+
+def escribir_entrega(
+    reports: Sequence[ValidationReport],
+    run_dir: Path,
+    separar_por: Sequence[str] = (),
+    excluidas: Optional[set[Tuple[str, int]]] = None,
+    dpi: int = 150,
+    discrepancias_al_final: bool = False,
+    paginas_por_parte: int = 0,
+) -> List[Tuple[Path, List[EntradaPdf]]]:
+    """Escribe la entrega y devuelve cada archivo con lo que lleva dentro.
+
+    Con ``paginas_por_parte`` en cero sale un solo PDF, como siempre. Con un
+    tope, la entrega se reparte en partes de a lo sumo esas páginas, cada
+    una en su archivo: una corrida entera son casi dos gigas y ochocientas
+    páginas, que en AirVault forman un lote incómodo de subir y de revisar.
+
+    Devuelve pares de ruta y secuencia porque el nombre definitivo solo se
+    conoce después de escribir —un archivo que ya existía obliga a añadir
+    sufijo— y el índice de páginas tiene que nombrar el archivo real.
+    """
+    del dpi  # las páginas se copian sin rasterizar
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
-    base_path = run_dir / f"{run_dir.name}.pdf"
 
     secuencia = secuencia_pdf_unico(
         reports, separar_por, excluidas, discrepancias_al_final
     )
     if not secuencia:
-        logger.info(f"[Organize] No hay páginas para exportar: {base_path}")
-        return base_path
+        logger.info(
+            f"[Organize] No hay páginas para exportar: {run_dir.name}"
+        )
+        return []
 
-    output_path = unique_path(base_path)
+    partes = partir_secuencia(secuencia, paginas_por_parte)
+    fuentes = [e.ref.pdf_path for e in secuencia if e.ref is not None]
+    escritas: List[Tuple[Path, List[EntradaPdf]]] = []
+    with PdfDocumentCache(fuentes) as sources:
+        for indice, tramo in enumerate(partes, start=1):
+            nombre = nombre_de_parte(run_dir.name, indice, len(partes))
+            destino = unique_path(run_dir / f"{nombre}.pdf")
+            _escribir_documento(destino, tramo, sources)
+            escritas.append((destino, tramo))
+    if len(escritas) == 1:
+        logger.info(f"[Organize] PDF único generado: {escritas[0][0]}")
+    else:
+        logger.info(
+            f"[Organize] Entrega repartida en {len(escritas)} partes de "
+            f"hasta {paginas_por_parte} páginas"
+        )
+    return escritas
+
+
+def _escribir_documento(
+    destino: Path, secuencia: Sequence[EntradaPdf], sources: PdfDocumentCache
+) -> None:
+    """Vuelca una secuencia de páginas en un PDF."""
     doc = fitz.open()
     try:
-        fuentes = [e.ref.pdf_path for e in secuencia if e.ref is not None]
-        with PdfDocumentCache(fuentes) as sources:
-            for indice, entrada in enumerate(secuencia):
-                if entrada.ref is not None:
-                    _insertar_pagina_fuente(doc, sources, entrada.ref)
-                    continue
-                # La divisoria copia el tamaño de la bitácora que abre, para
-                # que la sección no cambie de formato al pasar la página.
-                siguiente = next(
-                    (e.ref for e in secuencia[indice + 1:] if e.ref is not None),
-                    None,
-                )
-                _pagina_divisoria(
-                    doc,
-                    entrada.separador,
-                    _tamano_horizontal_fuente(sources, siguiente),
-                )
-        doc.save(str(output_path), deflate=True)
+        for indice, entrada in enumerate(secuencia):
+            if entrada.ref is not None:
+                _insertar_pagina_fuente(doc, sources, entrada.ref)
+                continue
+            # La divisoria copia el tamaño de la bitácora que abre, para que
+            # la sección no cambie de formato al pasar la página.
+            siguiente = next(
+                (e.ref for e in secuencia[indice + 1:] if e.ref is not None),
+                None,
+            )
+            _pagina_divisoria(
+                doc,
+                entrada.separador,
+                _tamano_horizontal_fuente(sources, siguiente),
+            )
+        doc.save(str(destino), deflate=True)
     finally:
         doc.close()
-    logger.info(f"[Organize] PDF único generado: {output_path}")
-    return output_path
 
 
 def escribir_pdf_discrepancias(

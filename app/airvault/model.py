@@ -103,6 +103,11 @@ class Manifiesto(BaseModel):
     repo_id: int = 3209
     batch_id: Optional[str] = None
     csv_origen: str = ""
+    # Archivo de entrega que forma este lote. Una corrida repartida en
+    # partes tiene un manifiesto por parte, cada uno con su PDF y su lote.
+    pdf_origen: str = ""
+    parte: int = 1
+    partes: int = 1
 
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"

@@ -8,6 +8,8 @@ anterior. Todo contra el cliente falso; ninguna prueba toca la red.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.airvault import manifest as manifiestos
@@ -16,9 +18,13 @@ from app.airvault.flujo import (
     ErrorDeCorrida,
     Trabajo,
     carpeta_de_corrida,
+    carpeta_de_parte,
     carpeta_de_trabajo,
-    pdf_unico_de_corrida,
+    comprobar_entrega,
+    partes_de_corrida,
     pdfs_de_corrida,
+    preparar_partes,
+    ruta_indice_paginas,
 )
 from app.airvault.model import EstadoEtapa, EstadoRegistro
 from tests.airvault_fake import ClienteFalso, lote, pagina
@@ -35,14 +41,37 @@ CSV = (
 
 
 def corrida(tmp_path, nombre: str = "BITS 18 AUG 2026 05 42",
-            pdfs: tuple[str, ...] = ("BITS 18 AUG 2026 05 42.pdf",)):
-    """Arma en el temporal la carpeta que deja una corrida terminada."""
+            pdfs: tuple[str, ...] = (), con_indice: bool = True):
+    """Arma en el temporal la carpeta que deja una corrida terminada.
+
+    Sin ``pdfs`` deja la entrega en un solo archivo, como la exportacion sin
+    repartir; con varios, cada uno lleva una de las dos bitacoras del CSV.
+    """
+    import json
+
     carpeta = tmp_path / "output" / nombre
     (carpeta / "datos").mkdir(parents=True)
     csv = carpeta / "datos" / f"{nombre}.CSV"
     csv.write_text(CSV, encoding="utf-8")
-    for pdf in pdfs:
+
+    archivos = list(pdfs) or [f"{nombre}.pdf"]
+    for pdf in archivos:
         (carpeta / pdf).write_bytes(b"%PDF-1.4\n")
+    if con_indice:
+        paginas = [
+            [{"archivo": "Image_001.pdf", "pagina": 1},
+             {"archivo": "Image_001.pdf", "pagina": 2}]
+            if len(archivos) == 1
+            else [{"archivo": "Image_001.pdf", "pagina": n + 1}]
+            for n in range(len(archivos))
+        ]
+        ruta_indice_paginas(csv).write_text(
+            json.dumps({"version": 2, "partes": [
+                {"pdf": archivo, "paginas": suyas}
+                for archivo, suyas in zip(archivos, paginas)
+            ]}),
+            encoding="utf-8",
+        )
     return csv
 
 
@@ -65,23 +94,102 @@ def test_la_carpeta_de_la_corrida_sale_del_csv(tmp_path):
 
 def test_encuentra_el_pdf_de_entrega(tmp_path):
     csv = corrida(tmp_path)
-    assert pdf_unico_de_corrida(csv).name == "BITS 18 AUG 2026 05 42.pdf"
+    partes = comprobar_entrega(csv)
+    assert len(partes) == 1
+    assert partes[0].pdf.name == "BITS 18 AUG 2026 05 42.pdf"
+
+
+def test_cada_parte_es_un_archivo(tmp_path):
+    csv = corrida(tmp_path, pdfs=("corrida (1 de 2).pdf",
+                                  "corrida (2 de 2).pdf"))
+    partes = comprobar_entrega(csv)
+    assert [p.indice for p in partes] == [1, 2]
+    assert all(p.total == 2 for p in partes)
+    assert [p.pdf.name for p in partes] == [
+        "corrida (1 de 2).pdf", "corrida (2 de 2).pdf"
+    ]
+    assert len(pdfs_de_corrida(csv)) == 2
+
+
+def test_cada_parte_lleva_su_numero_en_el_nombre_del_lote(tmp_path):
+    """Los lotes se localizan por nombre; dos iguales no se distinguirian."""
+    csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
+    partes = comprobar_entrega(csv)
+    assert partes[0].nombre_lote("DP | BIT") == "DP | BIT (1 de 2)"
+    assert partes[1].nombre_lote("DP | BIT") == "DP | BIT (2 de 2)"
+
+
+def test_una_sola_parte_no_lleva_sufijo(tmp_path):
+    csv = corrida(tmp_path)
+    assert comprobar_entrega(csv)[0].nombre_lote("DP | BIT") == "DP | BIT"
 
 
 def test_sin_pdf_no_hay_nada_que_subir(tmp_path):
-    csv = corrida(tmp_path, pdfs=())
+    carpeta = tmp_path / "output" / "BITS 18 AUG 2026 05 42"
+    (carpeta / "datos").mkdir(parents=True)
+    csv = carpeta / "datos" / "BITS 18 AUG 2026 05 42.CSV"
+    csv.write_text(CSV, encoding="utf-8")
     with pytest.raises(ErrorDeCorrida) as fallo:
-        pdf_unico_de_corrida(csv)
+        comprobar_entrega(csv)
     assert "exportarla" in str(fallo.value)
 
 
-def test_con_varios_pdf_no_se_adivina_el_orden(tmp_path):
-    """El orden del lote es el del archivo subido; con varios no se sabe."""
-    csv = corrida(tmp_path, pdfs=("HP-1848CMP.pdf", "HP-1849CMP.pdf"))
+def test_sin_indice_no_se_adivina_el_reparto(tmp_path):
+    """Sin saber que hay en cada archivo no se puede emparejar nada."""
+    csv = corrida(tmp_path, con_indice=False)
     with pytest.raises(ErrorDeCorrida) as fallo:
-        pdf_unico_de_corrida(csv)
-    assert "un solo PDF" in str(fallo.value)
-    assert len(pdfs_de_corrida(csv)) == 2
+        comprobar_entrega(csv)
+    assert "volver a exportarla" in str(fallo.value)
+
+
+def test_un_indice_que_nombra_lo_que_no_esta_se_detiene(tmp_path):
+    csv = corrida(tmp_path)
+    (carpeta_de_corrida(csv) / "BITS 18 AUG 2026 05 42.pdf").unlink()
+    with pytest.raises(ErrorDeCorrida) as fallo:
+        comprobar_entrega(csv)
+    assert "no estan en la carpeta" in str(fallo.value)
+
+
+def test_cada_parte_tiene_su_carpeta_de_trabajo(tmp_path):
+    csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
+    partes = comprobar_entrega(csv)
+    assert carpeta_de_parte(Path("job"), partes[0]).name == "parte-01"
+    assert carpeta_de_parte(Path("job"), partes[1]).name == "parte-02"
+
+
+def test_con_una_sola_parte_no_se_crea_subcarpeta(tmp_path):
+    """Es el trabajo de siempre, en la carpeta de siempre."""
+    csv = corrida(tmp_path)
+    parte = comprobar_entrega(csv)[0]
+    assert carpeta_de_parte(Path("job"), parte) == Path("job")
+
+
+def test_preparar_partes_deja_un_manifiesto_por_lote(tmp_path):
+    csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
+    trabajos = preparar_partes(AirVaultConfig(), tmp_path / "job", csv)
+    assert len(trabajos) == 2
+    assert [t.manifiesto.parte for t in trabajos] == [1, 2]
+    assert [t.manifiesto.partes for t in trabajos] == [2, 2]
+    assert [Path(t.manifiesto.pdf_origen).name for t in trabajos] == [
+        "a.pdf", "b.pdf"
+    ]
+    assert manifiestos.existe(tmp_path / "job" / "parte-01")
+    assert manifiestos.existe(tmp_path / "job" / "parte-02")
+
+
+def test_cada_parte_solo_lleva_sus_bitacoras(tmp_path):
+    csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
+    trabajos = preparar_partes(AirVaultConfig(), tmp_path / "job", csv)
+    assert [len(t.manifiesto.registros) for t in trabajos] == [1, 1]
+    assert trabajos[0].manifiesto.registros[0].log_number == "2312238"
+    assert trabajos[1].manifiesto.registros[0].log_number == "2312239"
+
+
+def test_una_corrida_repartida_no_se_prepara_como_un_solo_lote(tmp_path):
+    csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
+    with pytest.raises(ErrorDeCorrida) as fallo:
+        Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv)
+    assert "2 partes" in str(fallo.value)
 
 
 def test_el_trabajo_se_llama_como_la_corrida(tmp_path):
@@ -168,10 +276,9 @@ def test_el_lote_no_se_sube_dos_veces(tmp_path, monkeypatch):
     falso = SubidorFalso()
     monkeypatch.setattr(uploader, "SubidorQuickUpload", falso)
     trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv)
-    pdf = pdf_unico_de_corrida(csv)
 
-    trabajo.subir(object(), pdf)
-    trabajo.subir(object(), pdf)
+    trabajo.subir(object())
+    trabajo.subir(object())
     assert len(falso.subidos) == 1
     assert trabajo.manifiesto.etapa_hecha("subir")
 

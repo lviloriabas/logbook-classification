@@ -123,7 +123,10 @@ class PlanFalso:
 
 
 def test_la_revision_dice_que_no_se_ha_escrito_nada(panel, tmp_path):
-    panel._al_revisar({"plan": PlanFalso(), "reporte": tmp_path / "r.html"})
+    panel._al_revisar({
+        "partes": [("DP | BIT 003SRO", PlanFalso())],
+        "reporte": tmp_path / "r.html",
+    })
     texto = panel.resumen.text()
     assert "003SRO" in texto and "5 páginas" in texto
     assert "2 se escribirían" in texto
@@ -135,12 +138,24 @@ def test_la_revision_dice_que_no_se_ha_escrito_nada(panel, tmp_path):
 class ResultadoFalso:
     escritas, omitidas, fallidas = 2, 1, 0
     detalles: list = []
+    interrumpido = ""
 
 
 def test_al_indexar_cuenta_como_quedo_el_lote(panel):
     panel._al_indexar({"resultado": ResultadoFalso(), "validas": 2, "total": 3})
     texto = panel.resumen.text()
     assert "Escritas 2" in texto and "2 de 3 páginas válidas" in texto
+
+
+def test_un_indexado_cortado_dice_que_lo_que_falta_se_retoma(panel):
+    """Con la sesion o la red caidas, lo escrito no se pierde ni se repite."""
+    class Cortado(ResultadoFalso):
+        interrumpido = "La sesion de AirVault caduco."
+
+    panel._al_indexar({"resultado": Cortado(), "validas": 2, "total": 5})
+    texto = panel.resumen.text()
+    assert "se cortó" in texto and "caduco" in texto
+    assert "sin repetir lo escrito" in texto
 
 
 def test_el_fallo_se_cuenta_donde_se_lee(panel):
