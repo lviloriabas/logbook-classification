@@ -232,10 +232,27 @@ def write_outputs(
         pdf_paths: list[Path] = []
         stage("Guardando datos (sin PDFs)…", 60)
     else:
-        from app.reports.organize import escribir_pdf_unico, generar_pdfs
+        from app.reports.organize import (
+            NOMBRE_INDICE_PAGINAS,
+            escribir_indice_paginas,
+            escribir_pdf_unico,
+            generar_pdfs,
+            secuencia_pdf_unico,
+        )
 
         stage("Organizando PDFs…", 60)
         if pdf_unico:
+            # El indexado en AirVault empareja el PDF con el CSV por
+            # posición, y el PDF lleva separadores que el CSV no tiene: se
+            # deja escrito qué hay en cada página.
+            escribir_indice_paginas(
+                secuencia_pdf_unico(
+                    reports, separar or [], excluidas,
+                    discrepancias_al_final=bool(options.discrepancias),
+                ),
+                datos_dir / f"{corrida}{NOMBRE_INDICE_PAGINAS}",
+                f"{corrida}.pdf",
+            )
             pdf_paths = [
                 escribir_pdf_unico(
                     reports,
