@@ -61,6 +61,7 @@ from app.templates.schema import FieldType, Template
 from app.utils.postprocess import (
     _OCR_LETTER_TO_DIGIT_DICT,
     AMBIGUOUS_MATRICULA_NOTE,
+    FLIGHT_FUZZY_NOTE,
     MONTH_WORDS,
     NUMERIC_MONTH_NOTE,
     WEAK_MATRICULA_NOTE,
@@ -122,6 +123,10 @@ _SOFT_NOTES = (
     # salieron los dígitos. Sin esto la página quedaría en ERROR y no podría
     # votar en el consenso de su libro, que es justo donde más aporta.
     AMBIGUOUS_MATRICULA_NOTE,
+    # Un vuelo ajustado al vocabulario de la bitácora ("Tek" -> TCK,
+    # "7S8" -> 758) sigue siendo la lectura de ese recorte: la nota dice de
+    # dónde salió, no que el campo esté mal.
+    FLIGHT_FUZZY_NOTE,
 )
 
 _WORKER_STATE: dict = {}

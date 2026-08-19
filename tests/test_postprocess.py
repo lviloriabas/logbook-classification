@@ -220,27 +220,80 @@ class TestMatricula(unittest.TestCase):
 
 
 class TestFlightNumber(unittest.TestCase):
-    def test_formatos_manuscritos_admitidos(self):
+    """Las cuatro formas que de verdad se escriben en el casillero."""
+
+    def _valor(self, texto: str) -> str:
+        return apply_postprocess("flight_number", "flight_number", texto)[0]
+
+    def test_vuelo_numerado_se_conserva(self):
         for value, expected in (
-            ("CM", "CM"),
-            ("A + 123", "A123"),
-            ("C", "C"),
-            ("C03", "C03"),
-            ("C-04", "C04"),
             ("802", "802"),
+            ("41", "41"),
+            ("4605", "4605"),
+            ("A + 123", "A123"),
+            ("CM188", "CM188"),
+            ("CM 472", "CM472"),
         ):
-            self.assertEqual(
-                apply_postprocess("flight_number", "flight_number", value),
-                (expected, ""),
-            )
+            self.assertEqual(self._valor(value), expected)
+
+    def test_letras_alrededor_de_tres_cifras_son_un_vuelo_CM(self):
+        """El prefijo manuscrito es CM aunque el OCR lea otra cosa."""
+        for value, expected in (
+            ("CMp472", "CM472"),
+            ("CN364", "CM364"),
+            ("M395", "CM395"),
+            ("CMP7S9", "CM759"),
+        ):
+            self.assertEqual(self._valor(value), expected)
+
+    def test_cifras_leidas_como_letras_se_recuperan(self):
+        for value, expected in (
+            ("7S8", "758"),
+            ("2o0", "200"),
+            ("4C2", "402"),
+            ("CMIO3", "CM103"),
+        ):
+            self.assertEqual(self._valor(value), expected)
+
+    def test_codigos_se_ajustan_al_vocabulario(self):
+        for value, expected in (
+            ("TCK", "TCK"),
+            ("Tek", "TCK"),
+            ("TLK", "TCK"),
+            ("CCk", "CCK"),
+            ("SPV", "SPV"),
+            ("SVC VISIT", "SVC"),
+            ("9643TCK", "TCK"),
+        ):
+            self.assertEqual(self._valor(value), expected)
+
+    def test_un_CM_limpio_sostiene_un_vuelo_de_dos_cifras(self):
+        self.assertEqual(self._valor("CM 40"), "CM40")
+        self.assertEqual(self._valor("CM4i"), "CM41")
 
     def test_descarta_etiqueta_impresa(self):
-        self.assertEqual(
-            apply_postprocess(
-                "flight_number", "flight_number", "FLT. NO / CHECK C03"
-            ),
-            ("C03", ""),
-        )
+        self.assertEqual(self._valor("FLT. NO / CHECK CM403"), "CM403")
+
+    def test_lo_que_no_es_ninguna_de_las_formas_queda_vacio(self):
+        """Antes se escribían tal cual en el CSV: BSO, SYZ, MF7, E…"""
+        for value in ("BSO", "SYZ", "MF7", "E", "CMOS", "CMZD",
+                      "FLEET INTERCHANGE"):
+            self.assertEqual(self._valor(value), "")
+
+    def test_un_CM_leido_entero_manda_sobre_lo_que_lleve_detras(self):
+        """Con el prefijo delante, lo de atrás son las cifras del vuelo."""
+        for value, expected in (
+            ("CMPlOS", "CM105"),
+            ("cmloy", "CM104"),
+            ("CMYTO", "CM470"),
+            ("CMPBA3", "CM843"),
+        ):
+            self.assertEqual(self._valor(value), expected)
+
+    def test_un_cero_suelto_no_es_un_vuelo(self):
+        """Ese trazo es una marca del casillero, no un número."""
+        self.assertEqual(self._valor("0"), "")
+        self.assertEqual(self._valor("00"), "")
 
     def test_texto_largo_no_llega_al_csv(self):
         value, note = apply_postprocess(
