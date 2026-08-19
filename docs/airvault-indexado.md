@@ -214,6 +214,39 @@ y se cierra. Nadie copia nada ni teclea nada.
 Nada de esto instala ni descarga nada: Edge ya viene con Windows y el
 perfil es una carpeta mas dentro de `portable/`, que viaja con el programa.
 
+### Por que un perfil propio y no el Edge de siempre
+
+Lo ideal seria colgarse de la ventana de Edge donde la persona ya esta
+dentro de AirVault, sin entrar una segunda vez. No se puede, y no por
+comodidad:
+
+- **Chromium ignora el puerto de depuracion cuando el perfil es el de por
+  defecto.** Es una proteccion deliberada del navegador, no un ajuste: sin
+  ese puerto no hay forma de pedirle las cookies.
+- **Si Edge ya esta abierto, lanzarlo otra vez no arranca nada**: el
+  proceso nuevo le pasa la orden al que ya corre y se va, asi que no queda
+  ningun puerto al que conectarse.
+- **Un WebDriver no cambia nada de lo anterior.** `msedgedriver` maneja un
+  navegador que arranca el mismo, con su propio perfil; llega al mismo
+  punto que este modulo y con una dependencia mas que empaquetar. Solo
+  valdria la pena si evitara el acceso, y no lo evita.
+- **Copiar el perfil de la persona tampoco sirve** y ademas no se hace: las
+  cookies estan cifradas contra el navegador, la copia se haria con Edge
+  abierto y, sobre todo, la cookie de federacion es de sesion y muchas
+  veces ni siquiera esta en el disco. Leer el almacen de cookies del
+  navegador de alguien no es algo que este programa haga.
+
+Por eso el trato es otro: **se entra una sola vez** en el perfil del
+programa y esa sesion se queda. Lo que lo sostiene es
+`--restore-last-session`, que no esta para reabrir pestanas: Chromium solo
+guarda en disco las cookies **de sesion** —y la de federacion lo es— cuando
+el perfil arranca restaurando la sesion anterior. Sin esa bandera habria
+que entrar con segundo factor en cada corrida.
+
+Cuando la sesion guardada deja de valer, el programa **vuelve a abrir la
+ventana para entrar**, en vez de quedarse pidiendo que alguien copie una
+cookie con F12.
+
 Las cookies se le piden al navegador por su protocolo de depuracion
 (`Storage.getCookies`), no leyendo su archivo. Un Edge moderno las cifra
 con la identidad del navegador (prefijo `v20`, clave
@@ -343,10 +376,22 @@ respuesta decidida de antemano.
 | Falla el guardado de una página concreta | Se marca esa página con el motivo. Con `--continuar-con-errores` el resto del lote sigue. |
 | Un trozo de la subida se pierde | Se reenvía ese trozo. Reenviar el mismo índice es inocuo: el servidor arma el archivo por posición. |
 
-La petición que abre el lote merece mención aparte: si el lote está abierto
-en el navegador, AirVault **no contesta y no da error**, deja la petición
-esperando. Por eso todas las peticiones llevan tiempo límite y el mensaje
-lo dice: hay que cerrar el lote en el navegador antes de indexarlo.
+### El lote se abre y se cierra
+
+AirVault admite **un solo dueño por lote**. Abrirlo lo bloquea a nombre de
+quien lo abre, y mientras siga bloqueado cualquier otra apertura —la del
+programa la próxima vez, o la de la persona que lo abre en el navegador—
+se queda esperando: el servidor **no contesta y no da error**. Por eso
+todas las peticiones llevan tiempo límite.
+
+De ahí que el lote se suelte siempre al terminar: salga bien, se cancele o
+se corte a medias, y también cuando la ventana se cierra sin llegar a
+indexar. El lote de «Revisar» se suelta en cuanto se planifica, porque es
+justo el que una persona tiene que abrir a mano.
+
+Cuando aun así una apertura se queda esperando, el programa pregunta al
+listado quién lo tiene tomado y lo dice con nombre y apellido, en vez de
+dejar un tiempo agotado sin explicación.
 
 La comprobación de sesión se hace antes de empezar, no a mitad: descubrir
 en la página 250 de 400 que la cookie había caducado cuesta mucho más que

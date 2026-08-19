@@ -270,3 +270,43 @@ def test_se_entra_por_el_enlace_federado(monkeypatch, tmp_path):
     sso = f"https://{HOST}/zfp/?whr=https://login.microsoftonline.com/x/wsfed"
     obtener_cookies(f"https://{HOST}", tmp_path, sso, dormir=lambda _s: None)
     assert falso.urls == [sso]
+
+
+def test_forzar_login_no_pregunta_al_perfil(monkeypatch, tmp_path):
+    """Cuando el servidor ya rechazo lo del perfil, releerlo da lo mismo.
+
+    Es la salida del callejon: la cookie guardada tiene la forma correcta,
+    asi que el intento sin ventana la daria por buena una y otra vez.
+    """
+    preparar(monkeypatch, [{"FedAuth": FEDAUTH}])
+    cookies = obtener_cookies(
+        f"https://{HOST}", tmp_path, dormir=lambda _s: None,
+        forzar_login=True,
+    )
+    assert cookies == {"FedAuth": FEDAUTH}
+    # Directo a la ventana: ningun intento silencioso de por medio.
+    assert NavegadorFalso.abiertos == [True]
+
+
+def test_la_espera_agotada_dice_que_llego_y_que_falto(monkeypatch, tmp_path):
+    """Sin ventana no se ve nada; el motivo tiene que decirlo todo."""
+    preparar(monkeypatch, [{"ASP.NET_SessionId": "abc"}])
+    relojes = iter([0.0, 0.0, 1.0, 999.0])
+    with pytest.raises(ErrorDeNavegador) as fallo:
+        obtener_cookies(
+            f"https://{HOST}", tmp_path, espera_login_s=120.0,
+            dormir=lambda _s: None, reloj=lambda: next(relojes),
+        )
+    motivo = str(fallo.value)
+    assert "ASP.NET_SessionId" in motivo
+    assert "pagina de Microsoft" in motivo
+
+
+def test_la_sesion_se_guarda_al_cerrar_el_navegador():
+    """La cookie de federacion es de sesion y se pierde sin esta bandera.
+
+    Sin ella hay que entrar con segundo factor en cada corrida, que es lo
+    que el perfil propio viene a evitar. Se fija aqui porque parece una
+    preferencia de pestanas y no lo es.
+    """
+    assert "--restore-last-session" in navegador._ARGUMENTOS

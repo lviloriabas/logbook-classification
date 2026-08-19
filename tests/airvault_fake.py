@@ -29,6 +29,7 @@ class ClienteFalso:
         self.filtros: List[str] = []
         self.lecturas: List[int] = []
         self.abiertos: List[str] = []
+        self.cerrados: List[str] = []
 
     # ── contrato que usa el indexador ──────────────────────────────
 
@@ -42,6 +43,10 @@ class ClienteFalso:
     def abrir_lote(self, batch_id: str) -> Mapping[str, object]:
         self.abiertos.append(batch_id)
         return {"pageCount": self.page_count, "batchId": batch_id}
+
+    def cerrar_lote(self, batch_id: str) -> Mapping[str, object]:
+        self.cerrados.append(batch_id)
+        return {"ok": True}
 
     def leer_pagina(self, batch_id: str, pagina: int) -> PaginaIndexada:
         self.lecturas.append(pagina)
@@ -79,9 +84,9 @@ def pagina(numero: int, estado: int = 3,
 
 
 def lote(batch_id: str, nombre: str, paginas: int = 0,
-         repo_id: int = 3209) -> ResumenLote:
+         repo_id: int = 3209, bloqueado_por: str = "") -> ResumenLote:
     return ResumenLote(
         batch_id=batch_id, nombre=nombre, paginas=paginas, repo_id=repo_id,
-        repositorio="MXDocs", paso="Web Index", bloqueado_por="",
-        recibido="",
+        repositorio="MXDocs", paso="Web Index",
+        bloqueado_por=bloqueado_por, recibido="",
     )

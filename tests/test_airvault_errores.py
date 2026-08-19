@@ -15,6 +15,7 @@ from app.airvault.config import AirVaultConfig
 from app.airvault.indexer import Indexador
 from app.airvault.model import EstadoRegistro, Manifiesto, Registro
 from app.airvault.session import (
+    ErrorDeAirVault,
     ErrorDeConexion,
     ErrorDeSesion,
     SesionAirVault,
@@ -42,8 +43,14 @@ class HttpFalso:
 
 
 class _Tarro:
+    def __init__(self):
+        self.vaciado = 0
+
     def set(self, *_a, **_k):
         return None
+
+    def clear(self, *_a, **_k):
+        self.vaciado += 1
 
 
 class RespuestaFalsa:
@@ -101,9 +108,23 @@ def test_el_servidor_ocupado_se_reintenta():
 def test_lo_que_no_mejora_insistiendo_no_se_reintenta():
     """Un 404 se responde igual las tres veces; insistir solo hace esperar."""
     s = sesion([RespuestaFalsa(status_code=404)])
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(ErrorDeAirVault) as fallo:
         s.get("/x")
     assert len(s.http.pedidas) == 1
+    # El motivo tiene que decir que fallo y por que, no un codigo suelto.
+    assert "no existe" in str(fallo.value)
+    assert "404" in str(fallo.value)
+
+
+def test_un_rechazo_de_una_pagina_no_es_un_fallo_del_camino():
+    """Un 404 frena esa pagina; el lote entero sigue.
+
+    Si se anunciara como error de conexion, el indexador daria por caido el
+    camino y marcaria como fallidas cientos de paginas que nadie intento.
+    """
+    from app.airvault.indexer import FALLOS_DE_CAMINO
+
+    assert not issubclass(ErrorDeAirVault, FALLOS_DE_CAMINO)
 
 
 def test_agotados_los_intentos_se_dice_que_paso():
@@ -119,7 +140,10 @@ def test_el_tiempo_agotado_menciona_el_lote_abierto():
     s = sesion([requests.Timeout("nada")] * 3)
     with pytest.raises(ErrorDeConexion) as fallo:
         s.get("/index/Batch/LockAndGetBatchInfo")
-    assert "abierto en el navegador" in str(fallo.value)
+    motivo = str(fallo.value)
+    assert "un solo dueno por lote" in motivo
+    # Tambien cuando lo dejo tomado el propio programa, no solo el navegador.
+    assert "intento anterior no llego a soltarlo" in motivo
 
 
 def test_la_espera_crece_con_cada_intento():
@@ -308,3 +332,59 @@ def test_verificar_cuenta_aparte_la_pagina_que_no_pudo_leerse():
     validas, total, problemas = verificar_lote(cliente, manifiesto())
     assert (validas, total) == (2, 3)
     assert any("no se pudo leer" in p for p in problemas)
+
+
+# ── la sesion guardada que ya no vale ──────────────────────────────
+
+def test_una_sesion_caducada_del_navegador_se_renueva(monkeypatch):
+    """El perfil guardaba una cookie que AirVault ya no acepta.
+
+    Tiene la forma correcta, asi que el programa la daba por buena, moria
+    en la primera peticion y solo sabia proponer que alguien copiara una
+    cookie a mano. Lo que corresponde es volver a entrar.
+    """
+    from app.airvault import navegador
+    from app.airvault.session import ORIGEN_EDGE, comprobar_o_renovar
+
+    s = sesion([
+        RespuestaFalsa(status_code=401),
+        RespuestaFalsa(json_data={"records": 7}),
+    ])
+    s._origen = ORIGEN_EDGE
+    pedidos: list = []
+
+    def entrar(*_a, forzar_login=False, **_k):
+        pedidos.append(forzar_login)
+        return {"FedAuth": "nueva"}
+
+    monkeypatch.setattr(navegador, "obtener_cookies", entrar)
+    assert comprobar_o_renovar(s) == 7
+    # Se vuelve a entrar sin mirar lo que guarda el perfil: leerlo otra vez
+    # devolveria la misma cookie que el servidor acaba de rechazar.
+    assert pedidos == [True]
+    # Y la vieja sale del tarro: requests mandaria las dos y AirVault se
+    # quedaria con la que acaba de rechazar.
+    assert s.http.cookies.vaciado == 1
+
+
+def test_una_cookie_pegada_a_mano_no_se_renueva_sola(monkeypatch):
+    """No hay navegador del que sacarla; hay que decirlo y no insistir."""
+    from app.airvault.session import comprobar_o_renovar
+
+    s = sesion([RespuestaFalsa(status_code=401)])
+    with pytest.raises(ErrorDeSesion) as fallo:
+        comprobar_o_renovar(s)
+    assert "F12" in str(fallo.value) or "herramientas de" in str(fallo.value)
+
+
+def test_la_sesion_caducada_del_navegador_no_manda_a_copiar_cookies():
+    """Mandar a copiar con F12 a quien entro por el navegador es el camino largo."""
+    from app.airvault.session import ORIGEN_EDGE
+
+    s = sesion([RespuestaFalsa(status_code=401)])
+    s._origen = ORIGEN_EDGE
+    with pytest.raises(ErrorDeSesion) as fallo:
+        s.get("/x")
+    motivo = str(fallo.value)
+    assert "perfil de Edge" in motivo
+    assert "F12" not in motivo

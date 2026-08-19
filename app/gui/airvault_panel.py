@@ -96,7 +96,7 @@ class TrabajoAirVaultWorker(QThread):
             escribir_csv_de_partes,
             escribir_html_de_partes,
         )
-        from app.airvault.session import abrir_sesion
+        from app.airvault.session import abrir_sesion, comprobar_o_renovar
 
         estado = self.estado
         config = estado["config"]
@@ -116,11 +116,17 @@ class TrabajoAirVaultWorker(QThread):
             )
 
         self._avisar("Entrando a AirVault", 0, 0)
+        def avisar_texto(texto: str) -> None:
+            self._avisar(texto, 0, 0)
+
         sesion = abrir_sesion(
             config, cookie=estado.get("cookie") or None,
-            avisar=lambda texto: self._avisar(texto, 0, 0),
+            avisar=avisar_texto,
         )
-        sesion.comprobar()
+        # Comprobar antes de subir nada: si la sesión guardada ya no vale,
+        # esto vuelve a abrir el navegador en lugar de morir en la primera
+        # página con un mensaje que manda a copiar cookies a mano.
+        comprobar_o_renovar(sesion, avisar=avisar_texto)
         cliente = ClienteHttp(sesion, config)
 
         subir_partes(trabajos, sesion, avisar=self._avisar)
@@ -151,17 +157,27 @@ class TrabajoAirVaultWorker(QThread):
         })
 
     def _indexar(self) -> None:
-        from app.airvault.flujo import indexar_partes, verificar_partes
+        from app.airvault.flujo import (
+            cerrar_partes,
+            indexar_partes,
+            verificar_partes,
+        )
 
         estado = self.estado
         trabajos = estado["trabajos"]
-        resultado = indexar_partes(
-            trabajos, estado["planes"], avisar=self._avisar
-        )
-        self._avisar("Comprobando como quedaron los lotes", 0, 0)
-        validas, total, _problemas = verificar_partes(
-            trabajos, estado["cliente"]
-        )
+        cliente = estado["cliente"]
+        try:
+            resultado = indexar_partes(
+                trabajos, estado["planes"], avisar=self._avisar
+            )
+            self._avisar("Comprobando como quedaron los lotes", 0, 0)
+            validas, total, _problemas = verificar_partes(trabajos, cliente)
+        finally:
+            # Los lotes quedan tomados desde la revisión para poder
+            # escribirlos; salga bien o mal, aquí se sueltan. Uno que queda
+            # tomado no da error: cuelga la próxima vez que alguien lo abra.
+            self._avisar("Cerrando los lotes en AirVault", 0, 0)
+            cerrar_partes(trabajos, cliente)
         self.indexado.emit({
             "resultado": resultado, "validas": validas, "total": total,
             "lotes": len(trabajos),
@@ -182,6 +198,10 @@ class AirVaultPanel(QWidget):
         self._raiz = Path(raiz)
         self._worker: Optional[TrabajoAirVaultWorker] = None
         self._revision: dict = {}
+        # Los lotes se sueltan al terminar de escribir, así que una
+        # revisión ya indexada no sirve para volver a indexar: hay que
+        # revisar de nuevo, que es lo que los vuelve a tomar.
+        self._escrito = False
         self._config = None
 
         # La flecha no se guarda aqui dentro: la ventana la pone en la
@@ -306,6 +326,7 @@ class AirVaultPanel(QWidget):
         self.corrida_edit.setText(str(ruta))
         self.lote_edit.setText(nombre_desde_corrida(ruta))
         self._revision = {}
+        self._escrito = False
         self.boton_indexar.setEnabled(False)
         self.boton_reporte.setEnabled(False)
         self.resumen.setText(TEXTO_SIN_REVISAR)
@@ -377,7 +398,9 @@ class AirVaultPanel(QWidget):
         self.boton_buscar.setEnabled(activo)
         self.lote_edit.setEnabled(activo)
         self.cookie_edit.setEnabled(activo)
-        self.boton_indexar.setEnabled(activo and bool(self._revision))
+        self.boton_indexar.setEnabled(
+            activo and bool(self._revision) and not self._escrito
+        )
 
     # ── respuestas del hilo ────────────────────────────────────────
 
@@ -391,6 +414,7 @@ class AirVaultPanel(QWidget):
         partes = datos["partes"]
         resumen = _resumen_sumado(partes)
         self._revision = datos
+        self._escrito = False
         self.boton_indexar.setEnabled(True)
         self.boton_reporte.setEnabled(True)
         donde = (
@@ -408,6 +432,8 @@ class AirVaultPanel(QWidget):
     def _al_indexar(self, datos: dict) -> None:
         resultado = datos["resultado"]
         lotes = datos.get("lotes", 1)
+        self._escrito = True
+        self.boton_indexar.setEnabled(False)
         donde = f" en {lotes} lotes" if lotes > 1 else ""
         cuenta = (
             f"Escritas {resultado.escritas}, omitidas {resultado.omitidas} "
@@ -428,6 +454,10 @@ class AirVaultPanel(QWidget):
         self.progreso_cambiado.emit(0, 0)
 
     def _al_fallar(self, mensaje: str) -> None:
+        # El motivo va entero aunque la línea lo recorte: ``ElidedLabel`` ya
+        # deja el texto completo en el tooltip. Ponérselo a mano lo daría por
+        # tooltip propio y congelaría este error sobre los mensajes que
+        # vengan después.
         self.resumen.setText(mensaje)
         self.estado_cambiado.emit("El indexado no pudo continuar")
         self.progreso_cambiado.emit(0, 0)
@@ -459,3 +489,24 @@ class AirVaultPanel(QWidget):
         if self._worker is not None and self._worker.isRunning():
             self._worker.requestInterruption()
             self._worker.wait(5000)
+        self._soltar_lotes()
+
+    def _soltar_lotes(self) -> None:
+        """Suelta en AirVault los lotes que la revisión dejó tomados.
+
+        Entre revisar e indexar los lotes quedan tomados a nombre de quien
+        revisó, que es lo que permite escribirlos después. Si la ventana se
+        cierra sin indexar, hay que soltarlos: un lote tomado no da error,
+        deja colgada la próxima vez que alguien lo abra.
+        """
+        revision, self._revision = self._revision, {}
+        trabajos = revision.get("trabajos")
+        cliente = revision.get("cliente")
+        if not trabajos or cliente is None:
+            return
+        from app.airvault.flujo import cerrar_partes
+
+        try:
+            cerrar_partes(trabajos, cliente)
+        except Exception:  # noqa: BLE001 - cerrando la ventana no se avisa
+            pass

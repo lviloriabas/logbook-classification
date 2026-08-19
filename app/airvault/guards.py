@@ -17,6 +17,7 @@ from app.airvault.config import (
     CAMPO_MATRICULA,
     CAMPOS_OBLIGATORIOS,
     ESTADO_VALIDO,
+    nombre_campo,
 )
 from app.airvault.model import Registro
 
@@ -49,14 +50,31 @@ def verificar_cantidad(
     Los separadores cuentan: en el lote ocupan una pagina cada uno, igual
     que en el PDF que se subio.
     """
-    if paginas_lote != len(registros):
-        separadores = sum(1 for r in registros if r.es_separador)
-        detalle = f", {separadores} de ellos separadores" if separadores else ""
+    if paginas_lote == len(registros):
+        return
+    separadores = sum(1 for r in registros if r.es_separador)
+    detalle = f", {separadores} de ellos separadores" if separadores else ""
+    if paginas_lote <= 0:
         raise ErrorDeGuarda(
-            f"El lote tiene {paginas_lote} paginas y el manifiesto "
-            f"{len(registros)}{detalle}. No se escribe nada hasta que "
-            f"coincidan."
+            f"AirVault no dijo cuantas paginas tiene el lote, y el manifiesto "
+            f"espera {len(registros)}{detalle}. Suele pasar cuando el lote "
+            f"todavia se esta procesando en el servidor o cuando el lote "
+            f"anotado ya no existe: conviene mirarlo en AirVault antes de "
+            f"volver a intentar. No se escribe nada."
         )
+    faltan = len(registros) - paginas_lote
+    causa = (
+        f"al lote le faltan {faltan} paginas de las que trae el PDF"
+        if faltan > 0 else
+        f"el lote tiene {-faltan} paginas de mas que el PDF de la corrida"
+    )
+    raise ErrorDeGuarda(
+        f"El lote tiene {paginas_lote} paginas y el manifiesto "
+        f"{len(registros)}{detalle}: {causa}. Escribir asi correria cada "
+        f"dato a la bitacora de al lado, asi que no se escribe nada. Casi "
+        f"siempre es que se subio un PDF distinto al que se preparo, o que "
+        f"el lote quedo a medio subir."
+    )
 
 
 def verificar_matriculas(
@@ -84,13 +102,19 @@ def verificar_matriculas(
 def verificar_obligatorios(
     registro: Registro, valores: Mapping[int, str]
 ) -> List[Aviso]:
-    """Ningun campo obligatorio puede ir vacio."""
+    """Ningun campo obligatorio puede ir vacio.
+
+    El aviso nombra el campo como se llama en la pantalla de AirVault: quien
+    lo lee tiene que poder ir a la bitacora y ver que falta, sin traducir un
+    numero de campo.
+    """
     avisos: List[Aviso] = []
     for campo in CAMPOS_OBLIGATORIOS:
         if not str(valores.get(campo, "")).strip():
             avisos.append(Aviso(
                 registro.seq, "obligatorio_vacio",
-                f"el campo {campo} quedaria vacio",
+                f"{nombre_campo(campo)} quedaria vacio y AirVault dejaria "
+                f"la pagina en Need Correction",
             ))
     return avisos
 
@@ -138,7 +162,7 @@ def verificar_no_pisar(
     if estado_pagina == ESTADO_VALIDO and not sobrescribir:
         return [Aviso(
             registro.seq, "ya_indexada",
-            "la pagina ya esta en Valid; usar --sobrescribir para pisarla",
+            "la pagina ya esta en Valid en AirVault; se deja como esta",
         )]
     return []
 

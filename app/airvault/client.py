@@ -88,6 +88,22 @@ def codificar_texto(texto: str) -> str:
     return base64.b64encode(limpio.encode("utf-8")).decode("ascii")
 
 
+class RespuestaInesperada(RuntimeError):
+    """AirVault contesto algo con otra forma de la que se esperaba."""
+
+
+def _describir(datos: Any) -> str:
+    """Describe una respuesta rara sin volcarla entera en el mensaje."""
+    if datos is None:
+        return "una respuesta vacia"
+    if isinstance(datos, (list, tuple)):
+        return f"una lista de {len(datos)} elementos"
+    texto = str(datos).strip().replace("\n", " ")
+    if not texto:
+        return "una respuesta vacia"
+    return f"«{texto[:120]}»" + ("…" if len(texto) > 120 else "")
+
+
 class ClienteAirVault(Protocol):
     """Contrato minimo que necesita el indexador.
 
@@ -98,6 +114,8 @@ class ClienteAirVault(Protocol):
     def listar_lotes(self, filtro: str = "") -> List[ResumenLote]: ...
 
     def abrir_lote(self, batch_id: str) -> Mapping[str, Any]: ...
+
+    def cerrar_lote(self, batch_id: str) -> Mapping[str, Any]: ...
 
     def leer_pagina(self, batch_id: str, pagina: int) -> PaginaIndexada: ...
 
@@ -157,6 +175,14 @@ class ClienteHttp:
         )
 
     def cerrar_lote(self, batch_id: str) -> Mapping[str, Any]:
+        """Suelta el lote que abrio :meth:`abrir_lote`.
+
+        Hay que llamarlo siempre, tambien cuando el indexado se corta a
+        medias: AirVault admite un solo dueno por lote, asi que un lote que
+        queda bloqueado deja colgada la siguiente apertura —la del propio
+        programa o la de la persona que lo abre en el navegador— sin decir
+        por que.
+        """
         return self.sesion.get(
             "/index/Batch/UnlockBatch",
             {"repoId": self.config.repo_id,
@@ -171,6 +197,12 @@ class ClienteHttp:
             {"encodedBatchId": codificar_batch_id(batch_id),
              "repoId": self.config.repo_id, "page": pagina},
         )
+        if not isinstance(datos, Mapping):
+            raise RespuestaInesperada(
+                f"AirVault no devolvio los campos de la pagina {pagina} del "
+                f"lote {batch_id}, sino {_describir(datos)}. Suele ser que "
+                f"el lote ya no tenga esa pagina."
+            )
         valores: Dict[int, str] = {}
         columnas: Dict[str, str] = {}
         for campo in (datos.get("RepoFields") or []):

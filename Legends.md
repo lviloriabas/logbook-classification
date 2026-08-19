@@ -2,6 +2,18 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-19 — El lote de AirVault se suelta al terminar y la sesión se renueva sola
+
+Indexar dejaba el lote tomado. Abrirlo lo bloquea a nombre de quien lo abre, y el programa nunca lo soltaba: AirVault admite un solo dueño por lote, así que a partir de la primera corrida cualquier apertura posterior —la del programa la vez siguiente, o la de la persona que entra por el navegador— se quedaba esperando sin respuesta, porque el servidor no contesta ni da error cuando el lote está tomado. Después de tres minutos aparecía un tiempo agotado que además culpaba al navegador de un candado que había dejado el propio programa. El lote de «Revisar» era el peor caso: es el que alguien tiene que indexar a mano, y quedaba bloqueado sin que nadie escribiera en él.
+
+Ahora el lote se suelta siempre: al terminar, al cancelar, cuando algo se corta a medias y también cuando la ventana se cierra sin llegar a indexar. El de «Revisar» se suelta en cuanto se planifica. Y cuando una apertura se queda esperando de todos modos, el programa pregunta al listado quién lo tiene tomado y lo dice con nombre, en vez de dejar una espera sin explicación.
+
+La sesión guardada en el perfil de Edge tampoco tenía salida cuando dejaba de valer. La cookie seguía ahí y con la forma correcta, así que se daba por buena, la primera petición moría y el mensaje mandaba a copiar una cookie con F12: el camino largo, y encima el que el perfil venía a evitar. Ahora el programa vuelve a abrir la ventana para entrar, que es lo que haría una persona.
+
+Sigue siendo un perfil propio dentro de `portable/` y no el Edge de siempre, aunque ahí la sesión ya esté abierta. No es una preferencia: el navegador ignora a propósito el puerto de depuración cuando el perfil es el de por defecto, y si Edge ya está abierto el arranque nuevo le pasa la orden al que corre y se va, sin dejar puerto al que conectarse. Un WebDriver termina en el mismo sitio, porque también maneja un navegador que arranca él. Lo que sí se arregló es que entrar sea una sola vez de verdad: la cookie de federación es de sesión, y Chromium solo la guarda en disco cuando el perfil arranca restaurando la sesión anterior.
+
+Los motivos que se muestran cambian de tono. Un campo obligatorio vacío se nombra como se llama en la pantalla de AirVault —Aircraft, Fleet, Log Page Number— y no por su número interno. Si el lote y la corrida no tienen las mismas páginas, el aviso dice cuántas faltan o sobran y cuál es la causa habitual. Un rechazo del servidor dice qué se pedía y qué contestó, y ya no arrastra el lote entero: un 404 de una página frena esa página, no las cuatrocientas. Y si Edge no arranca, el mensaje incluye lo que dijo Edge, que antes se tiraba.
+
 ## 2026-08-19 — La sesión de AirVault se resuelve sola
 
 Indexar empezaba por un trámite a mano: entrar a AirVault en el navegador, abrir las herramientas de desarrollo, copiar la cookie de sesión y pegarla en el campo **Sesión**. Cada vez que se abría el programa, otra vez. El atajo que iba a evitarlo —leer la cookie del perfil de Edge— casi nunca funcionaba: hay que cerrar Edge para que suelte su base de cookies, y un Edge moderno las cifra con la identidad del navegador (`v20`), que no se deshace desde fuera.

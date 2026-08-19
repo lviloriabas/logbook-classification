@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, List, Mapping, Optional, Sequence, Tuple
 
 from loguru import logger
 
@@ -50,6 +50,21 @@ Aviso = Callable[[str, int, int], None]
 
 class ErrorDeCorrida(RuntimeError):
     """La corrida no trae lo que hace falta para indexarla."""
+
+
+def paginas_de_lote(info) -> int:
+    """Cuantas paginas dice AirVault que tiene el lote recien abierto.
+
+    Devuelve 0 cuando la respuesta no lo trae, que es una situacion real
+    —lote a medio procesar, lote borrado— y la guarda de cantidad explica
+    mejor que un error de atributo a mitad de camino.
+    """
+    if not isinstance(info, Mapping):
+        return 0
+    try:
+        return int(info.get("pageCount", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def carpeta_de_trabajo(job: str, raiz: Optional[Path] = None) -> Path:
@@ -379,8 +394,8 @@ class Trabajo:
             raise ErrorDeCorrida(
                 "El trabajo todavia no tiene lote. Hay que buscarlo primero."
             )
-        info = cliente.abrir_lote(self.manifiesto.batch_id)
-        paginas = int((info or {}).get("pageCount", 0) or 0)
+        info = self._abrir_lote(cliente)
+        paginas = paginas_de_lote(info)
         try:
             picklist = cliente.picklist_matriculas()
         except Exception as exc:  # noqa: BLE001 - el catalogo no es critico
@@ -396,9 +411,79 @@ class Trabajo:
             al_guardar=persistir,
             resolutor=resolutor or ResolutorFlota(),
         )
-        plan = indexador.planificar(paginas)
+        try:
+            plan = indexador.planificar(paginas)
+        except BaseException:
+            # El lote queda abierto a proposito cuando el plan sale bien:
+            # escribirlo necesita seguir siendo su dueno. Si el plan no
+            # sale, nadie va a escribir y dejarlo tomado solo cuelga al
+            # siguiente que lo abra.
+            self.cerrar(cliente)
+            raise
+        if self.manifiesto.solo_subir:
+            # El lote de «Revisar» se sube para que una persona lo indexe a
+            # mano: es justo el que no puede quedar tomado por el programa.
+            self.cerrar(cliente)
         self.guardar()
         return plan, indexador
+
+    def _abrir_lote(self, cliente):
+        """Toma el lote y, si no contesta, dice quien lo tiene tomado.
+
+        AirVault admite un solo dueno por lote y no responde «esta
+        ocupado»: deja la peticion colgada hasta que vence el tiempo
+        limite. El listado si dice quien lo tiene, asi que se pregunta
+        justo cuando hace falta y el mensaje deja de ser un tiempo agotado
+        sin explicacion.
+        """
+        from app.airvault.session import ErrorDeConexion
+
+        try:
+            return cliente.abrir_lote(self.manifiesto.batch_id)
+        except ErrorDeConexion as exc:
+            dueno = self._quien_lo_tiene(cliente)
+            if not dueno:
+                raise
+            raise ErrorDeConexion(
+                f"El lote {self.manifiesto.nombre_batch} esta abierto por "
+                f"{dueno} y AirVault no lo entrega a nadie mas: la peticion "
+                f"se queda esperando sin contestar. Hay que cerrarlo en "
+                f"AirVault —abrirlo y salir con Close— y volver a intentar."
+            ) from exc
+
+    def _quien_lo_tiene(self, cliente) -> str:
+        """Usuario que tiene tomado el lote, o vacio si no se pudo saber."""
+        try:
+            lotes = cliente.listar_lotes(self.manifiesto.nombre_batch)
+        except Exception as exc:  # noqa: BLE001 - es solo para el mensaje
+            logger.debug("No se pudo averiguar quien tiene el lote: {}", exc)
+            return ""
+        for lote in lotes or []:
+            if lote.batch_id == self.manifiesto.batch_id:
+                return lote.bloqueado_por
+        return ""
+
+    def cerrar(self, cliente) -> None:
+        """Suelta el lote en AirVault. No levanta: es limpieza.
+
+        Se llama al terminar y tambien cuando algo se corta a medias. Un
+        lote que queda tomado no da error: cuelga la siguiente apertura,
+        que es mucho peor de diagnosticar.
+        """
+        batch_id = self.manifiesto.batch_id
+        if not batch_id:
+            return
+        try:
+            cliente.cerrar_lote(batch_id)
+        except Exception as exc:  # noqa: BLE001 - cerrar nunca tumba nada
+            logger.warning(
+                "No se pudo soltar el lote {} en AirVault: {}. Si la "
+                "siguiente apertura se queda esperando, hay que cerrarlo "
+                "alli a mano.",
+                batch_id, exc,
+            )
+        else:
+            logger.info("Lote {} soltado en AirVault", batch_id)
 
     def indexar(
         self, indexador: Indexador, plan: Plan,
@@ -527,10 +612,22 @@ def planificar_partes(
             if avisar is not None:
                 avisar(f"{cabeza}{texto}", hechas, total)
 
-        planes.append(trabajo.planificar(
-            cliente, resolutor, sobrescribir, propio if avisar else None
-        ))
+        try:
+            planes.append(trabajo.planificar(
+                cliente, resolutor, sobrescribir, propio if avisar else None
+            ))
+        except BaseException:
+            # Una parte que falla no puede dejar tomadas las anteriores:
+            # son lotes distintos y ya nadie va a escribir en ellos.
+            cerrar_partes(trabajos[:len(planes)], cliente)
+            raise
     return planes
+
+
+def cerrar_partes(trabajos: Sequence["Trabajo"], cliente) -> None:
+    """Suelta en AirVault todos los lotes que el recorrido dejo abiertos."""
+    for trabajo in trabajos:
+        trabajo.cerrar(cliente)
 
 
 def indexar_partes(
