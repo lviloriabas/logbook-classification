@@ -37,6 +37,7 @@ from app.airvault.model import EstadoEtapa, Manifiesto
 from app.airvault.naming import (
     PREFIJO_POR_DEFECTO,
     nombre_de_parte,
+    nombre_de_revisar,
     nombre_desde_corrida,
 )
 
@@ -87,8 +88,13 @@ class ParteDeEntrega:
     total: int
     pdf: Path
     paginas: List[dict]
+    # El archivo con las bitacoras sin avion confirmado. Se sube igual que
+    # los demas, pero no se indexa.
+    revisar: bool = False
 
     def nombre_lote(self, base: str) -> str:
+        if self.revisar:
+            return nombre_de_revisar(base)
         return nombre_de_parte(base, self.indice, self.total)
 
 
@@ -103,14 +109,21 @@ def partes_de_corrida(csv: Path | str) -> List[ParteDeEntrega]:
     if not indice:
         return []
     carpeta = carpeta_de_corrida(csv)
-    total = len(indice)
+    # El archivo de revisar no se numera: no es «una de cinco», es el que
+    # queda aparte. Numerarlo correria la cuenta de las demas.
+    numerables = sum(1 for p in indice if not p.get("revisar"))
     partes: List[ParteDeEntrega] = []
-    for numero, parte in enumerate(indice, start=1):
+    numero = 0
+    for parte in indice:
         nombre = str(parte.get("pdf", "")).strip()
+        es_revisar = bool(parte.get("revisar"))
+        if not es_revisar:
+            numero += 1
         partes.append(ParteDeEntrega(
-            indice=numero, total=total,
+            indice=numero, total=numerables,
             pdf=carpeta / nombre if nombre else carpeta,
             paginas=list(parte.get("paginas") or []),
+            revisar=es_revisar,
         ))
     return partes
 
@@ -209,6 +222,7 @@ class Trabajo:
             pdf_origen=str(parte.pdf) if parte else "",
             parte=parte.indice if parte else 1,
             partes=parte.total if parte else 1,
+            solo_subir=bool(parte and parte.revisar),
             doc_type=config.doc_type,
             audit_status=config.audit_status,
             registros=registros,
@@ -426,6 +440,8 @@ def carpeta_de_parte(carpeta: Path | str, parte: ParteDeEntrega) -> Path:
     siempre los trabajos de una corrida sin repartir.
     """
     carpeta = Path(carpeta)
+    if parte.revisar:
+        return carpeta / "revisar"
     if parte.total <= 1:
         return carpeta
     return carpeta / f"parte-{parte.indice:02d}"
@@ -456,6 +472,8 @@ def preparar_partes(
 def _prefijo(trabajo: "Trabajo") -> str:
     """Como se nombra una parte en los avisos de avance."""
     manifiesto = trabajo.manifiesto
+    if manifiesto.solo_subir:
+        return "Revisar: "
     if manifiesto.partes <= 1:
         return ""
     return f"Parte {manifiesto.parte} de {manifiesto.partes}: "
@@ -564,6 +582,10 @@ def verificar_partes(
     validas = total = 0
     problemas: List[str] = []
     for trabajo in trabajos:
+        if trabajo.manifiesto.solo_subir:
+            # No se escribio nada en el: comprobar que quedo valido seria
+            # reprochar que nadie lo haya indexado todavia.
+            continue
         cabeza = _prefijo(trabajo)
         propias, suyas, suyos = trabajo.verificar(cliente)
         validas += propias

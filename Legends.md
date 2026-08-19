@@ -36,6 +36,22 @@ Terminado el OCR, el programa generaba siempre los PDF de entrega. Componerlos v
 
 **Procesar** guarda ahora los datos —CSV, JSON y estadísticas— y nada más. La entrega se arma al pulsar **Exportar**, con la separación marcada en ese momento. Los archivos de entrada se siguen apartando a `input/processed/` al terminar, y la ventana reapunta sus resultados allí, así que exportar después encuentra las páginas originales.
 
+## 2026-08-19 — Nombre de lote definitivo y las bitácoras sin avión en su propio lote
+
+### El nombre
+
+Los lotes se llamaban `DP | BIT 18 AUG 2026 05 42`, y al repartir la entrega las partes salían como `(1 de 5)`. Pasan a llamarse **`DP | BITS 18 AUG 2026 05 42`**, con S, enteros en mayúsculas, y las partes con sufijo `-1`, `-2`. El sufijo del lote es el mismo que lleva su archivo, y una prueba comprueba que no se separen: si lo hicieran, el lote dejaría de poder emparejarse con el PDF que lo formó.
+
+La marca de tiempo es la del **procesamiento**. Ya salía del nombre de la carpeta de la corrida, pero cuando esa carpeta no lo llevaba se caía a la hora actual, que es la de la subida y no dice nada de la bitácora. Ahora se toma la hora del propio archivo, que sigue siendo la del procesamiento; la hora actual solo aparece si no hay ni archivo que mirar.
+
+### Las bitácoras sin avión confirmado, en su propio lote
+
+Las páginas cuya matrícula nadie pudo confirmar cerraban el PDF de entrega bajo el separador **REVISAR**, así que caían dentro del lote grande. Allí el indexado las bloqueaba —sin avión no hay dónde archivarlas— y se quedaban en medio de cuatrocientas páginas, donde nadie las encontraba.
+
+Salen ahora en su propio archivo y, por tanto, en su propio lote: `DP | BITS 18 AUG 2026 05 42 REVISAR`. Ese lote **se sube y no se toca**: el indexado no le lee ni le escribe ninguna página, y queda marcado en la cola del Web Index para resolverlo a mano. No se numera como una parte más —no es «una de cinco», es el que queda aparte— y su manifiesto vive en `output/airvault/<corrida>/revisar/`.
+
+En la corrida de referencia son 17 páginas de 884.
+
 ## 2026-08-19 — La entrega se reparte en lotes, y el indexado aguanta que la red falle
 
 ### Repartir la corrida en varios lotes

@@ -36,7 +36,7 @@ se puede procesar hoy, subir manana e indexar despues sin repetir nada.
 
 | Etapa | Que hace |
 |---|---|
-| `preparar` | Arma el manifiesto a partir del CSV y del indice de paginas (un manifiesto por parte) |
+| `preparar` | Arma el manifiesto a partir del CSV y del indice de paginas (uno por parte, y otro para REVISAR) |
 | `subir` | Sube los PDFs por Quick Upload (opcional: se puede subir a mano) |
 | `descubrir` | Ubica el lote en AirVault por su nombre |
 | `plan` | Dry run: calcula todo, escribe el reporte y no toca nada |
@@ -92,6 +92,35 @@ su separador, de modo que ninguna parte empieza con bitácoras sueltas.
 
 El reporte de revisión sigue siendo uno solo para toda la corrida: se
 aprueba de una vez y no lote por lote.
+
+El sufijo `-1` del lote es el mismo que lleva su archivo
+(`BITS 18 AUG 2026 05 42 -1.pdf`), y hay una prueba que comprueba que no se
+separen: si lo hicieran, el lote dejaría de poder emparejarse con el PDF que
+lo formó.
+
+## El lote REVISAR
+
+Las bitácoras cuya matrícula nadie pudo confirmar —ni el OCR, ni el consenso
+de su libro, ni la lista de flota— no se pueden indexar: sin avión no hay
+dónde archivarlas. Antes cerraban el PDF de entrega bajo el separador
+`REVISAR`, de modo que caían dentro del lote grande y allí se quedaban
+bloqueadas, en medio de cuatrocientas páginas, donde nadie las encontraba.
+
+Ahora salen en su **propio archivo**, y por tanto en su propio lote:
+
+```
+DP | BITS 18 AUG 2026 05 42 REVISAR
+```
+
+Ese lote **se sube y no se toca**. El indexado no le lee ni le escribe
+ninguna página; queda en la cola del Web Index, marcado y a la vista, para
+que alguien lo resuelva a mano. En el reporte sus páginas aparecen con el
+aviso `revisar_a_mano`.
+
+No se numera como una parte más: no es «una de cinco», es el que queda
+aparte. Su manifiesto vive en `output/airvault/<corrida>/revisar/`.
+
+En la corrida de referencia son 17 páginas de 884.
 
 ## Separadores del PDF
 
@@ -229,16 +258,25 @@ La etapa esta desacoplada a proposito: si el lote se sube a mano, se salta
 
 El nombre es lo unico que el sistema y AirVault comparten para reconocer un
 lote, asi que se arma solo, con el prefijo mas la marca de tiempo de la
-corrida, en el mismo formato que ya usa el nombre del CSV:
+corrida, en el mismo formato que ya usa el nombre del CSV, y **entero en
+mayusculas**:
 
 ```
-DP | BIT 18 AUG 2026 05 42
+DP | BITS 18 AUG 2026 05 42            entrega sin repartir
+DP | BITS 18 AUG 2026 05 42 -1         primera parte
+DP | BITS 18 AUG 2026 05 42 -2         segunda parte
+DP | BITS 18 AUG 2026 05 42 REVISAR    bitacoras sin avion confirmado
 ```
 
-`preparar` lo deduce de la ruta del CSV, de modo que el lote se llama igual
-que la corrida que lo produjo y los dos se cruzan de un vistazo. Con
-`--prefijo` se cambia el prefijo y con `--lote` se fija el nombre completo a
-mano.
+**La marca es la del procesamiento, no la de la subida.** Sale del nombre de
+la carpeta de la corrida; si esa carpeta no lo lleva, se toma la hora del
+propio archivo, que sigue siendo la del procesamiento. La hora actual es el
+ultimo recurso y solo aparece cuando no hay ni archivo que mirar: el lote
+tiene que decir cuando se leyo la bitacora, no cuando alguien se acordo de
+subirla.
+
+Con `--prefijo` se cambia el prefijo y con `--lote` se fija el nombre
+completo a mano; los dos se pasan a mayusculas igual.
 
 **El lote hay que subirlo a AirVault con ese mismo nombre.** Es lo que
 `descubrir` va a buscar.

@@ -96,6 +96,10 @@ def corrida(tmp_path, paginas_por_parte=0, separar=("avion",)):
     return csv_path, partes
 
 
+def principales(partes):
+    return [a for a in partes if not a.revisar]
+
+
 def paginas_del_pdf(ruta) -> int:
     doc = fitz.open(ruta)
     try:
@@ -111,7 +115,7 @@ def test_el_manifiesto_tiene_una_entrada_por_pagina_del_pdf(tmp_path):
     csv_path, partes = corrida(tmp_path)
     trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv_path)
 
-    en_el_pdf = paginas_del_pdf(partes[0][0])
+    en_el_pdf = paginas_del_pdf(partes[0].ruta)
     assert len(trabajo.manifiesto.registros) == en_el_pdf
     verificar_cantidad(trabajo.manifiesto.registros, en_el_pdf)
 
@@ -145,7 +149,7 @@ def test_sin_separar_no_sobra_ninguna_pagina(tmp_path):
     csv_path, partes = corrida(tmp_path, separar=())
     trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv_path)
 
-    assert paginas_del_pdf(partes[0][0]) == 8
+    assert paginas_del_pdf(partes[0].ruta) == 8
     assert len(trabajo.manifiesto.registros) == 8
     assert not trabajo.manifiesto.separadores()
 
@@ -157,9 +161,9 @@ def test_cada_parte_declara_lo_que_lleva(tmp_path):
     declaradas = comprobar_entrega(csv_path)
 
     assert len(declaradas) == len(partes) > 1
-    for parte, (ruta, _tramo) in zip(declaradas, partes):
-        assert parte.pdf.name == ruta.name
-        assert len(parte.paginas) == paginas_del_pdf(ruta)
+    for parte, archivo in zip(declaradas, partes):
+        assert parte.pdf.name == archivo.ruta.name
+        assert len(parte.paginas) == paginas_del_pdf(archivo.ruta)
 
 
 def test_el_manifiesto_de_cada_parte_cuadra_con_su_archivo(tmp_path):
@@ -168,9 +172,9 @@ def test_el_manifiesto_de_cada_parte_cuadra_con_su_archivo(tmp_path):
     trabajos = preparar_partes(AirVaultConfig(), tmp_path / "job", csv_path)
 
     assert len(trabajos) == len(partes)
-    for trabajo, (ruta, _tramo) in zip(trabajos, partes):
+    for trabajo, archivo in zip(trabajos, partes):
         verificar_cantidad(
-            trabajo.manifiesto.registros, paginas_del_pdf(ruta)
+            trabajo.manifiesto.registros, paginas_del_pdf(archivo.ruta)
         )
 
 
@@ -189,12 +193,11 @@ def test_entre_todas_las_partes_estan_todas_las_bitacoras(tmp_path):
 def test_cada_parte_lleva_su_numero_en_el_nombre_del_lote(tmp_path):
     csv_path, _partes = corrida(tmp_path, paginas_por_parte=6)
     trabajos = preparar_partes(
-        AirVaultConfig(), tmp_path / "job", csv_path, "DP | BIT PRUEBA"
+        AirVaultConfig(), tmp_path / "job", csv_path, "DP | BITS PRUEBA"
     )
     nombres = [t.manifiesto.nombre_batch for t in trabajos]
     assert nombres == [
-        f"DP | BIT PRUEBA ({n} de {len(trabajos)})"
-        for n in range(1, len(trabajos) + 1)
+        f"DP | BITS PRUEBA -{n}" for n in range(1, len(trabajos) + 1)
     ]
 
 
@@ -236,3 +239,111 @@ def test_una_corrida_sin_exportar_no_se_indexa(tmp_path):
                         encoding="utf-8")
     with pytest.raises(ErrorDeCorrida):
         comprobar_entrega(csv_path)
+
+
+# ── el lote de las que nadie pudo asignar ──────────────────────────
+
+SIN_AVION = [
+    ("HP-1848CMP", "2271620", "2026/08/11"),
+    ("", "2271621", "2026/08/12"),
+    ("HP-1830CMP", "2293105", "2026/08/11"),
+    ("", "2293107", "2026/08/13"),
+]
+
+
+def corrida_con_revisar(tmp_path):
+    """Corrida donde dos bitacoras se quedaron sin matricula confirmada."""
+    global BITACORAS
+    originales = BITACORAS
+    BITACORAS = SIN_AVION
+    try:
+        return corrida(tmp_path)
+    finally:
+        BITACORAS = originales
+
+
+def test_las_que_no_tienen_avion_salen_en_su_propio_archivo(tmp_path):
+    """En AirVault cada archivo es un lote: asi quedan en uno aparte."""
+    _csv_path, partes = corrida_con_revisar(tmp_path)
+
+    assert len(principales(partes)) == 1
+    aparte = [a for a in partes if a.revisar]
+    assert len(aparte) == 1
+    assert aparte[0].ruta.name.endswith("REVISAR.pdf")
+
+
+def test_el_archivo_principal_no_las_lleva(tmp_path):
+    """Sueltas dentro del lote grande quedaban bloqueadas donde nadie mira."""
+    _csv_path, partes = corrida_con_revisar(tmp_path)
+    principal = principales(partes)[0]
+    logs = {
+        e.ref.page.fields[1].value
+        for e in principal.paginas if e.ref is not None
+    }
+    assert logs == {"2271620", "2293105"}
+
+
+def test_el_lote_de_revisar_se_llama_como_la_corrida_y_va_marcado(tmp_path):
+    csv_path, _partes = corrida_con_revisar(tmp_path)
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, "DP | BITS PRUEBA"
+    )
+    revisar = [t for t in trabajos if t.manifiesto.solo_subir]
+    assert len(revisar) == 1
+    assert revisar[0].manifiesto.nombre_batch == "DP | BITS PRUEBA REVISAR"
+
+
+def test_el_lote_de_revisar_no_se_numera_como_una_parte_mas(tmp_path):
+    """No es «una de dos»: es el que queda aparte."""
+    csv_path, _partes = corrida_con_revisar(tmp_path)
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, "DP | BITS PRUEBA"
+    )
+    principal = [t for t in trabajos if not t.manifiesto.solo_subir]
+    assert len(principal) == 1
+    assert principal[0].manifiesto.nombre_batch == "DP | BITS PRUEBA"
+
+
+def test_en_el_lote_de_revisar_no_se_escribe_nada(tmp_path):
+    from app.airvault.indexer import Indexador
+    from tests.airvault_fake import ClienteFalso, pagina
+
+    csv_path, _partes = corrida_con_revisar(tmp_path)
+    trabajos = preparar_partes(AirVaultConfig(), tmp_path / "job", csv_path)
+    revisar = next(t for t in trabajos if t.manifiesto.solo_subir)
+    revisar.fijar_lote("003SRO")
+
+    total = len(revisar.manifiesto.registros)
+    cliente = ClienteFalso(
+        paginas={n: pagina(n) for n in range(1, total + 1)},
+        page_count=total,
+    )
+    indexador = Indexador(cliente, revisar.manifiesto, ["HP-1848CMP"])
+    plan = indexador.planificar(total)
+    indexador.aplicar(plan)
+
+    assert cliente.escrituras == []
+    # Tampoco se leen: serian peticiones de mas contra el servidor.
+    assert cliente.lecturas == []
+    assert plan.escribibles == []
+
+
+def test_el_reporte_dice_que_hay_que_indexarlas_a_mano(tmp_path):
+    from app.airvault.indexer import Indexador
+    from tests.airvault_fake import ClienteFalso
+
+    csv_path, _partes = corrida_con_revisar(tmp_path)
+    trabajos = preparar_partes(AirVaultConfig(), tmp_path / "job", csv_path)
+    revisar = next(t for t in trabajos if t.manifiesto.solo_subir)
+    revisar.fijar_lote("003SRO")
+
+    total = len(revisar.manifiesto.registros)
+    plan = Indexador(ClienteFalso(page_count=total), revisar.manifiesto,
+                     []).planificar(total)
+    motivos = {a.codigo for p in plan.bloqueadas for a in p.avisos}
+    assert motivos == {"revisar_a_mano"}
+
+
+def test_sin_bitacoras_sueltas_no_hay_lote_de_revisar(tmp_path):
+    _csv_path, partes = corrida(tmp_path)
+    assert not [a for a in partes if a.revisar]
