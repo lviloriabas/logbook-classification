@@ -52,6 +52,14 @@ La aplicación fija PaddleOCR en CPU. La GUI trabaja a un máximo de 200 DPI par
 
 ## 2.5 Configuración de salida
 
+**Repartir en** escribe la entrega en varios PDF en lugar de uno solo, de a
+lo sumo las páginas indicadas. Una corrida completa son unas 900 páginas y
+casi dos gigas: repartida, cada archivo es un lote manejable en AirVault y
+una subida que si se corta no obliga a rehacer todo. El corte se hace entre
+secciones, así que las bitácoras de un mismo avión no se separan salvo que
+un avión solo no quepa.
+
+
 La entrega inicial queda configurada así:
 
 - **Un solo PDF**;
@@ -146,7 +154,10 @@ La sección **Indexar en AirVault** está junto a **Opciones avanzadas** y se
 despliega con su flecha. Escribe en el Web Index de AirVault los datos que
 la corrida ya leyó, en lugar de teclearlos página por página.
 
-Requiere una corrida exportada **en un solo PDF**.
+Requiere una corrida exportada con la salida en **un solo PDF**. Si marcó
+**Repartir en**, la entrega sale en varios archivos y cada uno será un lote
+distinto en AirVault; la sección los sube y los indexa todos, y cuenta el
+avance sobre el total de la corrida.
 
 1. Despliegue la sección. **Corrida** viene puesta con la que acaba de
    exportar; con **Buscar…** elija otra.

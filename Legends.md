@@ -36,6 +36,34 @@ Terminado el OCR, el programa generaba siempre los PDF de entrega. Componerlos v
 
 **Procesar** guarda ahora los datos —CSV, JSON y estadísticas— y nada más. La entrega se arma al pulsar **Exportar**, con la separación marcada en ese momento. Los archivos de entrada se siguen apartando a `input/processed/` al terminar, y la ventana reapunta sus resultados allí, así que exportar después encuentra las páginas originales.
 
+## 2026-08-19 — La entrega se reparte en lotes, y el indexado aguanta que la red falle
+
+### Repartir la corrida en varios lotes
+
+Una corrida completa —unas 900 páginas y casi dos gigas— formaba un solo lote en AirVault: incómodo de revisar, y una subida de ~1850 peticiones que si se cortaba había que rehacer entera.
+
+La casilla **Repartir en** del cuadro «Salidas», o `--paginas-por-parte N` en la línea de comandos, escribe la entrega en varios PDF de a lo sumo esas páginas. Cada archivo es un lote propio en AirVault, con su nombre —`DP | BIT 18 AUG 2026 05 42 (2 de 5)`—, su manifiesto y sus guardas; una parte que se corte no arrastra a las demás y al volver a revisar se retoma solo lo que falta. El reporte de revisión sigue siendo uno solo para toda la corrida.
+
+El corte se hace entre secciones, así que las bitácoras de un mismo avión no quedan repartidas entre dos lotes. Cuando un avión solo tiene más páginas que el tope, se parte y la continuación repite su separador, para que ninguna parte empiece con bitácoras sueltas.
+
+El nombre lleva el número de parte porque los lotes se localizan por nombre: dos iguales no habría forma de distinguirlos, que es justo lo que ya pasa en la cola de AirVault con los lotes cargados a mano.
+
+El control se puso en la fila del formato de salida y no debajo: apilado, el cuadro crecía y la ventana dejaba de caber en 1280x720; con el texto largo, además, empujaba el reparto en dos columnas fuera de alcance y la ventana volvía a estirarse a lo alto.
+
+### Que la red falle deja de tirar el trabajo
+
+Un lote son cientos de peticiones y una subida completa casi dos mil. A esa escala un corte momentáneo dejó de ser raro, y hasta ahora cualquiera de ellos tiraba el trabajo entero: la subida no reintentaba nada, y una página que no cargaba cortaba la planificación del lote completo.
+
+- **Se reintenta lo que puede arreglarse solo**: un tiempo agotado, una conexión cortada, un servidor que responde que está ocupado (408, 429, 5xx). Tres intentos, esperando más en cada uno. Un 404 no se reintenta, porque insistir devuelve lo mismo.
+- **Cada trozo de la subida se reintenta por separado.** Reenviar un trozo con el mismo índice es inocuo: el servidor arma el archivo por posición.
+- **Una página que no carga bloquea solo a esa página.** Sin poder leerla no se puede comprobar que el lote y el manifiesto hablan de la misma bitácora, así que no se escribe; el resto del lote sigue.
+- **Si la cookie caduca a media escritura, se corta el lote entero.** Lo que no se llegó a intentar queda pendiente, no fallido: seguir habría marcado como fallidas cientos de páginas que nadie tocó, y al retomar no se sabría cuáles reintentar. La sesión se comprueba además antes de empezar.
+- **El lote abierto en el navegador** hace que AirVault no conteste y tampoco dé error. Todas las peticiones llevan tiempo límite y el mensaje dice qué cerrar.
+
+### Muestra para probar antes de un lote real
+
+`tools/muestra_bitacoras.py` arma una corrida de prueba con unas pocas bitácoras al azar de una corrida ya hecha, con la misma forma que una de verdad: CSV, índice de páginas y PDF de entrega escrito por la exportación real, con sus separadores. Veinte bitácoras de dieciséis aviones salen en 36 páginas y 40 MB, frente a las 884 páginas y 1.9 GB de una corrida completa.
+
 ## 2026-08-18 — Indexación automática: vuelo, fechas, matrículas sin confirmar y sección «Revisar»
 
 Corrida de referencia: 884 páginas de `input/Image_001..003.pdf`.
