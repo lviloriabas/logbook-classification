@@ -424,7 +424,21 @@ def _matricula(value: str) -> Tuple[str, str]:
 # la palabra más parecida o se reconstruye alrededor de las cifras, y lo que
 # no encaja en ninguna de las dos formas se deja vacío: un valor inventado en
 # el CSV cuesta más que una celda por indexar a mano.
-FLIGHT_CODES = ("TCK", "CCK", "SPV", "SVC", "SV")
+FLIGHT_CODES = ("TCK", "CCK", "SPV", "SVC", "SUP", "MTC", "SV")
+# Clases de trazo que el reconocedor confunde en estas bitácoras: la S con el
+# 5, la P con el 9 y la R, la T con el 7 y la J, la U con la V. Comparar los
+# códigos por clase y no letra a letra es lo que permite reconocer "S9V",
+# "SRV" o "52V" como el SPV que está escrito en la página, y "JCK" como TCK
+# sin tener que aflojar la distancia y confundir "ZCC" —que es un 700— con
+# CCK.
+_FLIGHT_STROKE_GROUPS = (
+    "0OQD", "1IL", "2Z", "3E", "4YA", "5S", "6G", "7TFJ", "8B", "9PR", "UV",
+)
+_FLIGHT_STROKE_CLASS = {
+    char: group[0]
+    for group in _FLIGHT_STROKE_GROUPS
+    for char in group
+}
 FLIGHT_PREFIX = "CM"
 FLIGHT_FUZZY_NOTE = "flight number matched against the logbook vocabulary"
 _FLIGHT_LABEL_RE = re.compile(r"\b(?:FLT|FLIGHT|NO|CHECK)\b")
@@ -532,21 +546,45 @@ def _flight_as_digits(text: str) -> Optional[str]:
     return "".join(digits)
 
 
-def _flight_nearest_code(letters: str) -> Optional[str]:
-    """Palabra del vocabulario a una letra de distancia, si no hay empate.
+def _same_stroke(left: str, right: str) -> bool:
+    """Los dos caracteres salen del mismo trazo manuscrito."""
+    return (
+        _FLIGHT_STROKE_CLASS.get(left, left)
+        == _FLIGHT_STROKE_CLASS.get(right, right)
+    )
 
-    Un empate no se resuelve: entre dos códigos igual de parecidos, acertar
-    sería suerte y la celda se deja para revisión.
+
+def _flight_nearest_code(token: str) -> Optional[str]:
+    """Palabra del vocabulario a un solo trazo de distancia, sin empates.
+
+    Con la misma cantidad de caracteres se comparan posición a posición por
+    clase de trazo, que es como falla el reconocedor en este campo; con
+    longitudes distintas queda la distancia de edición. Un empate no se
+    resuelve: entre dos códigos igual de parecidos, acertar sería suerte y
+    la celda se deja para revisión.
     """
-    if len(letters) < 2:
+    if len(token) < 2:
         return None
     ranked = sorted(
-        (_levenshtein(letters, code), code) for code in FLIGHT_CODES
+        (
+            sum(
+                0 if _same_stroke(left, right) else 1
+                for left, right in zip(token, code)
+            )
+            if len(code) == len(token)
+            else _levenshtein(token, code),
+            # A igualdad de trazos gana el código que tiene los mismos
+            # caracteres que la lectura: sobra menos explicación que en uno
+            # al que hay que quitarle o ponerle una letra.
+            abs(len(code) - len(token)),
+            code,
+        )
+        for code in FLIGHT_CODES
     )
-    best = ranked[0][0]
-    if best > 1:
+    best = ranked[0][:2]
+    if best[0] > 1:
         return None
-    tied = [code for distance, code in ranked if distance == best]
+    tied = [code for *distance, code in ranked if tuple(distance) == best]
     return tied[0] if len(tied) == 1 else None
 
 
@@ -609,12 +647,16 @@ def _flight_number(value: str) -> Tuple[str, str]:
         ):
             return f"{FLIGHT_PREFIX}{digits}", FLIGHT_FUZZY_NOTE
 
-    blocks = re.findall(r"[A-Z]+", compact)
-    nearest = (
-        _flight_nearest_code(max(blocks, key=len)) if blocks else None
-    )
+    # El código se compara entero, con los dígitos que el reconocedor haya
+    # metido dentro: "S9V" y "52V" son el SPV de la página, no una palabra
+    # más un número. La cifra que va detrás sí se aparta antes de comparar,
+    # porque forma parte del código ("SV2", "SVC2").
+    token, suffix = compact, ""
+    if len(token) > 2 and token[-1].isdigit():
+        token, suffix = token[:-1], token[-1]
+    nearest = _flight_nearest_code(token)
     if nearest is not None:
-        return nearest, FLIGHT_FUZZY_NOTE
+        return f"{nearest}{suffix}", FLIGHT_FUZZY_NOTE
     return "", f"invalid flight number: {value}"
 
 
