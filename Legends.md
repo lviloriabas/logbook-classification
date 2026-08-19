@@ -90,7 +90,7 @@ Un lote son cientos de peticiones y una subida completa casi dos mil. A esa esca
 
 ### Muestra para probar antes de un lote real
 
-`tools/muestra_bitacoras.py` arma una corrida de prueba con unas pocas bitácoras al azar de una corrida ya hecha, con la misma forma que una de verdad: CSV, índice de páginas y PDF de entrega escrito por la exportación real, con sus separadores. Veinte bitácoras de dieciséis aviones salen en 36 páginas y 40 MB, frente a las 884 páginas y 1.9 GB de una corrida completa.
+`tools/muestra_bitacoras.py` arma un PDF de prueba con veinte páginas al azar de las que haya en `input/`. Es una entrada de verdad, así que se procesa, se exporta y se indexa como cualquier otra y la prueba recorre lo mismo que un lote real: 40 MB y veinte páginas en vez de 1.9 GB y 884.
 
 ## 2026-08-18 — Indexación automática: vuelo, fechas, matrículas sin confirmar y sección «Revisar»
 

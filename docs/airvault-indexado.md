@@ -361,34 +361,36 @@ desde donde quedo. Las que fallaron quedan con el motivo anotado.
 ## Prueba de punta a punta
 
 Antes de soltar el indexado sobre un lote real conviene probarlo con una
-muestra. `tools/muestra_bitacoras.py` arma una corrida de prueba con unas
-pocas bitácoras sacadas al azar de una corrida ya hecha:
+muestra. `tools/muestra_bitacoras.py` arma un PDF de prueba con unas pocas
+páginas al azar de las que haya en `input/`:
 
 ```batch
-portable\python312\tools\python.exe tools\muestra_bitacoras.py ^
-    --csv "output\BITS 18 AUG 2026 05 42\datos\BITS 18 AUG 2026 05 42.CSV" ^
-    --pdf "input\Image_001.pdf" ^
-    --cuantas 20
+portable\python312\tools\python.exe tools\muestra_bitacoras.py
 ```
 
-Deja en `output\PRUEBA INDEXADO\` una carpeta con la misma forma que una
-corrida de verdad —CSV, índice de páginas y PDF de entrega con sus
-separadores—, porque la entrega la escribe la exportación real. Veinte
-bitácoras de dieciséis aviones distintos salen en unas 36 páginas y 40 MB.
+Deja `input\MUESTRA.pdf` con veinte páginas —unos 40 MB, frente a los
+setecientos de un escaneo entero— y dice de dónde salió cada una. Es una
+entrada de verdad, no una corrida reconstruida: se procesa desde la ventana
+como cualquier otro PDF, así que la prueba pasa por el mismo OCR, la misma
+exportación y el mismo indexado que un lote de verdad.
+
+Las páginas salen al azar a propósito. Entre ellas caen bitácoras buenas,
+alguna en blanco y alguna que el OCR no va a poder leer, que es justo lo
+que hay que ver antes.
 
 La semilla se imprime al terminar: con `--semilla N` se repite exactamente
-la misma muestra. Con `--paginas-por-parte` se prueba además el reparto en
-varios lotes.
+la misma muestra. `--cuantas` cambia el tamaño y `--pdf` saca todas las
+páginas de un solo escaneo.
 
 Después:
 
-1. Apuntar la sección de AirVault a `output\PRUEBA INDEXADO\datos\PRUEBA INDEXADO.CSV`.
-2. **Subir y revisar**, y mirar `revision.html`.
+1. Procesar `MUESTRA.pdf` y exportar con la salida en **un solo PDF**.
+2. Desplegar la sección de AirVault, pulsar **Subir y revisar** y mirar
+   `revision.html`.
 3. **Indexar**, y comprobar en el Web Index que las páginas separadoras
    quedaron sin tocar y las bitácoras con sus datos.
 
-Nada de esto se commitea: `output/` está fuera del repositorio y los PDF de
-entrada pesan cientos de megas.
+Nada de esto se commitea: `input/` y `output/` están fuera del repositorio.
 
 ## Tests
 
