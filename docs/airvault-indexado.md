@@ -24,10 +24,9 @@ avanzadas», cerrada hasta que se despliega. Trabaja en dos tiempos:
 El avance sale por la barra y la etiqueta de estado de la ventana, las
 mismas que usa el procesamiento.
 
-La corrida tiene que estar exportada **en un solo PDF**: el orden de las
-paginas del lote es el del archivo que se subio, y con varios archivos no
-esta verificado que AirVault los junte en un lote ni en que orden. Si la
-corrida trae varios PDF, la seccion lo dice y no sube nada.
+La corrida tiene que estar exportada con la salida en **un solo PDF**. Ese
+archivo puede venir repartido en partes (ver más abajo): cada parte es un
+lote distinto y la sección los recorre todos.
 
 ## Etapas
 
@@ -37,7 +36,7 @@ se puede procesar hoy, subir manana e indexar despues sin repetir nada.
 
 | Etapa | Que hace |
 |---|---|
-| `preparar` | Arma el manifiesto a partir del CSV y del indice de paginas |
+| `preparar` | Arma el manifiesto a partir del CSV y del indice de paginas (un manifiesto por parte) |
 | `subir` | Sube los PDFs por Quick Upload (opcional: se puede subir a mano) |
 | `descubrir` | Ubica el lote en AirVault por su nombre |
 | `plan` | Dry run: calcula todo, escribe el reporte y no toca nada |
@@ -64,6 +63,35 @@ portable\python312\tools\python.exe run_airvault.py verificar --job varias24
 
 El reporte es el mismo artefacto en los tres modos, asi que lo que se
 aprueba es exactamente lo que se envia.
+
+## Repartir en varios lotes
+
+Una corrida completa son unas 900 páginas y casi dos gigas. Eso en AirVault
+es un solo lote: incómodo de revisar, y una subida que si se corta hay que
+rehacer entera.
+
+Marcando **Repartir en** en el cuadro «Salidas» —o `--paginas-por-parte N`
+en la línea de comandos— la entrega se escribe en varios PDF de a lo sumo
+esas páginas:
+
+```
+BITS 18 AUG 2026 05 42 (1 de 5).pdf
+BITS 18 AUG 2026 05 42 (2 de 5).pdf
+...
+```
+
+Cada archivo es un lote propio en AirVault, con su nombre —`DP | BIT 18 AUG
+2026 05 42 (2 de 5)`—, su manifiesto en `output/airvault/<corrida>/parte-02/`
+y sus guardas. Una parte que falle o se corte no arrastra a las demás, y al
+volver a revisar se retoma solo lo que falta.
+
+El corte se hace **entre secciones** siempre que se pueda, para no separar
+en dos lotes las bitácoras de un mismo avión. Cuando un avión tiene por sí
+solo más páginas que el tope, se parte y la continuación vuelve a abrir con
+su separador, de modo que ninguna parte empieza con bitácoras sueltas.
+
+El reporte de revisión sigue siendo uno solo para toda la corrida: se
+aprueba de una vez y no lote por lote.
 
 ## Separadores del PDF
 
@@ -236,11 +264,68 @@ equivocado es peor que preguntar.
 Con `--esperar` sondea hasta que el lote aparezca, porque un lote recien
 subido tarda en pasar por el procesamiento del servidor.
 
+## Cuando algo falla
+
+Un lote son cientos de peticiones y una subida completa casi dos mil. A esa
+escala los tropiezos dejan de ser raros, así que cada uno tiene una
+respuesta decidida de antemano.
+
+| Qué pasa | Qué hace el indexado |
+|---|---|
+| Se corta la red, vence el tiempo o el servidor responde que está ocupado (408, 429, 5xx) | Reintenta, esperando más en cada intento. Por defecto tres intentos con 5 s, 10 s. |
+| Se agotan los reintentos | Corta y dice qué pasó. Lo escrito queda anotado. |
+| El servidor responde 404 o 403 | No reintenta: insistir devuelve lo mismo. |
+| Una página del lote no carga | Bloquea **esa** página y sigue con el resto. Sin poder leerla no se puede comprobar que el lote y el manifiesto hablan de la misma bitácora, así que no se escribe. |
+| Caduca la cookie a media escritura | Corta el lote entero. Lo que no se llegó a intentar queda **pendiente**, no fallido: al volver a revisar se retoma sin repetir lo escrito. |
+| Falla el guardado de una página concreta | Se marca esa página con el motivo. Con `--continuar-con-errores` el resto del lote sigue. |
+| Un trozo de la subida se pierde | Se reenvía ese trozo. Reenviar el mismo índice es inocuo: el servidor arma el archivo por posición. |
+
+La petición que abre el lote merece mención aparte: si el lote está abierto
+en el navegador, AirVault **no contesta y no da error**, deja la petición
+esperando. Por eso todas las peticiones llevan tiempo límite y el mensaje
+lo dice: hay que cerrar el lote en el navegador antes de indexarlo.
+
+La comprobación de sesión se hace antes de empezar, no a mitad: descubrir
+en la página 250 de 400 que la cookie había caducado cuesta mucho más que
+descubrirlo al principio.
+
 ## Reanudacion
 
 El manifiesto se guarda despues de cada pagina. Si el proceso se corta, al
 volver a correr `indexar` las paginas ya escritas se saltan y se sigue
 desde donde quedo. Las que fallaron quedan con el motivo anotado.
+
+## Prueba de punta a punta
+
+Antes de soltar el indexado sobre un lote real conviene probarlo con una
+muestra. `tools/muestra_bitacoras.py` arma una corrida de prueba con unas
+pocas bitácoras sacadas al azar de una corrida ya hecha:
+
+```batch
+portable\python312\tools\python.exe tools\muestra_bitacoras.py ^
+    --csv "output\BITS 18 AUG 2026 05 42\datos\BITS 18 AUG 2026 05 42.CSV" ^
+    --pdf "input\Image_001.pdf" ^
+    --cuantas 20
+```
+
+Deja en `output\PRUEBA INDEXADO\` una carpeta con la misma forma que una
+corrida de verdad —CSV, índice de páginas y PDF de entrega con sus
+separadores—, porque la entrega la escribe la exportación real. Veinte
+bitácoras de dieciséis aviones distintos salen en unas 36 páginas y 40 MB.
+
+La semilla se imprime al terminar: con `--semilla N` se repite exactamente
+la misma muestra. Con `--paginas-por-parte` se prueba además el reparto en
+varios lotes.
+
+Después:
+
+1. Apuntar la sección de AirVault a `output\PRUEBA INDEXADO\datos\PRUEBA INDEXADO.CSV`.
+2. **Subir y revisar**, y mirar `revision.html`.
+3. **Indexar**, y comprobar en el Web Index que las páginas separadoras
+   quedaron sin tocar y las bitácoras con sus datos.
+
+Nada de esto se commitea: `output/` está fuera del repositorio y los PDF de
+entrada pesan cientos de megas.
 
 ## Tests
 

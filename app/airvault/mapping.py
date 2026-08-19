@@ -223,11 +223,15 @@ def _registro_de_fila(
 
 
 def leer_indice_paginas(path: Path | str) -> List[dict]:
-    """Lee el indice del PDF de entrega que escribe la corrida.
+    """Lee el indice de la entrega que escribe la corrida.
 
-    Devuelve la lista de paginas en el orden en que estan en el archivo.
-    Sin indice devuelve una lista vacia, y quien llame decide si puede
-    seguir sin el.
+    Devuelve una entrada por archivo de entrega, ``{"pdf", "paginas"}``, con
+    las paginas en el orden en que estan dentro de ese archivo. Cada archivo
+    es un lote distinto en AirVault, asi que el reparto importa tanto como
+    el orden.
+
+    Sin indice devuelve una lista vacia y quien llame decide si puede seguir
+    sin el.
     """
     ruta = Path(path)
     if not ruta.is_file():
@@ -238,8 +242,23 @@ def leer_indice_paginas(path: Path | str) -> List[dict]:
         return []
     if not isinstance(datos, Mapping):
         return []
-    paginas = datos.get("paginas")
-    return [p for p in paginas if isinstance(p, Mapping)] if paginas else []
+    if datos.get("partes") is not None:
+        crudas = datos.get("partes") or []
+    else:
+        # Version 1: un unico archivo, con las paginas en la raiz.
+        crudas = [{"pdf": datos.get("pdf", ""),
+                   "paginas": datos.get("paginas") or []}]
+    partes: List[dict] = []
+    for parte in crudas:
+        if not isinstance(parte, Mapping):
+            continue
+        paginas = [
+            p for p in (parte.get("paginas") or []) if isinstance(p, Mapping)
+        ]
+        if paginas:
+            partes.append({"pdf": str(parte.get("pdf", "")),
+                           "paginas": paginas})
+    return partes
 
 
 def registros_desde_entrega(

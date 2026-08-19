@@ -14,6 +14,7 @@ los tests, que es como se comprueba que un ensayo no escribe nada.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
@@ -33,7 +34,11 @@ from app.airvault.mapping import (
     valores_de_indice,
 )
 from app.airvault.model import EstadoEtapa, Manifiesto
-from app.airvault.naming import PREFIJO_POR_DEFECTO, nombre_desde_corrida
+from app.airvault.naming import (
+    PREFIJO_POR_DEFECTO,
+    nombre_de_parte,
+    nombre_desde_corrida,
+)
 
 CARPETA_TRABAJOS = Path("output") / "airvault"
 
@@ -74,29 +79,62 @@ def pdfs_de_corrida(csv: Path | str) -> List[Path]:
     return sorted(p for p in carpeta.glob("*.pdf") if p.is_file())
 
 
-def pdf_unico_de_corrida(csv: Path | str) -> Path:
-    """El unico PDF de la corrida, o un error que explica que falta.
+@dataclass(frozen=True)
+class ParteDeEntrega:
+    """Un archivo de la entrega, que sera un lote propio en AirVault."""
 
-    Se exige uno solo a proposito. El orden de las paginas del lote en
-    AirVault es el del archivo que se subio, y con varios archivos no hay
-    forma de saber si el servidor los junta en un lote ni en que orden los
-    encadena. Equivocarse ahi no deja un hueco: escribe la matricula de un
-    avion en la bitacora de otro.
+    indice: int
+    total: int
+    pdf: Path
+    paginas: List[dict]
+
+    def nombre_lote(self, base: str) -> str:
+        return nombre_de_parte(base, self.indice, self.total)
+
+
+def partes_de_corrida(csv: Path | str) -> List[ParteDeEntrega]:
+    """Archivos de entrega de la corrida, con lo que lleva cada uno.
+
+    Sale del indice que escribe la exportacion, no de listar la carpeta: el
+    indice dice ademas en que orden van las paginas dentro de cada archivo,
+    que es lo unico que permite emparejarlas con el lote sin adivinar.
     """
-    encontrados = pdfs_de_corrida(csv)
-    if not encontrados:
+    indice = leer_indice_paginas(ruta_indice_paginas(csv))
+    if not indice:
+        return []
+    carpeta = carpeta_de_corrida(csv)
+    total = len(indice)
+    partes: List[ParteDeEntrega] = []
+    for numero, parte in enumerate(indice, start=1):
+        nombre = str(parte.get("pdf", "")).strip()
+        partes.append(ParteDeEntrega(
+            indice=numero, total=total,
+            pdf=carpeta / nombre if nombre else carpeta,
+            paginas=list(parte.get("paginas") or []),
+        ))
+    return partes
+
+
+def comprobar_entrega(csv: Path | str) -> List[ParteDeEntrega]:
+    """Partes de la corrida, o un error que explica que le falta."""
+    partes = partes_de_corrida(csv)
+    if not partes:
+        if pdfs_de_corrida(csv):
+            raise ErrorDeCorrida(
+                "La corrida se exporto antes de que existiera el indice de "
+                "paginas. Hay que volver a exportarla para poder indexarla."
+            )
         raise ErrorDeCorrida(
             "La corrida no tiene ningun PDF de entrega. Hay que exportarla "
             "antes de subirla a AirVault."
         )
-    if len(encontrados) > 1:
-        nombres = ", ".join(p.name for p in encontrados[:4])
+    faltan = [p.pdf.name for p in partes if not p.pdf.is_file()]
+    if faltan:
         raise ErrorDeCorrida(
-            f"La corrida tiene {len(encontrados)} PDF ({nombres}...). Para "
-            f"indexar hace falta uno solo: volver a exportarla con la salida "
-            f"en un solo PDF."
+            f"El indice nombra archivos que no estan en la carpeta de la "
+            f"corrida: {', '.join(faltan[:4])}. Volver a exportarla."
         )
-    return encontrados[0]
+    return partes
 
 
 class Trabajo:
@@ -115,19 +153,35 @@ class Trabajo:
         cls, config: AirVaultConfig, carpeta: Path | str, csv: Path | str,
         nombre_lote: str = "", prefijo: str = PREFIJO_POR_DEFECTO,
         resolutor: Optional[ResolutorFlota] = None,
+        parte: Optional[ParteDeEntrega] = None,
     ) -> "Trabajo":
-        """Arma el manifiesto a partir del CSV y del PDF de la corrida.
+        """Arma el manifiesto de un archivo de entrega.
 
         El orden manda el PDF, no el CSV: el archivo que se sube lleva
         separadores entre las secciones y el lote de AirVault tendra una
         pagina por cada uno. Si se contaran solo las bitacoras, todo lo que
         va detras del primer separador se escribiria una pagina corrida.
+
+        Sin ``parte`` se toma la de la corrida, y se exige que sea una sola:
+        con varias hay varios lotes y el reparto lo hace
+        :func:`preparar_partes`.
         """
         resolutor = resolutor or ResolutorFlota()
         filas = leer_csv_corrida(csv)
-        indice = leer_indice_paginas(ruta_indice_paginas(csv))
-        if indice:
-            registros = registros_desde_entrega(filas, indice, resolutor)
+        base = nombre_lote or nombre_desde_corrida(csv, prefijo)
+        if parte is None:
+            disponibles = partes_de_corrida(csv)
+            if len(disponibles) > 1:
+                raise ErrorDeCorrida(
+                    f"La corrida esta repartida en {len(disponibles)} partes; "
+                    f"cada una es un lote distinto."
+                )
+            parte = disponibles[0] if disponibles else None
+
+        if parte is not None:
+            registros = registros_desde_entrega(
+                filas, parte.paginas, resolutor
+            )
             detalle_orden = (
                 f"{sum(1 for r in registros if r.es_separador)} separadores"
             )
@@ -149,9 +203,12 @@ class Trabajo:
         carpeta = Path(carpeta)
         manifiesto = Manifiesto(
             job_id=carpeta.name,
-            nombre_batch=nombre_lote or nombre_desde_corrida(csv, prefijo),
+            nombre_batch=parte.nombre_lote(base) if parte else base,
             repo_id=config.repo_id,
             csv_origen=str(Path(csv).resolve()),
+            pdf_origen=str(parte.pdf) if parte else "",
+            parte=parte.indice if parte else 1,
+            partes=parte.total if parte else 1,
             doc_type=config.doc_type,
             audit_status=config.audit_status,
             registros=registros,
@@ -175,6 +232,7 @@ class Trabajo:
         cls, config: AirVaultConfig, carpeta: Path | str, csv: Path | str,
         nombre_lote: str = "", prefijo: str = PREFIJO_POR_DEFECTO,
         resolutor: Optional[ResolutorFlota] = None,
+        parte: Optional[ParteDeEntrega] = None,
     ) -> "Trabajo":
         """Retoma el trabajo si ya existe para este CSV; si no, lo crea.
 
@@ -191,15 +249,19 @@ class Trabajo:
                 Path(csv).resolve()
             )
             if mismo_csv:
-                if nombre_lote:
-                    trabajo.manifiesto.nombre_batch = nombre_lote
+                propuesto = (
+                    parte.nombre_lote(nombre_lote) if parte and nombre_lote
+                    else nombre_lote
+                )
+                if propuesto:
+                    trabajo.manifiesto.nombre_batch = propuesto
                     trabajo.guardar()
                 return trabajo
             logger.info(
                 "El trabajo {} era de otra corrida; se rehace", carpeta.name
             )
         return cls.preparar(
-            config, carpeta, csv, nombre_lote, prefijo, resolutor
+            config, carpeta, csv, nombre_lote, prefijo, resolutor, parte
         )
 
     def guardar(self) -> Path:
@@ -207,7 +269,7 @@ class Trabajo:
 
     # ── etapas ─────────────────────────────────────────────────────
 
-    def subir(self, sesion, pdf: Path | str,
+    def subir(self, sesion, pdf: Path | str = "",
               avisar: Optional[Aviso] = None) -> None:
         """Sube el PDF de la corrida por Quick Upload.
 
@@ -220,7 +282,11 @@ class Trabajo:
         if self.manifiesto.etapa_hecha("subir"):
             logger.info("El lote ya estaba subido; no se vuelve a subir")
             return
-        archivo = Path(pdf)
+        archivo = Path(pdf or self.manifiesto.pdf_origen)
+        if not archivo.is_file():
+            raise ErrorDeCorrida(
+                f"No esta el archivo de entrega {archivo.name}"
+            )
         valores = valores_de_indice(
             self.manifiesto.registros[0], self.manifiesto.doc_type,
             self.manifiesto.audit_status, self.manifiesto.nombre_batch,
@@ -349,3 +415,158 @@ class Trabajo:
         )
         self.guardar()
         return validas, total, problemas
+
+
+# ── la corrida entera, parte por parte ─────────────────────────────
+
+def carpeta_de_parte(carpeta: Path | str, parte: ParteDeEntrega) -> Path:
+    """Carpeta del trabajo de una parte dentro del trabajo de la corrida.
+
+    Con una sola parte se usa la carpeta tal cual, que es donde han vivido
+    siempre los trabajos de una corrida sin repartir.
+    """
+    carpeta = Path(carpeta)
+    if parte.total <= 1:
+        return carpeta
+    return carpeta / f"parte-{parte.indice:02d}"
+
+
+def preparar_partes(
+    config: AirVaultConfig, carpeta: Path | str, csv: Path | str,
+    nombre_lote: str = "", prefijo: str = PREFIJO_POR_DEFECTO,
+    resolutor: Optional[ResolutorFlota] = None,
+) -> List["Trabajo"]:
+    """Un trabajo por cada archivo de entrega de la corrida.
+
+    Cada parte es un lote distinto en AirVault, con su nombre, su
+    manifiesto y sus guardas. Repartirlas asi es lo que deja que una parte
+    se caiga o se retome sin arrastrar a las demas.
+    """
+    partes = comprobar_entrega(csv)
+    resolutor = resolutor or ResolutorFlota()
+    return [
+        Trabajo.abrir_o_preparar(
+            config, carpeta_de_parte(carpeta, parte), csv,
+            nombre_lote, prefijo, resolutor, parte,
+        )
+        for parte in partes
+    ]
+
+
+def _prefijo(trabajo: "Trabajo") -> str:
+    """Como se nombra una parte en los avisos de avance."""
+    manifiesto = trabajo.manifiesto
+    if manifiesto.partes <= 1:
+        return ""
+    return f"Parte {manifiesto.parte} de {manifiesto.partes}: "
+
+
+def subir_partes(trabajos: Sequence["Trabajo"], sesion,
+                 avisar: Optional[Aviso] = None) -> None:
+    """Sube el archivo de cada parte que no se haya subido ya."""
+    for trabajo in trabajos:
+        cabeza = _prefijo(trabajo)
+
+        def propio(texto: str, hechas: int, total: int,
+                   cabeza: str = cabeza) -> None:
+            if avisar is not None:
+                avisar(f"{cabeza}{texto}", hechas, total)
+
+        trabajo.subir(sesion, avisar=propio if avisar else None)
+
+
+def descubrir_partes(
+    trabajos: Sequence["Trabajo"], cliente, esperar: bool = True,
+    dormir: Callable[[float], None] = time.sleep,
+    avisar: Optional[Aviso] = None,
+) -> None:
+    """Ubica en AirVault el lote de cada parte."""
+    for trabajo in trabajos:
+        cabeza = _prefijo(trabajo)
+
+        def propio(texto: str, hechas: int, total: int,
+                   cabeza: str = cabeza) -> None:
+            if avisar is not None:
+                avisar(f"{cabeza}{texto}", hechas, total)
+
+        trabajo.descubrir(cliente, esperar, dormir,
+                          propio if avisar else None)
+
+
+def planificar_partes(
+    trabajos: Sequence["Trabajo"], cliente,
+    resolutor: Optional[ResolutorFlota] = None, sobrescribir: bool = False,
+    avisar: Optional[Aviso] = None,
+) -> List[Tuple[Plan, Indexador]]:
+    """Calcula el plan de cada parte sin escribir nada en ninguna."""
+    resolutor = resolutor or ResolutorFlota()
+    planes: List[Tuple[Plan, Indexador]] = []
+    for trabajo in trabajos:
+        cabeza = _prefijo(trabajo)
+
+        def propio(texto: str, hechas: int, total: int,
+                   cabeza: str = cabeza) -> None:
+            if avisar is not None:
+                avisar(f"{cabeza}{texto}", hechas, total)
+
+        planes.append(trabajo.planificar(
+            cliente, resolutor, sobrescribir, propio if avisar else None
+        ))
+    return planes
+
+
+def indexar_partes(
+    trabajos: Sequence["Trabajo"], planes: Sequence[Tuple[Plan, Indexador]],
+    detener_en_error: bool = True, avisar: Optional[Aviso] = None,
+) -> Resultado:
+    """Escribe todas las partes y devuelve el resultado sumado.
+
+    El avance se cuenta sobre el total de la corrida, no sobre cada parte:
+    quien mira la barra quiere saber cuanto falta para terminar, no cuanto
+    falta del archivo tres.
+    """
+    total = sum(len(plan.escribibles) for plan, _indexador in planes)
+    hechas = 0
+    sumado = Resultado()
+    for trabajo, (plan, indexador) in zip(trabajos, planes):
+        cabeza = _prefijo(trabajo)
+        arrastre = hechas
+
+        def propio(texto: str, propias: int, _suyas: int,
+                   cabeza: str = cabeza, arrastre: int = arrastre) -> None:
+            if avisar is not None:
+                avisar(f"{cabeza}{texto}", arrastre + propias, total)
+
+        resultado = trabajo.indexar(
+            indexador, plan, detener_en_error, propio if avisar else None
+        )
+        hechas += resultado.escritas
+        sumado.escritas += resultado.escritas
+        sumado.omitidas += resultado.omitidas
+        sumado.fallidas += resultado.fallidas
+        sumado.detalles.extend(
+            f"{cabeza}{detalle}" for detalle in resultado.detalles
+        )
+        if resultado.interrumpido:
+            # Se cayo la sesion o la red: las partes que faltan no se
+            # intentan siquiera, y lo escrito queda anotado para retomarlo.
+            sumado.interrumpido = resultado.interrumpido
+            break
+        if resultado.fallidas and detener_en_error:
+            break
+    return sumado
+
+
+def verificar_partes(
+    trabajos: Sequence["Trabajo"], cliente
+) -> Tuple[int, int, List[str]]:
+    """Relee todas las partes y suma como quedaron."""
+    validas = total = 0
+    problemas: List[str] = []
+    for trabajo in trabajos:
+        cabeza = _prefijo(trabajo)
+        propias, suyas, suyos = trabajo.verificar(cliente)
+        validas += propias
+        total += suyas
+        problemas.extend(f"{cabeza}{p}" for p in suyos)
+    return validas, total, problemas

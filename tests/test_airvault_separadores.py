@@ -82,9 +82,25 @@ def test_una_pagina_del_pdf_que_no_esta_en_el_csv_queda_avisada():
 
 def test_el_indice_se_lee_del_archivo_de_la_corrida(tmp_path):
     ruta = tmp_path / "corrida_paginas.json"
-    ruta.write_text(json.dumps({"version": 1, "paginas": INDICE}),
-                    encoding="utf-8")
-    assert leer_indice_paginas(ruta) == INDICE
+    ruta.write_text(
+        json.dumps({"version": 2, "partes": [
+            {"pdf": "corrida.pdf", "paginas": INDICE}
+        ]}),
+        encoding="utf-8",
+    )
+    partes = leer_indice_paginas(ruta)
+    assert len(partes) == 1 and partes[0]["paginas"] == INDICE
+
+
+def test_un_indice_de_la_primera_version_se_sigue_leyendo(tmp_path):
+    """Corridas exportadas antes de que la entrega pudiera repartirse."""
+    ruta = tmp_path / "corrida_paginas.json"
+    ruta.write_text(
+        json.dumps({"version": 1, "pdf": "corrida.pdf", "paginas": INDICE}),
+        encoding="utf-8",
+    )
+    partes = leer_indice_paginas(ruta)
+    assert len(partes) == 1 and partes[0]["paginas"] == INDICE
 
 
 def test_sin_indice_no_se_inventa_nada(tmp_path):

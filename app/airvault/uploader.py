@@ -93,12 +93,13 @@ class SubidorQuickUpload:
         archivo = Path(ruta)
         if not archivo.is_file():
             return ResultadoSubida(str(archivo), False, "no existe")
-        base = self.sesion.config.url("/quickuploadex/Home/Upload/")
         for indice, total, datos in trozos(archivo):
             if avisar is not None:
                 avisar(f"Subiendo {archivo.name}", indice, total)
-            respuesta = self.sesion.http.post(
-                base,
+            # Reenviar un trozo con el mismo indice es inocuo: el servidor
+            # arma el archivo por posicion, no por orden de llegada.
+            self.sesion.post(
+                "/quickuploadex/Home/Upload/",
                 data={
                     "repoId": self.repo_id,
                     "filename": archivo.name,
@@ -108,19 +109,15 @@ class SubidorQuickUpload:
                 },
                 files={"file": (archivo.name, datos,
                                 "application/octet-stream")},
-                timeout=self.sesion.config.timeout_s,
             )
-            respuesta.raise_for_status()
-        confirmacion = self.sesion.http.post(
-            self.sesion.config.url("/quickuploadex/Home/FinishUpload"),
+        self.sesion.post(
+            "/quickuploadex/Home/FinishUpload",
             json={"model": {
                 "RepoId": self.repo_id,
                 "FileName": archivo.name,
                 "InputValues": valores_quick_upload(valores),
             }},
-            timeout=self.sesion.config.timeout_s,
         )
-        confirmacion.raise_for_status()
         logger.info("Subido {}", archivo.name)
         return ResultadoSubida(archivo.name, True)
 

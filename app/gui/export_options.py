@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QGroupBox,
+    QSpinBox,
     QHBoxLayout,
     QLabel,
     QRadioButton,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
+from app.reports.organize import PAGINAS_POR_PARTE
 
 
 class ExportOptionsGroup(QGroupBox):
@@ -55,6 +57,41 @@ class ExportOptionsGroup(QGroupBox):
         self.radio_unico.setChecked(True)
         formato_row.addWidget(self.radio_varios)
         formato_row.addWidget(self.radio_unico)
+
+        formato_row.addSpacing(8)
+        self.partes_check = QCheckBox("Repartir en")
+        self.partes_check.setToolTip(
+            "Escribe la entrega en varios PDF en lugar de uno solo. Una "
+            "corrida completa son cientos de páginas y casi dos gigas, que "
+            "en AirVault forman un lote incómodo de subir y de revisar; "
+            "cada parte es un lote aparte. El reparto corta entre secciones "
+            "para no separar las bitácoras de un mismo avión."
+        )
+        formato_row.addWidget(self.partes_check)
+        self.partes_spin = QSpinBox()
+        self.partes_spin.setRange(10, 5000)
+        self.partes_spin.setSingleStep(50)
+        self.partes_spin.setValue(PAGINAS_POR_PARTE)
+        self.partes_spin.setSuffix(" pág.")
+        self.partes_spin.setEnabled(False)
+        # Igualado en alto a los redondeles de al lado: con su alto natural
+        # el cuadro crecía 8 px y la ventana no cabía en un escritorio de
+        # 1280x720 con el escalado de Windows al 150%.
+        self.partes_spin.setFixedHeight(self.radio_unico.sizeHint().height())
+        self.partes_spin.setToolTip(
+            "Páginas como máximo en cada parte, contando las separadoras"
+        )
+        self.partes_check.toggled.connect(self.partes_spin.setEnabled)
+        formato_row.addWidget(self.partes_spin)
+
+        # Repartir solo tiene sentido sobre el PDF único: «Varios PDF» ya
+        # escribe un archivo por matrícula.
+        self.radio_unico.toggled.connect(self.partes_check.setEnabled)
+        self.radio_unico.toggled.connect(
+            lambda activo: self.partes_spin.setEnabled(
+                activo and self.partes_check.isChecked()
+            )
+        )
         formato_row.addStretch()
         layout.addLayout(formato_row)
 

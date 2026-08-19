@@ -46,6 +46,10 @@ class OutputOptions:
     skip_pdfs: bool = False
     csv_date_mode: str = CSV_DATE_SPECIFIC
     important_csv_columns: tuple[str, ...] = ()
+    # Páginas por parte del PDF único. Cero deja la entrega en un solo
+    # archivo; con un tope se reparte, para que ningún lote de AirVault
+    # cargue con una corrida entera.
+    paginas_por_parte: int = 0
 
 
 def complete_csv_path(csv_path: Path) -> Path:
@@ -234,36 +238,36 @@ def write_outputs(
     else:
         from app.reports.organize import (
             NOMBRE_INDICE_PAGINAS,
+            escribir_entrega,
             escribir_indice_paginas,
-            escribir_pdf_unico,
             generar_pdfs,
-            secuencia_pdf_unico,
         )
 
         stage("Organizando PDFs…", 60)
         if pdf_unico:
-            # El indexado en AirVault empareja el PDF con el CSV por
-            # posición, y el PDF lleva separadores que el CSV no tiene: se
-            # deja escrito qué hay en cada página.
-            escribir_indice_paginas(
-                secuencia_pdf_unico(
-                    reports, separar or [], excluidas,
-                    discrepancias_al_final=bool(options.discrepancias),
-                ),
-                datos_dir / f"{corrida}{NOMBRE_INDICE_PAGINAS}",
-                f"{corrida}.pdf",
+            partes = escribir_entrega(
+                reports,
+                run_dir,
+                separar or [],
+                excluidas,
+                dpi=options.dpi,
+                discrepancias_al_final=options.discrepancias,
+                paginas_por_parte=options.paginas_por_parte,
             )
-            pdf_paths = [
-                escribir_pdf_unico(
-                    reports,
-                    run_dir,
-                    separar or [],
-                    excluidas,
-                    dpi=options.dpi,
-                    discrepancias_al_final=options.discrepancias,
+            pdf_paths = [ruta for ruta, _tramo in partes]
+            # El indexado en AirVault empareja cada PDF con el CSV por
+            # posición, y los PDF llevan separadores que el CSV no tiene: se
+            # deja escrito qué hay en cada página de cada archivo.
+            escribir_indice_paginas(
+                partes, datos_dir / f"{corrida}{NOMBRE_INDICE_PAGINAS}"
+            )
+            if len(pdf_paths) == 1:
+                logger.info(f"PDF único: {pdf_paths[0].relative_to(run_dir)}")
+            elif pdf_paths:
+                logger.info(
+                    f"Entrega en {len(pdf_paths)} partes de hasta "
+                    f"{options.paginas_por_parte} páginas"
                 )
-            ]
-            logger.info(f"PDF único: {pdf_paths[0].relative_to(run_dir)}")
         elif separar:
             pdf_paths = generar_pdfs(
                 reports,
