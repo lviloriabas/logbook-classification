@@ -141,9 +141,11 @@ Pulse **Visor de CSV…** para abrir una corrida anterior.
 
 1. Seleccione una de las 25 corridas recientes en **Historial**, o use **Seleccionar carpeta…** o **Seleccionar CSV…**.
 2. Seleccione el CSV mínimo o completo.
-3. Busque un `log_number` de siete dígitos cuando sea necesario.
+3. Escriba en **Buscar** cualquier texto del CSV: número de bitácora, matrícula, archivo, página o parte de ellos. La búsqueda no distingue mayúsculas, recorre las columnas que muestra la tabla —con el CSV completo también las ocultas en la vista resumida— y prioriza las celdas que coinciden por completo sobre las que solo contienen el texto. Repetir la búsqueda, o pulsar ‹ y ›, recorre las coincidencias; el indicador dice en qué columna coincidió y qué página es.
 4. Revise la fila y la página fuente en el panel PDF.
 5. Use **Exportar** solo si la corrida conserva su JSON, plantilla y PDF fuente requeridos.
+
+Para quitar páginas de una corrida, selecciónelas en la tabla —con `Ctrl` o `Mayús` para varias— y pulse `Supr`. Tras confirmar, el visor reescribe el CSV mínimo, el CSV completo, el JSON y `stats.json` sin ellas. Los PDF ya exportados conservan esas páginas hasta que pulse **Exportar**. La eliminación necesita una corrida completa con su JSON y su plantilla, y no puede dejar la corrida sin ninguna página.
 
 El visor puede regenerar salidas de una corrida sin repetir el OCR. Desactiva **Exportar** si falta el JSON consolidado o si el CSV no pertenece a una carpeta de corrida reconocible. Si falta la plantilla o un PDF fuente, lo informa después de pulsar **Exportar**.
 

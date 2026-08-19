@@ -381,24 +381,107 @@ def test_source_documents_fall_back_to_the_file_column_without_companion_json(
     assert missing == []
 
 
-def test_log_search_selects_exact_seven_digit_match(tmp_path: Path):
-    app = QApplication.instance() or QApplication([])
+def _viewer_for_search(tmp_path: Path) -> CsvViewerWindow:
     run = tmp_path / "run"
     data = run / "datos"
     data.mkdir(parents=True)
     (data / "run.csv").write_text(
-        "file,page,log_number\na.pdf,3,1234500\nb.pdf,7,1234501\n",
+        "file,page,log_number,matricula\n"
+        "a.pdf,3,1234500,HP-1534CMP\n"
+        "b.pdf,7,1234501,HP-1538CMP\n"
+        "c.pdf,9,1234512,HP-1534CMP\n",
         encoding="utf-8",
     )
     viewer = CsvViewerWindow(tmp_path)
     assert viewer.load_folder(run)
+    return viewer
 
-    viewer.log_search.setText("1234501")
-    viewer._find_log_number()
 
-    assert viewer._search_matches == [1]
+def test_search_finds_the_logbook_by_its_number(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    viewer = _viewer_for_search(tmp_path)
+
+    viewer.search_edit.setText("1234501")
+    viewer._find_in_csv()
+
+    assert viewer._search_matches == [(1, "log_number")]
     assert viewer.table.currentRow() == 1
     assert "b.pdf, página 7" in viewer.search_context.text()
+    viewer.close()
+    app.processEvents()
+
+
+def test_search_covers_any_column_of_the_csv(tmp_path: Path):
+    """Matrícula, archivo, página: lo que muestra la tabla se puede buscar."""
+    app = QApplication.instance() or QApplication([])
+    viewer = _viewer_for_search(tmp_path)
+
+    viewer.search_edit.setText("hp-1534cmp")
+    viewer._find_in_csv()
+    # Sin distinguir mayúsculas y con las dos filas de esa matrícula.
+    assert [row for row, _column in viewer._search_matches] == [0, 2]
+    assert "en «matricula»" in viewer.search_context.text()
+
+    viewer.search_edit.setText("c.pdf")
+    viewer._find_in_csv()
+    assert viewer._search_matches == [(2, "file")]
+    assert "c.pdf, página 9" in viewer.search_context.text()
+
+    viewer.close()
+    app.processEvents()
+
+
+def test_search_puts_the_whole_value_before_the_partial_ones(tmp_path: Path):
+    """Escribir la bitácora entera lleva a esa, no a la que la contiene."""
+    app = QApplication.instance() or QApplication([])
+    viewer = _viewer_for_search(tmp_path)
+
+    viewer.search_edit.setText("123451")
+    viewer._find_in_csv()
+
+    # 1234512 la contiene; ninguna celda vale «123451».
+    assert [row for row, _column in viewer._search_matches] == [2]
+
+    viewer.search_edit.setText("9")
+    viewer._find_in_csv()
+    # La página 9 vale exactamente «9»; 1234512 solo la contiene.
+    assert viewer._search_matches[0] == (2, "page")
+
+    viewer.close()
+    app.processEvents()
+
+
+def test_repeating_the_search_walks_the_matches(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    viewer = _viewer_for_search(tmp_path)
+
+    viewer.search_edit.setText("HP-1534CMP")
+    viewer._find_in_csv()
+    assert viewer._search_position == 0
+
+    viewer._find_in_csv()
+    assert viewer._search_position == 1
+    assert viewer.table.currentRow() == 2
+
+    # Al vaciar el campo la búsqueda se olvida en vez de quedar a medias.
+    viewer.search_edit.setText("")
+    viewer._find_in_csv()
+    assert viewer._search_matches == []
+    assert not viewer.search_next.isEnabled()
+
+    viewer.close()
+    app.processEvents()
+
+
+def test_search_without_matches_says_so(tmp_path: Path):
+    app = QApplication.instance() or QApplication([])
+    viewer = _viewer_for_search(tmp_path)
+
+    viewer.search_edit.setText("XX-9999")
+    viewer._find_in_csv()
+
+    assert viewer._search_matches == []
+    assert "sin coincidencias" in viewer.search_context.text()
     viewer.close()
     app.processEvents()
 

@@ -11,7 +11,6 @@ from loguru import logger
 from PySide6.QtCore import (
     QEvent,
     QObject,
-    QRegularExpression,
     QSize,
     Qt,
     QThread,
@@ -23,8 +22,9 @@ from PySide6.QtGui import (
     QIcon,
     QImage,
     QIntValidator,
+    QKeySequence,
     QPixmap,
-    QRegularExpressionValidator,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QComboBox,
@@ -85,6 +85,9 @@ from app.utils.important_fields import (
     ImportantFieldsStore,
 )
 from app.utils.io import PROCESSED_DIRNAME
+# El mismo recuento que dejan los correctores al tocar un reporte: quitarle
+# páginas cambia los totales y el JSON no puede quedar diciendo los de antes.
+from app.validation.book_corrector import _recompute_summary
 
 
 _STATUS_COLORS = {
@@ -114,6 +117,8 @@ _TABLE_SHARE = 3
 _HISTORY_LIMIT = 25
 # El mismo texto que en la ventana principal; el botón lo recupera cuando
 # deja de explicar por qué no se puede exportar.
+# Lo que dice el indicador de búsqueda mientras no hay nada que buscar.
+_SEARCH_HINT = "Escriba lo que busca del CSV: bitácora, matrícula, archivo…"
 _EXPORT_TOOLTIP = (
     "Volver a generar CSV, JSON y PDFs de esta corrida con las opciones "
     "actuales, sin reprocesar los archivos. Los PDFs ya exportados se "
@@ -379,6 +384,22 @@ def run_dir_for_csv(csv_path: Path) -> Path | None:
     return run_dir if run_dir.name.casefold() == stem.casefold() else None
 
 
+def reports_from_companion(csv_path: Path) -> list:
+    """Reportes tal como los guardó la corrida, sin buscar sus PDF.
+
+    Es lo que hace falta para reescribir los datos de la corrida —CSV, JSON
+    y estadísticas—, que salen del propio reporte y no de las páginas. Buscar
+    los PDF aquí sería peor que inútil: descartar el reporte cuyo archivo ya
+    no está borraría de la corrida todo lo que se procesó desde él.
+    """
+    from app.models.schemas import ValidationReport
+
+    return [
+        ValidationReport.model_validate(entry)
+        for entry in _companion_payload(Path(csv_path)).get("reportes", [])
+    ]
+
+
 def reports_for_csv(
     csv_path: Path, extra_folders: Iterable[Path] = ()
 ) -> tuple[list, list[str]]:
@@ -391,8 +412,6 @@ def reports_for_csv(
     el nombre de los PDF que no aparecieron, porque sin ellos no se pueden
     rehacer las páginas.
     """
-    from app.models.schemas import ValidationReport
-
     csv_path = Path(csv_path)
     extra = [Path(folder) for folder in extra_folders]
     folders = _source_search_folders(csv_path)
@@ -400,8 +419,7 @@ def reports_for_csv(
 
     reports = []
     missing: list[str] = []
-    for entry in _companion_payload(csv_path).get("reportes", []):
-        report = ValidationReport.model_validate(entry)
+    for report in reports_from_companion(csv_path):
         located = _locate_document(Path(report.pdf_path), folders, extra)
         if located is None:
             name = Path(report.pdf_path).name
@@ -1002,10 +1020,18 @@ class CsvViewerWindow(QMainWindow):
         )
         self._row_pdf_paths: list[Path | None] = []
         self._pdf_search_folders: list[Path] = []
-        self._search_matches: list[int] = []
+        # Cada coincidencia es la fila del CSV y la columna donde apareció el
+        # texto: la columna es lo que se muestra y sobre lo que se posa el
+        # cursor, para que se vea por qué esa fila coincide.
+        self._search_matches: list[tuple[int, str]] = []
         self._search_position = -1
+        self._search_query = ""
+
         self._splitter_adjusted = False
         self._outputs_worker = None
+        # Qué escribió la última corrida del hilo de salidas: exportar o
+        # eliminar páginas. El aviso final de cada una no es el mismo.
+        self._outputs_context = "export"
         # El indicador de abajo lleva dos cosas: el resumen de la tabla, que
         # se rehace en cada cambio de columnas, y el estado de la exportación,
         # que sobrevive a esos cambios hasta que se abre otro CSV.
@@ -1090,17 +1116,23 @@ class CsvViewerWindow(QMainWindow):
         layout.addLayout(controls)
 
         search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Número de bitácora:"))
-        self.log_search = QLineEdit()
-        self.log_search.setPlaceholderText("7 dígitos")
-        self.log_search.setMaxLength(7)
-        self.log_search.setValidator(
-            QRegularExpressionValidator(QRegularExpression(r"\d{0,7}"), self)
+        search_row.addWidget(QLabel("Buscar:"))
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText(
+            "Bitácora, matrícula, archivo, página… cualquier texto del CSV"
         )
-        self.log_search.returnPressed.connect(self._find_log_number)
-        search_row.addWidget(self.log_search)
+        self.search_edit.setAccessibleName("Texto que se busca en el CSV")
+        self.search_edit.setToolTip(
+            "Busca el texto en las columnas que muestra la tabla; con el CSV "
+            "completo busca también en las que la vista resumida oculta. "
+            "Cada coincidencia selecciona su fila y abre su página en el "
+            "visor; se recorren con ‹ y ›, o repitiendo la búsqueda."
+        )
+        self.search_edit.returnPressed.connect(self._find_in_csv)
+        search_row.addWidget(self.search_edit, 1)
         search = QPushButton("Buscar")
-        search.clicked.connect(self._find_log_number)
+        search.setToolTip("Buscar el texto; repetido, pasa a la coincidencia siguiente")
+        search.clicked.connect(self._find_in_csv)
         search_row.addWidget(search)
         self.search_prev = QPushButton("‹")
         self.search_prev.setToolTip("Coincidencia anterior")
@@ -1110,7 +1142,7 @@ class CsvViewerWindow(QMainWindow):
         self.search_next.setToolTip("Coincidencia siguiente")
         self.search_next.clicked.connect(lambda: self._move_search(1))
         search_row.addWidget(self.search_next)
-        self.search_context = QLabel("Ingrese exactamente 7 dígitos.")
+        self.search_context = QLabel(_SEARCH_HINT)
         self.search_context.setStyleSheet("color: #57606a;")
         search_row.addWidget(self.search_context, 1)
         layout.addLayout(search_row)
@@ -1133,6 +1165,20 @@ class CsvViewerWindow(QMainWindow):
         self.table.setAccessibleName("CSV procesado")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(
+            QTableWidget.SelectionMode.ExtendedSelection
+        )
+        self.table.setToolTip(
+            "Cada fila es una página de la corrida. Al seleccionarla se abre "
+            "su página en el visor, y Supr quita de la corrida las páginas "
+            "seleccionadas."
+        )
+        # Supr solo mientras la tabla tiene el foco: es la que sabe qué
+        # páginas hay elegidas, y desde el buscador o el cuadro de salidas la
+        # tecla no tiene por qué borrar nada.
+        delete_pages = QShortcut(QKeySequence.StandardKey.Delete, self.table)
+        delete_pages.setContext(Qt.ShortcutContext.WidgetShortcut)
+        delete_pages.activated.connect(self._delete_selected_pages)
         style_data_table(self.table)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionsMovable(False)
@@ -1376,9 +1422,11 @@ class CsvViewerWindow(QMainWindow):
         self._load_pdf_paths(path)
         self._search_matches = []
         self._search_position = -1
+        self._search_query = ""
+        self.search_context.setText(_SEARCH_HINT)
         self._sync_search_controls()
         self._sync_export_button()
-        self.setWindowTitle(f"Visor de CSV — {path.name}")
+        self.setWindowTitle(f"Visor de CSV e historial — {path.name}")
 
     def _populate_table(self) -> None:
         """Llena la tabla por tramos para no bloquear la ventana.
@@ -1507,6 +1555,170 @@ class CsvViewerWindow(QMainWindow):
             if column in self._selected_important_columns
         ]
 
+    def _selected_source_rows(self) -> list[int]:
+        """Filas del CSV seleccionadas, en el orden en que están en el CSV.
+
+        La tabla se puede ordenar por cualquier columna, así que la posición
+        en pantalla no dice qué fila del CSV es: eso lo lleva cada celda de
+        la primera columna, que es la que sobrevive al reordenamiento.
+        """
+        model = self.table.selectionModel()
+        if model is None:
+            return []
+        rows: set[int] = set()
+        for index in model.selectedRows():
+            item = self.table.item(index.row(), 0)
+            source_row = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if isinstance(source_row, int) and 0 <= source_row < len(self._rows):
+                rows.add(source_row)
+        return sorted(rows)
+
+    def _page_keys(self, source_rows: Iterable[int]) -> set[tuple[str, int]]:
+        """Identifica las páginas elegidas por su PDF y su número de página.
+
+        El PDF se identifica por su ruta cuando se sabe cuál es y por su
+        nombre cuando no: es lo único que trae el CSV, y con el archivo
+        perdido tampoco hay nada más con qué distinguirlo.
+        """
+        keys: set[tuple[str, int]] = set()
+        for source_row in source_rows:
+            row = self._rows[source_row]
+            try:
+                page = int(row.get("page", ""))
+            except ValueError:
+                continue
+            path = (
+                self._row_pdf_paths[source_row]
+                if source_row < len(self._row_pdf_paths)
+                else None
+            )
+            name = row.get("file", "")
+            if path is not None:
+                keys.add((_folder_key(path), page))
+            if name:
+                keys.add((name.casefold(), page))
+        return keys
+
+    @staticmethod
+    def _page_matches(pdf_path: Path, page_number: int, keys: set) -> bool:
+        """¿Esta página del reporte es una de las elegidas?"""
+        return (
+            (_folder_key(pdf_path), page_number) in keys
+            or (pdf_path.name.casefold(), page_number) in keys
+        )
+
+    def _delete_selected_pages(self) -> None:
+        """Quita de la corrida las páginas seleccionadas en la tabla.
+
+        Se reescriben los datos de la corrida —CSV mínimo, CSV completo, JSON
+        y estadísticas— sin esas páginas, que es lo que consulta el visor y
+        de donde sale cualquier exportación posterior. Los PDF ya entregados
+        no se tocan: rehacerlos aquí dejaría dos entregas distintas de la
+        misma corrida en la carpeta, así que se rehacen al exportar.
+        """
+        if self._outputs_worker is not None and self._outputs_worker.isRunning():
+            self._export_note = "hay una escritura en curso; espere a que termine"
+            self._refresh_status()
+            return
+        source_rows = self._selected_source_rows()
+        if not source_rows:
+            self._export_note = "seleccione en la tabla las páginas que quiere eliminar"
+            self._refresh_status()
+            return
+
+        csv_path = self._current_csv_path()
+        run_dir = run_dir_for_csv(csv_path) if csv_path is not None else None
+        if csv_path is None or run_dir is None:
+            QMessageBox.information(
+                self,
+                "Eliminar páginas",
+                "Solo se pueden eliminar páginas de una corrida completa, la "
+                "que guarda su CSV y su JSON en la misma carpeta. Este CSV "
+                "está suelto y no tiene de dónde quitarlas.",
+            )
+            return
+        template = template_for_csv(csv_path)
+        if template is None:
+            QMessageBox.warning(
+                self,
+                "Plantilla no disponible",
+                "No se encontró la plantilla con la que se procesó esta "
+                "corrida, y sin ella no se pueden volver a escribir sus datos.",
+            )
+            return
+        try:
+            reports = reports_from_companion(csv_path)
+        except Exception as exc:  # noqa: BLE001 - se muestra en la GUI
+            logger.error(f"No se pudo leer el JSON de la corrida: {exc}")
+            QMessageBox.critical(
+                self,
+                "No se pudieron eliminar las páginas",
+                f"El JSON de la corrida no se pudo leer:\n\n{exc}",
+            )
+            return
+        if not reports:
+            QMessageBox.warning(
+                self,
+                "Sin datos de la corrida",
+                "Esta corrida no trae el JSON con sus páginas, así que no se "
+                "puede reescribir sin él.",
+            )
+            return
+
+        keys = self._page_keys(source_rows)
+        remaining = []
+        removed = 0
+        for report in reports:
+            pdf_path = Path(report.pdf_path)
+            pages = [
+                page
+                for page in report.pages
+                if not self._page_matches(pdf_path, page.page_number, keys)
+            ]
+            removed += len(report.pages) - len(pages)
+            if not pages:
+                continue
+            report.pages = pages
+            _recompute_summary(report)
+            remaining.append(report)
+        if not removed:
+            self._export_note = "las páginas seleccionadas no están en el JSON"
+            self._refresh_status()
+            return
+        if not remaining:
+            QMessageBox.information(
+                self,
+                "Eliminar páginas",
+                "Quedaría una corrida sin ninguna página. Para deshacerse de "
+                "la corrida entera, elimine su carpeta desde output/.",
+            )
+            return
+
+        answer = QMessageBox.warning(
+            self,
+            "Confirmar eliminación",
+            f"Se eliminarán {removed} página(s) de «{run_dir.name}».\n\n"
+            "Se reescriben el CSV, el JSON y las estadísticas de la corrida "
+            "sin ellas. Los PDF ya exportados las conservan hasta que vuelva "
+            "a exportar.\n\n¿Desea continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        logger.info(
+            f"Eliminando {removed} página(s) de la corrida {run_dir.name}"
+        )
+        self._start_outputs(
+            remaining,
+            self._export_options(
+                csv_path, template, remaining, skip_pdfs=True
+            ),
+            note=f"eliminando {removed} página(s)…",
+            context="eliminar",
+        )
+
     def _exportar(self) -> None:
         """Regenera CSV, JSON y PDFs de la corrida abierta, sin repetir OCR."""
         if self._outputs_worker is not None and self._outputs_worker.isRunning():
@@ -1546,32 +1758,56 @@ class CsvViewerWindow(QMainWindow):
             )
             return
 
+        self._start_outputs(
+            reports,
+            self._export_options(csv_path, template, reports),
+            note="exportando salidas…",
+            context="export",
+        )
+
+    def _start_outputs(
+        self, reports: list, options, note: str, context: str
+    ) -> None:
+        """Escribe las salidas en su propio hilo, venga de donde venga.
+
+        Exportar y eliminar páginas escriben la misma corrida con la misma
+        función; solo cambian las opciones —la eliminación no rehace PDFs— y
+        el aviso que queda en la franja de estado.
+        """
         from app.gui.worker import OutputsWorker
 
-        worker = OutputsWorker(
-            reports, self._export_options(csv_path, template, reports), parent=self
-        )
+        worker = OutputsWorker(reports, options, parent=self)
         self._outputs_worker = worker
+        self._outputs_context = context
         worker.succeeded.connect(self._on_outputs_written)
         worker.failed.connect(self._on_outputs_failed)
         worker.progress.connect(self._on_outputs_stage)
         worker.finished.connect(self._on_outputs_finished)
         worker.finished.connect(worker.deleteLater)
         self.btn_export.setEnabled(False)
-        self._export_note = "exportando salidas…"
+        self._export_note = note
         self._refresh_status()
         worker.start()
 
-    def _export_options(self, csv_path: Path, template, reports: list):
+    def _export_options(
+        self, csv_path: Path, template, reports: list, skip_pdfs: bool = False
+    ):
         """Opciones de salida de la corrida abierta, escritas sobre su carpeta."""
         from app.core.config import AppConfig, config_for_pdf
         from app.reports.outputs import OutputOptions
 
         config = AppConfig()
         # La resolución se acota al escaneo, igual que al procesar: nunca se
-        # interpola la página por encima del detalle que trae el PDF.
-        dpi = config_for_pdf(config, Path(reports[0].pdf_path)).dpi
+        # interpola la página por encima del detalle que trae el PDF. Sin
+        # PDFs que rehacer no se mira ninguno: el archivo puede no estar y
+        # para reescribir los datos da igual a qué resolución se escaneó.
+        dpi = (
+            config.dpi
+            if skip_pdfs
+            else config_for_pdf(config, Path(reports[0].pdf_path)).dpi
+        )
         return OutputOptions(
+            skip_pdfs=skip_pdfs,
             template=template,
             output_root=_PROGRAM_DIR / "output",
             dpi=dpi,
@@ -1593,21 +1829,31 @@ class CsvViewerWindow(QMainWindow):
         self._refresh_status()
 
     def _on_outputs_written(self, output_dir: Path) -> None:
-        """Recarga el CSV: la exportación acaba de reescribirlo en disco."""
-        logger.info(f"Exportación completada en: {output_dir}")
+        """Recarga el CSV: la escritura acaba de rehacerlo en disco."""
+        eliminando = self._outputs_context == "eliminar"
+        accion = "Páginas eliminadas" if eliminando else "Exportación completada"
+        logger.info(f"{accion} en: {output_dir}")
         csv_path = self._current_csv_path()
         if csv_path is not None and csv_path.is_file():
             self._load_csv(csv_path)
-        self._export_note = f"exportación terminada: {Path(output_dir).name}"
+        self._export_note = (
+            "páginas eliminadas de la corrida; vuelva a exportar para "
+            "rehacer los PDF sin ellas"
+            if eliminando
+            else f"exportación terminada: {Path(output_dir).name}"
+        )
         self._refresh_status()
 
     def _on_outputs_failed(self, message: str) -> None:
+        eliminando = self._outputs_context == "eliminar"
         logger.error(f"Error generando outputs: {message}")
-        self._export_note = "error al exportar"
+        self._export_note = (
+            "error al eliminar las páginas" if eliminando else "error al exportar"
+        )
         self._refresh_status()
         QMessageBox.critical(
             self,
-            "Error al exportar",
+            "Error al eliminar las páginas" if eliminando else "Error al exportar",
             message.splitlines()[0] if message else "Error desconocido",
         )
 
@@ -1643,24 +1889,73 @@ class CsvViewerWindow(QMainWindow):
             return f"{path.name}, página {page}"
         return f"{row.get('file', 'PDF desconocido')}, página {page or '?'}"
 
-    def _find_log_number(self) -> None:
-        value = self.log_search.text().strip()
-        if len(value) != 7 or not value.isdigit():
-            self._search_matches = []
-            self._search_position = -1
-            self.search_context.setText("La bitácora debe tener exactamente 7 dígitos.")
-            self._sync_search_controls()
-            return
-        self._search_matches = [
-            index
-            for index, row in enumerate(self._rows)
-            if row.get("log_number", "").strip() == value
+    def _searchable_columns(self) -> list[str]:
+        """Columnas donde busca el texto: las que la tabla está mostrando.
+
+        Así lo que se busca es lo que se ve. En la vista resumida eso son los
+        campos de la bitácora —número, matrícula, fecha, archivo, página— y
+        al pasar al CSV completo entran también la confianza, el estado y el
+        comentario de cada campo, que es cuando se quiere buscar por ellos.
+        """
+        visible = [
+            column
+            for index, column in enumerate(self._columns)
+            if index < self.table.columnCount()
+            and not self.table.isColumnHidden(index)
         ]
-        self._search_position = 0 if self._search_matches else -1
-        if not self._search_matches:
-            self.search_context.setText(f"Bitácora {value}: sin coincidencias.")
+        return visible or list(self._columns)
+
+    def _matches_for(self, needle: str) -> list[tuple[int, str]]:
+        """Filas que contienen el texto, con la columna en la que aparece.
+
+        Primero las que lo tienen completo en una celda y después las que lo
+        llevan dentro de un valor más largo: escribir una bitácora entera
+        lleva a esa bitácora, no a la primera fila que la mencione de paso.
+        Dentro de cada grupo se respeta el orden del CSV.
+        """
+        needle = needle.casefold()
+        columns = self._searchable_columns()
+        exact: list[tuple[int, str]] = []
+        partial: list[tuple[int, str]] = []
+        for index, row in enumerate(self._rows):
+            for column in columns:
+                value = (row.get(column) or "").strip().casefold()
+                if value == needle:
+                    exact.append((index, column))
+                    break
+                if needle in value:
+                    partial.append((index, column))
+                    break
+        return exact + partial
+
+    def _find_in_csv(self) -> None:
+        """Busca el texto escrito y lleva la tabla y el visor a la primera fila.
+
+        Repetir la búsqueda con el mismo texto avanza a la coincidencia
+        siguiente, igual que el botón ›: es lo que se espera al volver a
+        pulsar Intro sobre lo que ya se buscó.
+        """
+        value = self.search_edit.text().strip()
+        if value and value.casefold() == self._search_query and self._search_matches:
+            self._move_search(1)
+            return
+        self._search_query = value.casefold()
+        self._search_matches = []
+        self._search_position = -1
+        if not value:
+            self.search_context.setText(_SEARCH_HINT)
             self._sync_search_controls()
             return
+        if not self._rows:
+            self.search_context.setText("Abra un CSV para buscar en él.")
+            self._sync_search_controls()
+            return
+        self._search_matches = self._matches_for(value)
+        if not self._search_matches:
+            self.search_context.setText(f"«{value}»: sin coincidencias.")
+            self._sync_search_controls()
+            return
+        self._search_position = 0
         self._show_search_match()
 
     def _move_search(self, offset: int) -> None:
@@ -1672,7 +1967,7 @@ class CsvViewerWindow(QMainWindow):
         self._show_search_match()
 
     def _show_search_match(self) -> None:
-        source_row = self._search_matches[self._search_position]
+        source_row, column = self._search_matches[self._search_position]
         display_row = next(
             (
                 row
@@ -1683,18 +1978,40 @@ class CsvViewerWindow(QMainWindow):
             ),
             -1,
         )
-        log_column = self._columns.index("log_number")
         if display_row >= 0:
+            target = self._column_to_focus(column)
             self.table.selectRow(display_row)
-            self.table.setCurrentCell(display_row, log_column)
-            self.table.scrollToItem(self.table.item(display_row, log_column))
+            self.table.setCurrentCell(display_row, target)
+            self.table.scrollToItem(self.table.item(display_row, target))
 
         location = self._show_row_in_pdf(source_row)
         self.search_context.setText(
             f"Coincidencia {self._search_position + 1} de "
-            f"{len(self._search_matches)} · {location}"
+            f"{len(self._search_matches)} en «{column}» · {location}"
         )
         self._sync_search_controls()
+
+    def _column_to_focus(self, column: str) -> int:
+        """Columna sobre la que se posa el cursor al mostrar una coincidencia.
+
+        La que trae el texto encontrado, salvo que esté oculta: entonces la
+        primera visible, porque el cursor sobre una columna que no se ve deja
+        la fila seleccionada sin decir dónde está lo que se buscó.
+        """
+        try:
+            index = self._columns.index(column)
+        except ValueError:
+            index = -1
+        if index >= 0 and not self.table.isColumnHidden(index):
+            return index
+        return next(
+            (
+                position
+                for position in range(self.table.columnCount())
+                if not self.table.isColumnHidden(position)
+            ),
+            0,
+        )
 
     def _sync_search_controls(self) -> None:
         multiple = len(self._search_matches) > 1

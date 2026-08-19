@@ -113,6 +113,22 @@ def test_la_ventana_reapunta_a_la_carpeta_de_procesados(tmp_path: Path):
         app.processEvents()
 
 
+def test_la_carpeta_de_procesados_existe_desde_el_arranque(tmp_path: Path):
+    """No aparece el día que termina la primera corrida: está desde el inicio."""
+    app = QApplication.instance() or QApplication([])
+    entrada = tmp_path / "input"
+    entrada.mkdir()
+    window = MainWindow()
+    try:
+        with patch("app.gui.main_window.SCRIPT_DIR", tmp_path):
+            window.load_initial_data()
+
+        assert (entrada / PROCESSED_DIRNAME).is_dir()
+    finally:
+        window.close()
+        app.processEvents()
+
+
 def test_una_corrida_cancelada_deja_los_archivos_en_la_entrada(tmp_path: Path):
     """Cancelar no procesa el lote entero: esos archivos siguen pendientes."""
     app = QApplication.instance() or QApplication([])

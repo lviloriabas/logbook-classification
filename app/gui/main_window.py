@@ -107,6 +107,7 @@ from app.utils.important_fields import (
 from app.utils.io import (
     PROCESSED_DIRNAME,
     archive_processed_files,
+    ensure_dir,
     send_to_trash,
 )
 from app.validation.duplicates import DuplicateLogPage, detect_duplicate_log_pages
@@ -1661,6 +1662,14 @@ class MainWindow(QMainWindow):
         if not folder.is_dir():
             self._set_input_paths([])
             return
+        # La carpeta de lo ya procesado existe desde el primer arranque, no
+        # desde la primera corrida: es donde van a parar los archivos al
+        # terminar, y así se ve de entrada dónde se guardan en vez de
+        # aparecer un día sin avisar.
+        try:
+            ensure_dir(folder / PROCESSED_DIRNAME)
+        except OSError as exc:  # noqa: BLE001 - la entrada sigue sirviendo
+            logger.warning(f"No se pudo preparar input/{PROCESSED_DIRNAME}: {exc}")
         pdfs = sorted(
             p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"
         )
