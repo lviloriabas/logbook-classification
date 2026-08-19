@@ -21,10 +21,18 @@ import re
 from typing import Dict, Iterable, Mapping
 from urllib.parse import urlsplit
 
-# Nombres que sostienen la sesion en AirVault. ``FedAuth`` es la cookie de
-# WS-Federation y se parte en ``FedAuth1``, ``FedAuth2``... cuando el token
-# no cabe en una sola, asi que se compara por prefijo.
-PREFIJOS_DE_SESION = ("FedAuth", "ASP.NET_SessionId", ".ASPXAUTH")
+# Cookies que **autentican**. ``FedAuth`` es la de WS-Federation y se parte
+# en ``FedAuth1``, ``FedAuth2``... cuando el token no cabe en una sola, asi
+# que se compara por prefijo.
+PREFIJOS_DE_AUTENTICACION = ("FedAuth", ".ASPXAUTH")
+
+# Cookies que acompanan pero no autentican. ``ASP.NET_SessionId`` lo pone el
+# servidor al primer contacto, antes de saber quien eres: darla por buena
+# hacia pasar por sesion abierta una que todavia estaba en la pagina de
+# Microsoft, y el lote moria en la primera pagina.
+PREFIJOS_DE_ACOMPANAMIENTO = ("ASP.NET_SessionId",)
+
+PREFIJOS_DE_SESION = PREFIJOS_DE_AUTENTICACION + PREFIJOS_DE_ACOMPANAMIENTO
 
 # Alguien puede pegar la linea entera que copia de las herramientas del
 # navegador, con el nombre de la cabecera delante.
@@ -61,15 +69,17 @@ def formatear(cookies: Mapping[str, str]) -> str:
 
 
 def sostienen_sesion(cookies: Mapping[str, str]) -> bool:
-    """Dice si entre las cookies esta alguna de las que abren sesion.
+    """Dice si entre las cookies esta la que de verdad autentica.
 
     Sirve para avisar temprano de que lo pegado no es lo que hace falta, en
-    vez de descubrirlo a mitad de un lote de 400 paginas.
+    vez de descubrirlo a mitad de un lote de 400 paginas. Una
+    ``ASP.NET_SessionId`` sola no cuenta: la pone el servidor antes de saber
+    quien eres.
     """
     return any(
         nombre.startswith(prefijo)
         for nombre in cookies
-        for prefijo in PREFIJOS_DE_SESION
+        for prefijo in PREFIJOS_DE_AUTENTICACION
     )
 
 
