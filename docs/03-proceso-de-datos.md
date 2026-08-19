@@ -83,9 +83,11 @@ El casillero de vuelo no tiene un formato fijo. Las formas admitidas son:
 |---|---|---|
 | Vuelo numerado | `395`, `4605` | Entre una y cuatro cifras. |
 | Vuelo con prefijo | `CM472` | Un prefijo leído junto a tres cifras se normaliza a `CM`. La `A` se conserva. |
-| Código de mantenimiento | `TCK`, `CCK`, `SPV`, `SVC`, `SV` | Se ajusta al código más parecido a una letra de distancia. |
+| Código de mantenimiento | `TCK`, `CCK`, `SPV`, `SVC`, `SUP`, `MTC`, `SV` | Se ajusta al código más parecido a un trazo de distancia. Una cifra final forma parte del código: `SV2`, `SVC2`. |
 
-Una lectura que no corresponde a ninguna de esas formas no se escribe. La letra confundida con una cifra se recupera cuando el tramo conserva evidencia numérica y un empate entre dos códigos no se resuelve.
+El código se compara por clase de trazo y no letra a letra, porque el reconocedor devuelve la P como `9`, `D` o `R`, la S como `5` y la T como `J`: `S9V`, `SRV` y `52V` son el mismo `SPV` de la página. La comparación toma la lectura entera, con los dígitos que haya dentro, y admite un solo trazo distinto; a igualdad de trazos gana el código con la misma cantidad de caracteres.
+
+Una lectura que no corresponde a ninguna de esas formas no se escribe. La letra confundida con una cifra se recupera cuando el tramo conserva evidencia numérica y un empate entre dos códigos no se resuelve: `ZCC` es un `700` manuscrito y no un `CCK`.
 
 El valor OCR sin normalizar queda en `raw_value`. Los candidatos descartados pero útiles quedan en `alternatives` para las correcciones posteriores.
 
