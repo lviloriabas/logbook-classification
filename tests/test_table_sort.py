@@ -89,8 +89,8 @@ def test_sorting_moves_the_whole_row_and_its_metadata(tmp_path: Path):
         for row in range(table.rowCount())
     ] == [1, 0, 2]
 
-    viewer.log_search.setText("1234500")
-    viewer._find_log_number()
+    viewer.search_edit.setText("1234500")
+    viewer._find_in_csv()
     assert table.currentRow() == 2
 
     viewer.close()
