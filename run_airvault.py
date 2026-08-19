@@ -49,7 +49,11 @@ from app.airvault.discovery import (  # noqa: E402
     esperar,
 )
 from app.airvault.indexer import Indexador, verificar_lote  # noqa: E402
-from app.airvault.flujo import ErrorDeCorrida, Trabajo  # noqa: E402
+from app.airvault.flujo import (  # noqa: E402
+    ErrorDeCorrida,
+    Trabajo,
+    paginas_de_lote,
+)
 from app.airvault.mapping import (  # noqa: E402
     FLOTA_CACHE_FILENAME,
     ResolutorFlota,
@@ -66,6 +70,7 @@ from app.airvault.session import (  # noqa: E402
     Credenciales,
     ErrorDeSesion,
     SesionAirVault,
+    comprobar_o_renovar,
 )
 from app.airvault.session import abrir_sesion as _abrir_sesion  # noqa: E402
 
@@ -185,7 +190,7 @@ def abrir_sesion(config: AirVaultConfig, args) -> SesionAirVault:
         credenciales=credenciales,
         avisar=print,
     )
-    lotes = sesion.comprobar()
+    lotes = comprobar_o_renovar(sesion, avisar=print)
     print(f"Sesion de AirVault lista ({sesion.origen}); {lotes} lotes en la cola")
     return sesion
 
@@ -316,7 +321,7 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
     sesion = abrir_sesion(config, args)
     cliente = ClienteHttp(sesion, config)
     info = cliente.abrir_lote(manifiesto.batch_id)
-    paginas = int(info.get("pageCount", 0) or 0)
+    paginas = paginas_de_lote(info)
     try:
         picklist = cliente.picklist_matriculas()
     except Exception as exc:  # noqa: BLE001 - el catalogo no es critico
@@ -328,7 +333,13 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
         al_guardar=lambda m: manifiestos.guardar(m, carpeta),
         resolutor=resolutor,
     )
-    plan = indexador.planificar(paginas)
+    try:
+        plan = indexador.planificar(paginas)
+    except BaseException:
+        # Sin plan no se escribe nada, y un lote que queda tomado deja
+        # colgada la siguiente apertura sin decir por que.
+        _soltar(cliente, manifiesto.batch_id)
+        raise
     # Lo aprendido del lote sirve para los siguientes: se guarda siempre,
     # tambien en dry run, porque no toca nada de AirVault.
     resolutor.guardar(_ROOT / FLOTA_CACHE_FILENAME)
@@ -336,7 +347,27 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
     escribir_csv(plan, carpeta / "revision.csv")
     escribir_html(plan, carpeta / "revision.html",
                   f"{manifiesto.nombre_batch} ({manifiesto.batch_id})")
-    return manifiesto, indexador, plan, carpeta
+    return manifiesto, indexador, plan, carpeta, cliente
+
+
+def _soltar(cliente, batch_id: str) -> None:
+    """Suelta el lote en AirVault; nunca levanta, es limpieza.
+
+    `LockAndGetBatchInfo` deja el lote tomado a nombre de quien lo abrio y
+    AirVault solo admite un dueno: si no se suelta, la proxima apertura
+    —la del programa o la de la persona que entra por el navegador— se
+    queda esperando sin contestar.
+    """
+    if not batch_id:
+        return
+    try:
+        cliente.cerrar_lote(batch_id)
+    except Exception as exc:  # noqa: BLE001 - cerrar nunca tumba nada
+        logger.warning(
+            "No se pudo soltar el lote {}: {}. Si la siguiente apertura se "
+            "queda esperando, hay que cerrarlo en AirVault a mano.",
+            batch_id, exc,
+        )
 
 
 def etapa_plan(args, config: AirVaultConfig) -> int:
@@ -348,29 +379,36 @@ def etapa_plan(args, config: AirVaultConfig) -> int:
 
 
 def etapa_indexar(args, config: AirVaultConfig) -> int:
-    manifiesto, indexador, plan, carpeta = _planificar(
+    manifiesto, indexador, plan, carpeta, cliente = _planificar(
         args, config, getattr(args, "sobrescribir", False)
     )
     print(resumen_texto(plan))
     print(f"\nReporte: {carpeta / 'revision.html'}")
 
-    if not (args.revisar or args.auto):
-        print("Dry run: nada fue escrito.")
-        return 0
-    if args.revisar:
-        respuesta = input(
-            f"\nEscribir {len(plan.escribibles)} paginas en "
-            f"{plan.batch_id}? [escribir/no]: "
-        ).strip().lower()
-        if respuesta != "escribir":
-            print("Cancelado. Nada fue escrito.")
+    try:
+        if not (args.revisar or args.auto):
+            print("Dry run: nada fue escrito.")
             return 0
+        if args.revisar:
+            respuesta = input(
+                f"\nEscribir {len(plan.escribibles)} paginas en "
+                f"{plan.batch_id}? [escribir/no]: "
+            ).strip().lower()
+            if respuesta != "escribir":
+                print("Cancelado. Nada fue escrito.")
+                return 0
 
-    manifiesto.etapa("indexar").marcar(EstadoEtapa.EN_CURSO)
-    manifiestos.guardar(manifiesto, carpeta)
-    resultado = indexador.aplicar(
-        plan, detener_en_error=not getattr(args, "continuar_con_errores", False)
-    )
+        manifiesto.etapa("indexar").marcar(EstadoEtapa.EN_CURSO)
+        manifiestos.guardar(manifiesto, carpeta)
+        resultado = indexador.aplicar(
+            plan,
+            detener_en_error=not getattr(args, "continuar_con_errores", False),
+        )
+    finally:
+        # Salga como salga —cancelado, a medias o completo— el lote se
+        # suelta: AirVault admite un solo dueno y el que queda tomado
+        # cuelga la siguiente apertura sin decir por que.
+        _soltar(cliente, manifiesto.batch_id)
     estado = (EstadoEtapa.HECHA if not resultado.fallidas
               else EstadoEtapa.ERROR)
     manifiesto.etapa("indexar").marcar(

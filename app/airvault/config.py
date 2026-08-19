@@ -53,6 +53,28 @@ NOMBRE_ESTADO = {
     ESTADO_NECESITA_CORRECCION: "Need Correction",
 }
 
+# Como se llama cada campo en la pantalla de AirVault. Un aviso que dice
+# «el campo 9633 quedaria vacio» no se puede leer sin abrir el codigo; el
+# mismo aviso con el nombre se resuelve mirando la bitacora.
+NOMBRE_CAMPO = {
+    CAMPO_DOC_TYPE: "Doc Type",
+    CAMPO_WORK_TYPE: "Work Type",
+    CAMPO_MATRICULA: "Aircraft",
+    CAMPO_DESCRIPCION: "Description",
+    CAMPO_FLEET: "Fleet",
+    CAMPO_LESSOR: "Lessor",
+    CAMPO_LOG_NUMBER: "Log Page Number",
+    CAMPO_AUDIT_STATUS: "Audit Status",
+    CAMPO_START_DATE: "Start Date",
+    CAMPO_END_DATE: "End Date",
+    CAMPO_BATCH_NAME: "Batch Name",
+}
+
+
+def nombre_campo(field_id: int) -> str:
+    """Nombre legible de un campo; el numero solo si no se conoce."""
+    return NOMBRE_CAMPO.get(field_id, f"campo {field_id}")
+
 
 @dataclass(frozen=True)
 class AirVaultConfig:

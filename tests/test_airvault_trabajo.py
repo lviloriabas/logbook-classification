@@ -364,3 +364,89 @@ def test_el_avance_llega_pagina_a_pagina(tmp_path):
     trabajo.indexar(indexador, plan,
                     avisar=lambda t, h, n: avisos.append((h, n)))
     assert avisos == [(1, 2), (2, 2)]
+
+
+# ── el lote se suelta ──────────────────────────────────────────────
+
+def test_el_lote_se_suelta_al_terminar(tmp_path):
+    """AirVault admite un solo dueno: quedarselo cuelga la proxima apertura.
+
+    Sin soltarlo, la corrida siguiente —o la persona que abre el lote en el
+    navegador— se encuentra con una peticion que nunca contesta, y el
+    programa culpaba al navegador de un candado que habia dejado el.
+    """
+    from app.airvault.flujo import cerrar_partes
+
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.descubrir(cliente, esperar=False)
+    plan, indexador = trabajo.planificar(cliente)
+    trabajo.indexar(indexador, plan)
+    assert cliente.cerrados == []
+
+    cerrar_partes([trabajo], cliente)
+    assert cliente.cerrados == ["003SRO"]
+
+
+def test_un_plan_que_falla_no_deja_el_lote_tomado(tmp_path):
+    """El plan no sale, nadie va a escribir: quedarselo solo estorba."""
+    from app.airvault.guards import ErrorDeGuarda
+
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote(paginas=3)
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.fijar_lote("003SRO")
+    with pytest.raises(ErrorDeGuarda):
+        trabajo.planificar(cliente)
+    assert cliente.cerrados == ["003SRO"]
+
+
+def test_soltar_un_lote_que_no_se_deja_no_tumba_la_corrida(tmp_path):
+    """Cerrar es limpieza: si falla se anota, pero no se pierde lo escrito."""
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+
+    def no_se_deja(_batch_id):
+        raise RuntimeError("AirVault no contesto")
+
+    cliente.cerrar_lote = no_se_deja
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.fijar_lote("003SRO")
+    trabajo.cerrar(cliente)
+
+
+def test_el_lote_de_revisar_no_queda_tomado(tmp_path):
+    """Es el que una persona tiene que abrir a mano; tomarlo la deja fuera."""
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.manifiesto.solo_subir = True
+    trabajo.fijar_lote("003SRO")
+    trabajo.planificar(cliente)
+    assert cliente.cerrados == ["003SRO"]
+
+
+def test_si_el_lote_esta_tomado_se_dice_quien_lo_tiene(tmp_path):
+    """Un tiempo agotado sin explicacion no se puede resolver; un nombre si."""
+    from app.airvault.session import ErrorDeConexion
+
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+    cliente.lotes = [lote("003SRO", "DP | BIT 18 AUG 2026 05 42", 2,
+                          bloqueado_por="jperez@dominio.com")]
+
+    def no_contesta(_batch_id):
+        raise ErrorDeConexion("no contesto en 60s")
+
+    cliente.abrir_lote = no_contesta
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.fijar_lote("003SRO")
+    with pytest.raises(ErrorDeConexion) as fallo:
+        trabajo.planificar(cliente)
+    assert "jperez@dominio.com" in str(fallo.value)

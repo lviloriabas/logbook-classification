@@ -66,15 +66,43 @@ class ErrorDeConexion(RuntimeError):
     """No se pudo hablar con AirVault, ni siquiera reintentando."""
 
 
+class ErrorDeAirVault(RuntimeError):
+    """AirVault contesto, y lo que contesto es un rechazo.
+
+    Es distinto de :class:`ErrorDeConexion` a proposito: un 404 o un 403
+    hablan de *esa* peticion —una pagina que ya no esta, un lote sin
+    permiso— y no del camino, asi que frenan la pagina y no el lote entero.
+    """
+
+
 # Respuestas que no significan que algo este mal, sino que el servidor
 # estaba ocupado: reintentar tiene sentido. Un 404 o un 403, no.
 ESTADOS_TRANSITORIOS = frozenset({408, 429, 500, 502, 503, 504})
 
 _AYUDA_LOTE_ABIERTO = (
-    "Si el lote esta abierto en el navegador, AirVault deja la peticion "
-    "esperando sin contestar: hay que cerrarlo alli antes de indexarlo "
-    "desde aqui."
+    " AirVault admite un solo dueno por lote y no contesta «ocupado»: deja "
+    "la peticion esperando. Si el lote esta abierto —en el navegador o "
+    "porque un intento anterior no llego a soltarlo— hay que cerrarlo en "
+    "AirVault antes de indexarlo desde aqui."
 )
+
+# Rutas que se cuelgan por un motivo concreto y no por la red. Decirlo solo
+# donde corresponde evita mandar a cerrar un lote a quien lo que tiene es
+# el wifi caido.
+_PISTAS_POR_RUTA = {
+    "/index/Batch/LockAndGetBatchInfo": _AYUDA_LOTE_ABIERTO,
+}
+
+
+def _pista_de(ruta: str) -> str:
+    """Lo que conviene mirar cuando falla justo esta ruta."""
+    for prefijo, pista in _PISTAS_POR_RUTA.items():
+        if str(ruta or "").startswith(prefijo):
+            return pista
+    return (
+        " Suele ser la red o AirVault ocupado; se puede volver a intentar y "
+        "lo que ya se escribio no se repite."
+    )
 
 
 class _FormParser(HTMLParser):
@@ -121,6 +149,24 @@ def _formularios(html: str) -> List[Tuple[str, str, Dict[str, str]]]:
     return parser.formularios
 
 
+def _describir_cuerpo(respuesta: requests.Response, limite: int = 160) -> str:
+    """Resume lo que contesto el servidor, para poder pegarlo en un error.
+
+    Va recortado y en una sola linea a proposito: lo que hace falta para
+    reconocer si vino una pagina de error, un HTML de acceso o un JSON, sin
+    volcar media respuesta en la ventana ni en el log.
+    """
+    try:
+        texto = (respuesta.text or "").strip()
+    except Exception:  # noqa: BLE001 - describir no puede fallar
+        texto = ""
+    if not texto:
+        return f"respuesta vacia, codigo {respuesta.status_code}"
+    plano = " ".join(texto.split())
+    recorte = plano[:limite] + ("…" if len(plano) > limite else "")
+    return f"codigo {respuesta.status_code}, empieza por «{recorte}»"
+
+
 @dataclass
 class Credenciales:
     """Usuario y contrasena de una cuenta local, solo en memoria."""
@@ -160,6 +206,9 @@ class SesionAirVault:
         })
         self._autenticada = False
         self._origen = ""
+        # Perfil de Edge del que salio la sesion, por si hay que volver a
+        # entrar cuando el servidor la rechace.
+        self._perfil: Optional[Path] = None
         # Inyectable para que las pruebas no esperen de verdad.
         self.dormir = time.sleep
 
@@ -217,16 +266,37 @@ class SesionAirVault:
     def usar_navegador(
         self, perfil: Optional[Path] = None,
         avisar: Optional[Callable[[str], None]] = None,
+        forzar_login: bool = False,
     ) -> "SesionAirVault":
         """Toma la sesion del navegador que abre el propio programa."""
         from app.airvault import navegador
 
+        if forzar_login:
+            # Las cookies viejas siguen en el tarro y taparian a las nuevas:
+            # ``requests`` manda las dos y AirVault se queda con la primera.
+            self.http.cookies.clear()
+        self._perfil = perfil
         return self.usar_cookies(
             navegador.obtener_cookies(
                 self.config.base_url, perfil, self.config.url_sso,
                 espera_login_s=self.config.espera_login_s, avisar=avisar,
+                forzar_login=forzar_login,
             ),
             ORIGEN_EDGE,
+        )
+
+    def renovar_en_navegador(
+        self, avisar: Optional[Callable[[str], None]] = None
+    ) -> "SesionAirVault":
+        """Vuelve a entrar por el navegador, sin mirar lo que guarda el perfil.
+
+        Es la salida del callejon en el que se metia una sesion caducada: el
+        perfil conservaba una cookie que AirVault ya no acepta, releerla
+        devolvia siempre la misma y el programa solo sabia proponer que
+        alguien copiara una cookie a mano.
+        """
+        return self.usar_navegador(
+            getattr(self, "_perfil", None), avisar, forzar_login=True
         )
 
     def iniciar_sesion(self, credenciales: Credenciales) -> "SesionAirVault":
@@ -374,27 +444,23 @@ class SesionAirVault:
                 self.dormir(self.config.espera_reintento_s * intento)
         raise ErrorDeConexion(
             f"No se pudo completar {ruta} tras {intentos} intentos: "
-            f"{ultimo}. {_AYUDA_LOTE_ABIERTO}"
+            f"{ultimo}.{_pista_de(ruta)}"
         )
 
     def get(self, ruta: str, params: Dict[str, object] | None = None,
             json_esperado: bool = True):
         """GET con reintentos. Devuelve el JSON o el texto de la respuesta."""
         respuesta = self._pedir("GET", ruta, params=params)
-        if respuesta.status_code == 401 or self._pide_login(
-            respuesta.text[:2000], respuesta.url
-        ):
-            raise ErrorDeSesion(
-                f"La sesion de AirVault caduco. {_AYUDA_COOKIE}"
-            )
-        respuesta.raise_for_status()
+        self._comprobar_respuesta(respuesta, ruta)
         if not json_esperado:
             return respuesta.text
         try:
             return respuesta.json()
         except ValueError as exc:
             raise ErrorDeSesion(
-                f"AirVault devolvio algo que no es JSON en {ruta}"
+                f"AirVault contesto {ruta} con algo que no es JSON "
+                f"({_describir_cuerpo(respuesta)}). Suele significar que "
+                f"contesto una pagina de error o de acceso en vez de datos."
             ) from exc
 
     def post(self, ruta: str, **extra) -> requests.Response:
@@ -404,14 +470,61 @@ class SesionAirVault:
         reintentar, un solo trozo perdido obliga a repetir la subida entera.
         """
         respuesta = self._pedir("POST", ruta, **extra)
+        self._comprobar_respuesta(respuesta, ruta)
+        return respuesta
+
+    def _comprobar_respuesta(self, respuesta: requests.Response,
+                             ruta: str) -> None:
+        """Traduce lo que contesto el servidor a un motivo que se entienda.
+
+        ``raise_for_status`` levanta un texto en ingles con la URL entera y
+        sin decir que hacer; a mitad de un lote eso llega al reporte como
+        «500 Server Error for url ...», que no dice ni que pagina fallo ni
+        si conviene reintentar.
+        """
         if respuesta.status_code == 401 or self._pide_login(
             respuesta.text[:2000], respuesta.url
         ):
-            raise ErrorDeSesion(
-                f"La sesion de AirVault caduco. {_AYUDA_COOKIE}"
+            raise ErrorDeSesion(self._motivo_de_caducidad())
+        if respuesta.status_code < 400:
+            return
+        codigo = respuesta.status_code
+        if codigo == 403:
+            detalle = (
+                "la cuenta entro pero no tiene permiso sobre este "
+                "repositorio o este lote"
             )
-        respuesta.raise_for_status()
-        return respuesta
+        elif codigo == 404:
+            detalle = (
+                "AirVault dice que eso no existe; suele ser un lote borrado "
+                "o una pagina que ya no esta en el lote"
+            )
+        else:
+            detalle = f"el servidor respondio {codigo}"
+        raise ErrorDeAirVault(
+            f"AirVault rechazo {ruta}: {detalle} "
+            f"({_describir_cuerpo(respuesta)})."
+        )
+
+    def _motivo_de_caducidad(self) -> str:
+        """Que decir cuando el servidor contesta la pagina de acceso.
+
+        Depende de donde salio la sesion: mandar a copiar una cookie con
+        F12 a quien entro por el navegador es mandarlo por el camino largo
+        justo cuando el corto —volver a entrar— es el que corresponde.
+        """
+        if self._origen == ORIGEN_EDGE:
+            return (
+                "La sesion que guardaba el perfil de Edge ya no vale: "
+                "AirVault volvio a pedir acceso. Hay que entrar de nuevo en "
+                "la ventana del navegador que abre el programa."
+            )
+        if self._origen == ORIGEN_FORMULARIO:
+            return (
+                "AirVault cerro la sesion iniciada por formulario y volvio a "
+                "pedir acceso. Hay que volver a entrar."
+            )
+        return f"La cookie de AirVault ya no vale. {_AYUDA_COOKIE}"
 
 
 def abrir_sesion(
@@ -459,6 +572,37 @@ def abrir_sesion(
         f"No hay ninguna sesion de AirVault disponible. {_AYUDA_COOKIE}"
         f"{detalle}"
     )
+
+
+def comprobar_o_renovar(
+    sesion: SesionAirVault,
+    avisar: Optional[Callable[[str], None]] = None,
+) -> int:
+    """Comprueba la sesion y, si el perfil trae una caducada, vuelve a entrar.
+
+    Un perfil de Edge puede conservar una cookie que AirVault ya no acepta:
+    tiene la forma correcta, asi que el programa la daba por buena y moria
+    en la primera peticion pidiendo que alguien copiara una cookie a mano.
+    Aqui se hace lo que haria una persona: abrir el navegador y entrar otra
+    vez. Solo tiene sentido cuando la sesion salio del navegador; una cookie
+    pegada a mano no se puede renovar sola.
+    """
+    try:
+        return sesion.comprobar()
+    except ErrorDeSesion:
+        if sesion.origen != ORIGEN_EDGE:
+            raise
+        logger.info(
+            "La sesion guardada en el perfil de Edge ya no vale; se vuelve "
+            "a entrar por el navegador"
+        )
+        if avisar is not None:
+            avisar(
+                "La sesión guardada ya no vale; hay que entrar otra vez en "
+                "AirVault."
+            )
+        sesion.renovar_en_navegador(avisar)
+        return sesion.comprobar()
 
 
 def _perfil(config: AirVaultConfig) -> Optional[Path]:

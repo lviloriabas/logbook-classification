@@ -30,6 +30,7 @@ import os
 import socket
 import struct
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -50,13 +51,21 @@ _UBICACIONES_EDGE = (
 )
 
 # Argumentos que aislan la ventana del Edge de la persona: perfil propio, sin
-# la primera ejecucion, sin extensiones y sin restaurar pestanas.
+# la primera ejecucion y sin extensiones.
+#
+# ``--restore-last-session`` no esta para reabrir pestanas: es lo unico que
+# hace que la sesion se guarde. La cookie de federacion es **de sesion**, y
+# Chromium solo escribe esas cookies en disco cuando el perfil arranca
+# restaurando la sesion anterior. Sin esta bandera el perfil pierde el
+# acceso cada vez que se cierra el navegador y hay que entrar de nuevo con
+# el segundo factor en cada corrida, que es justo lo que el perfil propio
+# viene a evitar. Comprobado midiendo la cookie antes y despues de cerrar.
 _ARGUMENTOS = (
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-extensions",
     "--disable-background-networking",
-    "--restore-last-session=false",
+    "--restore-last-session",
 )
 
 
@@ -186,6 +195,10 @@ class SesionDeNavegador:
         self.visible = visible
         self.puerto = _puerto_libre()
         self._proceso: Optional[subprocess.Popen] = None
+        self._quejas = None
+        # Lo que contesto /json/version: hace falta para pedirle el cierre
+        # por el mismo protocolo por el que se le piden las cookies.
+        self._version: Optional[dict] = None
 
     def abrir(self, url: str, espera_s: float = 30.0) -> dict:
         """Arranca el navegador y espera a que conteste el protocolo."""
@@ -199,8 +212,13 @@ class SesionDeNavegador:
         if not self.visible:
             orden.append("--headless=new")
         orden.append(url)
+        # La salida de error de Edge se guarda: es lo unico que dice por que
+        # no arranco —perfil tomado, bandera rechazada, politica de la
+        # empresa— y tirarla dejaba el fallo en «Edge se cerro», que no se
+        # puede diagnosticar.
+        self._quejas = tempfile.TemporaryFile()
         self._proceso = subprocess.Popen(
-            orden, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            orden, stdout=subprocess.DEVNULL, stderr=self._quejas,
         )
         limite = time.monotonic() + espera_s
         while time.monotonic() < limite:
@@ -208,17 +226,41 @@ class SesionDeNavegador:
                 with urllib.request.urlopen(
                     f"http://127.0.0.1:{self.puerto}/json/version", timeout=2
                 ) as respuesta:
-                    return json.load(respuesta)
+                    self._version = json.load(respuesta)
+                    return self._version
             except (urllib.error.URLError, OSError, ValueError):
                 if self._proceso.poll() is not None:
                     raise ErrorDeNavegador(
-                        "Edge se cerro antes de abrir la sesion"
+                        f"Edge se cerro antes de abrir la sesion "
+                        f"(codigo {self._proceso.returncode}). "
+                        f"{self._por_que()}"
                     )
                 time.sleep(0.5)
         raise ErrorDeNavegador(
-            f"Edge no contesto en {espera_s:.0f}s. Puede que ya este abierto "
-            f"con este mismo perfil."
+            f"Edge arranco pero no contesto por su puerto de depuracion en "
+            f"{espera_s:.0f}s, asi que no hay forma de pedirle la sesion. "
+            f"Casi siempre es que el perfil {self.perfil} ya esta abierto en "
+            f"otra ventana: hay que cerrarla y volver a intentar. "
+            f"{self._por_que()}"
         )
+
+    def _por_que(self) -> str:
+        """Lo que Edge dejo escrito al fallar, recortado a lo legible."""
+        quejas = getattr(self, "_quejas", None)
+        if quejas is None:
+            return ""
+        try:
+            quejas.seek(0)
+            texto = quejas.read().decode("utf-8", "replace")
+        except (OSError, ValueError):
+            return ""
+        lineas = [l.strip() for l in texto.splitlines() if l.strip()]
+        # Las ultimas son las del fallo; las primeras suelen ser ruido de
+        # arranque que Edge escribe siempre.
+        utiles = [l for l in lineas if "ERROR" in l or "FATAL" in l] or lineas
+        if not utiles:
+            return ""
+        return "Edge dijo: " + " / ".join(utiles[-3:])[:400]
 
     def cookies(self, version: dict) -> Dict[str, List[dict]]:
         """Pide al navegador sus cookies, ya descifradas."""
@@ -233,15 +275,49 @@ class SesionDeNavegador:
             por_dominio.setdefault(dominio, []).append(cookie)
         return por_dominio
 
-    def cerrar(self) -> None:
+    def cerrar(self, version: Optional[dict] = None) -> None:
+        """Cierra el navegador, pidiendoselo antes de matarlo.
+
+        Importa que sea por las buenas: Chromium escribe al salir lo que
+        conserva del perfil —entre otras cosas la sesion— y suelta el
+        candado de la carpeta. Matarlo deja las dos cosas a medias, y la
+        siguiente apertura del mismo perfil se encuentra un candado que ya
+        no tiene dueno.
+        """
         if self._proceso is None:
             return
-        self._proceso.terminate()
+        version = version or self._version
+        if version:
+            self._pedir_que_se_cierre(version)
         try:
             self._proceso.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            self._proceso.kill()
+            self._proceso.terminate()
+            try:
+                self._proceso.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._proceso.kill()
         self._proceso = None
+        self._version = None
+        if self._quejas is not None:
+            self._quejas.close()
+            self._quejas = None
+
+    def _pedir_que_se_cierre(self, version: dict) -> None:
+        """Manda ``Browser.close`` por el protocolo y no insiste si falla."""
+        try:
+            ws = _WebSocket(version["webSocketDebuggerUrl"], timeout=5.0)
+        except (ErrorDeNavegador, OSError, KeyError) as exc:
+            logger.debug("No se pudo pedir el cierre a Edge: {}", exc)
+            return
+        try:
+            ws.pedir("Browser.close")
+        except (ErrorDeNavegador, OSError, ValueError) as exc:
+            # El navegador se va mientras contesta: que no llegue la
+            # respuesta es lo normal, no un fallo.
+            logger.debug("Edge se fue sin contestar al cierre: {}", exc)
+        finally:
+            ws.cerrar()
 
     def __enter__(self) -> "SesionDeNavegador":
         return self
@@ -270,6 +346,7 @@ def obtener_cookies(
     avisar: Optional[Callable[[str], None]] = None,
     dormir: Callable[[float], None] = time.sleep,
     reloj: Callable[[], float] = time.monotonic,
+    forzar_login: bool = False,
 ) -> Dict[str, str]:
     """Devuelve las cookies de AirVault, abriendo el navegador si hace falta.
 
@@ -277,6 +354,10 @@ def obtener_cookies(
     vez anterior, nadie tiene que hacer nada. Solo cuando no hay sesion se
     abre una ventana para que la persona entre; en cuanto AirVault suelta sus
     cookies, la ventana se cierra sola.
+
+    Con ``forzar_login`` se salta el intento sin ventana. Lo usa quien ya
+    probo las cookies del perfil contra el servidor y se encontro con que
+    ya no valen: en ese caso volver a leerlas devolveria las mismas.
     """
     perfil = Path(perfil or PERFIL_POR_DEFECTO)
     host = galletas.dominio(base_url)
@@ -284,17 +365,22 @@ def obtener_cookies(
     # redireccion a Microsoft y, con ella, la cookie que autentica.
     entrada = url_sso or base_url
 
-    with SesionDeNavegador(perfil, edge, visible=False) as navegador:
-        encontradas = _del_dominio(navegador.cookies(
-            navegador.abrir(entrada)
-        ), host)
-    if galletas.sostienen_sesion(encontradas):
-        logger.info("La sesion del perfil de Edge seguia abierta")
-        return encontradas
+    if not forzar_login:
+        with SesionDeNavegador(perfil, edge, visible=False) as navegador:
+            encontradas = _del_dominio(navegador.cookies(
+                navegador.abrir(entrada)
+            ), host)
+        if galletas.sostienen_sesion(encontradas):
+            logger.info("La sesion del perfil de Edge seguia abierta")
+            return encontradas
+        logger.info(
+            "El perfil {} no tiene sesion de AirVault; se abre la ventana "
+            "para entrar", perfil,
+        )
 
     if avisar is not None:
         avisar(
-            "Se abrio una ventana de Edge: entre a AirVault con su usuario "
+            "Se abrió una ventana de Edge: entre a AirVault con su usuario "
             "de Microsoft. La ventana se cierra sola al terminar."
         )
     with SesionDeNavegador(perfil, edge, visible=True) as navegador:
@@ -309,9 +395,18 @@ def obtener_cookies(
                 )
                 return encontradas
             dormir(2.0)
+        acompanantes = galletas.resumir(encontradas) if encontradas else ""
+    detalle = (
+        f" Del sitio si llegaron {acompanantes}, que son las que pone "
+        f"AirVault antes de saber quien entra: eso pasa cuando la ventana "
+        f"se quedo en la pagina de Microsoft sin completar el acceso."
+        if acompanantes else ""
+    )
     raise ErrorDeNavegador(
-        f"Nadie entro a AirVault en {espera_login_s / 60:.0f} minutos. "
-        f"Se puede volver a intentar o pegar la cookie a mano."
+        f"Pasaron {espera_login_s / 60:.0f} minutos y AirVault no llego a "
+        f"dar una sesion en la ventana de Edge que abrio el programa.{detalle} "
+        f"Se puede volver a intentar, o pegar la cookie a mano en el campo "
+        f"Sesion."
     )
 
 
