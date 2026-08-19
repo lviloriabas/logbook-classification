@@ -4,8 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QBrush, QColor, QIcon, QPalette
+from PySide6.QtCore import QEvent, QObject, QRectF, QSize, Qt
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QRegion,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -232,6 +240,45 @@ class FlatSelectionDelegate(QStyledItemDelegate):
         option.palette = palette
 
 
+class _RoundedCornerClip(QObject):
+    """Recorta un widget a esquinas redondas por fuera, con una máscara.
+
+    ``border-radius`` en la hoja de estilo solo redondea el fondo/borde que
+    pinta el propio widget: una tabla dibuja las filas directamente sobre su
+    viewport (no como hijos), así que ese contenido llega en escuadra hasta
+    el borde y tapa el radio de las esquinas de abajo aunque las de arriba
+    se vean bien (las pinta la cabecera, que sí respeta el radio). La única
+    forma de que las cuatro esquinas queden iguales pase lo que pinte
+    adentro es recortar el widget entero desde fuera, con una máscara que se
+    recalcula cada vez que cambia de tamaño.
+    """
+
+    def __init__(self, radius: int, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._radius = radius
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        if event.type() == QEvent.Type.Resize:
+            self._apply(watched)
+        return False
+
+    def _apply(self, widget: QWidget) -> None:
+        if widget.width() <= 0 or widget.height() <= 0:
+            return
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(widget.rect()), self._radius, self._radius)
+        widget.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+
+def round_corners(widget: QWidget, radius: int = TABLE_RADIUS) -> None:
+    """Mantiene ``widget`` recortado a esquinas redondas mientras cambia de tamaño."""
+    widget.installEventFilter(_RoundedCornerClip(radius, widget))
+    if widget.width() > 0 and widget.height() > 0:
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(widget.rect()), radius, radius)
+        widget.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+
 def style_data_table(table: QAbstractItemView) -> None:
     """Deja la tabla en el gris oscuro de la aplicación.
 
@@ -257,6 +304,7 @@ def style_data_table(table: QAbstractItemView) -> None:
     viewport.setPalette(palette)
     viewport.setAutoFillBackground(True)
     table.setItemDelegate(FlatSelectionDelegate(table))
+    round_corners(table)
 
 
 def style_dark_pane(pane: QWidget) -> None:
@@ -303,6 +351,48 @@ def load_zoom_icon(name: str) -> QIcon:
     """Carga un icono de zoom local para que los visores se vean igual en Windows."""
     path = _ASSETS / f"zoom_{name}.svg"
     return QIcon(str(path)) if path.is_file() else QIcon.fromTheme(f"zoom-{name}")
+
+
+# Los iconos de los botones acompañan al texto: van al alto de una letra, la
+# misma medida que ya usan los controles de zoom, para que la fila de botones
+# no crezca ni el dibujo pese más que la palabra.
+ICON_SIZE = QSize(14, 14)
+# Tamaños que se guardan del dibujo: el del botón y el doble, para que se vea
+# igual de limpio en una pantalla al 200 %.
+_ICON_RENDER_SIZES = (ICON_SIZE.width(), ICON_SIZE.width() * 2)
+
+
+def load_icon(name: str, color: QColor | str | None = None) -> QIcon:
+    """Carga un icono de ``assets/`` por su nombre, sin extensión.
+
+    Los iconos son locales por la misma razón que los del zoom: el tema de
+    iconos del sistema no existe en Windows y dejar el botón sin dibujo según
+    la máquina es peor que no ponerlo.
+
+    Con ``color`` el dibujo se pinta de ese color entero. Los botones normales
+    los pinta el estilo de Windows, que en tema claro los da con texto negro
+    y en tema oscuro con texto blanco: un icono de color fijo se pierde en uno
+    de los dos. Pintado del color del texto del botón, se lee en ambos y
+    pertenece al botón en vez de estar pegado encima.
+    """
+    path = _ASSETS / f"{name}.svg"
+    if not path.is_file():
+        return QIcon()
+    icon = QIcon(str(path))
+    if color is None:
+        return icon
+    tinted = QIcon()
+    for size in _ICON_RENDER_SIZES:
+        pixmap = icon.pixmap(QSize(size, size))
+        painter = QPainter(pixmap)
+        # SourceIn conserva la transparencia del dibujo y sustituye el color:
+        # el trazo queda del color pedido y los bordes suavizados se
+        # mantienen, sin el recuadro que dejaría rellenar sin más.
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), QColor(color))
+        painter.end()
+        tinted.addPixmap(pixmap)
+    return tinted
 
 
 class ZoomOverlay(QFrame):

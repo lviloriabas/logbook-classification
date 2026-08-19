@@ -24,10 +24,13 @@ from loguru import logger
 
 from app.models.schemas import ValidationReport
 from app.reports.organize import (
+    NOMBRE_PDF_REVISAR,
     agrupar_paginas,
     clave_avion,
     clave_mes,
     iterar_paginas,
+    paginas_para_revisar,
+    por_revisar,
     ruta_pdf,
 )
 from app.validation.discrepancias import Categoria, Discrepancia
@@ -139,12 +142,15 @@ def _stats_separacion(
     """
     excluidas = excluidas or set()
     grupos = agrupar_paginas(reports, separar_por, excluidas)
+    revisar = paginas_para_revisar(reports)
     claves = sorted(grupos)
     reales = list(pdf_paths or [])
+    # ``generar_pdfs`` escribe los grupos y, detrás, el PDF de revisión.
     nombres = (
         [ruta.name for ruta in reales]
-        if len(reales) == len(claves)
+        if len(reales) == len(claves) + bool(revisar)
         else [ruta_pdf(clave, separar_por).as_posix() for clave in claves]
+        + ([NOMBRE_PDF_REVISAR] if revisar else [])
     )
     pdfs: List[dict] = []
     distribuidas = 0
@@ -152,10 +158,16 @@ def _stats_separacion(
         paginas = len(grupos[clave])
         distribuidas += paginas
         pdfs.append({"archivo": nombre, "paginas": paginas})
+    if revisar:
+        # Las bitácoras sin avión confirmado no se pierden: salen siempre en
+        # su propio PDF, así que cuentan como distribuidas.
+        pdfs.append({"archivo": nombres[-1], "paginas": len(revisar)})
+        distribuidas += len(revisar)
     excluidas_count = sum(
         1
         for ref in iterar_paginas(reports)
         if not ref.page.blank
+        and not por_revisar(ref.page)
         and (Path(ref.pdf_path).name, ref.page.page_number) in excluidas
     )
     fuera = total_paginas - paginas_en_blanco - excluidas_count - distribuidas

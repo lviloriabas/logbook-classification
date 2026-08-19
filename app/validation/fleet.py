@@ -9,6 +9,8 @@ from loguru import logger
 
 from app.models.schemas import Status, ValidationReport
 from app.utils.fleet import load_fleet
+from app.validation.book_corrector import _recompute_summary
+from app.validation.page_status import recompute_page_status
 
 
 _MATRICULA_RE = re.compile(r"^HP-(\d{4})(CMP|WWP)$")
@@ -94,8 +96,13 @@ def verify_reports_against_fleet(
     canónica que no aparezca en ella no existe como avión: se reemplaza por la
     matrícula más parecida de la flota. El valor leído queda en
     ``alternatives`` y la página sigue en WARNING para que la reclasificación
-    sea auditable. Si dos aviones quedan igual de cerca, o si la lectura ni
-    siquiera tiene formato de matrícula, solo se marca para revisión.
+    sea auditable.
+
+    Cuando no hay un avión más parecido —dos quedan a la misma distancia, o
+    la lectura ni siquiera tiene formato de matrícula— la página se queda sin
+    matrícula. Antes conservaba la lectura, y esa lectura terminaba abriendo
+    en el PDF y en las estadísticas una bitácora de un avión que no existe;
+    ahora cae en «Revisar», que es donde una persona decide de qué avión era.
     """
     allowed = set(load_fleet(Path(fleet_path)))
     if not allowed:
@@ -117,9 +124,9 @@ def verify_reports_against_fleet(
             if not value or value in allowed:
                 continue
             fleet_match, tied = _nearest_fleet_match(value, allowed)
+            if value not in field.alternatives:
+                field.alternatives.append(value)
             if fleet_match is not None:
-                if value not in field.alternatives:
-                    field.alternatives.append(value)
                 field.value = fleet_match
                 field.source = "fleet_validation"
                 field.inference_method = "fleet_nearest_match"
@@ -127,30 +134,24 @@ def verify_reports_against_fleet(
                     f"Matrícula reclasificada de {value} a {fleet_match}: "
                     "es la más parecida de la lista de flota"
                 )
-            elif tied:
-                note = (
-                    f"Matrícula fuera de la lista de flota: {value} queda a la "
-                    f"misma distancia de {', '.join(tied)}"
-                )
             else:
-                note = f"Matrícula no encontrada en la lista de flota: {value}"
+                # La lista de flota es el catálogo completo, así que este
+                # avión no existe y no se puede elegir uno por él. Dejar la
+                # lectura escrita creaba una bitácora de un avión inexistente
+                # en el CSV y una sección propia en el PDF; se borra el valor
+                # y la página cae en «Revisar», que es donde una persona
+                # decide de qué avión era.
+                field.value = None
+                field.source = "fleet_validation"
+                field.inference_method = "fleet_unconfirmed"
+                note = (
+                    f"Matrícula sin confirmar: {value} queda a la misma "
+                    f"distancia de {', '.join(tied)}"
+                    if tied
+                    else f"Matrícula sin confirmar: {value} no está en la "
+                         "lista de flota y no se parece a ningún avión de ella"
+                )
             field.status = Status.WARNING
             field.comment = f"{field.comment} | {note}".strip(" |")
-            page.status = max(
-                (item.status for item in page.fields),
-                key={Status.OK: 0, Status.WARNING: 1, Status.ERROR: 2}.get,
-                default=page.status,
-            )
-        counts = {"ok_pages": 0, "warning_pages": 0, "error_pages": 0}
-        for page in report.pages:
-            if page.status is Status.OK:
-                counts["ok_pages"] += 1
-            elif page.status is Status.WARNING:
-                counts["warning_pages"] += 1
-            else:
-                counts["error_pages"] += 1
-        report.summary.update(
-            total_pages=len(report.pages),
-            blank_pages=sum(1 for page in report.pages if page.blank),
-            **counts,
-        )
+            recompute_page_status(page)
+        _recompute_summary(report)

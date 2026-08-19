@@ -9,6 +9,12 @@
   en la salida de varios archivos se escriben en ``discrepancias.pdf``. En
   ambos casos se ordenan únicamente por logpage y no se subdividen por avión
   ni mes.
+- **Revisar**: las bitácoras cuya matrícula nadie pudo confirmar (ni el OCR,
+  ni el consenso del libro, ni la lista de flota). Se escriben siempre, con
+  cualquier combinación de opciones: en el PDF único cierran el archivo tras
+  un separador ``REVISAR`` y en la salida de varios archivos forman
+  ``revisar.pdf``. No abren grupo de avión propio, porque una matrícula sin
+  confirmar puesta como título se lee como un avión que existe.
 - **Recortes de firmas**: volcado de las regiones de firma para auditar
   visualmente los bounding boxes.
 
@@ -24,9 +30,10 @@ Convenciones de nombres (rutas relativas a la carpeta de la corrida):
 - ``HP-XXXXCMP_2026-JUL.pdf``        por avión y mes: ambos valores forman el
                                      nombre (``HP-XXXXCMP_sf.pdf`` sin fecha)
 - ``discrepancias.pdf``              páginas con discrepancias
+- ``revisar.pdf``                    páginas sin avión confirmado
 
-Las páginas sin matrícula legible van al grupo ``sin_matricula`` y las
-sin fecha legible al grupo ``sin_fecha`` (archivo ``sf.pdf``), de modo
+Las páginas sin fecha legible van al grupo ``sin_fecha`` (archivo
+``sf.pdf``) y las que no dicen de qué avión son van a «Revisar», de modo
 que ninguna bitácora queda por fuera de los PDFs generados.
 
 Exportar de nuevo nunca borra ni sobreescribe los PDFs que ya están en la
@@ -60,6 +67,13 @@ from app.validation.discrepancias import (
 from app.validation.grouping import log_number
 from app.vision.pdf_loader import PdfDocumentCache, copy_pdf_pages, render_page
 from app.vision.signature import SIGNATURE_PAD_X, SIGNATURE_PAD_Y
+
+SIN_MATRICULA = "sin_matricula"
+# La sección «Revisar» se escribe siempre: son las bitácoras que nadie pudo
+# asignar a un avión, y quedarse fuera de la entrega es peor que cualquier
+# opción de separación que se haya marcado.
+ETIQUETA_REVISAR = "REVISAR"
+NOMBRE_PDF_REVISAR = "revisar.pdf"
 
 _DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(CMP|WWP)$")
@@ -99,7 +113,30 @@ def clave_avion(page: PageResult) -> str:
             value = field.value.strip()
             if _MATRICULA_RE.fullmatch(value):
                 return value
-    return "sin_matricula"
+    return SIN_MATRICULA
+
+
+def por_revisar(page: PageResult) -> bool:
+    """La página no dice de qué avión es.
+
+    Ni el OCR, ni el consenso de su libro, ni la lista de flota pudieron
+    confirmar la matrícula. No hay avión al que archivarla, así que va a la
+    sección «Revisar» en vez de abrir un grupo propio: un grupo con una
+    matrícula sin confirmar se lee como una bitácora de un avión que existe.
+    """
+    return clave_avion(page) == SIN_MATRICULA
+
+
+def paginas_para_revisar(
+    reports: Sequence[ValidationReport],
+) -> List[PaginaRef]:
+    """Páginas sin avión confirmado, ordenadas por libro y logpage."""
+    refs = [
+        ref for ref in iterar_paginas(reports)
+        if not ref.page.blank and por_revisar(ref.page)
+    ]
+    refs.sort(key=lambda ref: clave_orden(ref.page, ref.orden))
+    return refs
 
 
 def clave_mes(page: PageResult) -> str:
@@ -150,7 +187,9 @@ def agrupar_paginas(
             agrupa todo en una sola clave ().
         excluidas: Conjunto de (nombre del archivo, número de página) que
             NO se incluyen (páginas con discrepancia cuando se genera el
-            PDF de discrepancias). Páginas en blanco siempre se excluyen.
+            PDF de discrepancias). Las páginas en blanco y las que no
+            tienen avión confirmado siempre se excluyen: las segundas van
+            a la sección «Revisar» (``paginas_para_revisar``).
 
     Returns:
         Diccionario clave -> lista de páginas ya ordenadas (libro, logpage).
@@ -168,6 +207,9 @@ def agrupar_paginas(
         if ref.page.blank:
             continue
         if (Path(ref.pdf_path).name, ref.page.page_number) in excluidas:
+            continue
+        if por_revisar(ref.page):
+            # Va a la sección «Revisar», no a un grupo de avión.
             continue
         if condiciones:
             clave = tuple(
@@ -259,11 +301,14 @@ def generar_pdfs(
 
     Los PDFs de una exportación anterior no se pisan: si el nombre del
     grupo ya existe en la carpeta, la copia nueva lleva sufijo numérico.
-    Las rutas se devuelven en el orden de ``sorted(grupos)``.
+    Las rutas se devuelven en el orden de ``sorted(grupos)`` y, al final,
+    ``revisar.pdf`` con las bitácoras sin avión confirmado (siempre que
+    haya alguna).
     """
     grupos = agrupar_paginas(reports, separar_por, excluidas)
+    revisar = paginas_para_revisar(reports)
     rutas: List[Path] = []
-    refs = [ref for grupo in grupos.values() for ref in grupo]
+    refs = [ref for grupo in grupos.values() for ref in grupo] + revisar
     with PdfDocumentCache(ref.pdf_path for ref in refs) as sources:
         for clave in sorted(grupos):
             ruta = escribir_pdf_paginas(
@@ -275,6 +320,13 @@ def generar_pdfs(
                 sources=sources,
             )
             rutas.append(ruta)
+        if revisar:
+            rutas.append(escribir_pdf_paginas(
+                revisar,
+                unique_path(Path(run_dir) / NOMBRE_PDF_REVISAR),
+                dpi,
+                sources=sources,
+            ))
     return rutas
 
 
@@ -291,6 +343,8 @@ def _preparar_paginas(
         if ref.page.blank:
             continue
         if (Path(ref.pdf_path).name, ref.page.page_number) in excluidas:
+            continue
+        if por_revisar(ref.page):
             continue
         refs.append(ref)
     refs.sort(key=lambda ref: clave_orden(ref.page, ref.orden))
@@ -309,6 +363,7 @@ def _preparar_paginas_incluidas(
         ref
         for ref in iterar_paginas(reports)
         if not ref.page.blank
+        and not por_revisar(ref.page)
         and (Path(ref.pdf_path).name, ref.page.page_number) in incluidas
     ]
     refs.sort(key=lambda ref: clave_orden(ref.page, ref.orden))
@@ -467,6 +522,10 @@ def escribir_pdf_unico(
     - Si ``discrepancias_al_final`` es verdadero, las páginas excluidas de los
       grupos se agregan al final bajo un único separador ``POSIBLES
       DISCREPANCIAS``, ordenadas globalmente por logpage.
+    - Las páginas sin avión confirmado cierran el PDF bajo el separador
+      ``REVISAR``, se hayan pedido o no las discrepancias y se haya elegido
+      o no separar por avión: son las únicas bitácoras que nadie puede
+      archivar, así que siempre tienen que quedar juntas y señaladas.
     """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -483,7 +542,8 @@ def escribir_pdf_unico(
         if discrepancias_al_final
         else []
     )
-    todas_las_refs = refs + refs_discrepancias
+    refs_revisar = paginas_para_revisar(reports)
+    todas_las_refs = refs + refs_discrepancias + refs_revisar
 
     if not todas_las_refs:
         logger.info(f"[Organize] No hay páginas para exportar: {base_path}")
@@ -513,6 +573,14 @@ def escribir_pdf_unico(
                     _tamano_horizontal_fuente(sources, refs_discrepancias[0]),
                 )
                 for ref in refs_discrepancias:
+                    _insertar_pagina_fuente(doc, sources, ref)
+            if refs_revisar:
+                _pagina_divisoria(
+                    doc,
+                    ETIQUETA_REVISAR,
+                    _tamano_horizontal_fuente(sources, refs_revisar[0]),
+                )
+                for ref in refs_revisar:
                     _insertar_pagina_fuente(doc, sources, ref)
         doc.save(str(output_path), deflate=True)
     finally:

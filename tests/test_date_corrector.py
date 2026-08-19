@@ -204,18 +204,41 @@ class TestMonthAndYearInference(unittest.TestCase):
 
 
 class TestDayPolicy(unittest.TestCase):
-    def test_day_is_not_mutated_by_book_corrector(self):
+    def test_read_day_is_never_overwritten(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        read = _page(2, "2147302", "25", "JUL", "26")
+        last = _page(3, "2147303", "28", "JUL", "26")
+
+        stats = correct_dates_by_book([_report(first, read, last)])
+
+        day = _field_of(read, "day")
+        self.assertEqual(day.value, "25")
+        self.assertEqual(day.source, "direct")
+        self.assertEqual(stats["days_filled"], 0)
+
+    def test_missing_day_takes_the_last_one_that_fits_the_sequence(self):
         first = _page(1, "2147301", "20", "JUL", "26")
         missing_day = _page(2, "2147302", None, "JUL", "26")
-        last = _page(3, "2147303", "20", "JUL", "26")
+        last = _page(3, "2147303", "22", "JUL", "26")
 
         stats = correct_dates_by_book([_report(first, missing_day, last)])
 
         day = _field_of(missing_day, "day")
-        self.assertIsNone(day.value)
+        self.assertEqual(day.value, "22")
         self.assertIs(day.status, Status.WARNING)
-        self.assertIsNone(missing_day.date)
-        self.assertEqual(stats["days_filled"], 0)
+        self.assertEqual(day.source, "inferred")
+        self.assertEqual(day.inference_method, "month_end_fallback")
+        self.assertEqual(missing_day.date, "2026/07/22")
+        self.assertEqual(stats["days_filled"], 1)
+
+    def test_missing_day_at_the_end_takes_the_last_day_of_the_month(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        missing_day = _page(2, "2147302", None, "JUL", "26")
+
+        correct_dates_by_book([_report(first, missing_day)])
+
+        self.assertEqual(_field_of(missing_day, "day").value, "31")
+        self.assertEqual(missing_day.date, "2026/07/31")
 
     def test_missing_day_does_not_block_inferred_month_and_year(self):
         first = _page(1, "2147301", "20", "JUL", "26")
@@ -226,8 +249,17 @@ class TestDayPolicy(unittest.TestCase):
 
         self.assertEqual(_field_of(missing_day, "month").value, "JUL")
         self.assertEqual(_field_of(missing_day, "year").value, "26")
-        self.assertIsNone(_field_of(missing_day, "day").value)
-        self.assertIsNone(missing_day.date)
+        self.assertEqual(_field_of(missing_day, "day").value, "20")
+        self.assertEqual(missing_day.date, "2026/07/20")
+
+    def test_day_is_not_filled_without_month_and_year(self):
+        page = _page(1, "2147301", None, None, None)
+
+        stats = correct_dates_by_book([_report(page)])
+
+        self.assertIsNone(_field_of(page, "day").value)
+        self.assertIsNone(page.date)
+        self.assertEqual(stats["days_filled"], 0)
 
 
 class TestSequenceCandidates(unittest.TestCase):
@@ -339,15 +371,36 @@ class TestYearConsensus(unittest.TestCase):
 
 class TestSafetyBoundaries(unittest.TestCase):
     def test_unreadable_log_number_is_not_positionally_inferred(self):
+        """Sin número no hay posición, así que no hay tramo que interpolar.
+
+        El libro trae dos meses, de modo que la página sin número tampoco
+        puede resolverse por el consenso del libro: no hay un único valor
+        posible y la fecha se queda sin decidir.
+        """
         first = _page(1, "2147301", "20", "JUL", "26")
         unknown = _page(2, None, "20", None, None)
-        last = _page(3, "2147303", "20", "JUL", "26")
+        last = _page(3, "2147303", "20", "AGO", "26")
 
         correct_dates_by_book([_report(first, unknown, last)])
 
         self.assertIsNone(_field_of(unknown, "month").value)
-        self.assertIsNone(_field_of(unknown, "year").value)
         self.assertIsNone(unknown.date)
+
+    def test_a_single_month_book_fills_the_pages_it_could_not_read(self):
+        """Un libro con un solo mes no deja otra opción para sus huecos."""
+        first = _page(1, "2147301", "20", "JUL", "26")
+        last = _page(2, "2147303", "22", "JUL", "26")
+        # Lejos de las dos anclas: ni el intervalo ni el extremo llegan
+        # hasta aquí, solo el consenso del libro.
+        unknown = _page(3, "2147330", "24", None, None)
+
+        correct_dates_by_book([_report(first, last, unknown)])
+
+        month = _field_of(unknown, "month")
+        self.assertEqual(month.value, "JUL")
+        self.assertIs(month.status, Status.WARNING)
+        self.assertEqual(month.inference_method, "book_consensus")
+        self.assertEqual(unknown.date, "2026/07/24")
 
     def test_year_change_is_not_filled_across_conflicting_anchors(self):
         first = _page(1, "2147301", "31", "DIC", "25")
@@ -358,7 +411,7 @@ class TestSafetyBoundaries(unittest.TestCase):
 
         year = _field_of(missing, "year")
         self.assertIsNone(year.value)
-        self.assertIs(year.status, Status.ERROR)
+        self.assertIs(year.status, Status.WARNING)
 
     def test_unresolved_date_is_explicit(self):
         page = _page(1, "2147301", None, None, None)

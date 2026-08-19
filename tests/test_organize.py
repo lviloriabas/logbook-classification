@@ -15,6 +15,7 @@ from app.reports.organize import (
     _etiqueta_separador,
     _preparar_paginas,
     agrupar_paginas,
+    paginas_para_revisar,
     clave_mes,
     escribir_pdf_discrepancias,
     escribir_pdf_unico,
@@ -123,7 +124,6 @@ class TestAgrupar(unittest.TestCase):
             _page(1, "1000001", "HP-1538CMP", date=None),
             _page(2, "9000001", "HP-1534CMP", date="2026/08/02"),
             _page(3, "9000002", "HP-1534CMP", date="2026/07/28"),
-            _page(4, "0000001", None, date="2026/01/01"),
         ]
         criterios = ["avion", "mes"]
         grupos = agrupar_paginas([_reporte(*pages)], criterios, None)
@@ -134,18 +134,22 @@ class TestAgrupar(unittest.TestCase):
                 ("HP-1534CMP", "2026-07"),
                 ("HP-1534CMP", "2026-08"),
                 ("HP-1538CMP", "sin_fecha"),
-                ("sin_matricula", "2026-01"),
             ],
         )
 
-    def test_fallbacks_sin_matricula_y_sin_fecha(self):
+    def test_sin_avion_confirmado_va_a_revisar_y_no_a_un_grupo(self):
+        """Una matrícula sin confirmar no abre grupo: abriría un avión falso."""
         pages = [
             _page(1, "2147300", None, date="2026/07/15"),
             _page(2, "2147301", "HP-1534CMP", date=None),
         ]
-        grupos = agrupar_paginas([_reporte(*pages)], ["avion", "mes"], None)
-        self.assertIn(("sin_matricula", "2026-07"), grupos)
-        self.assertIn(("HP-1534CMP", "sin_fecha"), grupos)
+        reportes = [_reporte(*pages)]
+        grupos = agrupar_paginas(reportes, ["avion", "mes"], None)
+        self.assertEqual(list(grupos), [("HP-1534CMP", "sin_fecha")])
+        self.assertEqual(
+            [ref.page.page_number for ref in paginas_para_revisar(reportes)],
+            [1],
+        )
 
     def test_pagina_en_blanco_excluida(self):
         pagina = _page(1, "2147300", "HP-1534CMP")
@@ -336,6 +340,58 @@ class TestPdfsOrdenados(unittest.TestCase):
         self.assertEqual(doc.load_page(2).get_text().strip(),
                          "HP-1538CMP")
         doc.close()
+
+    def test_pdf_unico_cierra_con_el_separador_revisar(self):
+        """La sección «Revisar» sale sin haber pedido nada más."""
+        reporte = ValidationReport(
+            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pages=[
+                _page(1, "2147300", "HP-1534CMP"),
+                _page(2, "2147301", None),
+            ],
+        )
+        run_dir = Path(tempfile.mkdtemp())
+        ruta = escribir_pdf_unico(
+            [reporte], run_dir, ["avion"], None, dpi=100
+        )
+        import pymupdf as fitz
+
+        doc = fitz.open(str(ruta))
+        # 2 escaneos + separador del avión + separador de revisión
+        self.assertEqual(doc.page_count, 4)
+        self.assertEqual(doc.load_page(0).get_text().strip(), "HP-1534CMP")
+        self.assertEqual(doc.load_page(2).get_text().strip(), "REVISAR")
+        doc.close()
+
+    def test_pdf_unico_sin_criterios_tambien_separa_revisar(self):
+        reporte = ValidationReport(
+            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pages=[
+                _page(1, "2147300", "HP-1534CMP"),
+                _page(2, "2147301", None),
+            ],
+        )
+        run_dir = Path(tempfile.mkdtemp())
+        ruta = escribir_pdf_unico([reporte], run_dir, [], None, dpi=100)
+        import pymupdf as fitz
+
+        doc = fitz.open(str(ruta))
+        self.assertEqual(doc.page_count, 3)
+        self.assertEqual(doc.load_page(1).get_text().strip(), "REVISAR")
+        doc.close()
+
+    def test_varios_pdf_escriben_revisar_pdf(self):
+        reporte = ValidationReport(
+            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pages=[
+                _page(1, "2147300", "HP-1534CMP"),
+                _page(2, "2147301", None),
+            ],
+        )
+        run_dir = Path(tempfile.mkdtemp())
+        rutas = generar_pdfs([reporte], run_dir, ["avion"], None, dpi=100)
+        self.assertEqual([ruta.name for ruta in rutas],
+                         ["HP-1534CMP.pdf", "revisar.pdf"])
 
     def test_pdf_unico_plano_sin_divisores(self):
         reporte = ValidationReport(

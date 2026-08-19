@@ -122,6 +122,46 @@ def find_csv_files(folder: Path) -> list[Path]:
     return sorted(set(found), key=lambda path: str(path).casefold())
 
 
+def _holds_csv(folder: Path) -> bool:
+    """¿Hay algún CSV suelto en esta carpeta? Sin entrar en las de dentro."""
+    try:
+        return any(
+            path.is_file() and path.suffix.lower() == ".csv"
+            for path in Path(folder).iterdir()
+        )
+    except OSError:
+        return False
+
+
+def find_run_dirs(root: Path, limit: int | None = None) -> list[Path]:
+    """Corridas guardadas en ``root``, de la más reciente a la más antigua.
+
+    Una corrida es una carpeta con su reporte dentro: en ``datos/`` las
+    actuales y en la propia carpeta las históricas. Lo demás que vive junto a
+    ellas —los logs, los recortes de firmas— no es una corrida y no aparece.
+    El recorrido se queda en el primer nivel de cada carpeta: recorrerlas
+    enteras solo para saber si son corridas costaría más que abrir la que se
+    elija.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return []
+    runs = [
+        path
+        for path in root.iterdir()
+        if path.is_dir() and (_holds_csv(path / "datos") or _holds_csv(path))
+    ]
+
+    def recency(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    runs.sort(key=lambda path: (recency(path), path.name.casefold()), reverse=True)
+    return runs[:limit] if limit else runs
+
+
 def read_csv_file(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     """Lee un CSV generado por la aplicación sin escribir sobre él."""
     with Path(path).open("r", newline="", encoding="utf-8-sig") as handle:

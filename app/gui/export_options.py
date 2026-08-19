@@ -49,7 +49,10 @@ class ExportOptionsGroup(QGroupBox):
         )
         self.modo_grupo.addButton(self.radio_varios)
         self.modo_grupo.addButton(self.radio_unico)
-        self.radio_varios.setChecked(True)
+        # La entrega habitual es un único PDF separado por matrícula: es lo
+        # que se marcaba a mano en cada corrida. El mes no entra porque
+        # subdivide de más una entrega que ya va por avión.
+        self.radio_unico.setChecked(True)
         formato_row.addWidget(self.radio_varios)
         formato_row.addWidget(self.radio_unico)
         formato_row.addStretch()
@@ -62,6 +65,7 @@ class ExportOptionsGroup(QGroupBox):
         sep_row.addWidget(sep_label)
         sep_row.addSpacing(8)
         self.matricula_check = QCheckBox("Matrícula")
+        self.matricula_check.setChecked(True)
         self.matricula_check.setToolTip(
             "Varios PDF: un archivo por matrícula. "
             "Un solo PDF: página separadora por matrícula."
@@ -73,7 +77,10 @@ class ExportOptionsGroup(QGroupBox):
         )
         sep_row.addWidget(self.mes_check)
 
-        self.discrepancias_check = QCheckBox("Discrepancias")
+        # El nombre es el del apartado que sale en el PDF: lo que se marca
+        # es una sospecha de firma distinta, no una discrepancia confirmada.
+        self.discrepancias_check = QCheckBox("Posibles discrepancias")
+        self.discrepancias_check.setChecked(True)
         self.discrepancias_check.setToolTip(
             "Un solo PDF: agrega al final una sección 'Posibles "
             "discrepancias'. Varios PDF: genera discrepancias.pdf."

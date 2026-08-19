@@ -33,6 +33,7 @@ from PySide6.QtGui import (
     QIntValidator,
     QKeySequence,
     QPainter,
+    QPalette,
     QPen,
     QPixmap,
     QShortcut,
@@ -85,9 +86,12 @@ from app.gui.table_sort import ColumnSortController
 from app.gui.widgets import (
     APP_CHROME_QSS,
     DATA_TABLE_QSS,
+    ICON_SIZE,
+    TABLE_RADIUS,
     ElidedLabel,
     ZoomableScrollArea,
     ZoomOverlay,
+    load_icon,
     style_data_table,
 )
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
@@ -100,7 +104,11 @@ from app.utils.important_fields import (
     ImportantFieldsStore,
     default_important_columns,
 )
-from app.utils.io import send_to_trash
+from app.utils.io import (
+    PROCESSED_DIRNAME,
+    archive_processed_files,
+    send_to_trash,
+)
 from app.validation.duplicates import DuplicateLogPage, detect_duplicate_log_pages
 
 SCRIPT_DIR = Path(__file__).resolve().parents[2]
@@ -760,6 +768,15 @@ class MainWindow(QMainWindow):
             return 1
         return 2 if width >= self._two_column_width else 1
 
+    def _button_text_color(self) -> QColor:
+        """Color con el que el estilo escribe el texto de los botones.
+
+        Windows lo cambia con el tema del sistema, así que se pregunta en vez
+        de fijarlo: es el único color de la fila de botones que no sale de las
+        constantes de la aplicación.
+        """
+        return self.palette().color(QPalette.ColorRole.ButtonText)
+
     def _build_input_group(self) -> QGroupBox:
         group = QGroupBox("Entrada")
         grid = QGridLayout(group)
@@ -788,13 +805,26 @@ class MainWindow(QMainWindow):
         grid.addWidget(btn_input, 0, 3)
 
         btn_clear_input = QPushButton("Vaciar input")
+        # Los dos botones que mandan archivos a la Papelera llevan el mismo
+        # dibujo: es la única acción de la fila que borra algo y así se
+        # distingue de «Detectar» o «Seleccionar» sin leer el texto. Va del
+        # color del texto del botón para que se lea con el tema claro y con
+        # el oscuro, y para que no cante al lado de la palabra.
+        trash_icon = load_icon("trash", self._button_text_color())
+        btn_clear_input.setObjectName("iconButton")
+        btn_clear_input.setIcon(trash_icon)
+        btn_clear_input.setIconSize(ICON_SIZE)
         btn_clear_input.setToolTip(
-            "Mover todos los archivos de input/ a la Papelera de reciclaje"
+            "Mover todos los archivos de input/ a la Papelera de reciclaje. "
+            "Los ya procesados, que están en input/processed, se conservan"
         )
         btn_clear_input.clicked.connect(self._clear_input_folder)
         grid.addWidget(btn_clear_input, 0, 4)
 
         self.btn_clear_output = QPushButton("Vaciar output")
+        self.btn_clear_output.setObjectName("iconButton")
+        self.btn_clear_output.setIcon(trash_icon)
+        self.btn_clear_output.setIconSize(ICON_SIZE)
         self.btn_clear_output.setToolTip(
             "Mover todas las corridas de output/ a la Papelera de reciclaje"
         )
@@ -822,7 +852,8 @@ class MainWindow(QMainWindow):
 
         self.btn_csv_viewer = QPushButton("Visor de CSV…")
         self.btn_csv_viewer.setToolTip(
-            "Abrir una ventana independiente para consultar una corrida procesada"
+            "Abrir una ventana independiente con el historial de corridas "
+            "procesadas y sus CSV"
         )
         self.btn_csv_viewer.clicked.connect(self._open_csv_viewer)
         grid.addWidget(self.btn_csv_viewer, 1, 4)
@@ -1216,7 +1247,8 @@ class MainWindow(QMainWindow):
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(0, 0)
         self.preview_label.setStyleSheet(
-            "border: 1px solid #bbb; background: transparent;"
+            f"border: 1px solid #bbb; border-radius: {TABLE_RADIUS}px;"
+            " background: transparent;"
         )
         self.preview_label.setAccessibleName("Vista previa de la página")
 
@@ -1374,6 +1406,13 @@ class MainWindow(QMainWindow):
         self.csv_columns_toggle = CsvColumnModeButton()
         self.csv_columns_toggle.setEnabled(False)
         self.csv_columns_toggle.setVisible(False)
+        # Oculto no debe encoger la fila: sin esto, la barra de abajo de la
+        # tabla queda mas baja que la de la vista previa (que siempre tiene
+        # botones) y el panel derecho se ve mas corto que el izquierdo hasta
+        # que se procesa un lote.
+        toggle_policy = self.csv_columns_toggle.sizePolicy()
+        toggle_policy.setRetainSizeWhenHidden(True)
+        self.csv_columns_toggle.setSizePolicy(toggle_policy)
         self.csv_columns_toggle.toggled.connect(self._apply_csv_table_view)
         table_controls.addWidget(self.csv_columns_toggle)
         table_layout.addLayout(table_controls)
@@ -2888,10 +2927,77 @@ class MainWindow(QMainWindow):
             )
             logger.info(f"Corrida cancelada guardada (datos sin PDF) en: {output_dir}")
         else:
+            # Los archivos ya dieron todo lo que tenían que dar: el OCR está
+            # hecho y las salidas escritas. Se apartan aquí, no al terminar el
+            # OCR, porque generar los PDFs vuelve a abrir cada original.
+            self._archive_processed_inputs()
             self.status_label.setText(
                 "Procesamiento terminado. Puede cambiar la separación y exportar."
             )
             logger.info(f"Outputs generados en: {output_dir}")
+
+    def _archive_processed_inputs(self) -> None:
+        """Saca de input/ los PDF de la corrida que acaba de terminar.
+
+        La entrada queda con lo que falta por procesar y nada más; lo hecho
+        se guarda en ``input/processed``. La ventana sigue apuntando a los
+        archivos allí, así que la vista previa y volver a exportar siguen
+        funcionando sin que el usuario tenga que buscarlos.
+        """
+        moved, failed = archive_processed_files(
+            [Path(report.pdf_path) for report in self._reports],
+            SCRIPT_DIR / "input",
+        )
+        for path, error in failed:
+            logger.warning(
+                f"No se pudo apartar {path.name} a "
+                f"input/{PROCESSED_DIRNAME}: {error}"
+            )
+        if not moved:
+            return
+        self._remap_document_paths(moved)
+        logger.info(
+            f"{len(moved)} archivo(s) apartados en input/{PROCESSED_DIRNAME}"
+        )
+
+    def _remap_document_paths(self, moved: dict[Path, Path]) -> None:
+        """Reapunta a su nueva ruta todo lo que la ventana guarda por archivo.
+
+        Los resultados, la vista previa y las filas de la tabla se identifican
+        por la ruta del PDF. Sin actualizarlas, apartar los archivos dejaría
+        la vista previa en blanco y el re-export buscando donde ya no hay nada.
+        """
+        by_key = {
+            self._document_key(source): destination
+            for source, destination in moved.items()
+        }
+
+        def relocated(path) -> Path:
+            return by_key.get(self._document_key(path), Path(path))
+
+        for report in self._reports:
+            report.pdf_path = str(relocated(report.pdf_path))
+        self._pdf_paths = [relocated(path) for path in self._pdf_paths]
+        self._row_pdfs = [relocated(path) for path in self._row_pdfs]
+        self._preview_results = {
+            (str(relocated(path).resolve()), page): result
+            for (path, page), result in self._preview_results.items()
+        }
+        self._preprocess_geometry = {
+            (str(relocated(path)), page): geometry
+            for (path, page), geometry in self._preprocess_geometry.items()
+        }
+        if self._preview_pdf is not None:
+            self._preview_pdf = relocated(self._preview_pdf)
+        # Los recuentos de páginas ya están hechos y no cambian al mover el
+        # archivo: se reutilizan para no reabrir el lote entero. Si de alguno
+        # no se sabe, se dejan contar todos: un cero se leería como un PDF sin
+        # páginas y dejaría ese documento sin paginación.
+        documents = [Path(report.pdf_path) for report in self._reports]
+        counts = [self._known_page_count(path) for path in documents]
+        self._set_preview_documents(
+            documents, counts if all(counts) else None
+        )
 
     def _on_outputs_failed(self, message: str) -> None:
         """Registra un error de salidas sin interrumpir la interfaz."""
