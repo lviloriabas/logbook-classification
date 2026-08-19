@@ -115,13 +115,13 @@ def test_cada_parte_lleva_su_numero_en_el_nombre_del_lote(tmp_path):
     """Los lotes se localizan por nombre; dos iguales no se distinguirian."""
     csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
     partes = comprobar_entrega(csv)
-    assert partes[0].nombre_lote("DP | BIT") == "DP | BIT (1 de 2)"
-    assert partes[1].nombre_lote("DP | BIT") == "DP | BIT (2 de 2)"
+    assert partes[0].nombre_lote("DP | BITS") == "DP | BITS -1"
+    assert partes[1].nombre_lote("DP | BITS") == "DP | BITS -2"
 
 
 def test_una_sola_parte_no_lleva_sufijo(tmp_path):
     csv = corrida(tmp_path)
-    assert comprobar_entrega(csv)[0].nombre_lote("DP | BIT") == "DP | BIT"
+    assert comprobar_entrega(csv)[0].nombre_lote("DP | BITS") == "DP | BITS"
 
 
 def test_sin_pdf_no_hay_nada_que_subir(tmp_path):
@@ -214,7 +214,7 @@ def test_preparar_deja_el_manifiesto_en_disco(tmp_path):
 def test_el_lote_se_llama_como_la_corrida_si_no_se_dice_otra_cosa(tmp_path):
     csv = corrida(tmp_path)
     trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv)
-    assert trabajo.manifiesto.nombre_batch == "DP | BIT 18 AUG 2026 05 42"
+    assert trabajo.manifiesto.nombre_batch == "DP | BITS 18 AUG 2026 05 42"
 
 
 def test_un_csv_sin_bitacoras_no_arma_trabajo(tmp_path):
@@ -247,7 +247,7 @@ def test_otra_corrida_en_la_misma_carpeta_rehace_el_trabajo(tmp_path):
     rehecho = Trabajo.abrir_o_preparar(AirVaultConfig(), tmp_path / "job",
                                        segunda)
     assert rehecho.manifiesto.registros[0].estado is EstadoRegistro.PENDIENTE
-    assert rehecho.manifiesto.nombre_batch == "DP | BIT 19 AUG 2026 06 10"
+    assert rehecho.manifiesto.nombre_batch == "DP | BITS 19 AUG 2026 06 10"
 
 
 # ── subida ─────────────────────────────────────────────────────────

@@ -257,6 +257,7 @@ def leer_indice_paginas(path: Path | str) -> List[dict]:
         ]
         if paginas:
             partes.append({"pdf": str(parte.get("pdf", "")),
+                           "revisar": bool(parte.get("revisar", False)),
                            "paginas": paginas})
     return partes
 

@@ -520,11 +520,38 @@ class EntradaPdf:
         return self.ref is None
 
 
+@dataclass(frozen=True)
+class ArchivoDeEntrega:
+    """Un archivo de la entrega con lo que lleva dentro.
+
+    ``revisar`` marca el que recoge las bitácoras sin avión confirmado. Va
+    aparte porque en AirVault cada archivo es un lote, y ese no se indexa:
+    se sube para que alguien lo resuelva a mano.
+    """
+
+    ruta: Path
+    paginas: List[EntradaPdf]
+    revisar: bool = False
+
+
+def secuencia_de_revisar(
+    reports: Sequence[ValidationReport],
+) -> List[EntradaPdf]:
+    """Bitácoras sin avión confirmado, bajo su separador."""
+    refs = paginas_para_revisar(reports)
+    if not refs:
+        return []
+    return [EntradaPdf(separador=ETIQUETA_REVISAR)] + [
+        EntradaPdf(ref=ref) for ref in refs
+    ]
+
+
 def secuencia_pdf_unico(
     reports: Sequence[ValidationReport],
     separar_por: Sequence[str] = (),
     excluidas: Optional[set[Tuple[str, int]]] = None,
     discrepancias_al_final: bool = False,
+    incluir_revisar: bool = True,
 ) -> List[EntradaPdf]:
     """Páginas del PDF único en el orden exacto en que se escriben.
 
@@ -555,10 +582,8 @@ def secuencia_pdf_unico(
             secuencia.append(EntradaPdf(separador="POSIBLES DISCREPANCIAS"))
             secuencia.extend(EntradaPdf(ref=ref) for ref in discrepantes)
 
-    revisar = paginas_para_revisar(reports)
-    if revisar:
-        secuencia.append(EntradaPdf(separador=ETIQUETA_REVISAR))
-        secuencia.extend(EntradaPdf(ref=ref) for ref in revisar)
+    if incluir_revisar:
+        secuencia.extend(secuencia_de_revisar(reports))
 
     # Un separador sin ninguna bitácora detrás no llega a escribirse: la
     # divisoria toma su tamaño de la página que la sigue.
@@ -648,19 +673,21 @@ def partir_secuencia(
 
 
 def nombre_de_parte(base: str, indice: int, total: int) -> str:
-    """Nombre de una parte: ``<base> (2 de 5)``, o ``<base>`` si va sola.
+    """Nombre del archivo de una parte: ``<base> -2``, o ``<base>`` si va sola.
 
-    El sufijo no es decoracion. Cada parte es un lote distinto en AirVault y
-    los lotes se localizan por nombre; dos con el mismo nombre no habria
-    forma de distinguirlos.
+    El sufijo no es decoración. Cada archivo es un lote distinto en AirVault
+    y los lotes se localizan por nombre; dos con el mismo no habría forma de
+    distinguirlos. Tiene que coincidir con el sufijo que
+    ``app.airvault.naming`` le pone al nombre del lote, y hay una prueba que
+    lo comprueba.
     """
     if total <= 1:
         return base
-    return f"{base} ({indice} de {total})"
+    return f"{base} -{indice}"
 
 
 def escribir_indice_paginas(
-    partes: Sequence[Tuple[Path, Sequence[EntradaPdf]]], destino: Path
+    partes: Sequence[ArchivoDeEntrega], destino: Path
 ) -> Path:
     """Deja escrito qué hay en cada página de cada PDF de entrega.
 
@@ -674,8 +701,9 @@ def escribir_indice_paginas(
     ruta.write_text(
         json.dumps(
             {"version": 2, "partes": [
-                {"pdf": Path(archivo).name, "paginas": _paginas_json(tramo)}
-                for archivo, tramo in partes
+                {"pdf": archivo.ruta.name, "revisar": archivo.revisar,
+                 "paginas": _paginas_json(archivo.paginas)}
+                for archivo in partes
             ]},
             indent=2, ensure_ascii=False,
         ),
@@ -725,11 +753,11 @@ def escribir_pdf_unico(
     """
     escritas = escribir_entrega(
         reports, run_dir, separar_por, excluidas, dpi,
-        discrepancias_al_final,
+        discrepancias_al_final, revisar_aparte=False,
     )
     if not escritas:
         return Path(run_dir) / f"{Path(run_dir).name}.pdf"
-    return escritas[0][0]
+    return escritas[0].ruta
 
 
 def escribir_entrega(
@@ -740,7 +768,8 @@ def escribir_entrega(
     dpi: int = 150,
     discrepancias_al_final: bool = False,
     paginas_por_parte: int = 0,
-) -> List[Tuple[Path, List[EntradaPdf]]]:
+    revisar_aparte: bool = True,
+) -> List[ArchivoDeEntrega]:
     """Escribe la entrega y devuelve cada archivo con lo que lleva dentro.
 
     Con ``paginas_por_parte`` en cero sale un solo PDF, como siempre. Con un
@@ -748,38 +777,59 @@ def escribir_entrega(
     una en su archivo: una corrida entera son casi dos gigas y ochocientas
     páginas, que en AirVault forman un lote incómodo de subir y de revisar.
 
-    Devuelve pares de ruta y secuencia porque el nombre definitivo solo se
-    conoce después de escribir —un archivo que ya existía obliga a añadir
-    sufijo— y el índice de páginas tiene que nombrar el archivo real.
+    Con ``revisar_aparte`` las bitácoras sin avión confirmado cierran en su
+    propio archivo en vez de al final del último. En AirVault cada archivo
+    es un lote, y esas páginas no se pueden indexar: sueltas dentro de un
+    lote de cuatrocientas quedan bloqueadas donde nadie las encuentra.
+
+    Devuelve el nombre definitivo de cada archivo porque solo se conoce
+    después de escribir —uno que ya existía obliga a añadir sufijo— y el
+    índice de páginas tiene que nombrar el archivo real.
     """
     del dpi  # las páginas se copian sin rasterizar
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    secuencia = secuencia_pdf_unico(
-        reports, separar_por, excluidas, discrepancias_al_final
+    principal = secuencia_pdf_unico(
+        reports, separar_por, excluidas, discrepancias_al_final,
+        incluir_revisar=not revisar_aparte,
     )
-    if not secuencia:
+    revisar = secuencia_de_revisar(reports) if revisar_aparte else []
+    if not principal and not revisar:
         logger.info(
             f"[Organize] No hay páginas para exportar: {run_dir.name}"
         )
         return []
 
-    partes = partir_secuencia(secuencia, paginas_por_parte)
-    fuentes = [e.ref.pdf_path for e in secuencia if e.ref is not None]
-    escritas: List[Tuple[Path, List[EntradaPdf]]] = []
+    partes = partir_secuencia(principal, paginas_por_parte)
+    fuentes = [
+        e.ref.pdf_path
+        for e in list(principal) + list(revisar) if e.ref is not None
+    ]
+    escritas: List[ArchivoDeEntrega] = []
     with PdfDocumentCache(fuentes) as sources:
         for indice, tramo in enumerate(partes, start=1):
             nombre = nombre_de_parte(run_dir.name, indice, len(partes))
             destino = unique_path(run_dir / f"{nombre}.pdf")
             _escribir_documento(destino, tramo, sources)
-            escritas.append((destino, tramo))
-    if len(escritas) == 1:
-        logger.info(f"[Organize] PDF único generado: {escritas[0][0]}")
-    else:
+            escritas.append(ArchivoDeEntrega(destino, tramo))
+        if revisar:
+            destino = unique_path(
+                run_dir / f"{run_dir.name} {ETIQUETA_REVISAR}.pdf"
+            )
+            _escribir_documento(destino, revisar, sources)
+            escritas.append(ArchivoDeEntrega(destino, revisar, revisar=True))
+    if len(partes) > 1:
         logger.info(
-            f"[Organize] Entrega repartida en {len(escritas)} partes de "
+            f"[Organize] Entrega repartida en {len(partes)} partes de "
             f"hasta {paginas_por_parte} páginas"
+        )
+    elif partes:
+        logger.info(f"[Organize] PDF único generado: {escritas[0].ruta}")
+    if revisar:
+        logger.info(
+            f"[Organize] {len(revisar) - 1} bitácoras sin avión confirmado "
+            f"en {escritas[-1].ruta.name}"
         )
     return escritas
 

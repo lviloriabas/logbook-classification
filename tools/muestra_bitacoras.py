@@ -189,11 +189,12 @@ def main() -> int:
     print(f"Corrida de prueba en {salida}")
     print(f"  CSV:     datos/{salida.name}.CSV  ({len(muestra)} bitacoras)")
     print(f"  Indice:  datos/{salida.name}{NOMBRE_INDICE_PAGINAS}")
-    for ruta, tramo in partes:
-        divisorias = sum(1 for e in tramo if e.es_separador)
-        print(f"  Entrega: {ruta.name}  ({len(tramo)} paginas, "
-              f"{divisorias} separadoras, "
-              f"{ruta.stat().st_size / 1_048_576:.1f} MB)")
+    for archivo in partes:
+        divisorias = sum(1 for e in archivo.paginas if e.es_separador)
+        marca = " [para indexar a mano]" if archivo.revisar else ""
+        print(f"  Entrega: {archivo.ruta.name}  "
+              f"({len(archivo.paginas)} paginas, {divisorias} separadoras, "
+              f"{archivo.ruta.stat().st_size / 1_048_576:.1f} MB){marca}")
     print("\nPaginas tomadas del original:")
     for numero, fila in enumerate(muestra, start=1):
         print(f"  {numero:2d} <- pagina {fila['page']:>4}  "

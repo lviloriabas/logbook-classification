@@ -171,8 +171,16 @@ avance sobre el total de la corrida.
 5. Pulse **Ver reporte…** y revise las páginas bloqueadas.
 6. Pulse **Indexar**. El avance sale por la barra de la ventana.
 
-Las páginas separadoras del PDF —la matrícula de cada grupo, **POSIBLES
-DISCREPANCIAS**, **REVISAR**— ocupan su página en el lote y no se indexan.
+Las páginas separadoras del PDF —la matrícula de cada grupo y **POSIBLES
+DISCREPANCIAS**— ocupan su página en el lote y no se indexan.
+
+Las bitácoras sin matrícula confirmada salen en un archivo aparte y forman
+su propio lote, `… REVISAR`. Ese lote se sube pero no se indexa: queda en la
+cola del Web Index, a la vista, para resolverlo a mano.
+
+Los lotes se llaman como la corrida, en mayúsculas y con la fecha y hora del
+procesamiento: `DP | BITS 18 AUG 2026 05 42`, y `-1`, `-2`… si la entrega se
+repartió.
 
 Si el trabajo se corta, vuelva a pulsar **Subir y revisar**: las páginas ya
 escritas no se repiten y el PDF no se vuelve a subir.

@@ -254,7 +254,7 @@ def write_outputs(
                 discrepancias_al_final=options.discrepancias,
                 paginas_por_parte=options.paginas_por_parte,
             )
-            pdf_paths = [ruta for ruta, _tramo in partes]
+            pdf_paths = [archivo.ruta for archivo in partes]
             # El indexado en AirVault empareja cada PDF con el CSV por
             # posición, y los PDF llevan separadores que el CSV no tiene: se
             # deja escrito qué hay en cada página de cada archivo.

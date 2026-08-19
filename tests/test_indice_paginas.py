@@ -14,8 +14,10 @@ from pathlib import Path
 
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.reports.organize import (
+    ArchivoDeEntrega,
     ETIQUETA_REVISAR,
     escribir_indice_paginas,
+    secuencia_de_revisar,
     secuencia_pdf_unico,
 )
 
@@ -73,6 +75,22 @@ def test_las_paginas_sin_matricula_cierran_bajo_revisar():
     assert etiquetas(secuencia_pdf_unico([reporte])) == [1, ETIQUETA_REVISAR, 2]
 
 
+def test_revisar_puede_quedar_fuera_de_la_secuencia_principal():
+    """Va a su propio archivo, que en AirVault sera su propio lote."""
+    reporte = _reporte(
+        _page(1, "2147337", "HP-1534CMP"),
+        _page(2, "2147338", None),
+    )
+    principal = secuencia_pdf_unico([reporte], incluir_revisar=False)
+    assert etiquetas(principal) == [1]
+    assert etiquetas(secuencia_de_revisar([reporte])) == [ETIQUETA_REVISAR, 2]
+
+
+def test_sin_paginas_sin_matricula_no_hay_archivo_de_revisar():
+    reporte = _reporte(_page(1, "2147337", "HP-1534CMP"))
+    assert secuencia_de_revisar([reporte]) == []
+
+
 def test_las_discrepancias_van_al_final_con_su_separador():
     reporte = _reporte(
         _page(1, "2147337", "HP-1534CMP"),
@@ -117,7 +135,7 @@ def test_el_indice_describe_separadores_y_bitacoras(tmp_path):
         _page(2, "2147338", None),
     )
     destino = escribir_indice_paginas(
-        [(Path("corrida.pdf"), secuencia_pdf_unico([reporte]))],
+        [ArchivoDeEntrega(Path("corrida.pdf"), secuencia_pdf_unico([reporte]))],
         tmp_path / "corrida_paginas.json",
     )
     datos = json.loads(Path(destino).read_text(encoding="utf-8"))
@@ -140,16 +158,30 @@ def test_el_indice_nombra_cada_parte_con_su_archivo(tmp_path):
     )
     secuencia = secuencia_pdf_unico([reporte])
     destino = escribir_indice_paginas(
-        [(Path("corrida (1 de 2).pdf"), secuencia[:1]),
-         (Path("corrida (2 de 2).pdf"), secuencia[1:])],
+        [ArchivoDeEntrega(Path("corrida -1.pdf"), secuencia[:1]),
+         ArchivoDeEntrega(Path("corrida -2.pdf"), secuencia[1:])],
         tmp_path / "corrida_paginas.json",
     )
     datos = json.loads(Path(destino).read_text(encoding="utf-8"))
 
     assert [p["pdf"] for p in datos["partes"]] == [
-        "corrida (1 de 2).pdf", "corrida (2 de 2).pdf"
+        "corrida -1.pdf", "corrida -2.pdf"
     ]
     assert [len(p["paginas"]) for p in datos["partes"]] == [1, 1]
+
+
+def test_el_indice_marca_cual_es_el_lote_de_revisar(tmp_path):
+    """Sin la marca, el indexado escribiria en las que nadie pudo asignar."""
+    reporte = _reporte(_page(1, "2147337", "HP-1534CMP"), _page(2, "x", None))
+    principal = secuencia_pdf_unico([reporte], incluir_revisar=False)
+    revisar = secuencia_de_revisar([reporte])
+    destino = escribir_indice_paginas(
+        [ArchivoDeEntrega(Path("corrida.pdf"), principal),
+         ArchivoDeEntrega(Path("corrida REVISAR.pdf"), revisar, revisar=True)],
+        tmp_path / "corrida_paginas.json",
+    )
+    datos = json.loads(Path(destino).read_text(encoding="utf-8"))
+    assert [p["revisar"] for p in datos["partes"]] == [False, True]
 
 
 def test_el_indice_se_escribe_aunque_no_exista_la_carpeta(tmp_path):

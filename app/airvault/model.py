@@ -108,6 +108,9 @@ class Manifiesto(BaseModel):
     pdf_origen: str = ""
     parte: int = 1
     partes: int = 1
+    # El lote se sube pero no se indexa: recoge las bitacoras sin avion
+    # confirmado, que nadie puede archivar sin mirarlas una por una.
+    solo_subir: bool = False
 
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"

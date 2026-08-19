@@ -137,6 +137,12 @@ class Indexador:
         registros = self.manifiesto.registros
         verificar_cantidad(registros, paginas_lote)
 
+        if self.manifiesto.solo_subir:
+            # El lote esta subido para que alguien lo resuelva a mano. No se
+            # lee ni se escribe: leerlo serian peticiones de mas y escribirlo
+            # es justo lo que no se puede hacer sin mirar la bitacora.
+            return self._plan_para_revisar(registros)
+
         globales: List[Aviso] = []
         globales.extend(verificar_matriculas(registros, self.picklist))
         globales.extend(verificar_duplicados(registros))
@@ -223,6 +229,21 @@ class Indexador:
         plan.avisos_globales = [
             a for a in globales if a.seq not in {p.seq for p in plan.paginas}
         ]
+        return plan
+
+    def _plan_para_revisar(self, registros) -> Plan:
+        """Plan de un lote que se sube pero no se indexa."""
+        plan = Plan(batch_id=self.manifiesto.batch_id or "")
+        for indice, registro in enumerate(registros, start=1):
+            avisos = [] if registro.es_separador else [Aviso(
+                registro.seq, "revisar_a_mano",
+                "sin avion confirmado; se indexa a mano en AirVault",
+            )]
+            plan.paginas.append(PlanPagina(
+                seq=registro.seq,
+                pagina_batch=registro.pagina_batch or indice,
+                registro=registro, valores={}, avisos=avisos,
+            ))
         return plan
 
     def _aprender_flota(self, remotas) -> None:
