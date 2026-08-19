@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -414,25 +414,207 @@ def _matricula(value: str) -> Tuple[str, str]:
     return f"HP-{numero}{sufijo}", note
 
 
+# ── Número de vuelo ────────────────────────────────────────────────────
+# El casillero de vuelo no tiene un formato fijo. Escrito a mano trae un
+# vuelo numerado (``CM`` y tres cifras, o solo las cifras) o una de las
+# palabras cortas que usa el mantenimiento. Comparado contra los escaneos, el
+# reconocedor casi nunca se equivoca de forma: se equivoca en una letra
+# (``Tek``, ``TLK``, ``TCB`` son TCK) o confunde una cifra manuscrita con una
+# letra (``7S8`` es 758, ``CMIO3`` es CM103). Por eso la lectura se ajusta a
+# la palabra más parecida o se reconstruye alrededor de las cifras, y lo que
+# no encaja en ninguna de las dos formas se deja vacío: un valor inventado en
+# el CSV cuesta más que una celda por indexar a mano.
+FLIGHT_CODES = ("TCK", "CCK", "SPV", "SVC", "SV")
+FLIGHT_PREFIX = "CM"
+FLIGHT_FUZZY_NOTE = "flight number matched against the logbook vocabulary"
+_FLIGHT_LABEL_RE = re.compile(r"\b(?:FLT|FLIGHT|NO|CHECK)\b")
+# Letras que el reconocedor devuelve en lugar de una cifra manuscrita.
+_FLIGHT_LETTER_TO_DIGIT = {
+    **{char.upper(): digit
+       for char, digit in _OCR_LETTER_TO_DIGIT_DICT.items()},
+    # El 1 sin base se lee como L y el 4 con la cabeza abierta como Y:
+    # "cmloy" es CM104 y "73y" es 734.
+    "L": "1",
+    "Y": "4",
+    # El 7 va con travesaño y vuelve como T o como F, igual que en la
+    # matrícula ("cMTSO" es CM750).
+    "T": "7",
+    "F": "7",
+}
+# Detrás de un ``CM`` leído entero no puede haber letras: lo que sigue es el
+# número. Ahí valen además las confusiones que en cualquier otro sitio serían
+# ambiguas —la A de "CMPBA3" (CM843) es un 4, pero la de "A123" es el
+# prefijo del vuelo—.
+_FLIGHT_TAIL_TO_DIGIT = {
+    **_FLIGHT_LETTER_TO_DIGIT,
+    "A": "4",
+    "D": "0",
+}
+# Estas solo valen como cifra cuando el trazo queda encerrado entre dos
+# números: la C de ``4C2`` es un cero, la de ``CM103`` no.
+_FLIGHT_INNER_LETTER_TO_DIGIT = {"C": "0", "D": "0"}
+# Un vuelo numerado son tres cifras, a veces cuatro. Un tramo más largo ya no
+# es un vuelo: es el número de bitácora que se coló en el recorte.
+_FLIGHT_MIN_DIGITS = 3
+_FLIGHT_MAX_DIGITS = 4
+# ``CM`` leído entero: lo que va detrás es el número del vuelo, sean las
+# tres cifras de siempre o no.
+_FLIGHT_PREFIXED_RE = re.compile(r"CMP?(.{1,4})$")
+
+
+def _flight_code_in(compact: str) -> Optional[str]:
+    """Palabra del vocabulario contenida tal cual en la lectura.
+
+    Se buscan las más largas primero para que ``SVCVISIT`` no se quede en
+    ``SV``. Un dígito pegado detrás forma parte del código (``SV3``); las
+    letras de alrededor son ruido del recorte.
+    """
+    for code in sorted(FLIGHT_CODES, key=len, reverse=True):
+        index = compact.find(code)
+        if index < 0:
+            continue
+        tail = compact[index + len(code):]
+        return f"{code}{tail[0]}" if tail[:1].isdigit() else code
+    return None
+
+
+def _flight_digit_run(compact: str) -> Optional[Tuple[int, str]]:
+    """(posición, cifras) del tramo que puede leerse como número de vuelo.
+
+    Gana el tramo con más cifras de verdad: entre ``BSO`` (ninguna) y
+    ``7S8`` (dos) solo el segundo tiene evidencia de ser un número.
+    """
+    mapped: List[Optional[str]] = []
+    for index, char in enumerate(compact):
+        if char.isdigit():
+            mapped.append(char)
+            continue
+        digit = _FLIGHT_LETTER_TO_DIGIT.get(char)
+        if (
+            digit is None
+            and 0 < index < len(compact) - 1
+            and compact[index - 1].isdigit()
+            and compact[index + 1].isdigit()
+        ):
+            digit = _FLIGHT_INNER_LETTER_TO_DIGIT.get(char)
+        mapped.append(digit)
+
+    best: Optional[Tuple[Tuple[int, int, int], Tuple[int, str]]] = None
+    start = 0
+    while start < len(mapped):
+        if mapped[start] is None:
+            start += 1
+            continue
+        end = start
+        while end < len(mapped) and mapped[end] is not None:
+            end += 1
+        length = end - start
+        real = sum(char.isdigit() for char in compact[start:end])
+        if _FLIGHT_MIN_DIGITS <= length <= _FLIGHT_MAX_DIGITS and real:
+            score = (real, length, start)
+            if best is None or score > best[0]:
+                best = (score, (start, "".join(mapped[start:end])))
+        start = end
+    return best[1] if best else None
+
+
+def _flight_as_digits(text: str) -> Optional[str]:
+    """El tramo entero leído como cifras, o ``None`` si alguna no lo es."""
+    digits = []
+    for char in text:
+        if char.isdigit():
+            digits.append(char)
+            continue
+        digit = _FLIGHT_TAIL_TO_DIGIT.get(char)
+        if digit is None:
+            return None
+        digits.append(digit)
+    return "".join(digits)
+
+
+def _flight_nearest_code(letters: str) -> Optional[str]:
+    """Palabra del vocabulario a una letra de distancia, si no hay empate.
+
+    Un empate no se resuelve: entre dos códigos igual de parecidos, acertar
+    sería suerte y la celda se deja para revisión.
+    """
+    if len(letters) < 2:
+        return None
+    ranked = sorted(
+        (_levenshtein(letters, code), code) for code in FLIGHT_CODES
+    )
+    best = ranked[0][0]
+    if best > 1:
+        return None
+    tied = [code for distance, code in ranked if distance == best]
+    return tied[0] if len(tied) == 1 else None
+
+
 def _flight_number(value: str) -> Tuple[str, str]:
     """Normaliza el número de vuelo manuscrito junto a la matrícula.
 
-    El formulario mezcla códigos cortos (``CM``, ``C``), prefijos con
-    números (``A123``, ``C03``) y vuelos puramente numéricos. Se eliminan
-    separadores y las etiquetas impresas conocidas, pero no se inventan
-    letras o dígitos cuando el OCR no aporta una lectura inequívoca.
+    Se resuelve en este orden:
+
+    1. La lectura contiene una palabra del vocabulario (``TCK``, ``SPV``…):
+       esa palabra es el valor, aunque el recorte traiga números al lado.
+    2. La lectura es solo cifras (hasta cuatro): es un vuelo numerado.
+    3. Hay un tramo de tres o cuatro cifras recuperables: es el número del
+       vuelo. Cualquier letra delante se normaliza a ``CM``, salvo la ``A``,
+       que sí se escribe en el casillero.
+    4. Sin cifras, las letras se ajustan a la palabra más parecida del
+       vocabulario si está a un solo trazo de distancia.
+
+    Lo que no cae en ninguno de los cuatro casos se devuelve vacío.
     """
-    raw = value.upper().strip()
-    raw = re.sub(r"\b(?:FLT|FLIGHT|NO|CHECK)\b", " ", raw)
+    raw = _FLIGHT_LABEL_RE.sub(" ", value.upper())
     compact = re.sub(r"[^A-Z0-9]", "", raw)
     if not compact:
         return "", "empty flight number"
-    if len(compact) > 7:
+
+    code = _flight_code_in(compact)
+    if code is not None:
+        return code, "" if code == compact else FLIGHT_FUZZY_NOTE
+
+    if compact.isdigit():
+        # Un vuelo no es cero: ese trazo es una marca del casillero.
+        if len(compact) <= _FLIGHT_MAX_DIGITS and set(compact) != {"0"}:
+            return compact, ""
         return "", f"invalid flight number: {value}"
-    if re.fullmatch(r"\d{1,4}", compact):
-        return compact, ""
-    if re.fullmatch(r"[A-Z]{1,3}\d{0,4}", compact):
-        return compact, ""
+
+    run = _flight_digit_run(compact)
+    if run is not None:
+        start, digits = run
+        letters = re.sub(r"[^A-Z]", "", compact[:start])
+        if not letters:
+            number = digits
+        elif letters == "A":
+            number = f"A{digits}"
+        else:
+            number = f"{FLIGHT_PREFIX}{digits}"
+        return number, "" if number == compact else FLIGHT_FUZZY_NOTE
+
+    # Un "CM" leído limpio es evidencia por sí solo: lo que va detrás es el
+    # número del vuelo. Lo habitual son tres cifras, pero no se exige la
+    # cifra exacta ni que el reconocedor las devolviera como dígitos: con el
+    # prefijo delante, "CMPlOS" es CM105 y "CM 40" es CM40. Con una o dos
+    # cifras sí se pide al menos un dígito de verdad, porque ahí el tramo es
+    # demasiado corto para distinguirlo de un resto de texto.
+    prefixed = _FLIGHT_PREFIXED_RE.fullmatch(compact)
+    if prefixed is not None:
+        tail = prefixed.group(1)
+        digits = _flight_as_digits(tail)
+        if digits is not None and (
+            len(tail) >= _FLIGHT_MIN_DIGITS
+            or any(char.isdigit() for char in tail)
+        ):
+            return f"{FLIGHT_PREFIX}{digits}", FLIGHT_FUZZY_NOTE
+
+    blocks = re.findall(r"[A-Z]+", compact)
+    nearest = (
+        _flight_nearest_code(max(blocks, key=len)) if blocks else None
+    )
+    if nearest is not None:
+        return nearest, FLIGHT_FUZZY_NOTE
     return "", f"invalid flight number: {value}"
 
 
