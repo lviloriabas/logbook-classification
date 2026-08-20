@@ -21,10 +21,18 @@ import re
 from typing import Dict, Iterable, Mapping
 from urllib.parse import urlsplit
 
-# Cookies que **autentican**. ``FedAuth`` es la de WS-Federation y se parte
-# en ``FedAuth1``, ``FedAuth2``... cuando el token no cabe en una sola, asi
-# que se compara por prefijo.
-PREFIJOS_DE_AUTENTICACION = ("FedAuth", ".ASPXAUTH")
+# Cookies que **autentican**. ``Critical`` es la de AirVault: la pone el
+# sitio al volver de Entra ID y es la unica que abre la sesion, medido
+# pidiendo el listado de lotes con cada cookie por separado. Las otras dos
+# son las formas habituales de ASP.NET —``FedAuth`` se parte en
+# ``FedAuth1``, ``FedAuth2``... cuando el token no cabe en una sola, asi que
+# se compara por prefijo— y se dejan por si otra instalacion las usa.
+#
+# Buscar solo las de ASP.NET dejaba al programa esperando cinco minutos con
+# la sesion ya abierta delante: las cookies estaban, ninguna se llamaba como
+# se esperaba, y el aviso acusaba a la ventana de haberse quedado en la
+# pagina de Microsoft.
+PREFIJOS_DE_AUTENTICACION = ("Critical", "FedAuth", ".ASPXAUTH")
 
 # Cookies que acompanan pero no autentican. ``ASP.NET_SessionId`` lo pone el
 # servidor al primer contacto, antes de saber quien eres: darla por buena

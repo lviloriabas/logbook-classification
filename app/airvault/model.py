@@ -66,6 +66,10 @@ class Registro(BaseModel):
 
     matricula: str = ""
     log_number: str = ""
+    # Numero de vuelo tal como lo dejo la lectura: un vuelo numerado
+    # (``703``, ``CM137``) o un codigo de mantenimiento del vocabulario
+    # (``TCK``, ``SPV``). Va al campo Description de AirVault.
+    flight_number: str = ""
     # Fecha en el formato del CSV de la corrida (YYYY/MM/dd). La conversion
     # al formato de AirVault (m/d/Y) se hace al construir los valores, no
     # aqui, para que el manifiesto se siga leyendo igual que el CSV.
@@ -115,6 +119,11 @@ class Manifiesto(BaseModel):
     # El lote se sube pero no se indexa: recoge las bitacoras sin avion
     # confirmado, que nadie puede archivar sin mirarlas una por una.
     solo_subir: bool = False
+    # Lotes que ya estaban en la cola justo antes de subir. Es lo que
+    # permite reconocer el propio: Quick Upload no deja ponerle nombre al
+    # lote —todos llegan como «Empty-Batch»—, asi que el nombre no
+    # distingue nada y la diferencia con esta lista si.
+    lotes_previos: List[str] = Field(default_factory=list)
 
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"

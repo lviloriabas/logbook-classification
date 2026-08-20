@@ -40,6 +40,8 @@ important_fields.json
 
 .claude/
 .vscode/
+.agents/
 img/
+
 # Cache de flota que arma el indexado de AirVault
 airvault_flota.json

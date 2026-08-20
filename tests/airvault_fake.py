@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Mapping, Optional
 
-from app.airvault.client import PaginaIndexada, ResumenLote
+from app.airvault.client import PaginaDelLote, PaginaIndexada, ResumenLote
 
 
 class ClienteFalso:
@@ -19,17 +19,28 @@ class ClienteFalso:
         picklist: Optional[List[str]] = None,
         page_count: int = 0,
         fallar_en: Optional[set[int]] = None,
+        mapa: Optional[List[PaginaDelLote]] = None,
+        no_se_pueden_borrar: Optional[set[int]] = None,
     ):
         self.paginas = paginas or {}
         self.lotes = lotes or []
         self.picklist = picklist or []
         self.page_count = page_count or len(self.paginas)
         self.fallar_en = fallar_en or set()
+        # Como ve AirVault el lote entero. Sin decir nada, cada pagina es
+        # su propio documento y esta en verde: lo que hace falta para que
+        # el lote se pueda dar por terminado.
+        self.mapa = mapa
+        # Paginas que AirVault no deja quitar: es lo que pasa sin el
+        # permiso «Delete Batch Image».
+        self.no_se_pueden_borrar = no_se_pueden_borrar or set()
+        self.borradas: List[int] = []
         self.escrituras: List[tuple[int, Dict[int, str], int]] = []
         self.filtros: List[str] = []
         self.lecturas: List[int] = []
         self.abiertos: List[str] = []
         self.cerrados: List[str] = []
+        self.completados: List[str] = []
 
     # ── contrato que usa el indexador ──────────────────────────────
 
@@ -67,6 +78,31 @@ class ClienteFalso:
 
     def picklist_matriculas(self) -> List[str]:
         return list(self.picklist)
+
+    def paginas_del_lote(self, batch_id: str) -> List[PaginaDelLote]:
+        if self.mapa is not None:
+            return list(self.mapa)
+        return [
+            PaginaDelLote(pagina=n, estado=0, inicio_documento=n)
+            for n in range(1, (self.page_count or len(self.paginas)) + 1)
+        ]
+
+    def borrar_pagina(self, batch_id: str, pagina: int,
+                      borrada: bool = True) -> bool:
+        if pagina in self.no_se_pueden_borrar:
+            return False
+        self.borradas.append(pagina)
+        if self.mapa is not None:
+            self.mapa = [
+                PaginaDelLote(p.pagina, p.estado, p.inicio_documento, borrada)
+                if p.pagina == pagina else p
+                for p in self.mapa
+            ]
+        return True
+
+    def completar_lote(self, batch_id: str) -> Mapping[str, object]:
+        self.completados.append(batch_id)
+        return {"IsError": False}
 
 
 def pagina(numero: int, estado: int = 3,

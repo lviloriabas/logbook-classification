@@ -40,10 +40,18 @@ from typing import Callable, Dict, List, Optional
 from loguru import logger
 
 from app.airvault import cookies as galletas
+from app.utils.portable import app_root
 
 # Donde vive el perfil que usa el programa. Va en portable/ para que la
 # carpeta entera se pueda copiar a otra maquina con la sesion incluida.
-PERFIL_POR_DEFECTO = Path("portable") / "edge-airvault"
+#
+# La ruta se arma desde la raiz del proyecto y **absoluta**: Chromium
+# descarta un ``--user-data-dir`` relativo sin decir nada y se cierra al
+# instante, asi que el programa veia «Edge se cerro antes de abrir la
+# sesion» y mandaba a pegar la cookie a mano. Ademas la interfaz no siempre
+# corre desde la carpeta del proyecto, y una ruta relativa dejaria el perfil
+# —con la sesion dentro— donde cayera el directorio de trabajo.
+PERFIL_POR_DEFECTO = app_root() / "portable" / "edge-airvault"
 
 _UBICACIONES_EDGE = (
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -67,6 +75,11 @@ _ARGUMENTOS = (
     "--disable-background-networking",
     "--restore-last-session",
 )
+
+
+# Cuanto se le da al navegador para abrir su puerto despues de que el
+# proceso lanzador ya termino. Un perfil recien creado tarda unos segundos.
+_GRACIA_TRAS_LANZADOR_S = 15.0
 
 
 class ErrorDeNavegador(RuntimeError):
@@ -178,6 +191,17 @@ def ruta_de_edge(candidatas=_UBICACIONES_EDGE) -> Path:
     )
 
 
+def _absoluta(perfil: Path | str) -> Path:
+    """Ruta del perfil, siempre absoluta.
+
+    Edge no admite un ``--user-data-dir`` relativo: no lo usa, no avisa y se
+    cierra. Como la ruta puede venir de ``airvault.json``, se normaliza aqui
+    y no solo en el valor por defecto.
+    """
+    ruta = Path(perfil).expanduser()
+    return ruta if ruta.is_absolute() else (app_root() / ruta)
+
+
 def _puerto_libre() -> int:
     """Un puerto que nadie este usando, para no chocar con otra ventana."""
     with socket.socket() as s:
@@ -190,7 +214,7 @@ class SesionDeNavegador:
 
     def __init__(self, perfil: Path, edge: Optional[Path] = None,
                  visible: bool = True):
-        self.perfil = Path(perfil)
+        self.perfil = _absoluta(perfil)
         self.edge = Path(edge) if edge else ruta_de_edge()
         self.visible = visible
         self.puerto = _puerto_libre()
@@ -221,6 +245,15 @@ class SesionDeNavegador:
             orden, stdout=subprocess.DEVNULL, stderr=self._quejas,
         )
         limite = time.monotonic() + espera_s
+        # ``msedge.exe`` no *es* el navegador: entrega el encargo a un proceso
+        # suelto y se va enseguida, con codigo 0 o 21 («ya avise a otro»).
+        # Que el lanzador termine no dice nada, asi que no se puede tomar por
+        # un fallo: dar por muerto al navegador ahi era declarar «Edge se
+        # cerro antes de abrir la sesion» sobre un Edge que estaba
+        # arrancando, y el resultado dependia de cual de los dos ganaba la
+        # carrera. Lo que si vale es que el lanzador se haya ido **y** el
+        # puerto siga mudo un rato despues: eso es que no arranco nadie.
+        gracia: Optional[float] = None
         while time.monotonic() < limite:
             try:
                 with urllib.request.urlopen(
@@ -230,11 +263,16 @@ class SesionDeNavegador:
                     return self._version
             except (urllib.error.URLError, OSError, ValueError):
                 if self._proceso.poll() is not None:
-                    raise ErrorDeNavegador(
-                        f"Edge se cerro antes de abrir la sesion "
-                        f"(codigo {self._proceso.returncode}). "
-                        f"{self._por_que()}"
-                    )
+                    ahora = time.monotonic()
+                    if gracia is None:
+                        gracia = min(ahora + _GRACIA_TRAS_LANZADOR_S, limite)
+                    elif ahora >= gracia:
+                        raise ErrorDeNavegador(
+                            f"Edge no llego a arrancar: el proceso termino "
+                            f"(codigo {self._proceso.returncode}) y nadie "
+                            f"contesto por el puerto de depuracion. "
+                            f"{self._por_que()}"
+                        )
                 time.sleep(0.5)
         raise ErrorDeNavegador(
             f"Edge arranco pero no contesto por su puerto de depuracion en "
@@ -289,19 +327,37 @@ class SesionDeNavegador:
         version = version or self._version
         if version:
             self._pedir_que_se_cierre(version)
+        # Esperar al proceso lanzador no dice nada: hace rato que termino
+        # (ver ``abrir``). Al navegador se le mide por su puerto, que deja de
+        # contestar justo cuando termina de guardar el perfil y suelta el
+        # candado. Eso es lo que hay que ver antes de volver a abrirlo.
+        self._esperar_a_que_se_vaya()
         try:
-            self._proceso.wait(timeout=10)
+            self._proceso.wait(timeout=1)
         except subprocess.TimeoutExpired:
             self._proceso.terminate()
-            try:
-                self._proceso.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._proceso.kill()
         self._proceso = None
         self._version = None
         if self._quejas is not None:
             self._quejas.close()
             self._quejas = None
+
+    def _esperar_a_que_se_vaya(self, espera_s: float = 15.0) -> None:
+        """Espera a que el puerto de depuracion deje de contestar."""
+        limite = time.monotonic() + espera_s
+        while time.monotonic() < limite:
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{self.puerto}/json/version", timeout=2
+                ):
+                    pass
+            except (urllib.error.URLError, OSError, ValueError):
+                return
+            time.sleep(0.5)
+        logger.debug(
+            "Edge sigue contestando en {} despues de pedirle el cierre",
+            self.puerto,
+        )
 
     def _pedir_que_se_cierre(self, version: dict) -> None:
         """Manda ``Browser.close`` por el protocolo y no insiste si falla."""
@@ -347,6 +403,8 @@ def obtener_cookies(
     dormir: Callable[[float], None] = time.sleep,
     reloj: Callable[[], float] = time.monotonic,
     forzar_login: bool = False,
+    confirmar: Optional[Callable[[Dict[str, str]], bool]] = None,
+    espera_perfil_s: float = 25.0,
 ) -> Dict[str, str]:
     """Devuelve las cookies de AirVault, abriendo el navegador si hace falta.
 
@@ -365,12 +423,37 @@ def obtener_cookies(
     # redireccion a Microsoft y, con ella, la cookie que autentica.
     entrada = url_sso or base_url
 
+    def sirven(cookies: Dict[str, str]) -> bool:
+        """Si estas cookies dan una sesion con la que se pueda trabajar.
+
+        Con ``confirmar`` se le pregunta al servidor, que es el unico que lo
+        sabe de verdad: el perfil guarda cookies con la forma correcta
+        mucho despues de que hayan caducado, y darlas por buenas dejaba el
+        trabajo muriendo en la primera peticion.
+        """
+        return bool(cookies) and galletas.sostienen_sesion(cookies) and (
+            confirmar is None or confirmar(cookies)
+        )
+
     if not forzar_login:
+        encontradas: Dict[str, str] = {}
+        listas = False
         with SesionDeNavegador(perfil, edge, visible=False) as navegador:
-            encontradas = _del_dominio(navegador.cookies(
-                navegador.abrir(entrada)
-            ), host)
-        if galletas.sostienen_sesion(encontradas):
+            version = navegador.abrir(entrada)
+            # Las cookies no se leen de golpe: recien abierto, el navegador
+            # todavia esta yendo y volviendo de Microsoft, y lo que hay en
+            # ese instante es lo de la vez anterior —caducado, si paso el
+            # rato—. Esperar a que la sesion sirva es ademas lo que la
+            # renueva sola: el navegador rehace el acceso federado sin que
+            # nadie teclee nada.
+            limite = reloj() + espera_perfil_s
+            while True:
+                encontradas = _del_dominio(navegador.cookies(version), host)
+                listas = sirven(encontradas)
+                if listas or reloj() >= limite:
+                    break
+                dormir(1.0)
+        if listas:
             logger.info("La sesion del perfil de Edge seguia abierta")
             return encontradas
         logger.info(
@@ -388,7 +471,7 @@ def obtener_cookies(
         limite = reloj() + espera_login_s
         while reloj() < limite:
             encontradas = _del_dominio(navegador.cookies(version), host)
-            if galletas.sostienen_sesion(encontradas):
+            if sirven(encontradas):
                 logger.info(
                     "Sesion de AirVault abierta en el navegador: {}",
                     galletas.resumir(encontradas),

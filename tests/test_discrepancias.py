@@ -1,7 +1,8 @@
 """Pruebas de la clasificación de discrepancias (faltas de firma).
 
 Reglas: vuelo requiere piloto + capitán + licencia del capitán;
-mantenimiento (technician_license presente) requiere piloto + técnico.
+mantenimiento (technician_license presente) requiere piloto + técnico,
+y no mira los campos de capitán.
 Una licencia de técnico ilegible deja el tipo de página INCIERTO (no se
 acusan los campos ambiguos). Las lecturas de baja confianza nunca se
 acusan como faltas: categoría UNCERTAIN (revisión manual).
@@ -135,30 +136,23 @@ class TestClasificacion(unittest.TestCase):
         pagina = _mant_ok()
         self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
 
-    def test_mantenimiento_con_firma_de_capitan_es_discrepancia(self):
+    def test_mantenimiento_con_firma_de_capitan_no_es_discrepancia(self):
+        # El formulario F-MNT-001 lleva el bloque de mantenimiento y el de
+        # aceptación de la aeronave —que firma el capitán— en la misma hoja.
+        # Que estén los dos es lo normal: en la ejecución de referencia le
+        # pasa a 114 de las 350 páginas de mantenimiento.
         pagina = _mant_ok(captain_signature=("true", PRESENTE))
-        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
-        self.assertEqual(len(entradas), 1)
-        self.assertIn(
-            "Firma de capitán presente en entrada de mantenimiento",
-            entradas[0].razones(),
-        )
+        self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
 
-    def test_mantenimiento_con_licencia_de_capitan_es_discrepancia(self):
+    def test_mantenimiento_con_licencia_de_capitan_no_es_discrepancia(self):
         pagina = _mant_ok(captain_license=("true", PRESENTE))
-        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
-        self.assertEqual(len(entradas), 1)
-        self.assertIn(
-            "Licencia de capitán presente en entrada de mantenimiento",
-            entradas[0].razones(),
-        )
+        self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
 
-    def test_mantenimiento_con_capitan_dudoso_requiere_revision(self):
+    def test_mantenimiento_no_mira_el_capitan_ni_dudoso(self):
+        # Ni siquiera una lectura dudosa del capitán se acusa: el campo no
+        # entra en los requisitos de una página de mantenimiento.
         pagina = _mant_ok(captain_signature=("false", DUDOSA))
-        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
-        self.assertEqual(len(entradas), 1)
-        self.assertIs(entradas[0].categoria, Categoria.UNCERTAIN)
-        self.assertIn("no se pudo confirmar", entradas[0].razones()[0].lower())
+        self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
 
     def test_licencia_de_tecnico_dudosa_hace_tipo_incierto(self):
         # Una licencia de técnico con confianza baja no identifica

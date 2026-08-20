@@ -368,26 +368,44 @@ def test_el_avance_llega_pagina_a_pagina(tmp_path):
 
 # ── el lote se suelta ──────────────────────────────────────────────
 
-def test_el_lote_se_suelta_al_terminar(tmp_path):
+def test_el_lote_se_suelta_al_terminar_cada_etapa(tmp_path):
     """AirVault admite un solo dueno: quedarselo cuelga la proxima apertura.
 
-    Sin soltarlo, la corrida siguiente —o la persona que abre el lote en el
-    navegador— se encuentra con una peticion que nunca contesta, y el
+    Sin soltarlo, la ejecucion siguiente —o la persona que abre el lote en
+    el navegador— se encuentra con una peticion que nunca contesta, y el
     programa culpaba al navegador de un candado que habia dejado el.
-    """
-    from app.airvault.flujo import cerrar_partes
 
+    Planificar solo lee, asi que suelta en cuanto termina: entre revisar y
+    escribir puede pasar un rato largo, y antes el lote se quedaba tomado
+    todo ese tiempo. Escribir lo vuelve a tomar, que es lo unico que de
+    verdad necesita ser el dueno, y lo suelta al acabar.
+    """
     csv = corrida(tmp_path)
     cliente = cliente_con_lote()
     trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
                                "DP | BIT 18 AUG 2026 05 42")
     trabajo.descubrir(cliente, esperar=False)
     plan, indexador = trabajo.planificar(cliente)
-    trabajo.indexar(indexador, plan)
-    assert cliente.cerrados == []
-
-    cerrar_partes([trabajo], cliente)
+    assert cliente.abiertos == ["003SRO"]
     assert cliente.cerrados == ["003SRO"]
+
+    trabajo.indexar(indexador, plan)
+    assert cliente.abiertos == ["003SRO", "003SRO"]
+    assert cliente.cerrados == ["003SRO", "003SRO"]
+
+
+def test_un_lote_sin_nada_que_escribir_ni_se_toma(tmp_path):
+    """Tomarlo seria bloquearlo para no escribir ni una pagina."""
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.descubrir(cliente, esperar=False)
+    plan, indexador = trabajo.planificar(cliente)
+    plan.paginas = []
+    cliente.abiertos.clear()
+    trabajo.indexar(indexador, plan)
+    assert cliente.abiertos == []
 
 
 def test_un_plan_que_falla_no_deja_el_lote_tomado(tmp_path):

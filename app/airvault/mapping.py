@@ -16,6 +16,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence
 from app.airvault.config import (
     CAMPO_AUDIT_STATUS,
     CAMPO_BATCH_NAME,
+    CAMPO_DESCRIPCION,
     CAMPO_DOC_TYPE,
     CAMPO_END_DATE,
     CAMPO_FLEET,
@@ -232,6 +233,7 @@ def _registro_de_fila(
         pagina_origen=pagina,
         matricula=matricula,
         log_number=normalizar_log_number(fila.get("log_number", "")),
+        flight_number=str(fila.get("flight_number", "")).strip().upper(),
         fecha=fecha,
         fecha_inferida=fecha_inferida,
         fleet=fleet if matricula else "",
@@ -359,6 +361,11 @@ def valores_de_indice(
     }
     if registro.lessor:
         valores[CAMPO_LESSOR] = registro.lessor
+    if registro.flight_number:
+        # El vuelo de la bitacora, en Description. Solo cuando la lectura
+        # lo trajo: mandarlo vacio borraria lo que alguien haya escrito a
+        # mano, y este campo no es de los que el sistema controla siempre.
+        valores[CAMPO_DESCRIPCION] = registro.flight_number
     if nombre_batch:
         valores[CAMPO_BATCH_NAME] = nombre_batch
     return valores

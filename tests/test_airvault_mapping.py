@@ -1,9 +1,10 @@
-"""Traduccion del CSV de la corrida a los valores de AirVault."""
+"""Traduccion del CSV de la ejecucion a los valores de AirVault."""
 
 from __future__ import annotations
 
 from app.airvault.config import (
     CAMPO_AUDIT_STATUS,
+    CAMPO_DESCRIPCION,
     CAMPO_DOC_TYPE,
     CAMPO_END_DATE,
     CAMPO_FLEET,
@@ -153,6 +154,26 @@ def test_no_se_mandan_campos_que_el_sistema_no_controla():
     # que alguien puso a mano.
     registro = registros_desde_csv([_fila()])[0]
     valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
-    assert 9752 not in valores  # Description
     assert 9625 not in valores  # WO #
     assert 9594 not in valores  # Start Date
+
+
+def test_el_vuelo_de_la_bitacora_va_en_description():
+    """Es la informacion de vuelo que la bitacora trae escrita."""
+    registro = registros_desde_csv([_fila(flight_number="CM137")])[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+    assert valores[CAMPO_DESCRIPCION] == "CM137"
+
+
+def test_un_vuelo_de_mantenimiento_viaja_igual():
+    """No todos son numeros: ``TCK`` y compania son vuelos tambien."""
+    registro = registros_desde_csv([_fila(flight_number="tck")])[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+    assert valores[CAMPO_DESCRIPCION] == "TCK"
+
+
+def test_sin_vuelo_leido_no_se_toca_description():
+    """Mandarlo vacio borraria lo que alguien haya escrito a mano."""
+    registro = registros_desde_csv([_fila(flight_number="")])[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+    assert CAMPO_DESCRIPCION not in valores

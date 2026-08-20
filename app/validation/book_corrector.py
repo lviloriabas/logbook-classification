@@ -221,6 +221,10 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
         field.status = Status.OK
         field.source = "book_correction"
         field.inference_method = "book_digit_consensus"
+        # Cuantas paginas del libro leyeron entera esta matricula. La pagina
+        # no la leyo —por eso se corrige—, asi que es todo el respaldo que
+        # tiene, y con uno solo no alcanza para indexarla sin mirar.
+        field.votes = count
         if original:
             field.comment = (
                 f"Corrected from {original!r} by book consensus "

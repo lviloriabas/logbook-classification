@@ -47,6 +47,12 @@ class FieldResult(BaseModel):
     source: str = "direct"
     inference_method: Optional[str] = None
     alternatives: List[str] = Field(default_factory=list)
+    # Cuantas lecturas independientes respaldan este valor exacto. Solo lo
+    # llenan los correctores que imponen un valor que la pagina no leyo:
+    # None significa que el valor es la lectura de la propia pagina. Con 0 o
+    # 1 el valor se sostiene en una sola lectura de todo el libro (o en
+    # ninguna, si se recompuso), y eso no alcanza para indexarlo sin mirar.
+    votes: Optional[int] = None
 
 
 class PageResult(BaseModel):
