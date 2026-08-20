@@ -1,29 +1,29 @@
 # Reglas del repositorio
 
-- **CSV:** no modifiques la salida del reporte sin solicitud o autorización previa del usuario.
+- **CSV:** no cambies la salida del reporte sin solicitud o autorización del usuario.
 
-## Git — obligatorio
+## Git
 
-- Al terminar cada trabajo, haz `git commit` y `git push` en la rama actual; esta autorización es permanente. Nunca commitees en `main`: si está activa, crea antes otra rama.
-- Usa la identidad del usuario. No añadas firmas, coautorías ni marcas de herramienta (`Co-Authored-By`, `Generated with`, etc.).
-- Imita el historial: mensaje en español sin acentos; asunto en presente y tercera persona que indique qué hace el cambio (ej.: `Cuenta paginas terminadas del lote, no la ultima que entrega el pool`); cuerpo dedicado al motivo y las consecuencias, no a enumerar archivos.
+- Cierra cada trabajo con `git commit` y `git push` en la rama activa; la autorización es permanente. Si estás en `main`, crea antes otra rama.
+- Usa la identidad del usuario. No agregues firmas, coautorías ni marcas como `Co-Authored-By` o `Generated with`.
+- Imita el historial: español sin acentos; asunto presente, en tercera persona y descriptivo, por ejemplo `Cuenta paginas terminadas del lote, no la ultima que entrega el pool`; cuerpo sobre motivo y consecuencias, no sobre archivos.
 
-## Interfaz — obligatorio
+## Interfaz
 
-- Antes de editarla, copia el estilo existente: grises `TABLE_BASE_BG` y `PANE_*` de `app/gui/widgets.py`; radio de 6 px de `QGroupBox`, `#timeSummary`, `#embeddedPdfPane` y tablas; tipografías y tamaños de `_QSS` en `main_window.py`. Ningún cuadro puede tener esquinas en pico ni colores ajenos a esas constantes.
-- No añadas por iniciativa propia botones, paneles, iconos, diálogos, columnas ni indicadores. Si son necesarios para cumplir la solicitud, propónlos y espera respuesta.
-- Todo control nuevo debe igualar a sus vecinos en alto, espaciado, colores e idioma. Usa español y no muestres jerga interna, perfiles de rendimiento, clases ni rutas.
+- Al editarla, replica los grises `TABLE_BASE_BG` y `PANE_*` de `app/gui/widgets.py`, las fuentes y tamaños de `_QSS` en `main_window.py`, y el radio de 6 px de `QGroupBox`, `#timeSummary`, `#embeddedPdfPane` y tablas. Prohibidas las esquinas en pico y otros colores.
+- No agregues por iniciativa propia botones, paneles, iconos, diálogos, columnas o indicadores. Si la solicitud los requiere, proponlos y espera.
+- Todo control nuevo debe igualar a sus vecinos en alto, espacio, color e idioma. Usa español; no muestres jerga interna, perfiles de rendimiento, clases ni rutas.
 
-## Plataforma — obligatorio
+## Plataforma
 
-- **Solo CPU:** instancia todo motor de inferencia con `device="cpu"`; no autodetectes GPU ni aceleradores. Se permiten oneDNN/MKL-DNN, hilos, lotes y cuantización int8 para CPU.
-- **Portable:** la carpeta completa debe funcionar en cualquier PC Windows, sin administrador ni instalación. No dependas de rutas del sistema, registro o descargas en ejecución. Intérprete, dependencias, Tesseract y modelos viven en `portable/`; dirige su caché allí con `PADDLE_PDX_CACHE_HOME`.
-- Precachea cualquier modelo nuevo en `portable/` mediante `tools/precache_paddle.py` y verifica su operación sin internet.
+- **Solo CPU:** crea cada motor con `device="cpu"`; no detectes GPU ni aceleradores. Se permiten oneDNN/MKL-DNN, hilos, lotes y cuantización int8.
+- **Portable:** la carpeta completa debe funcionar en cualquier PC Windows sin administrador ni instalación. No dependas de rutas del sistema, registro o descargas en ejecución. Intérprete, dependencias, Tesseract y modelos viven en `portable/`; dirige allí `PADDLE_PDX_CACHE_HOME`.
+- Precarga modelos nuevos en `portable/` con `tools/precache_paddle.py` y comprueba su uso sin internet.
 
-## Dominio de bitácoras
+## Bitácoras
 
-- Un libro físico tiene 50 páginas y pertenece a un solo avión.
-- `log_number` tiene exactamente siete dígitos. Sus dos últimos forman la página: `00`–`49` pertenecen a un libro y `50`–`99` al siguiente.
-- Dentro de cada libro/avión, al aumentar `log_number` la fecha no puede retroceder; varias páginas pueden compartir día. Esta regla no cruza libros: uno procesado después puede tener fechas anteriores.
-- Las fechas manuscritas suelen ocupar casillas `DD|MMM|AA` con separadores verticales; rara vez el mes es numérico.
-- La posición de las casillas varía entre escaneos; no dependas solo de coordenadas fijas de plantilla.
+- Cada libro físico tiene 50 páginas y una sola aeronave.
+- `log_number` tiene exactamente siete dígitos: `00` a `49` forman un libro; `50` a `99`, el siguiente.
+- Dentro del libro, la fecha no retrocede al aumentar `log_number`; puede repetirse. La regla no cruza libros.
+- La fecha manuscrita suele usar casillas `DD|MMM|AA` con separadores verticales; rara vez el mes es numérico.
+- Las casillas cambian de posición entre escaneos; no dependas solo de coordenadas fijas.
