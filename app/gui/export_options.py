@@ -22,7 +22,17 @@ from PySide6.QtWidgets import (
 )
 
 from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
-from app.reports.organize import PAGINAS_POR_PARTE
+
+# Paginas por parte cuando se pide repartir la entrega y no se dice cuantas.
+# Con los escaneos de siempre —unos 2 MB por pagina— deja partes de medio
+# giga, que suben sin sobresaltos y se revisan de una sentada.
+#
+# Vive aqui y no en ``app.reports.organize``, que es quien reparte, porque
+# es el unico sitio que lo lee: es el numero con el que abre el control. Y
+# tenerlo aqui evita que abrir la ventana cargue ese modulo, que arrastra
+# PyMuPDF, OpenCV y NumPy —un cuarto de segundo del arranque— para escribir
+# un 200 en una casilla.
+PAGINAS_POR_PARTE = 200
 
 
 class ExportOptionsGroup(QGroupBox):

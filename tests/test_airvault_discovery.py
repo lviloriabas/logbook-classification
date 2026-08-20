@@ -1,4 +1,9 @@
-"""Ubicar el lote por nombre, sin adivinar cuando hay dudas."""
+"""Ubicar el lote, sin adivinar cuando hay dudas.
+
+Por nombre cuando alguien lo subio a mano poniendoselo, y por lo que
+aparecio despues de subir cuando lo sube el programa: Quick Upload no
+admite nombre de lote y la cola los recibe todos como «Empty-Batch».
+"""
 
 from __future__ import annotations
 
@@ -8,9 +13,11 @@ from app.airvault.discovery import (
     LoteAmbiguo,
     LoteNoEncontrado,
     buscar,
+    buscar_nuevo,
     buscar_por_id,
     esperar,
     normalizar_nombre,
+    recien_llegados,
 )
 from tests.airvault_fake import lote
 
@@ -144,3 +151,64 @@ def test_el_filtro_dp_bit_atrapa_tambien_bitacoras():
 def test_nombre_con_acentos_coincide_aunque_venga_escapado():
     lotes = [lote("003AAA", "DP | Bit&#225;coras varias 4", 472)]
     assert buscar(lotes, "DP | Bitácoras varias 4").batch_id == "003AAA"
+
+
+# ── por lo que aparecio despues de subir ───────────────────────────
+
+def test_el_lote_propio_es_el_que_no_estaba_antes():
+    """El nombre no distingue nada: todos llegan como «Empty-Batch»."""
+    antes = ["003AAA", "003BBB"]
+    ahora = [lote("003AAA", "Empty-Batch", 12),
+             lote("003BBB", "Empty-Batch", 30),
+             lote("003CCC", "Empty-Batch", 29)]
+    assert buscar_nuevo(ahora, antes).batch_id == "003CCC"
+
+
+def test_mientras_no_aparezca_nada_no_es_un_fallo():
+    """El servidor tarda en procesar lo subido; esperar es lo correcto."""
+    antes = ["003AAA"]
+    assert buscar_nuevo([lote("003AAA", "Empty-Batch", 12)], antes) is None
+
+
+def test_con_varios_nuevos_desempata_la_cantidad_de_paginas():
+    antes: list = []
+    ahora = [lote("003BBB", "Empty-Batch", 4),
+             lote("003CCC", "Empty-Batch", 29)]
+    assert buscar_nuevo(ahora, antes, paginas_esperadas=29).batch_id == "003CCC"
+
+
+def test_si_no_hay_forma_de_desempatar_no_se_adivina():
+    """Escribir en el lote equivocado es peor que pedir el batch id."""
+    ahora = [lote("003BBB", "Empty-Batch", 29),
+             lote("003CCC", "Empty-Batch", 29)]
+    with pytest.raises(LoteAmbiguo):
+        buscar_nuevo(ahora, [], paginas_esperadas=29)
+
+
+def test_los_de_otro_repositorio_no_cuentan():
+    """En la cola conviven repositorios; el de al lado no es el nuestro."""
+    ahora = [lote("003BBB", "Empty-Batch", 29, repo_id=1),
+             lote("003CCC", "Empty-Batch", 29, repo_id=3209)]
+    assert buscar_nuevo(ahora, [], repo_id=3209).batch_id == "003CCC"
+
+
+def test_recien_llegados_no_distingue_mayusculas_en_el_id():
+    ahora = [lote("003aaa", "Empty-Batch", 12),
+             lote("003CCC", "Empty-Batch", 29)]
+    assert [l.batch_id for l in recien_llegados(ahora, ["003AAA"])] == ["003CCC"]
+
+
+def test_esperando_se_cae_al_recien_llegado_cuando_el_nombre_no_sirve():
+    """Es el caso real: se sube, y lo que llega no se llama como se pidio."""
+    cola = [lote("003AAA", "Empty-Batch", 12)]
+
+    def listar(filtro=""):
+        # El filtro del servidor por nombre no devuelve nada, claro.
+        return [] if filtro else list(cola)
+
+    cola.append(lote("003CCC", "Empty-Batch", 29))
+    encontrado = esperar(
+        listar, "DP | BITS 19 AUG 2026 17 33", None, 29,
+        dormir=lambda _s: None, previos=["003AAA"],
+    )
+    assert encontrado.batch_id == "003CCC"

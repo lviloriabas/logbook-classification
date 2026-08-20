@@ -56,6 +56,25 @@ def output_paths(
     )
 
 
+def resolve_processed_path(path: Path) -> Path:
+    """Encuentra el PDF ya sea en ``input/`` o en ``input/processed``.
+
+    Los reportes y la vista previa guardan la ruta del PDF tal como estaba
+    cuando se leyó, pero ``archive_processed_files`` puede moverlo a
+    ``processed`` después. Quien solo tenga esa ruta guardada (por ejemplo
+    una celda de la tabla ya pintada) la sigue encontrando sin importar en
+    cuál de las dos carpetas quedó.
+    """
+    path = Path(path)
+    if path.exists():
+        return path
+    if path.parent.name == PROCESSED_DIRNAME:
+        candidate = path.parent.parent / path.name
+    else:
+        candidate = path.parent / PROCESSED_DIRNAME / path.name
+    return candidate if candidate.exists() else path
+
+
 def archive_processed_files(
     paths: Iterable[Path], input_dir: Path
 ) -> tuple[dict[Path, Path], list[tuple[Path, Exception]]]:

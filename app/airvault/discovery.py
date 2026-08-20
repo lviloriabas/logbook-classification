@@ -1,10 +1,16 @@
 """Localizar en AirVault el lote que corresponde a un trabajo.
 
-El usuario sube el lote y el sistema lo tiene que encontrar solo. El nombre
-es lo unico que los dos lados comparten, asi que la busqueda es por nombre,
-con dos precauciones: los lotes creados por Quick Upload llegan como
-``<nombre> - <usuario>``, y puede haber mas de un lote con nombres
-parecidos, en cuyo caso no se adivina.
+El usuario sube el lote y el sistema lo tiene que encontrar solo. Hay dos
+formas, y se usan en este orden:
+
+1. **Por nombre**, para un lote que alguien subio a mano poniendoselo. Con
+   dos precauciones: los lotes creados desde la pagina llegan como
+   ``<nombre> - <usuario>``, y puede haber mas de un lote con nombres
+   parecidos, en cuyo caso no se adivina.
+2. **Por lo que aparecio despues de subir**, que es lo que hace falta
+   cuando lo sube el propio programa: Quick Upload no admite un nombre de
+   lote y la cola los recibe todos como ``Empty-Batch``, asi que el nombre
+   no distingue nada. La lista de lotes de justo antes de subir si.
 """
 
 from __future__ import annotations
@@ -40,6 +46,53 @@ def _nombre_base(nombre: str) -> str:
     if len(partes) == 2 and "@" in partes[1]:
         return partes[0]
     return nombre
+
+
+def recien_llegados(
+    lotes: Sequence[ResumenLote], previos: Sequence[str],
+    repo_id: int | None = None,
+) -> List[ResumenLote]:
+    """Lotes que no estaban en la cola antes de subir."""
+    conocidos = {str(b).strip().upper() for b in previos or ()}
+    return [
+        lote for lote in lotes
+        if lote.batch_id.strip().upper() not in conocidos
+        and (repo_id is None or not lote.repo_id or lote.repo_id == repo_id)
+    ]
+
+
+def buscar_nuevo(
+    lotes: Sequence[ResumenLote], previos: Sequence[str],
+    repo_id: int | None = None, paginas_esperadas: int | None = None,
+) -> Optional[ResumenLote]:
+    """El lote que aparecio despues de subir, cuando el nombre no sirve.
+
+    Quick Upload no deja ponerle nombre al lote: la cola lo recibe siempre
+    como ``Empty-Batch``, medido subiendo y mirando como quedo, asi que
+    buscarlo por nombre no puede funcionar por mucho que se espere. Lo que
+    si es exacto es la diferencia con la lista de antes de subir.
+
+    Devuelve ``None`` mientras todavia no ha aparecido nada, que no es un
+    fallo: el servidor tarda en procesar lo subido. Si aparecio mas de uno
+    se desempata por cantidad de paginas, y si aun asi queda mas de uno se
+    levanta :class:`LoteAmbiguo` en vez de escribir en el equivocado.
+    """
+    nuevos = recien_llegados(lotes, previos, repo_id)
+    if not nuevos:
+        return None
+    if len(nuevos) > 1 and paginas_esperadas is not None:
+        por_paginas = [l for l in nuevos if l.paginas == paginas_esperadas]
+        if por_paginas:
+            nuevos = por_paginas
+    if len(nuevos) > 1:
+        detalle = ", ".join(
+            f"{l.batch_id} ({l.paginas} pags)" for l in nuevos
+        )
+        raise LoteAmbiguo(
+            f"Desde que empezo la subida aparecieron {len(nuevos)} lotes "
+            f"en la cola: {detalle}. Indicar el batch id a mano."
+        )
+    return nuevos[0]
 
 
 class LoteNoEncontrado(RuntimeError):
@@ -115,6 +168,7 @@ def esperar(
     limite_s: float = 900.0,
     dormir: Callable[[float], None] = time.sleep,
     reloj: Callable[[], float] = time.monotonic,
+    previos: Optional[Sequence[str]] = None,
 ) -> ResumenLote:
     """Sondea el listado hasta que el lote aparezca o se agote el tiempo.
 
@@ -130,6 +184,17 @@ def esperar(
             return buscar(_listar(listar, nombre), nombre, repo_id,
                           paginas_esperadas)
         except LoteNoEncontrado:
+            if previos is not None:
+                nuevo = buscar_nuevo(
+                    _listar(listar, ""), previos, repo_id, paginas_esperadas
+                )
+                if nuevo is not None:
+                    logger.info(
+                        "El lote llego a la cola como {!r}; se reconoce "
+                        "porque no estaba antes de subir: {}",
+                        nuevo.nombre, nuevo.batch_id,
+                    )
+                    return nuevo
             transcurrido = reloj() - inicio
             if transcurrido >= limite_s:
                 raise

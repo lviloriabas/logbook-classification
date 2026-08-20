@@ -145,6 +145,66 @@ def test_true_dup_uses_warning_color_convention():
     app.processEvents()
 
 
+def test_minimal_csv_recovers_field_color_from_companion_json(tmp_path: Path):
+    """El CSV mínimo no trae columnas ``_status``: el color sale del JSON.
+
+    ``find_csv_files`` abre por defecto el CSV mínimo (ordena antes que
+    ``_completo``), y ese CSV se recorta al exportar sin esas columnas. Sin
+    este respaldo, el historial se abría sin ningún campo coloreado aunque
+    la corrida sí tuviera estados de WARNING/ERROR.
+    """
+    import json
+
+    from app.models.schemas import FieldResult, PageResult, ValidationReport
+    from app.reports.csv_reporter import CsvReporter
+    from app.reports.dual_csv import write_minimal_csv
+    from app.templates.manager import TemplateManager
+
+    app = QApplication.instance() or QApplication([])
+    template = TemplateManager().load(
+        Path(__file__).resolve().parents[1] / "template" / "aircraft_log.json"
+    )
+    page = PageResult(page_number=1)
+    page.add_field(
+        FieldResult(
+            page_number=1,
+            field_id="log_number",
+            field_type="ocr",
+            value="2147337",
+            confidence=0.4,
+            status="ERROR",
+        )
+    )
+    reports = [
+        ValidationReport(
+            pdf_path=str(INPUT / "test.pdf"),
+            template_name=template.name,
+            pages=[page],
+        )
+    ]
+    run = tmp_path / "run"
+    data = run / "datos"
+    data.mkdir(parents=True)
+    complete_path = data / "run_completo.CSV"
+    minimal_path = data / "run.CSV"
+    CsvReporter().write(reports, complete_path, template)
+    write_minimal_csv(complete_path, minimal_path)
+    (data / "run.json").write_text(
+        json.dumps({"reportes": [r.model_dump(mode="json") for r in reports]}),
+        encoding="utf-8",
+    )
+
+    viewer = CsvViewerWindow(tmp_path)
+    assert viewer.load_csv_file(minimal_path)
+
+    assert "log_number_status" not in viewer._columns
+    row = viewer._rows[0]
+    assert viewer._status_for(row, "log_number") == "ERROR"
+
+    viewer.close()
+    app.processEvents()
+
+
 def test_row_and_column_indicators_are_visible(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     run = tmp_path / "run"

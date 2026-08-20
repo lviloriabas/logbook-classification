@@ -380,3 +380,52 @@ class OutputsWorker(QThread):
 
     def _on_stage(self, message: str, percent: int) -> None:
         self.progress.emit(message, percent)
+
+
+class InputScanWorker(QThread):
+    """Lee DPI y numero de paginas de la entrada, fuera del hilo de la GUI.
+
+    Abrir los PDFs de ``input/`` es lo primero que hace la ventana al
+    arrancar, y es lo que la dejaba en «no responde» nada mas aparecer: los
+    escaneos son de cientos de megas y la primera apertura arrastra ademas
+    PyMuPDF, NumPy y OpenCV, que no estan cargados todavia. Medido con ocho
+    archivos de la carpeta de trabajo, un cuarto de segundo largo con la
+    ventana ya dibujada y sin atender un solo clic.
+
+    Las dos lecturas se hacen con el mismo handle porque el rango de paginas
+    necesita el recuento y el DPI ya obligaba a abrir cada archivo.
+
+    ``generacion`` viaja de ida y vuelta en las señales: elegir otros
+    archivos mientras un recorrido esta en marcha deja dos hilos vivos, y la
+    ventana tiene que poder descartar el que ya no corresponde.
+    """
+
+    # (generacion, [(ruta, dpi, paginas)…])
+    scanned = Signal(int, object)
+
+    def __init__(
+        self, pdf_paths: List[Path], generacion: int = 0, parent=None
+    ) -> None:
+        super().__init__(parent)
+        self.pdf_paths = [Path(path) for path in pdf_paths]
+        self.generacion = int(generacion)
+
+    def run(self) -> None:
+        """Recorre la entrada y entrega lo leido de cada archivo."""
+        from app.vision.pdf_loader import PdfPageRenderer
+
+        leido: List[tuple] = []
+        for path in self.pdf_paths:
+            if self.isInterruptionRequested():
+                return
+            try:
+                with PdfPageRenderer(path) as renderer:
+                    leido.append(
+                        (path, renderer.detect_dpi(default=600),
+                         renderer.page_count())
+                    )
+            except Exception:  # noqa: BLE001 - PDF invalido, se sigue
+                logger.warning(f"No se pudo leer la entrada: {path}")
+                leido.append((path, 0, 0))
+        if not self.isInterruptionRequested():
+            self.scanned.emit(self.generacion, leido)

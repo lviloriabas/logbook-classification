@@ -45,8 +45,7 @@ from app.airvault.client import ClienteHttp  # noqa: E402
 from app.airvault.discovery import (  # noqa: E402
     LoteAmbiguo,
     LoteNoEncontrado,
-    buscar,
-    esperar,
+    buscar_por_id,
 )
 from app.airvault.indexer import Indexador, verificar_lote  # noqa: E402
 from app.airvault.flujo import (  # noqa: E402
@@ -136,6 +135,8 @@ def parse_args() -> argparse.Namespace:
                    help="Tambien reescribir las paginas ya validadas")
     p.add_argument("--continuar-con-errores", action="store_true",
                    help="No detenerse en la primera pagina que falle")
+    p.add_argument("--completar", action="store_true",
+                   help="Al terminar, dar el lote por terminado en AirVault. Solo lo acepta con todas las paginas en verde.")
 
     p = sub.add_parser("verificar", parents=[comun],
                        help="Relee el lote y confirma como quedo")
@@ -246,10 +247,19 @@ def etapa_subir(args, config: AirVaultConfig) -> int:
     carpeta = carpeta_job(args.job)
     manifiesto = manifiestos.cargar(carpeta)
     sesion = abrir_sesion(config, args)
+    # Antes de subir se anota la cola: Quick Upload no admite nombre de
+    # lote y todos llegan como «Empty-Batch», asi que la diferencia con
+    # esta lista es lo unico con lo que despues se reconoce el propio.
+    trabajo = Trabajo(config, carpeta, manifiesto)
+    trabajo.anotar_lotes_previos(ClienteHttp(sesion, config))
     subidor = SubidorQuickUpload(sesion, config.repo_id)
+    # De la primera bitacora, no de la primera pagina: la primera suele ser
+    # un separador, sin avion, y Aircraft es obligatorio en Quick Upload.
+    bitacoras = manifiesto.bitacoras()
     plantilla = valores_de_indice(
-        manifiesto.registros[0], manifiesto.doc_type,
-        manifiesto.audit_status, manifiesto.nombre_batch,
+        bitacoras[0] if bitacoras else manifiesto.registros[0],
+        manifiesto.doc_type, manifiesto.audit_status,
+        manifiesto.nombre_batch,
     )
     fallos = 0
     for ruta in args.pdf:
@@ -280,32 +290,24 @@ def etapa_descubrir(args, config: AirVaultConfig,
         manifiestos.guardar(manifiesto, carpeta)
         print(f"Lote fijado a mano: {args.batch_id}")
         return 0
+    # Lo hace el mismo recorrido que usa la ventana: ahi viven el respaldo
+    # por lo que aparecio despues de subir —el nombre no sirve, Quick
+    # Upload los deja a todos como «Empty-Batch»— y el renombrado del lote.
+    trabajo = Trabajo(config, carpeta, manifiesto)
     try:
-        if getattr(args, "esperar", False):
-            lote = esperar(
-                cliente.listar_lotes, manifiesto.nombre_batch,
-                config.repo_id, esperadas,
-                config.espera_descubrimiento_s, config.espera_maxima_s,
-            )
-        else:
-            lote = buscar(
-                cliente.listar_lotes(), manifiesto.nombre_batch,
-                config.repo_id, esperadas,
-            )
+        trabajo.descubrir(cliente, esperar=getattr(args, "esperar", False))
     except (LoteNoEncontrado, LoteAmbiguo) as exc:
         manifiesto.etapa("descubrir").marcar(EstadoEtapa.ERROR, str(exc))
         manifiestos.guardar(manifiesto, carpeta)
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    manifiesto.batch_id = lote.batch_id
-    manifiesto.etapa("descubrir").marcar(
-        EstadoEtapa.HECHA, f"{lote.batch_id} ({lote.paginas} paginas)"
-    )
-    manifiestos.guardar(manifiesto, carpeta)
-    print(f"Lote encontrado: {lote.batch_id} - {lote.nombre} "
-          f"({lote.paginas} paginas)")
-    if lote.paginas != esperadas:
-        print(f"AVISO: el lote tiene {lote.paginas} paginas y el manifiesto "
+    lote = buscar_por_id(cliente.listar_lotes(), manifiesto.batch_id)
+    paginas = lote.paginas if lote else esperadas
+    print(f"Lote encontrado: {manifiesto.batch_id} - "
+          f"{lote.nombre if lote else manifiesto.nombre_batch} "
+          f"({paginas} paginas)")
+    if paginas != esperadas:
+        print(f"AVISO: el lote tiene {paginas} paginas y el manifiesto "
               f"{esperadas}. El indexado no va a escribir hasta que "
               f"coincidan.")
     return 0
@@ -371,7 +373,13 @@ def _soltar(cliente, batch_id: str) -> None:
 
 
 def etapa_plan(args, config: AirVaultConfig) -> int:
-    _manifiesto, _indexador, plan, carpeta = _planificar(args, config)
+    manifiesto, _indexador, plan, carpeta, cliente = _planificar(
+        args, config
+    )
+    # El plan solo lee, asi que el lote se suelta en cuanto termina:
+    # dejarlo tomado cuelga la siguiente apertura, la del programa o la
+    # de quien lo abra en el navegador.
+    _soltar(cliente, manifiesto.batch_id)
     print(resumen_texto(plan))
     print(f"\nReporte: {carpeta / 'revision.html'}")
     print("Nada fue escrito. Para escribir: indexar --revisar o --auto")
@@ -422,7 +430,29 @@ def etapa_indexar(args, config: AirVaultConfig) -> int:
     print(f"Fallidas:  {resultado.fallidas}")
     for detalle in resultado.detalles[:10]:
         print(f"  {detalle}")
+    if getattr(args, "completar", False):
+        _completar(carpeta, manifiesto, cliente, config)
     return 1 if resultado.fallidas else 0
+
+
+def _completar(carpeta: Path, manifiesto: Manifiesto, cliente,
+               config: AirVaultConfig) -> None:
+    """Da el lote por terminado, si AirVault lo va a aceptar.
+
+    Solo cierra un lote con todas las paginas en verde: basta una a
+    la que le falte un campo obligatorio —casi siempre la fecha—
+    para que lo rechace. Asi que se mira antes y, si alguna bloquea,
+    se dice cual y el lote se queda en la cola, que es justo donde
+    tiene que quedarse.
+    """
+    resultado = Trabajo(config, carpeta, manifiesto).completar(cliente)
+    print()
+    if resultado.completado:
+        print(f"Lote {manifiesto.batch_id} cerrado en AirVault "
+              f"({resultado.detalle}).")
+        return
+    print(f"El lote {manifiesto.batch_id} se queda en la cola: "
+          f"{resultado.detalle}")
 
 
 def etapa_verificar(args, config: AirVaultConfig) -> int:

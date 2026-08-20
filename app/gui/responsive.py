@@ -58,6 +58,9 @@ QPushButton { min-height: 20px; padding: 2px 8px; }
    que es donde ese reparto hace falta. */
 QPushButton#iconButton { padding-left: 4px; padding-right: 6px; }
 QToolButton { padding: 1px 4px; }
+/* Mismo alto que QPushButton en esta densidad: sin esto «Opciones
+   avanzadas» queda más alto que «Indexar en AirVault…», a su lado. */
+QToolButton#advancedToggle { min-height: 20px; padding: 2px 8px; }
 QGroupBox { margin-top: 6px; padding: 4px 6px 3px 6px; }
 QSpinBox, QComboBox, QLineEdit { padding: 1px; }
 """

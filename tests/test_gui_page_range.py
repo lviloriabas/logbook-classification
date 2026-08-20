@@ -32,6 +32,7 @@ def _window(tmp_path: Path, sizes=(10, 20, 5)) -> MainWindow:
         for index, size in enumerate(sizes)
     ]
     window._set_input_paths(paths)
+    window.esperar_lectura_de_entrada()
     return window
 
 
@@ -55,6 +56,7 @@ def test_changing_the_input_moves_the_end_to_the_new_last_page(tmp_path):
     try:
         assert window.page_to_spin.value() == 35
         window._set_input_paths([_pdf(tmp_path / "otra.pdf", 7)])
+        window.esperar_lectura_de_entrada()
         assert window.page_from_spin.value() == 1
         assert window.page_to_spin.value() == 7
         assert window.page_range_label.text() == "de 7 pág."
@@ -66,6 +68,7 @@ def test_an_empty_input_leaves_the_controls_at_one(tmp_path):
     window = _window(tmp_path)
     try:
         window._set_input_paths([])
+        window.esperar_lectura_de_entrada()
         assert window.page_from_spin.value() == 1
         assert window.page_to_spin.value() == 1
         assert window.page_range_label.text() == ""

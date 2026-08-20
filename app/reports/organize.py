@@ -594,11 +594,6 @@ def secuencia_pdf_unico(
 
 NOMBRE_INDICE_PAGINAS = "_paginas.json"
 
-# Paginas por parte cuando se pide repartir la entrega y no se dice cuantas.
-# Con los escaneos de siempre —unos 2 MB por pagina— deja partes de medio
-# giga, que suben sin sobresaltos y se revisan de una sentada.
-PAGINAS_POR_PARTE = 200
-
 
 def _secciones(secuencia: Sequence[EntradaPdf]) -> List[List[EntradaPdf]]:
     """Parte la secuencia en tramos que abren con su separador."""

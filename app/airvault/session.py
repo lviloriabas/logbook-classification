@@ -29,6 +29,7 @@ de un lote.
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -50,6 +51,17 @@ ENV_COOKIE = "AIRVAULT_COOKIE"
 ORIGEN_COOKIE = "cookie pegada"
 ORIGEN_EDGE = "navegador"
 ORIGEN_FORMULARIO = "formulario de AirVault"
+
+# Cabecera con la que AirVault comprueba que la peticion sale de su propia
+# pagina. La pone cada llamada del sitio, y sin ella el servidor contesta
+# 500 con su pagina de error generica: ni 403 ni mensaje. Eso era lo que
+# dejaba la subida muerta en ``FinishUpload`` **despues** de haber mandado
+# el archivo entero —los trozos si viajaban—, y como un 500 se reintenta,
+# el fallo llegaba disfrazado de «la red o AirVault ocupado».
+CABECERA_ANTIFORGERY = "AntiForgery"
+
+# El token viaja en la propia pagina, en el atributo que lee su javascript.
+_TOKEN_EN_LA_PAGINA = re.compile(r'data-root-antiforgery="([^"]+)"')
 
 _AYUDA_COOKIE = (
     "Entrar a AirVault en el navegador, abrir las herramientas de "
@@ -77,7 +89,23 @@ class ErrorDeAirVault(RuntimeError):
 
 # Respuestas que no significan que algo este mal, sino que el servidor
 # estaba ocupado: reintentar tiene sentido. Un 404 o un 403, no.
+# La peticion mas barata que distingue una sesion viva de una caducada:
+# pide un solo lote de cualquier repositorio. La usa tanto la comprobacion
+# de arranque como la que decide si las cookies del perfil sirven.
+RUTA_DE_PRUEBA = "/index/Batch/GetBatches"
+CONSULTA_DE_PRUEBA = {
+    "repoId": -1, "eventLabel": "", "encodedFilter": "",
+    "encodedKeywordFilter": "", "_search": "false", "rows": 1,
+    "page": 1, "sidx": "", "sord": "asc",
+}
+
 ESTADOS_TRANSITORIOS = frozenset({408, 429, 500, 502, 503, 504})
+
+# Lo que contesta AirVault cuando la sesion ya no vale. El 440 es el de IIS
+# —«Login Timeout»—, y llega con la pagina de error generica del servidor,
+# asi que sin nombrarlo se leia como un rechazo del sitio y el trabajo moria
+# en medio de una espera larga en vez de volver a entrar.
+ESTADOS_DE_SESION = frozenset({401, 419, 440})
 
 _AYUDA_LOTE_ABIERTO = (
     " AirVault admite un solo dueno por lote y no contesta «ocupado»: deja "
@@ -209,6 +237,11 @@ class SesionAirVault:
         # Perfil de Edge del que salio la sesion, por si hay que volver a
         # entrar cuando el servidor la rechace.
         self._perfil: Optional[Path] = None
+        # Un token antiforgery por aplicacion del sitio (``index``,
+        # ``quickuploadex``...): cada una sirve el suyo en su portada.
+        self._tokens: Dict[str, str] = {}
+        # Para no volver a entrar dentro de la propia renovacion.
+        self._renovando = False
         # Inyectable para que las pruebas no esperen de verdad.
         self.dormir = time.sleep
 
@@ -245,6 +278,9 @@ class SesionAirVault:
             )
         self._autenticada = True
         self._origen = origen
+        # El token antiforgery va emparejado con la cookie que lo acompana,
+        # asi que un juego de cookies nuevo deja sin valor los guardados.
+        self._tokens.clear()
         logger.info(
             "Sesion de AirVault tomada del {}: {}",
             origen, galletas.resumir(cookies),
@@ -280,10 +316,40 @@ class SesionAirVault:
             navegador.obtener_cookies(
                 self.config.base_url, perfil, self.config.url_sso,
                 espera_login_s=self.config.espera_login_s, avisar=avisar,
-                forzar_login=forzar_login,
+                forzar_login=forzar_login, confirmar=self.sirven_cookies,
             ),
             ORIGEN_EDGE,
         )
+
+    def sirven_cookies(self, cookies: Mapping[str, str]) -> bool:
+        """Si con esas cookies el servidor deja trabajar.
+
+        Lo pregunta con una sesion aparte, sin tocar la propia: se llama
+        mientras el navegador todavia esta rehaciendo el acceso, y adoptar
+        cookies a medio hacer dejaria el tarro con dos juegos mezclados.
+        """
+        if not cookies:
+            return False
+        sonda = requests.Session()
+        sonda.headers.update(dict(self.http.headers))
+        host = galletas.dominio(self.config.base_url)
+        for nombre, valor in cookies.items():
+            sonda.cookies.set(nombre, valor, domain=host, path="/")
+        try:
+            respuesta = sonda.get(
+                self.config.url(RUTA_DE_PRUEBA), params=dict(CONSULTA_DE_PRUEBA),
+                timeout=self.config.timeout_s,
+            )
+        except requests.RequestException as exc:
+            logger.debug("No se pudo probar la sesion del perfil: {}", exc)
+            return False
+        finally:
+            sonda.close()
+        if respuesta.status_code in ESTADOS_DE_SESION:
+            return False
+        if self._pide_login(respuesta.text[:2000], respuesta.url):
+            return False
+        return respuesta.status_code < 400
 
     def renovar_en_navegador(
         self, avisar: Optional[Callable[[str], None]] = None
@@ -388,18 +454,50 @@ class SesionAirVault:
         ahora, y la unica senal de que caduco es que el servidor devuelve la
         pagina de acceso en vez de datos.
         """
-        datos = self.get(
-            "/index/Batch/GetBatches",
-            {"repoId": -1, "eventLabel": "", "encodedFilter": "",
-             "encodedKeywordFilter": "", "_search": "false", "rows": 1,
-             "page": 1, "sidx": "", "sord": "asc"},
-        )
+        datos = self.get(RUTA_DE_PRUEBA, dict(CONSULTA_DE_PRUEBA))
         if isinstance(datos, Mapping):
             try:
                 return int(datos.get("records", 0) or 0)
             except (TypeError, ValueError):
                 return 0
         return 0
+
+    # ── antiforgery ────────────────────────────────────────────────
+
+    @staticmethod
+    def _aplicacion(ruta: str) -> str:
+        """Primer tramo de la ruta, que es la aplicacion que la atiende."""
+        tramos = str(ruta or "").strip("/").split("/")
+        return tramos[0].lower() if tramos and tramos[0] else ""
+
+    def _antiforgery(self, ruta: str) -> str:
+        """Token con el que el sitio acepta un POST, leido de su portada.
+
+        Se guarda por aplicacion y se pide una sola vez: son cientos de
+        peticiones por lote y la portada no cambia entre ellas. Si el
+        servidor lo rechaza mas tarde, ``_pedir`` tira el guardado y aqui
+        se vuelve a leer.
+        """
+        app = self._aplicacion(ruta)
+        if app in self._tokens:
+            return self._tokens[app]
+        token = ""
+        try:
+            respuesta = self.http.get(
+                self.config.url(f"/{app}/"), timeout=self.config.timeout_s
+            )
+            hallado = _TOKEN_EN_LA_PAGINA.search(respuesta.text or "")
+            token = hallado.group(1) if hallado else ""
+        except requests.RequestException as exc:
+            logger.debug("No se pudo leer el token de /{}/: {}", app, exc)
+        if not token:
+            logger.debug("La portada de /{}/ no trae token antiforgery", app)
+        self._tokens[app] = token
+        return token
+
+    def _olvidar_antiforgery(self, ruta: str) -> None:
+        """Tira el token guardado para que el siguiente intento lea otro."""
+        self._tokens.pop(self._aplicacion(ruta), None)
 
     # ── peticiones ─────────────────────────────────────────────────
 
@@ -420,11 +518,22 @@ class SesionAirVault:
             raise ErrorDeSesion("La sesion no esta autenticada")
         url = self.config.url(ruta)
         intentos = max(1, self.config.reintentos)
+        escribe = metodo.upper() != "GET"
+        propias = dict(extra.pop("headers", None) or {})
+        renovada = False
         ultimo = ""
         for intento in range(1, intentos + 1):
+            cabeceras = dict(propias)
+            if escribe:
+                # Solo lo que escribe necesita el token; pedirlo para cada
+                # lectura seria una peticion de mas por pagina.
+                token = self._antiforgery(ruta)
+                if token:
+                    cabeceras.setdefault(CABECERA_ANTIFORGERY, token)
             try:
                 respuesta = self.http.request(
-                    metodo, url, timeout=self.config.timeout_s, **extra
+                    metodo, url, timeout=self.config.timeout_s,
+                    headers=cabeceras or None, **extra
                 )
             except requests.Timeout as exc:
                 ultimo = (
@@ -433,9 +542,26 @@ class SesionAirVault:
             except requests.RequestException as exc:
                 ultimo = f"no se pudo conectar ({exc})"
             else:
+                if (not renovada and self._caduco(respuesta)
+                        and self._renovar_en_silencio()):
+                    # La sesion se cayo a mitad del trabajo. El perfil de
+                    # Edge la renueva sin ventana —vuelve a pasar por el
+                    # enlace federado y Microsoft la reconoce—, asi que se
+                    # rehace y se repite la peticion en vez de tirar un lote
+                    # de cuatrocientas paginas por una espera larga.
+                    renovada = True
+                    continue
                 if respuesta.status_code not in ESTADOS_TRANSITORIOS:
                     return respuesta
-                ultimo = f"el servidor respondio {respuesta.status_code}"
+                ultimo = (
+                    f"el servidor respondio {respuesta.status_code} "
+                    f"({_describir_cuerpo(respuesta)})"
+                )
+                if escribe:
+                    # Un 500 en una escritura suele ser el token, que es de
+                    # lo poco que se arregla solo: se tira el guardado para
+                    # que el siguiente intento lea uno nuevo.
+                    self._olvidar_antiforgery(ruta)
             logger.warning(
                 "AirVault {} en {} (intento {}/{})",
                 ultimo, ruta, intento, intentos,
@@ -454,6 +580,18 @@ class SesionAirVault:
         self._comprobar_respuesta(respuesta, ruta)
         if not json_esperado:
             return respuesta.text
+        try:
+            return respuesta.json()
+        except ValueError as exc:
+            raise ErrorDeSesion(
+                f"AirVault contesto {ruta} con algo que no es JSON "
+                f"({_describir_cuerpo(respuesta)}). Suele significar que "
+                f"contesto una pagina de error o de acceso en vez de datos."
+            ) from exc
+
+    def post_json(self, ruta: str, **extra):
+        """POST cuya respuesta es JSON, como el guardado de una pagina."""
+        respuesta = self.post(ruta, **extra)
         try:
             return respuesta.json()
         except ValueError as exc:
@@ -482,9 +620,7 @@ class SesionAirVault:
         «500 Server Error for url ...», que no dice ni que pagina fallo ni
         si conviene reintentar.
         """
-        if respuesta.status_code == 401 or self._pide_login(
-            respuesta.text[:2000], respuesta.url
-        ):
+        if self._caduco(respuesta):
             raise ErrorDeSesion(self._motivo_de_caducidad())
         if respuesta.status_code < 400:
             return
@@ -505,6 +641,35 @@ class SesionAirVault:
             f"AirVault rechazo {ruta}: {detalle} "
             f"({_describir_cuerpo(respuesta)})."
         )
+
+    def _renovar_en_silencio(self) -> bool:
+        """Vuelve a tomar la sesion del perfil de Edge, sin abrir ventana.
+
+        Solo una vez por peticion: si al renovar el servidor sigue diciendo
+        que hay que entrar, insistir seria abrir Edge en cada pagina de un
+        lote. Devuelve si merece la pena repetir la peticion.
+        """
+        if self._origen != ORIGEN_EDGE or self._renovando:
+            return False
+        self._renovando = True
+        try:
+            logger.info(
+                "AirVault pidio acceso a mitad del trabajo; se vuelve a "
+                "tomar la sesion del perfil de Edge"
+            )
+            self.usar_navegador(self._perfil)
+        except Exception as exc:  # noqa: BLE001 - se sigue con lo que habia
+            logger.info("No se pudo renovar la sesion sola: {}", exc)
+            return False
+        finally:
+            self._renovando = False
+        return True
+
+    def _caduco(self, respuesta: requests.Response) -> bool:
+        """Si lo que contesto el servidor es «vuelva a entrar»."""
+        if respuesta.status_code in ESTADOS_DE_SESION:
+            return True
+        return self._pide_login(respuesta.text[:2000], respuesta.url)
 
     def _motivo_de_caducidad(self) -> str:
         """Que decir cuando el servidor contesta la pagina de acceso.

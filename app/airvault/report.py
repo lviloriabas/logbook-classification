@@ -14,6 +14,7 @@ from typing import Sequence, Tuple
 
 from app.airvault.config import (
     CAMPO_AUDIT_STATUS,
+    CAMPO_DESCRIPCION,
     CAMPO_DOC_TYPE,
     CAMPO_END_DATE,
     CAMPO_FLEET,
@@ -25,7 +26,7 @@ from app.airvault.indexer import Plan
 COLUMNAS = (
     "pagina_lote", "seq", "archivo_origen", "pagina_origen",
     "doc_type", "matricula", "fleet", "fleet_inferido", "log_number",
-    "audit_status", "end_date", "fecha_inferida", "ya_indexada",
+    "vuelo", "audit_status", "end_date", "fecha_inferida", "ya_indexada",
     "accion", "avisos",
 )
 
@@ -64,6 +65,7 @@ def _fila(entrada) -> dict:
         "fleet": valores.get(CAMPO_FLEET, ""),
         "fleet_inferido": "si" if registro.fleet_inferido else "",
         "log_number": valores.get(CAMPO_LOG_NUMBER, ""),
+        "vuelo": valores.get(CAMPO_DESCRIPCION, ""),
         "audit_status": valores.get(CAMPO_AUDIT_STATUS, ""),
         "end_date": valores.get(CAMPO_END_DATE, ""),
         # Como se dedujo la fecha cuando la bitacora no la trajo leida.

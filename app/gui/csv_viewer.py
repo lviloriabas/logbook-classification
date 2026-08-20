@@ -28,6 +28,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -55,6 +56,7 @@ from app.gui.csv_utils import (
     template_for_csv,
     template_name_for_csv,
 )
+from app.gui.depuracion_dialog import DEPURAR_TOOLTIP, DepurarPaginasDialog
 from app.gui.export_options import ExportOptionsGroup
 from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.responsive import ROOMY, Density, density_for, fit_to_screen
@@ -88,6 +90,7 @@ from app.utils.io import PROCESSED_DIRNAME
 # El mismo recuento que dejan los correctores al tocar un reporte: quitarle
 # páginas cambia los totales y el JSON no puede quedar diciendo los de antes.
 from app.validation.book_corrector import _recompute_summary
+from app.validation.depuracion import depurar
 
 
 _STATUS_COLORS = {
@@ -1020,6 +1023,11 @@ class CsvViewerWindow(QMainWindow):
         )
         self._row_pdf_paths: list[Path | None] = []
         self._pdf_search_folders: list[Path] = []
+        # El CSV mínimo —el que se abre por primera vez, según el orden de
+        # find_csv_files— no trae columnas ``_status``: se recorta al
+        # exportar. El color de las celdas sale entonces de aquí, el JSON
+        # compañero, indexado igual que las filas del CSV.
+        self._field_statuses: dict[tuple[str, str], dict[str, str]] = {}
         # Cada coincidencia es la fila del CSV y la columna donde apareció el
         # texto: la columna es lo que se muestra y sobre lo que se posa el
         # cursor, para que se vea por qué esa fila coincide.
@@ -1200,6 +1208,11 @@ class CsvViewerWindow(QMainWindow):
         self.status_label = QLabel(self._summary)
         self.status_label.setStyleSheet("color: #57606a;")
         status_row.addWidget(self.status_label, 1)
+        self.btn_depurar = QPushButton("Depurar")
+        self.btn_depurar.setEnabled(False)
+        self.btn_depurar.setToolTip(DEPURAR_TOOLTIP)
+        self.btn_depurar.clicked.connect(self._depurar_paginas)
+        status_row.addWidget(self.btn_depurar)
         self.btn_export = QPushButton("Exportar")
         self.btn_export.setEnabled(False)
         self.btn_export.setToolTip(_EXPORT_TOOLTIP)
@@ -1400,6 +1413,7 @@ class CsvViewerWindow(QMainWindow):
         self._export_note = ""
         self._columns = columns
         self._rows = rows
+        self._field_statuses = self._load_field_statuses(path)
         # Se limpia antes de poblar: la tabla emite selección mientras se
         # llena y las rutas de la corrida anterior ya no corresponden.
         self._row_pdf_paths = []
@@ -1427,6 +1441,29 @@ class CsvViewerWindow(QMainWindow):
         self._sync_search_controls()
         self._sync_export_button()
         self.setWindowTitle(f"Visor de CSV e historial — {path.name}")
+
+    @staticmethod
+    def _load_field_statuses(path: Path) -> dict[tuple[str, str], dict[str, str]]:
+        """Estado de cada campo por página, leído del JSON compañero.
+
+        Respaldo del color de la tabla cuando el CSV abierto es el mínimo y
+        no trae columnas ``_status``. Sin JSON compañero (o sin ``reportes``
+        en él) devuelve un mapa vacío y la tabla queda sin colorear, igual
+        que antes de este respaldo.
+        """
+        statuses: dict[tuple[str, str], dict[str, str]] = {}
+        try:
+            reports = reports_from_companion(path)
+        except Exception:  # noqa: BLE001 - color no crítico para el visor
+            return statuses
+        for report in reports:
+            filename = Path(report.pdf_path).name.casefold()
+            for page in report.pages:
+                key = (filename, str(page.page_number))
+                statuses[key] = {
+                    field.field_id: field.status.value for field in page.fields
+                }
+        return statuses
 
     def _populate_table(self) -> None:
         """Llena la tabla por tramos para no bloquear la ventana.
@@ -1533,11 +1570,15 @@ class CsvViewerWindow(QMainWindow):
         else:
             reason = ""
         self.btn_export.setToolTip(reason or _EXPORT_TOOLTIP)
-        self.btn_export.setEnabled(
-            not reason
-            and (self._outputs_worker is None
-                 or not self._outputs_worker.isRunning())
+        libre = (
+            self._outputs_worker is None
+            or not self._outputs_worker.isRunning()
         )
+        self.btn_export.setEnabled(not reason and libre)
+        # Depurar reescribe la misma corrida que exportar, así que depende de
+        # lo mismo: sin el JSON al lado no hay páginas que quitar.
+        self.btn_depurar.setToolTip(reason or DEPURAR_TOOLTIP)
+        self.btn_depurar.setEnabled(not reason and libre)
 
     def _important_columns_for_export(self, template) -> list[str]:
         """Columnas del CSV mínimo, independientes del dataset completo."""
@@ -1613,6 +1654,99 @@ class CsvViewerWindow(QMainWindow):
             return True
         return by_name and (pdf_path.name.casefold(), page_number) in keys
 
+    def _corrida_para_eliminar(self):
+        """Corrida abierta lista para reescribirse sin algunas páginas.
+
+        Devuelve el CSV, su carpeta, la plantilla con la que se procesó y sus
+        reportes, o ``None`` tras avisar por qué no se puede. Lo comparten el
+        borrado por selección y la depuración: las dos quitan páginas de la
+        misma corrida y necesitan exactamente lo mismo para hacerlo.
+        """
+        csv_path = self._current_csv_path()
+        run_dir = run_dir_for_csv(csv_path) if csv_path is not None else None
+        if csv_path is None or run_dir is None:
+            QMessageBox.information(
+                self,
+                "Eliminar páginas",
+                "Solo se pueden eliminar páginas de una corrida completa, la "
+                "que guarda su CSV y su JSON en la misma carpeta. Este CSV "
+                "está suelto y no tiene de dónde quitarlas.",
+            )
+            return None
+        template = template_for_csv(csv_path)
+        if template is None:
+            QMessageBox.warning(
+                self,
+                "Plantilla no disponible",
+                "No se encontró la plantilla con la que se procesó esta "
+                "corrida, y sin ella no se pueden volver a escribir sus datos.",
+            )
+            return None
+        try:
+            reports = reports_from_companion(csv_path)
+        except Exception as exc:  # noqa: BLE001 - se muestra en la GUI
+            logger.error(f"No se pudo leer el JSON de la corrida: {exc}")
+            QMessageBox.critical(
+                self,
+                "No se pudieron eliminar las páginas",
+                f"El JSON de la corrida no se pudo leer:\n\n{exc}",
+            )
+            return None
+        if not reports:
+            QMessageBox.warning(
+                self,
+                "Sin datos de la corrida",
+                "Esta corrida no trae el JSON con sus páginas, así que no se "
+                "puede reescribir sin él.",
+            )
+            return None
+        return csv_path, run_dir, template, reports
+
+    def _depurar_paginas(self) -> None:
+        """Quita de la corrida las páginas repetidas o en blanco.
+
+        Escribe lo mismo que el borrado por selección —CSV, JSON y
+        estadísticas— y por lo mismo no rehace los PDF: la entrega se compone
+        al exportar, cuando ya no queda nada más que quitar.
+        """
+        if self._outputs_worker is not None and self._outputs_worker.isRunning():
+            self._export_note = "hay una escritura en curso; espere a que termine"
+            self._refresh_status()
+            return
+        corrida = self._corrida_para_eliminar()
+        if corrida is None:
+            return
+        csv_path, run_dir, template, reports = corrida
+
+        dialog = DepurarPaginasDialog(reports, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        remaining, resumen = depurar(
+            reports, dialog.duplicados(), dialog.en_blanco()
+        )
+        if not resumen.total:
+            self._export_note = "no había páginas repetidas ni en blanco"
+            self._refresh_status()
+            return
+        if not remaining:
+            QMessageBox.information(
+                self,
+                "Depurar páginas",
+                "Quedaría una corrida sin ninguna página. Para deshacerse de "
+                "la corrida entera, elimine su carpeta desde output/.",
+            )
+            return
+
+        logger.info(
+            f"Depurando {resumen.total} página(s) de la corrida {run_dir.name}"
+        )
+        self._start_outputs(
+            remaining,
+            self._export_options(csv_path, template, remaining, skip_pdfs=True),
+            note=f"eliminando {resumen.total} página(s)…",
+            context="eliminar",
+        )
+
     def _delete_selected_pages(self) -> None:
         """Quita de la corrida las páginas seleccionadas en la tabla.
 
@@ -1632,44 +1766,10 @@ class CsvViewerWindow(QMainWindow):
             self._refresh_status()
             return
 
-        csv_path = self._current_csv_path()
-        run_dir = run_dir_for_csv(csv_path) if csv_path is not None else None
-        if csv_path is None or run_dir is None:
-            QMessageBox.information(
-                self,
-                "Eliminar páginas",
-                "Solo se pueden eliminar páginas de una corrida completa, la "
-                "que guarda su CSV y su JSON en la misma carpeta. Este CSV "
-                "está suelto y no tiene de dónde quitarlas.",
-            )
+        corrida = self._corrida_para_eliminar()
+        if corrida is None:
             return
-        template = template_for_csv(csv_path)
-        if template is None:
-            QMessageBox.warning(
-                self,
-                "Plantilla no disponible",
-                "No se encontró la plantilla con la que se procesó esta "
-                "corrida, y sin ella no se pueden volver a escribir sus datos.",
-            )
-            return
-        try:
-            reports = reports_from_companion(csv_path)
-        except Exception as exc:  # noqa: BLE001 - se muestra en la GUI
-            logger.error(f"No se pudo leer el JSON de la corrida: {exc}")
-            QMessageBox.critical(
-                self,
-                "No se pudieron eliminar las páginas",
-                f"El JSON de la corrida no se pudo leer:\n\n{exc}",
-            )
-            return
-        if not reports:
-            QMessageBox.warning(
-                self,
-                "Sin datos de la corrida",
-                "Esta corrida no trae el JSON con sus páginas, así que no se "
-                "puede reescribir sin él.",
-            )
-            return
+        csv_path, run_dir, template, reports = corrida
 
         keys = self._page_keys(source_rows)
         # Dos PDF distintos que se llaman igual no se distinguen por nombre,
@@ -2057,6 +2157,11 @@ class CsvViewerWindow(QMainWindow):
         status = row.get(f"{field_id}_status", "").upper()
         if status in _STATUS_COLORS:
             return status
+        if f"{field_id}_status" not in self._columns:
+            key = (row.get("file", "").casefold(), row.get("page", ""))
+            status = self._field_statuses.get(key, {}).get(field_id, "").upper()
+            if status in _STATUS_COLORS:
+                return status
         if field_id.endswith("_signature"):
             value = row.get(field_id, "").strip().lower()
             return {"true": "OK", "unclear": "WARNING", "false": "ERROR"}.get(

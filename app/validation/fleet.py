@@ -130,6 +130,11 @@ def verify_reports_against_fleet(
                 field.value = fleet_match
                 field.source = "fleet_validation"
                 field.inference_method = "fleet_nearest_match"
+                # Nadie leyo este avion: se eligio por parecido con lo que
+                # se leyo. Sin respaldo de lectura, aunque el consenso del
+                # libro detras fuera unanime, porque lo que el libro voto
+                # era otra matricula.
+                field.votes = 0
                 note = (
                     f"Matrícula reclasificada de {value} a {fleet_match}: "
                     "es la más parecida de la lista de flota"

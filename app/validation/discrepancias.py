@@ -14,8 +14,12 @@ Reglas:
   falsas de vuelo como las de mantenimiento cuando no se puede decidir.
 - **Vuelo**: deben estar presentes las firmas de piloto, de capitán y la
   licencia del capitán.
-- **Mantenimiento**: deben estar presentes las firmas de piloto y de técnico;
-  la firma y la licencia de capitán deben estar ausentes.
+- **Mantenimiento**: deben estar presentes las firmas de piloto y de técnico.
+  La firma y la licencia de capitán no se miran: el formulario F-MNT-001 es
+  uno solo y lleva el bloque de mantenimiento («MAINTENANCE RETURN TO
+  SERVICE» + «MECH. LICENSE No.») y el de aceptación de la aeronave
+  («MAINTENANCE CHECK AIRWORTHINESS RELEASE», que firma el capitán) en la
+  misma hoja. Que estén los dos es lo normal, no una anomalía.
 
 La "presencia" de una firma se decide con el resultado del detector
 (``true`` / ``false`` / ``unclear``) combinado con la confianza y los
@@ -149,20 +153,6 @@ def _clasificar_pagina(page: PageResult, template: Template
              "Firma de técnico incierta (entrada de mantenimiento); revisar",
              FIELD_TECH),
         ]
-        prohibidos = [
-            (
-                "Firma de capitán presente en entrada de mantenimiento",
-                "No se pudo confirmar que la firma de capitán esté vacía "
-                "(entrada de mantenimiento); revisar",
-                FIELD_CAPTAIN,
-            ),
-            (
-                "Licencia de capitán presente en entrada de mantenimiento",
-                "No se pudo confirmar que la licencia de capitán esté vacía "
-                "(entrada de mantenimiento); revisar",
-                FIELD_CAPTAIN_LICENSE,
-            ),
-        ]
     elif tech_pres is False:
         tipo = TipoEntrada.VUELO
         requisitos = [
@@ -174,7 +164,6 @@ def _clasificar_pagina(page: PageResult, template: Template
              "Firma de licencia del capitán incierta; revisar",
              FIELD_CAPTAIN_LICENSE),
         ]
-        prohibidos = []
     else:
         # Licencia de técnico ilegible: no se puede decidir entre vuelo y
         # mantenimiento. Solo se reportan anomalías robustas (firma de
@@ -228,28 +217,6 @@ def _clasificar_pagina(page: PageResult, template: Template
             afectados.append(CampoAfectado(
                 field_id=field_id, categoria=Categoria.MISSING,
                 razon=razon_missing,
-            ))
-
-    # En mantenimiento estos campos no son simplemente opcionales: deben
-    # estar vacíos. Una presencia confirmada es una discrepancia confirmada;
-    # se conserva Categoria.MISSING como categoría histórica de toda
-    # discrepancia confirmada para no romper estadísticas/exportaciones.
-    for razon_present, razon_uncertain, field_id in prohibidos:
-        tmpl = template.field(field_id)
-        if tmpl is None:
-            continue
-        presencia = _presencia(_campo(page, field_id), tmpl)
-        if presencia is None:
-            afectados.append(CampoAfectado(
-                field_id=field_id,
-                categoria=Categoria.UNCERTAIN,
-                razon=razon_uncertain,
-            ))
-        elif presencia is True:
-            afectados.append(CampoAfectado(
-                field_id=field_id,
-                categoria=Categoria.MISSING,
-                razon=razon_present,
             ))
 
     if not afectados:
