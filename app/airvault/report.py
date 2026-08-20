@@ -25,7 +25,8 @@ from app.airvault.indexer import Plan
 COLUMNAS = (
     "pagina_lote", "seq", "archivo_origen", "pagina_origen",
     "doc_type", "matricula", "fleet", "fleet_inferido", "log_number",
-    "audit_status", "end_date", "ya_indexada", "accion", "avisos",
+    "audit_status", "end_date", "fecha_inferida", "ya_indexada",
+    "accion", "avisos",
 )
 
 # Con la corrida repartida en varios lotes, saber en cual cae cada pagina
@@ -42,7 +43,8 @@ def _lotes(partes: Sequence[Tuple[str, "Plan"]]) -> str:
 def _resumen_sumado(partes: Sequence[Tuple[str, "Plan"]]) -> dict:
     """Suma los resumenes de todas las partes."""
     total: dict = {"total": 0, "escribibles": 0, "bloqueadas": 0,
-                   "separadores": 0, "avisos_globales": 0}
+                   "separadores": 0, "avisos_globales": 0,
+                   "fechas_inferidas": 0}
     for _nombre, plan in partes:
         for clave, valor in plan.resumen().items():
             total[clave] = total.get(clave, 0) + valor
@@ -64,6 +66,9 @@ def _fila(entrada) -> dict:
         "log_number": valores.get(CAMPO_LOG_NUMBER, ""),
         "audit_status": valores.get(CAMPO_AUDIT_STATUS, ""),
         "end_date": valores.get(CAMPO_END_DATE, ""),
+        # Como se dedujo la fecha cuando la bitacora no la trajo leida.
+        # Vacio es lo normal: la fecha salio de la pagina.
+        "fecha_inferida": registro.fecha_inferida,
         "ya_indexada": "si" if entrada.ya_indexada else "",
         "accion": (
             "separador" if registro.es_separador
@@ -173,6 +178,7 @@ def escribir_html_de_partes(
  <span>Se escribirian: <b>{resumen['escribibles']}</b></span>
  <span>Bloqueadas: <b>{resumen['bloqueadas']}</b></span>
  <span>Separadores: <b>{resumen['separadores']}</b></span>
+ <span>Fecha deducida: <b>{resumen['fechas_inferidas']}</b></span>
 </div>
 <table><thead><tr>{encabezados}</tr></thead>
 <tbody>{''.join(filas)}</tbody></table>
@@ -201,6 +207,8 @@ def resumen_texto_de_partes(partes: Sequence[Tuple[str, Plan]]) -> str:
         f"  bloqueadas:     {datos['bloqueadas']}",
         f"  separadores:    {datos['separadores']}",
     ]
+    if datos["fechas_inferidas"]:
+        lineas.append(f"  fecha deducida: {datos['fechas_inferidas']}")
     motivos: dict[str, int] = {}
     for _nombre, plan in partes:
         for entrada in plan.bloqueadas:

@@ -70,6 +70,10 @@ class Registro(BaseModel):
     # al formato de AirVault (m/d/Y) se hace al construir los valores, no
     # aqui, para que el manifiesto se siga leyendo igual que el CSV.
     fecha: str = ""
+    # Regla con la que se dedujo la fecha cuando la bitacora no la trajo
+    # leida (``app/airvault/fechas.py``). Vacio cuando la fecha es la que
+    # se leyo de la pagina, que es el caso normal.
+    fecha_inferida: str = ""
     fleet: str = ""
     lessor: str = ""
     fleet_inferido: bool = False

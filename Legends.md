@@ -2,6 +2,16 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-20 — La bitácora sin fecha legible ya no bloquea el lote de AirVault
+
+`End Date` es obligatorio en AirVault. Una bitácora cuya fecha no se dejó leer llegaba al indexado con ese campo vacío, la guarda de obligatorios bloqueaba su página y el lote se quedaba sin poder cerrarse: alguien tenía que abrirlo en el Web Index y teclear esa fecha a mano, en medio de cuatrocientas páginas que sí se habían escrito solas. Y bastaba una.
+
+Ahora, cuando la fecha no se leyó pero el número de bitácora sí, la fecha se deduce. El número es el que ordena el libro, y dentro de un libro la fecha no retrocede al aumentar: una página sin fecha está entre la de la anterior y la de la siguiente, así que se le pone la de la bitácora fechada más cercana del mismo libro —en un empate, la posterior—, que cae dentro de ese intervalo por construcción. Pasada la última fechada ya no hay techo que respetar y va el último día de ese mes, la misma convención con la que el CSV completa un día ilegible. Si el libro entero llegó sin fechas se baja al mes dominante del avión y, en último término, al de la ejecución.
+
+La regla no cruza libros: otro libro del mismo avión no ordena a este, solo aporta su mes. Y una bitácora **sin número legible no recibe fecha**: sin número no hay libro ni posición, esa página está bloqueada de todos modos por su propio campo obligatorio, y ponerle una fecha solo maquillaría el reporte.
+
+La deducida no se presenta como leída. El reporte de revisión trae la columna `fecha_inferida` con la regla que la produjo, y el resumen —el de la página HTML y el de la consola— cuenta cuántas páginas la llevan, para mirarlas antes de aprobar la escritura. El CSV de la ejecución no cambia: ahí la fecha sigue siendo la que se leyó, o ninguna.
+
 ## 2026-08-19 — El lote de AirVault se suelta al terminar y la sesión se renueva sola
 
 Indexar dejaba el lote tomado. Abrirlo lo bloquea a nombre de quien lo abre, y el programa nunca lo soltaba: AirVault admite un solo dueño por lote, así que a partir de la primera corrida cualquier apertura posterior —la del programa la vez siguiente, o la de la persona que entra por el navegador— se quedaba esperando sin respuesta, porque el servidor no contesta ni da error cuando el lote está tomado. Después de tres minutos aparecía un tiempo agotado que además culpaba al navegador de un candado que había dejado el propio programa. El lote de «Revisar» era el peor caso: es el que alguien tiene que indexar a mano, y quedaba bloqueado sin que nadie escribiera en él.

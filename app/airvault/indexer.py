@@ -83,6 +83,12 @@ class Plan:
             "bloqueadas": len(self.bloqueadas),
             "separadores": len(self.separadores),
             "avisos_globales": len(self.avisos_globales),
+            # Paginas cuya End Date no se leyo y se dedujo del libro. No
+            # bloquean, pero son las primeras que hay que mirar en el
+            # reporte antes de aprobar la escritura.
+            "fechas_inferidas": sum(
+                1 for p in self.paginas if p.registro.fecha_inferida
+            ),
         }
 
 
