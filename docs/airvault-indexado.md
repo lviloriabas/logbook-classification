@@ -165,7 +165,8 @@ El indexado se niega a escribir si algo no cuadra. Estan todas juntas en
 3. Si AirVault ya trae un log number en esa pagina, tiene que coincidir con
    el del manifiesto. Es el mejor ancla de alineacion que existe.
 4. Una pagina ya validada no se pisa salvo con `--sobrescribir`.
-5. Ningun campo obligatorio puede quedar vacio.
+5. Ningun campo obligatorio puede quedar vacio. La fecha, que era la que
+   mas veces faltaba, se deduce antes de llegar aqui (ver «Campos»).
 
 Una pagina que falle cualquiera de estas queda marcada como bloqueada en el
 reporte y no se escribe; el resto del lote sigue. La primera guarda es la
@@ -186,7 +187,37 @@ pisa lo que alguien haya puesto a mano.
 | Fleet | se deduce de la matricula |
 | Log Page Number | columna `log_number` del CSV |
 | Audit Status | valor del trabajo |
-| End Date | columna `date` del CSV, convertida a `MM/DD/YYYY` |
+| End Date | columna `date` del CSV en `MM/DD/YYYY`; si no se leyo, se deduce del libro |
+
+**La fecha.** `End Date` es obligatorio: una bitacora sin fecha deja su
+pagina bloqueada, y basta una para que el lote no se pueda cerrar. Cuando la
+lectura no dejo fecha pero si el log number —que es el que ordena el libro—
+se deduce con las mismas reglas que el corrector de fechas del
+procesamiento, de la que mas evidencia tiene a la que menos:
+
+| Que hay | Que fecha se pone |
+|---|---|
+| La misma bitacora repetida, y una de las dos si trae fecha | esa |
+| Bitacoras fechadas antes y despues en el libro | la de la mas cercana; en un empate, la posterior |
+| Solo fechadas antes | el ultimo dia de ese mes |
+| Solo fechadas despues | la de la primera de ellas |
+| Ninguna en el libro | el ultimo dia del mes dominante del avion |
+| El avion entero sin fechas | el ultimo dia del mes dominante de la ejecucion |
+
+Dentro de un libro la fecha no retrocede al aumentar el log number, asi que
+una pagina sin fecha esta entre la de la anterior y la de la siguiente: lo
+que se le pone cae siempre dentro de ese intervalo. Pasada la ultima
+fechada ya no hay techo, y ahi va el fin de mes, la misma convencion con la
+que el CSV completa un dia ilegible. La regla no cruza libros: otro libro
+del mismo avion no ordena a este, solo aporta su mes.
+
+Una bitacora **sin log number legible no recibe fecha**: sin numero no hay
+libro ni posicion, la pagina esta bloqueada de todos modos por ese campo
+obligatorio, y ponerle una fecha solo maquillaria el reporte.
+
+La deducida no se presenta como leida. El reporte trae la columna
+`fecha_inferida` con la regla que la produjo y el resumen cuenta cuantas
+paginas la llevan, para mirarlas antes de aprobar la escritura.
 
 **La flota.** AirVault la resuelve con un procedimiento almacenado a partir
 de la matricula, pero ese lookup lo dispara la interfaz al escribir el

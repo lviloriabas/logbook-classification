@@ -111,6 +111,32 @@ def test_banderas_del_csv_viajan():
     assert registros[0].discrepancia is True
 
 
+def test_una_bitacora_sin_fecha_la_hereda_de_su_libro():
+    """End Date es obligatorio: sin fecha la pagina no se puede escribir."""
+    filas = [_fila(page="1", log_number="2287310", date="2026/08/03"),
+             _fila(page="2", log_number="2287311", date=""),
+             _fila(page="3", log_number="2287312", date="2026/08/28")]
+    registros = registros_desde_csv(filas)
+    valores = valores_de_indice(registros[1], "Log Page", "PUBLISHED")
+    assert valores[CAMPO_END_DATE] == "08/28/2026"
+    assert registros[1].fecha_inferida == "entre bitacoras del libro"
+
+
+def test_la_fecha_leida_no_queda_marcada_como_deducida():
+    registros = registros_desde_csv([_fila(date="2026/08/31")])
+    assert registros[0].fecha == "2026/08/31"
+    assert registros[0].fecha_inferida == ""
+
+
+def test_sin_log_number_la_fecha_sigue_vacia():
+    """No hay libro con el que ubicarla, y el propio log_number la bloquea."""
+    filas = [_fila(page="1", log_number="2287310", date="2026/08/03"),
+             _fila(page="2", log_number="", date="")]
+    registros = registros_desde_csv(filas)
+    assert registros[1].fecha == ""
+    assert registros[1].fecha_inferida == ""
+
+
 def test_valores_de_indice_llevan_los_seis_obligatorios():
     registro = registros_desde_csv([_fila()])[0]
     valores = valores_de_indice(registro, "Log Page", "PUBLISHED")

@@ -23,6 +23,7 @@ from app.airvault.config import (
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
 )
+from app.airvault.fechas import fechas_inferidas
 from app.airvault.model import Registro
 
 FLOTA_CACHE_FILENAME = "airvault_flota.json"
@@ -166,6 +167,8 @@ def registros_desde_csv(
     la correspondencia con las paginas del lote.
     """
     resolutor = resolutor or ResolutorFlota()
+    filas = list(filas)
+    inferidas = fechas_inferidas(filas)
     por_clave: Dict[tuple[str, int], Mapping[str, str]] = {}
     secuencia: List[Mapping[str, str]] = []
     for fila in filas:
@@ -188,7 +191,7 @@ def registros_desde_csv(
         if _en_blanco(fila):
             continue
         seq += 1
-        registros.append(_registro_de_fila(seq, fila, resolutor))
+        registros.append(_registro_de_fila(seq, fila, resolutor, inferidas))
     return registros
 
 
@@ -202,18 +205,35 @@ def _en_blanco(fila: Mapping[str, str]) -> bool:
 
 
 def _registro_de_fila(
-    seq: int, fila: Mapping[str, str], resolutor: ResolutorFlota
+    seq: int,
+    fila: Mapping[str, str],
+    resolutor: ResolutorFlota,
+    inferidas: Mapping[tuple[str, int], tuple[str, str]] | None = None,
 ) -> Registro:
-    """Traduce una fila del CSV al registro que viaja en el manifiesto."""
+    """Traduce una fila del CSV al registro que viaja en el manifiesto.
+
+    ``inferidas`` trae las fechas deducidas para las bitacoras que llegaron
+    sin ella (ver :mod:`app.airvault.fechas`). Solo se usa cuando la fila no
+    trae una fecha propia: una lectura nunca se pisa con una deduccion.
+    """
     matricula = normalizar_matricula(fila.get("matricula", ""))
     fleet, lessor, inferido = resolutor.resolver(matricula)
+    archivo = str(fila.get("file", "")).strip()
+    pagina = int(str(fila.get("page", "0")).strip() or 0)
+    fecha = str(fila.get("date", "")).strip()
+    fecha_inferida = ""
+    if not _FECHA_CSV_RE.match(fecha):
+        fecha, fecha_inferida = (inferidas or {}).get(
+            (archivo, pagina), (fecha, "")
+        )
     return Registro(
         seq=seq,
-        archivo_origen=str(fila.get("file", "")).strip(),
-        pagina_origen=int(str(fila.get("page", "0")).strip() or 0),
+        archivo_origen=archivo,
+        pagina_origen=pagina,
         matricula=matricula,
         log_number=normalizar_log_number(fila.get("log_number", "")),
-        fecha=str(fila.get("date", "")).strip(),
+        fecha=fecha,
+        fecha_inferida=fecha_inferida,
         fleet=fleet if matricula else "",
         lessor=lessor,
         fleet_inferido=inferido and bool(matricula),
@@ -276,6 +296,12 @@ def registros_desde_entrega(
     escriba nada.
     """
     resolutor = resolutor or ResolutorFlota()
+    filas = list(filas)
+    # Las fechas se deducen con el CSV entero, no con las paginas de esta
+    # parte: una ejecucion repartida en varios lotes sigue siendo un solo
+    # juego de libros, y las anclas de un libro pueden haber caido en otra
+    # parte.
+    inferidas = fechas_inferidas(filas)
     por_clave: Dict[tuple[str, int], Mapping[str, str]] = {}
     for fila in filas:
         archivo = str(fila.get("file", "")).strip()
@@ -306,7 +332,7 @@ def registros_desde_entrega(
                 ],
             ))
             continue
-        registros.append(_registro_de_fila(seq, fila, resolutor))
+        registros.append(_registro_de_fila(seq, fila, resolutor, inferidas))
     return registros
 
 
