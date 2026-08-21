@@ -13,6 +13,9 @@ los tests, que es como se comprueba que un ensayo no escribe nada.
 
 from __future__ import annotations
 
+import hashlib
+import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,6 +52,10 @@ from app.airvault.naming import (
 )
 
 CARPETA_TRABAJOS = Path("output") / "airvault"
+
+# AirVault/Quick Upload trabaja de forma mas estable con lotes acotados.
+# La ventana deja cambiarlo antes de preparar la carga.
+PAGINAS_POR_BATCH_POR_DEFECTO = 300
 
 # Avisos de avance: reciben un texto y, cuando se sabe, cuanto se lleva de
 # cuanto. Es lo que la interfaz convierte en barra de progreso.
@@ -116,7 +123,9 @@ class ParteDeEntrega:
 
     def nombre_lote(self, base: str) -> str:
         if self.revisar:
-            return nombre_de_revisar(base)
+            return nombre_de_parte(
+                nombre_de_revisar(base), self.indice, self.total
+            )
         return nombre_de_parte(base, self.indice, self.total)
 
 
@@ -131,18 +140,24 @@ def partes_de_corrida(csv: Path | str) -> List[ParteDeEntrega]:
     if not indice:
         return []
     carpeta = carpeta_de_corrida(csv)
-    # El archivo de revisar no se numera: no es «una de cinco», es el que
-    # queda aparte. Numerarlo correria la cuenta de las demas.
+    # Revisar lleva su cuenta aparte: nunca corre la numeracion de los
+    # automaticos, aunque el limite de Quick Upload obligue a trocearlo.
     numerables = sum(1 for p in indice if not p.get("revisar"))
+    revisables = sum(1 for p in indice if p.get("revisar"))
     partes: List[ParteDeEntrega] = []
     numero = 0
+    numero_revisar = 0
     for parte in indice:
         nombre = str(parte.get("pdf", "")).strip()
         es_revisar = bool(parte.get("revisar"))
-        if not es_revisar:
+        if es_revisar:
+            numero_revisar += 1
+            indice_parte, total_partes = numero_revisar, revisables
+        else:
             numero += 1
+            indice_parte, total_partes = numero, numerables
         partes.append(ParteDeEntrega(
-            indice=numero, total=numerables,
+            indice=indice_parte, total=total_partes,
             pdf=carpeta / nombre if nombre else carpeta,
             paginas=list(parte.get("paginas") or []),
             revisar=es_revisar,
@@ -170,6 +185,123 @@ def comprobar_entrega(csv: Path | str) -> List[ParteDeEntrega]:
             f"corrida: {', '.join(faltan[:4])}. Volver a exportarla."
         )
     return partes
+
+
+def _paginas_del_pdf(ruta: Path) -> int:
+    """Cuenta paginas sin dejar el documento abierto."""
+    import pymupdf as fitz
+
+    documento = fitz.open(str(ruta))
+    try:
+        return int(documento.page_count)
+    finally:
+        documento.close()
+
+
+def _pdf_de_carga(
+    origen: ParteDeEntrega, numero_origen: int, inicio: int, fin: int,
+    carpeta: Path,
+) -> Path:
+    """Copia un tramo contiguo a un PDF interno y estable de Quick Upload."""
+    from app.vision.pdf_loader import copy_pdf_pages
+
+    huella = hashlib.sha1(
+        str(origen.pdf.resolve()).casefold().encode("utf-8")
+    ).hexdigest()[:10]
+    clase = "revisar" if origen.revisar else "automatico"
+    destino = (
+        carpeta / "cargas" /
+        f"{clase}-{numero_origen:02d}-{huella}-"
+        f"p{inicio + 1:05d}-{fin:05d}.pdf"
+    )
+    esperadas = fin - inicio
+    if destino.is_file():
+        try:
+            if _paginas_del_pdf(destino) == esperadas:
+                return destino
+        except Exception:  # noqa: BLE001 - se vuelve a generar abajo
+            pass
+
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, nombre_temporal = tempfile.mkstemp(
+        dir=str(destino.parent), prefix=".carga-", suffix=".pdf"
+    )
+    os.close(descriptor)
+    temporal = Path(nombre_temporal)
+    temporal.unlink(missing_ok=True)
+    try:
+        copy_pdf_pages(
+            ((origen.pdf, pagina) for pagina in range(inicio + 1, fin + 1)),
+            temporal,
+        )
+        os.replace(temporal, destino)
+    finally:
+        temporal.unlink(missing_ok=True)
+    return destino
+
+
+def partes_para_airvault(
+    partes: Sequence[ParteDeEntrega], carpeta: Path | str,
+    paginas_por_batch: int = PAGINAS_POR_BATCH_POR_DEFECTO,
+    avisar: Optional[Aviso] = None,
+) -> List[ParteDeEntrega]:
+    """Acota los PDF que recibira Quick Upload sin tocar la entrega original.
+
+    Cada tramo conserva el mismo orden y los mismos diccionarios del indice
+    de paginas. Solo los archivos que exceden el limite se copian a la
+    carpeta interna del trabajo; los que ya caben se usan directamente.
+    Automaticos y REVISAR se numeran por separado.
+    """
+    try:
+        limite = int(paginas_por_batch)
+    except (TypeError, ValueError) as exc:
+        raise ErrorDeCorrida(
+            "El limite de paginas por batch no es valido"
+        ) from exc
+    if limite < 0:
+        raise ErrorDeCorrida(
+            "El limite de paginas por batch no puede ser negativo"
+        )
+
+    crudas: List[tuple[Path, List[dict], bool]] = []
+    total_paginas = sum(len(parte.paginas) for parte in partes)
+    preparadas = 0
+    for numero_origen, parte in enumerate(partes, start=1):
+        cantidad = len(parte.paginas)
+        if limite <= 0 or cantidad <= limite:
+            crudas.append((parte.pdf, list(parte.paginas), parte.revisar))
+            preparadas += cantidad
+            continue
+
+        paginas_pdf = _paginas_del_pdf(parte.pdf)
+        if paginas_pdf != cantidad:
+            raise ErrorDeCorrida(
+                f"El PDF {parte.pdf.name} tiene {paginas_pdf} paginas y su "
+                f"indice declara {cantidad}; no se puede repartir sin "
+                "desalinear las bitacoras. Vuelva a exportar la ejecucion."
+            )
+        for inicio in range(0, cantidad, limite):
+            fin = min(inicio + limite, cantidad)
+            if avisar is not None:
+                avisar(
+                    f"Preparando batches de hasta {limite} páginas",
+                    preparadas, total_paginas,
+                )
+            pdf = _pdf_de_carga(
+                parte, numero_origen, inicio, fin, Path(carpeta)
+            )
+            crudas.append((pdf, list(parte.paginas[inicio:fin]), parte.revisar))
+            preparadas += fin - inicio
+
+    resultado: List[ParteDeEntrega] = []
+    for revisar in (False, True):
+        propias = [p for p in crudas if p[2] is revisar]
+        for indice, (pdf, paginas, _revisar) in enumerate(propias, start=1):
+            resultado.append(ParteDeEntrega(
+                indice=indice, total=len(propias), pdf=pdf,
+                paginas=paginas, revisar=revisar,
+            ))
+    return resultado
 
 
 @dataclass(frozen=True)
@@ -275,6 +407,7 @@ class Trabajo:
         nombre_lote: str = "", prefijo: str = PREFIJO_POR_DEFECTO,
         resolutor: Optional[ResolutorFlota] = None,
         parte: Optional[ParteDeEntrega] = None,
+        paginas_por_batch: int = PAGINAS_POR_BATCH_POR_DEFECTO,
     ) -> "Trabajo":
         """Arma el manifiesto de un archivo de entrega.
 
@@ -330,6 +463,7 @@ class Trabajo:
             pdf_origen=str(parte.pdf) if parte else "",
             parte=parte.indice if parte else 1,
             partes=parte.total if parte else 1,
+            paginas_por_batch=int(paginas_por_batch),
             solo_subir=bool(parte and parte.revisar),
             doc_type=config.doc_type,
             audit_status=config.audit_status,
@@ -355,6 +489,7 @@ class Trabajo:
         nombre_lote: str = "", prefijo: str = PREFIJO_POR_DEFECTO,
         resolutor: Optional[ResolutorFlota] = None,
         parte: Optional[ParteDeEntrega] = None,
+        paginas_por_batch: int = PAGINAS_POR_BATCH_POR_DEFECTO,
     ) -> "Trabajo":
         """Retoma el trabajo si ya existe para este CSV; si no, lo crea.
 
@@ -370,7 +505,14 @@ class Trabajo:
                 Path(trabajo.manifiesto.csv_origen or "") ==
                 Path(csv).resolve()
             )
-            if mismo_csv:
+            mismo_pdf = (
+                parte is None
+                or Path(trabajo.manifiesto.pdf_origen) == parte.pdf
+            )
+            mismo_limite = trabajo.manifiesto.paginas_por_batch in (
+                0, int(paginas_por_batch)
+            )
+            if mismo_csv and mismo_pdf and mismo_limite:
                 propuesto = (
                     parte.nombre_lote(nombre_lote) if parte and nombre_lote
                     else nombre_lote
@@ -383,7 +525,8 @@ class Trabajo:
                 "El trabajo {} era de otra corrida; se rehace", carpeta.name
             )
         return cls.preparar(
-            config, carpeta, csv, nombre_lote, prefijo, resolutor, parte
+            config, carpeta, csv, nombre_lote, prefijo, resolutor, parte,
+            paginas_por_batch,
         )
 
     def guardar(self) -> Path:
@@ -818,7 +961,9 @@ def carpeta_de_parte(carpeta: Path | str, parte: ParteDeEntrega) -> Path:
     """
     carpeta = Path(carpeta)
     if parte.revisar:
-        return carpeta / "revisar"
+        if parte.total <= 1:
+            return carpeta / "revisar"
+        return carpeta / f"revisar-{parte.indice:02d}"
     if parte.total <= 1:
         return carpeta
     return carpeta / f"parte-{parte.indice:02d}"
@@ -828,6 +973,8 @@ def preparar_partes(
     config: AirVaultConfig, carpeta: Path | str, csv: Path | str,
     nombre_lote: str = "", prefijo: str = PREFIJO_POR_DEFECTO,
     resolutor: Optional[ResolutorFlota] = None,
+    paginas_por_batch: int = PAGINAS_POR_BATCH_POR_DEFECTO,
+    avisar: Optional[Aviso] = None,
 ) -> List["Trabajo"]:
     """Un trabajo por cada archivo de entrega de la corrida.
 
@@ -835,12 +982,14 @@ def preparar_partes(
     manifiesto y sus guardas. Repartirlas asi es lo que deja que una parte
     se caiga o se retome sin arrastrar a las demas.
     """
-    partes = comprobar_entrega(csv)
+    partes = partes_para_airvault(
+        comprobar_entrega(csv), carpeta, paginas_por_batch, avisar
+    )
     resolutor = resolutor or ResolutorFlota()
     return [
         Trabajo.abrir_o_preparar(
             config, carpeta_de_parte(carpeta, parte), csv,
-            nombre_lote, prefijo, resolutor, parte,
+            nombre_lote, prefijo, resolutor, parte, paginas_por_batch,
         )
         for parte in partes
     ]
@@ -954,21 +1103,62 @@ def cargar_partes(
     ejecucion cargada seria peor que ninguna, porque las partes que
     faltaran parecerian no existir.
     """
-    partes = partes_de_corrida(csv)
-    if not partes:
+    partes_originales = partes_de_corrida(csv)
+    if not partes_originales:
         return []
+    carpeta = Path(carpeta)
+    carpetas = [carpeta] if manifiestos.existe(carpeta) else []
+    if carpeta.is_dir():
+        carpetas.extend(
+            hija for hija in sorted(carpeta.iterdir())
+            if hija.is_dir() and manifiestos.existe(hija)
+        )
+    objetivo = Path(csv).resolve()
     trabajos: List["Trabajo"] = []
-    for parte in partes:
-        propia = carpeta_de_parte(carpeta, parte)
-        if not manifiestos.existe(propia):
-            return []
+    for propia in carpetas:
         trabajo = Trabajo.cargar(config, propia)
-        if Path(trabajo.manifiesto.csv_origen or "") != Path(csv).resolve():
-            # La carpeta guarda el trabajo de otra ejecucion; retomarlo
-            # escribiria los datos de una en el lote de otra.
+        if Path(trabajo.manifiesto.csv_origen or "") != objetivo:
+            continue
+        if not Path(trabajo.manifiesto.pdf_origen or "").is_file():
             return []
         trabajos.append(trabajo)
-    return trabajos
+    if not trabajos:
+        return []
+
+    def grupo(revisar: bool) -> Optional[List["Trabajo"]]:
+        suyos = [t for t in trabajos if t.manifiesto.solo_subir is revisar]
+        if not suyos:
+            return []
+        if (
+            revisar and len(suyos) == 1
+            and suyos[0].manifiesto.paginas_por_batch == 0
+        ):
+            # Antes del limite configurable, el unico REVISAR heredaba la
+            # numeracion de los automaticos. Se acepta para poder retomar
+            # trabajos ya subidos con ese formato antiguo.
+            return suyos
+        esperadas = suyos[0].manifiesto.partes
+        numeros = {t.manifiesto.parte for t in suyos}
+        if (
+            any(t.manifiesto.partes != esperadas for t in suyos)
+            or numeros != set(range(1, esperadas + 1))
+        ):
+            return None
+        return sorted(suyos, key=lambda t: t.manifiesto.parte)
+
+    automaticos = grupo(False)
+    revisar = grupo(True)
+    if automaticos is None or revisar is None:
+        return []
+    habia_automaticos = any(not parte.revisar for parte in partes_originales)
+    habia_revisar = any(parte.revisar for parte in partes_originales)
+    if (
+        habia_automaticos != bool(automaticos)
+        or habia_revisar != bool(revisar)
+    ):
+        # Una preparacion cortada no se presenta como una entrega completa.
+        return []
+    return list(automaticos) + list(revisar)
 
 
 def estado_local(trabajo: "Trabajo") -> EstadoParte:

@@ -11,12 +11,18 @@ diccionarios de mentira.
 from __future__ import annotations
 
 import csv
+from pathlib import Path
 
 import pymupdf as fitz
 import pytest
 
 from app.airvault.config import AirVaultConfig
-from app.airvault.flujo import Trabajo, comprobar_entrega, preparar_partes
+from app.airvault.flujo import (
+    Trabajo,
+    cargar_partes,
+    comprobar_entrega,
+    preparar_partes,
+)
 from app.airvault.guards import verificar_cantidad
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.reports.organize import (
@@ -227,6 +233,94 @@ def test_una_seccion_que_no_cabe_repite_su_separador(tmp_path):
     # Cada parte abre con un separador, sea el de su seccion o el repetido.
     for parte in declaradas:
         assert parte.paginas[0].get("separador")
+
+
+# ── limite propio de Quick Upload ──────────────────────────────────
+
+def test_airvault_reparte_una_entrega_que_supera_el_limite(tmp_path):
+    csv_path, partes = corrida(tmp_path)
+    original = partes[0].ruta.read_bytes()
+
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path,
+        paginas_por_batch=5,
+    )
+
+    assert len(trabajos) == 3
+    assert [len(t.manifiesto.registros) for t in trabajos] == [5, 5, 2]
+    assert all(t.manifiesto.paginas_por_batch == 5 for t in trabajos)
+    for trabajo in trabajos:
+        pdf = Path(trabajo.manifiesto.pdf_origen)
+        assert pdf.parent.name == "cargas"
+        assert paginas_del_pdf(pdf) == len(trabajo.manifiesto.registros)
+    # El reparto de AirVault no reexporta ni reemplaza la entrega original.
+    assert partes[0].ruta.read_bytes() == original
+
+
+def test_el_reparto_de_airvault_no_pierde_ni_duplica_bitacoras(tmp_path):
+    csv_path, _partes = corrida(tmp_path)
+    contenido_csv = csv_path.read_bytes()
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path,
+        paginas_por_batch=5,
+    )
+
+    logs = [
+        registro.log_number
+        for trabajo in trabajos
+        for registro in trabajo.manifiesto.bitacoras()
+    ]
+    assert sorted(logs) == sorted(log for _matricula, log, _fecha in BITACORAS)
+    assert csv_path.read_bytes() == contenido_csv
+
+
+def test_los_batches_repartidos_se_retoman_desde_sus_manifiestos(tmp_path):
+    csv_path, _partes = corrida(tmp_path)
+    preparados = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path,
+        paginas_por_batch=5,
+    )
+
+    cargados = cargar_partes(AirVaultConfig(), tmp_path / "job", csv_path)
+
+    assert [t.carpeta for t in cargados] == [t.carpeta for t in preparados]
+    assert [t.manifiesto.pdf_origen for t in cargados] == [
+        t.manifiesto.pdf_origen for t in preparados
+    ]
+
+
+def test_un_manifiesto_revisar_antiguo_se_puede_retomar(tmp_path):
+    csv_path, _partes = corrida_con_revisar(tmp_path)
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path,
+        paginas_por_batch=300,
+    )
+    revisar = next(t for t in trabajos if t.manifiesto.solo_subir)
+    # Formato anterior: REVISAR heredaba la cuenta de los automaticos.
+    revisar.manifiesto.parte = 2
+    revisar.manifiesto.partes = 2
+    revisar.manifiesto.paginas_por_batch = 0
+    revisar.guardar()
+
+    cargados = cargar_partes(AirVaultConfig(), tmp_path / "job", csv_path)
+
+    assert len([t for t in cargados if t.manifiesto.solo_subir]) == 1
+
+
+def test_revisar_tambien_se_reparte_si_excede_quick_upload(tmp_path):
+    csv_path, _partes = corrida_con_revisar(tmp_path)
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path,
+        "DP | BITS PRUEBA", paginas_por_batch=2,
+    )
+
+    revisar = [t for t in trabajos if t.manifiesto.solo_subir]
+    assert len(revisar) == 2
+    assert [t.manifiesto.nombre_batch for t in revisar] == [
+        "DP | BITS PRUEBA REVISAR -1",
+        "DP | BITS PRUEBA REVISAR -2",
+    ]
+    assert all(len(t.manifiesto.registros) <= 2 for t in trabajos)
 
 
 def test_una_corrida_sin_exportar_no_se_indexa(tmp_path):

@@ -323,16 +323,17 @@ El índice de páginas `<corrida>_paginas.json` representa cada hoja del PDF, in
 
 El flujo es:
 
-1. cargar cada PDF mediante Quick Upload;
-2. detectar el lote nuevo y asignarle nombre;
-3. leer páginas y construir un plan sin escribir;
-4. generar `revision.html` y `revision.csv`;
-5. escribir solo registros habilitados;
-6. releerlos y confirmar estado `Valid`;
-7. guardar el manifiesto después de cada página;
-8. liberar el lote al terminar, cancelar o abandonar.
+1. repartir para Quick Upload los PDF que excedan el máximo elegido en la ventana, 300 páginas por batch de forma predeterminada;
+2. cargar cada PDF mediante Quick Upload;
+3. detectar el lote nuevo y asignarle nombre;
+4. leer páginas y construir un plan sin escribir;
+5. generar `revision.html` y `revision.csv`;
+6. escribir solo registros habilitados;
+7. releerlos y confirmar estado `Valid`;
+8. guardar el manifiesto después de cada página;
+9. liberar el lote al terminar, cancelar o abandonar.
 
-BITS escribe siempre `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status` y `End Date`. Añade `Batch Name` cuando se proporciona, `Lessor` cuando está resuelto y `Description` cuando existe un `flight_number` válido. Los campos no enviados se conservan.
+BITS escribe siempre `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status` y `End Date`. Añade `Batch Name` cuando se proporciona y `Lessor` cuando está resuelto. `Description` recibe `<flight_number> AUTO INDEX` cuando existe vuelo y `AUTO INDEX` cuando no existe. Esta marca se agrega al payload remoto y no altera los CSV.
 
 La flota de AirVault se resuelve primero desde `airvault_flota.json`, en la raíz. BITS guarda allí los pares `Aircraft`, `Fleet` y `Lessor` confirmados por AirVault. Si no hay entrada, usa este respaldo: `HK-` produce `EMB`, `HP-98` y `HP-99` producen `MAX`, y las demás `HP-` producen `NG`. El reporte marca `fleet_inferido`; una confirmación posterior de AirVault sustituye el dato inferido en la caché.
 

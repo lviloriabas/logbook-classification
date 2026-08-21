@@ -98,14 +98,14 @@ def test_el_vuelo_se_marca_solo_en_el_payload_automatico():
     assert valores_remotos[CAMPO_DESCRIPCION] == "CM137 AUTO INDEX"
 
 
-def test_sin_vuelo_no_se_manda_la_marca_automatica():
+def test_sin_vuelo_se_manda_solo_la_marca_automatica():
     cliente = ClienteFalso(page_count=1)
     m = manifiesto(1)
     indexador = Indexador(cliente, m, PICKLIST)
     indexador.aplicar(indexador.planificar(1))
 
     _pagina, valores_remotos, _estado = cliente.escrituras[0]
-    assert CAMPO_DESCRIPCION not in valores_remotos
+    assert valores_remotos[CAMPO_DESCRIPCION] == "AUTO INDEX"
 
 
 def test_pagina_ya_valida_se_respeta():

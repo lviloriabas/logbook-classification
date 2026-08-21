@@ -313,10 +313,12 @@ class Indexador:
             try:
                 valores = dict(entrada.valores)
                 vuelo = registro.flight_number.strip()
-                if vuelo:
-                    # La marca identifica exclusivamente la escritura por
-                    # API. No forma parte del CSV ni del plan/reporte local.
-                    valores[CAMPO_DESCRIPCION] = f"{vuelo} AUTO INDEX"
+                # La marca identifica exclusivamente la escritura por API.
+                # Con vuelo va despues de el; sin vuelo es todo el contenido.
+                # No forma parte del CSV ni del plan/reporte local.
+                valores[CAMPO_DESCRIPCION] = (
+                    f"{vuelo} AUTO INDEX" if vuelo else "AUTO INDEX"
+                )
                 self.cliente.guardar_pagina(
                     plan.batch_id,
                     entrada.pagina_batch,
