@@ -248,7 +248,7 @@ La columna **ya_indexada** indica si la página ya estaba válida. En ese caso, 
 
 Las páginas sin aeronave confirmada forman un lote terminado en `REVISAR`. BITS lo sube y lo libera, pero su clasificación e indexado son manuales.
 
-En el flujo normal, BITS escribe `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status`, `End Date` y `Batch Name`. Añade `Lessor` cuando está resuelto y `Description` cuando existe un número de vuelo válido. Si el vuelo está vacío, conserva la descripción existente. No envía los demás campos.
+En el flujo normal, BITS escribe `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status`, `End Date` y `Batch Name`. Añade `Lessor` cuando está resuelto y `Description` cuando existe un número de vuelo válido; en AirVault queda como `<vuelo> AUTO INDEX`. Si el vuelo está vacío, conserva la descripción existente. La marca solo viaja a AirVault: no modifica el CSV ni el reporte de revisión. Al indexar también borra en AirVault las páginas separadoras del lote automático. El lote `REVISAR` conserva sus páginas y se indexa a mano. No envía los demás campos.
 
 `Fleet` se toma primero de `airvault_flota.json`, donde BITS guarda los valores confirmados por AirVault. Si no hay dato conocido, se infiere por familia y el reporte marca `fleet_inferido=si`; confirme esa fila antes de indexar.
 
