@@ -21,6 +21,7 @@ class ClienteFalso:
         fallar_en: Optional[set[int]] = None,
         mapa: Optional[List[PaginaDelLote]] = None,
         no_se_pueden_borrar: Optional[set[int]] = None,
+        estados_tras_validar: Optional[Dict[int, int]] = None,
     ):
         self.paginas = paginas or {}
         self.lotes = lotes or []
@@ -34,7 +35,9 @@ class ClienteFalso:
         # Paginas que AirVault no deja quitar: es lo que pasa sin el
         # permiso «Delete Batch Image».
         self.no_se_pueden_borrar = no_se_pueden_borrar or set()
+        self.estados_tras_validar = estados_tras_validar or {}
         self.borradas: List[int] = []
+        self.validaciones_batch: List[tuple[str, List[int]]] = []
         self.escrituras: List[tuple[int, Dict[int, str], int]] = []
         self.filtros: List[str] = []
         self.lecturas: List[int] = []
@@ -103,6 +106,26 @@ class ClienteFalso:
     def completar_lote(self, batch_id: str) -> Mapping[str, object]:
         self.completados.append(batch_id)
         return {"IsError": False}
+
+    def validar_batch(
+        self, batch_id: str, paginas: List[int],
+    ) -> List[Mapping[str, object]]:
+        cabeceras = list(paginas)
+        self.validaciones_batch.append((batch_id, cabeceras))
+        if self.mapa is not None and self.estados_tras_validar:
+            self.mapa = [
+                PaginaDelLote(
+                    p.pagina,
+                    self.estados_tras_validar.get(p.pagina, p.estado),
+                    p.inicio_documento,
+                    p.borrada,
+                )
+                for p in self.mapa
+            ]
+        return [
+            {"Sequence": p.pagina, "Status": p.estado}
+            for p in (self.mapa or []) if p.pagina in cabeceras
+        ]
 
 
 def pagina(numero: int, estado: int = 3,

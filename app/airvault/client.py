@@ -160,6 +160,10 @@ class ClienteAirVault(Protocol):
     def borrar_pagina(self, batch_id: str, pagina: int,
                       borrada: bool = True) -> bool: ...
 
+    def validar_batch(
+        self, batch_id: str, paginas: Sequence[int],
+    ) -> List[Mapping[str, Any]]: ...
+
     def completar_lote(self, batch_id: str) -> Mapping[str, Any]: ...
 
 
@@ -361,6 +365,39 @@ class ClienteHttp:
                 f"{respuesta.get('Message') or 'sin motivo'}"
             )
         return respuesta
+
+    def validar_batch(
+        self, batch_id: str, paginas: Sequence[int],
+    ) -> List[Mapping[str, Any]]:
+        """Ejecuta la validacion de repositorio previa a ``Complete``.
+
+        MXDocs anuncia ``data-batch-level-validation=1``. Por eso el boton
+        oficial no pasa directamente de ver las paginas verdes a
+        ``CompleteBatch``: primero envia las cabeceras de documento a
+        ``UpdateBatchValidationQuery``. Esa consulta puede devolver alguna
+        pagina a amarillo aunque sus campos obligatorios esten llenos.
+
+        Se conserva el identificador del batch sin Base64 y la lista
+        separada por comas porque ese es el contrato exacto del cliente web
+        de AirVault para esta ruta.
+        """
+        cabeceras = sorted({int(p) for p in paginas if int(p) > 0})
+        if not cabeceras:
+            return []
+        respuesta = self.sesion.post_json(
+            "/index/Batch/UpdateBatchValidationQuery",
+            data={
+                "batchId": batch_id,
+                "repoId": self.config.repo_id,
+                "pageRangeDelimiter": ",".join(map(str, cabeceras)),
+            },
+        )
+        if not isinstance(respuesta, (list, tuple)):
+            raise RespuestaInesperada(
+                f"AirVault no devolvio el resultado de validar el batch "
+                f"{batch_id}, sino {_describir(respuesta)}."
+            )
+        return [fila for fila in respuesta if isinstance(fila, Mapping)]
 
     # ── paginas ────────────────────────────────────────────────────
 

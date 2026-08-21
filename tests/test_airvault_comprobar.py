@@ -398,6 +398,7 @@ def test_un_lote_entero_en_verde_se_cierra(tmp_path):
     cliente.mapa = mapa(0, 0)
     resultado = trabajo.completar(cliente)
     assert resultado.completado
+    assert cliente.validaciones_batch == [("003SRO", [1, 2])]
     assert cliente.completados == ["003SRO"]
     assert trabajo.manifiesto.etapa_hecha("completar")
 
@@ -462,6 +463,55 @@ def test_las_divisorias_se_quitan_del_lote_para_poder_cerrarlo(tmp_path):
     assert resultado.quitadas == [1]
     assert cliente.borradas == [1]
     assert cliente.completados == ["003SRO"]
+
+
+def test_una_divisoria_verde_tambien_se_quita_antes_de_completar(tmp_path):
+    trabajo, cliente = trabajo_con_divisoria(tmp_path)
+    cliente.mapa = mapa(0, 0, 0)
+
+    resultado = trabajo.completar(cliente)
+
+    assert resultado.completado
+    assert resultado.quitadas == [1]
+    assert cliente.borradas == [1]
+    assert cliente.validaciones_batch == [("003SRO", [2, 3])]
+
+
+def test_la_validacion_final_puede_devolver_una_pagina_a_amarillo(tmp_path):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.fijar_lote("003SRO")
+    cliente.mapa = mapa(0, 0)
+    cliente.estados_tras_validar = {2: 3}
+
+    resultado = trabajo.completar(cliente)
+
+    assert not resultado.completado
+    assert resultado.bloqueadas == [2]
+    assert "no se envio CompleteBatch" in resultado.detalle
+    assert cliente.completados == []
+    assert cliente.cerrados == ["003SRO"]
+    assert (
+        trabajo.manifiesto.etapa("verificar").estado
+        is EstadoEtapa.ERROR
+    )
+
+
+def test_reiniciar_un_cierre_pendiente_no_reinicia_la_subida(tmp_path):
+    """El PDF no vuelve a Quick Upload si Complete necesita otro intento."""
+    trabajo, _cliente = trabajo_subido(tmp_path)
+    trabajo.fijar_lote("003SRO")
+    trabajo.manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.HECHA, "2/2 en Valid"
+    )
+    trabajo.manifiesto.etapa("completar").marcar(
+        EstadoEtapa.OMITIDA, "validacion pendiente"
+    )
+
+    reiniciados = reiniciar_trabajos_incompletos([trabajo])
+
+    assert reiniciados == [(trabajo, "completar")]
+    assert trabajo.manifiesto.etapa("subir").estado is EstadoEtapa.HECHA
+    assert trabajo.manifiesto.batch_id == "003SRO"
 
 
 def test_con_una_bitacora_en_amarillo_no_se_toca_ninguna_divisoria(tmp_path):
