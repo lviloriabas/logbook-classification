@@ -120,7 +120,7 @@ class ParteDeEntrega:
     total: int
     pdf: Path
     paginas: List[dict]
-    # El archivo con las bitacoras sin avion confirmado. Se sube igual que
+    # El archivo con las bitacoras que requieren revision. Se sube igual que
     # los demas, pero no se indexa.
     revisar: bool = False
 
@@ -1312,7 +1312,7 @@ def _estado_de(trabajo: "Trabajo", cliente,
         )
     if manifiesto.solo_subir:
         return EstadoParte(
-            trabajo, SOLO_REVISAR, f"{esperadas} paginas sin avion", lote
+            trabajo, SOLO_REVISAR, f"{esperadas} paginas para revisar", lote
         )
     verificar = manifiesto.etapas.get("verificar")
     if verificar and verificar.estado is EstadoEtapa.HECHA:

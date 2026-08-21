@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 from app.models.schemas import FieldResult, PageResult, ValidationReport
+from app.models.schemas import Status
 from app.reports.organize import (
     ArchivoDeEntrega,
     ETIQUETA_REVISAR,
@@ -73,6 +74,27 @@ def test_las_paginas_sin_matricula_cierran_bajo_revisar():
         _page(2, "2147338", None),
     )
     assert etiquetas(secuencia_pdf_unico([reporte])) == [1, ETIQUETA_REVISAR, 2]
+
+
+def test_una_matricula_en_conflicto_no_queda_bajo_su_separador():
+    segura = _page(1, "2147337", "HP-1534CMP")
+    dudosa = _page(2, "2147338", "HP-1534CMP")
+    dudosa.status = Status.WARNING
+    matricula = next(
+        field for field in dudosa.fields if field.field_id == "matricula"
+    )
+    matricula.status = Status.WARNING
+    matricula.source = "book_correction"
+    matricula.votes = 4
+    matricula.alternatives = ["HP-1734CMP"]
+
+    secuencia = secuencia_pdf_unico(
+        [_reporte(segura, dudosa)], ["avion"]
+    )
+
+    assert etiquetas(secuencia) == [
+        "HP-1534CMP", 1, ETIQUETA_REVISAR, 2,
+    ]
 
 
 def test_revisar_puede_quedar_fuera_de_la_secuencia_principal():

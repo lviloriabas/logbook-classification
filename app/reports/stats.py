@@ -159,8 +159,8 @@ def _stats_separacion(
         distribuidas += paginas
         pdfs.append({"archivo": nombre, "paginas": paginas})
     if revisar:
-        # Las bitácoras sin avión confirmado no se pierden: salen siempre en
-        # su propio PDF, así que cuentan como distribuidas.
+        # Las bitácoras cuya matrícula requiere revisión no se pierden: salen
+        # siempre en su propio PDF, así que cuentan como distribuidas.
         pdfs.append({"archivo": nombres[-1], "paginas": len(revisar)})
         distribuidas += len(revisar)
     excluidas_count = sum(

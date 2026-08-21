@@ -224,9 +224,12 @@ basta con **Comprobar ahora**.
 Las páginas separadoras del PDF —la matrícula de cada grupo y **POSIBLES
 DISCREPANCIAS**— ocupan su página en el lote y no se indexan.
 
-Las bitácoras sin matrícula confirmada salen en un archivo aparte y forman
+Las bitácoras con matrícula ausente, marcada, contradicha por otra lectura
+canónica o inferida con un solo respaldo salen en un archivo aparte y forman
 su propio lote, `… REVISAR`. Ese lote se sube pero no se indexa: queda en la
-cola del Web Index, a la vista, para resolverlo a mano.
+cola del Web Index, a la vista, para resolverlo a mano. Una inferencia de
+libro coherente respaldada por dos o más lecturas sigue en el lote automático;
+las advertencias de fecha tampoco la envían por sí solas a `REVISAR`.
 
 Los lotes se llaman como la ejecución, en mayúsculas y con la fecha y hora
 del procesamiento: `DP | BITS 18 AUG 2026 05 42`, y `-1`, `-2`… si la

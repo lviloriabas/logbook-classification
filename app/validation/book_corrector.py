@@ -41,7 +41,10 @@ from app.utils.postprocess import (
     apply_postprocess,
 )
 from app.validation.grouping import group_books, log_number
-from app.validation.page_status import recompute_page_status
+from app.validation.page_status import (
+    AUTO_INDEX_MIN_VOTES,
+    recompute_page_status,
+)
 
 MATRICULA_FIELD_ID = "matricula"
 
@@ -66,6 +69,10 @@ _VERIFIED_SOURCES = frozenset({"ocr_fallback", "vlm", "fleet_validation"})
 
 _ORDER = {Status.OK: 0, Status.WARNING: 1, Status.ERROR: 2}
 _CANONICAL_MATRICULA_RE = re.compile(r"^HP-(\d{4})(CMP|WWP)$")
+# El corrector no recibe ``AppConfig``. Este es el mismo umbral general que
+# usa la configuración por defecto; el número de votos y los conflictos son
+# las guardas adicionales que deciden si la inferencia puede ir automática.
+_MIN_BOOK_AUTO_CONFIDENCE = 0.50
 
 
 def _matricula_field(page: PageResult):
@@ -180,15 +187,19 @@ def _book_winner(
         number = max(sorted(observed.items()), key=lambda item: item[1])[0]
     suffix = max(sorted(suffixes.items()), key=lambda item: item[1])[0]
     winner = f"HP-{number}{suffix}"
+    # ``evidence`` ya eliminó escaneos repetidos del mismo log_number. El
+    # número que habilita una inferencia automática tiene que contar páginas
+    # físicas independientes, no filas: dos copias del mismo escaneo siguen
+    # siendo un solo respaldo.
     matches = [
-        field.confidence for _page, field in entries
-        if field.value == winner and field.source not in _DERIVED_SOURCES
+        weight for observed_number, observed_suffix, weight in evidence
+        if observed_number == number and observed_suffix == suffix
     ]
     confidence = (
         round(sum(matches) / len(matches), 3) if matches
         else round(min(observed[number], 1.0), 3)
     )
-    return winner, max(len(matches), 1), confidence
+    return winner, len(matches), confidence
 
 
 def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
@@ -212,13 +223,49 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
     flagged = 0
     for page, field in entries:
         if field.value == winner:
+            # Una lectura propia débil no tiene por qué ir a Revisar cuando
+            # varias páginas independientes leyeron exactamente lo mismo. El
+            # consenso no cambia su valor: únicamente aporta el respaldo que
+            # le faltaba y conserva esa procedencia para auditoría.
+            if (
+                field.status is not Status.OK
+                and count >= AUTO_INDEX_MIN_VOTES
+                and winner_confidence >= _MIN_BOOK_AUTO_CONFIDENCE
+            ):
+                field.confidence = max(field.confidence, winner_confidence)
+                field.status = Status.OK
+                field.source = "book_correction"
+                field.inference_method = "book_consensus_confirmation"
+                field.votes = count
+                field.comment = (
+                    f"{field.comment} | Confirmed by book consensus "
+                    f"({count} vote(s))"
+                ).strip(" |")
+                _recompute_page_status(page)
             continue
         original = field.value
         if original and original not in field.alternatives:
             field.alternatives.append(original)
         field.value = winner
         field.confidence = winner_confidence
-        field.status = Status.OK
+        # Se conserva la inferencia, pero no se borra la duda que la produjo.
+        # Una lectura canónica distinta puede significar que el log_number
+        # también se leyó mal y que esta página ni siquiera pertenece al libro
+        # cuya matrícula ganó. Ponerla en OK la enviaba bajo el separador de
+        # otro avión. Las lecturas vacías o inválidas sí pueden repararse de
+        # forma automática cuando el consenso tiene respaldo y confianza.
+        canonical_original = bool(
+            original and _CANONICAL_MATRICULA_RE.fullmatch(original)
+        )
+        sufficiently_supported = (
+            count >= AUTO_INDEX_MIN_VOTES
+            and winner_confidence >= _MIN_BOOK_AUTO_CONFIDENCE
+        )
+        field.status = (
+            Status.OK
+            if not canonical_original and sufficiently_supported
+            else Status.WARNING
+        )
         field.source = "book_correction"
         field.inference_method = "book_digit_consensus"
         # Cuantas paginas del libro leyeron entera esta matricula. La pagina
@@ -230,11 +277,15 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
                 f"Corrected from {original!r} by book consensus "
                 f"({count} vote(s))"
             )
+            if canonical_original:
+                field.comment += "; conflicting registration requires review"
             flagged += 1
         else:
             field.comment = (
                 f"Inferred from book readings: {winner} ({count} vote(s))"
             )
+            if not sufficiently_supported:
+                field.comment += "; insufficient support for auto index"
             corrected += 1
         _recompute_page_status(page)
 

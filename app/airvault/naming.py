@@ -27,8 +27,8 @@ from typing import Optional
 
 PREFIJO_POR_DEFECTO = "DP | BITS"
 
-# Marca del lote que recoge las bitacoras sin avion confirmado. No se
-# indexa: se sube para que alguien la resuelva a mano en el Web Index.
+# Marca del lote que recoge las bitacoras cuya matricula requiere revision.
+# No se indexa: se sube para que alguien la resuelva a mano en el Web Index.
 ETIQUETA_REVISAR = "REVISAR"
 
 _MESES = (
@@ -127,7 +127,7 @@ def nombre_de_parte(base: str, indice: int, total: int) -> str:
 
 
 def nombre_de_revisar(base: str) -> str:
-    """Nombre del lote que recoge las bitacoras sin avion confirmado.
+    """Nombre del lote que recoge las bitacoras para revision manual.
 
     Va aparte y no se indexa. Mezcladas con las demas quedarian bloqueadas
     en medio de un lote de cuatrocientas paginas, donde nadie las encuentra;

@@ -63,6 +63,9 @@ def test_out_of_fleet_registration_is_reclassified_as_the_closest(
     assert field.status is Status.WARNING
     assert page.status is Status.WARNING
     assert report.summary["warning_pages"] == 1
+    # El candidato se conserva para ayudar a revisar, pero el mero parecido
+    # no autoriza a poner la página bajo el separador HP-1234CMP.
+    assert por_revisar(page)
 
 
 def test_closest_fleet_match_corrects_handwritten_2_read_instead_of_7(
