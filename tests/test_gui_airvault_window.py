@@ -100,6 +100,30 @@ def test_el_limite_de_quick_upload_empieza_en_300_paginas(ventana):
     assert ventana.limite_batch_spin.value() == 300
 
 
+def test_la_espera_automatica_empieza_en_dos_minutos(ventana):
+    assert ventana.minutos_spin.value() == 2
+
+
+def test_el_menu_de_automatizacion_empieza_oculto_y_es_secuencial(ventana):
+    assert ventana.menu_automatizacion.isHidden()
+    assert ventana.auto_subir_check.isChecked()
+    assert ventana.auto_esperar_check.isChecked()
+    assert not ventana.auto_indexar_check.isChecked()
+    assert not ventana.auto_completar_check.isEnabled()
+
+    ventana.auto_indexar_check.setChecked(True)
+    assert ventana.auto_completar_check.isEnabled()
+    ventana.auto_esperar_check.setChecked(False)
+    assert not ventana.auto_indexar_check.isChecked()
+    assert not ventana.auto_indexar_check.isEnabled()
+    assert not ventana.auto_completar_check.isEnabled()
+
+
+def test_la_ventana_usa_batch_en_sus_campos_y_tabla(ventana):
+    assert ventana.lotes.horizontalHeaderItem(0).text() == "Batch"
+    assert "batch" in ventana.lote_edit.placeholderText().lower()
+
+
 def test_el_usuario_puede_elegir_el_limite_antes_de_subir(ventana, tmp_path):
     ventana.fijar_corrida(corrida(tmp_path))
     ventana.limite_batch_spin.setValue(450)
@@ -214,7 +238,9 @@ def test_cambiar_de_corrida_tira_lo_que_se_sabia_de_la_anterior(ventana,
     ventana.fijar_corrida(corrida(tmp_path))
     assert ventana._estado == {}
     assert ventana._estados == []
-    assert not ventana.boton_indexar.isEnabled()
+    # Indexar tambien sirve para conectarse y recuperar batches que esta
+    # aplicacion hubiera subido en una ejecucion anterior.
+    assert ventana.boton_indexar.isEnabled()
 
 
 # ── no se arranca sin lo imprescindible ────────────────────────────
@@ -230,7 +256,7 @@ def test_sin_nombre_de_lote_no_arranca_nada(ventana, tmp_path):
     ventana.lote_edit.setText("   ")
     ventana._subir()
     assert ventana._worker is None
-    assert "Falta el nombre del lote" in ventana.resumen.text()
+    assert "Falta el nombre del batch" in ventana.resumen.text()
 
 
 def test_indexar_sin_ningun_lote_listo_no_hace_nada(ventana):
@@ -356,7 +382,7 @@ def test_mientras_falte_un_lote_se_sigue_preguntando_solo(ventana):
     })
     assert ventana._vigilante is not None
     assert ventana._vigilante.isActive()
-    assert ventana._vigilante.interval() == 5 * 60_000
+    assert ventana._vigilante.interval() == 2 * 60_000
 
 
 def test_cuando_no_queda_nada_que_esperar_deja_de_preguntar(ventana):

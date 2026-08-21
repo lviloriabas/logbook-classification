@@ -17,6 +17,7 @@ import hashlib
 import os
 import tempfile
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Mapping, Optional, Sequence, Tuple
@@ -27,9 +28,11 @@ from app.airvault import manifest as manifiestos
 from app.airvault.config import AirVaultConfig
 from app.airvault.client import ResumenLote
 from app.airvault.discovery import (
+    LoteAmbiguo,
     LoteNoEncontrado,
     buscar_por_id,
     normalizar_nombre,
+    recien_llegados,
 )
 from app.airvault.discovery import esperar as esperar_lote
 from app.airvault.discovery import buscar as buscar_lote
@@ -43,7 +46,7 @@ from app.airvault.mapping import (
     registros_desde_entrega,
     valores_de_indice,
 )
-from app.airvault.model import EstadoEtapa, Manifiesto
+from app.airvault.model import EstadoEtapa, EstadoRegistro, Etapa, Manifiesto
 from app.airvault.naming import (
     PREFIJO_POR_DEFECTO,
     nombre_de_parte,
@@ -1009,22 +1012,13 @@ def subir_partes(
     trabajos: Sequence["Trabajo"], sesion, avisar: Optional[Aviso] = None,
     cliente=None, dormir: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Sube el archivo de cada parte que no se haya subido ya.
+    """Sube primero todos los archivos, sin esperar ni descubrir entre ellos.
 
-    Entre una parte y la siguiente se espera a que la anterior aparezca en
-    la cola. AirVault junta en un mismo lote los archivos que le llegan
-    seguidos —comprobado subiendo la entrega y la parte de Revisar una
-    detras de otra: quedaron las dos en un solo lote de 33 paginas—, y dos
-    partes en el mismo lote no se pueden indexar por separado, que es justo
-    para lo que se reparten.
-
-    Detras de la ultima no se espera a nada. Ahi la subida termina; que
-    AirVault haya acabado de procesarla es otra cosa, puede tardar mucho
-    mas, y se pregunta despues con :func:`comprobar_partes` en vez de
-    dejar el programa esperando delante.
+    La espera de procesamiento empieza unicamente cuando todas las cargas
+    terminaron. La comprobacion conjunta reconoce despues cada batch nuevo
+    y evita que dos trabajos reclamen el mismo resultado de Quick Upload.
     """
-    ultima = len(trabajos) - 1
-    for indice, trabajo in enumerate(trabajos):
+    for trabajo in trabajos:
         cabeza = _prefijo(trabajo)
 
         def propio(texto: str, hechas: int, total: int,
@@ -1034,13 +1028,6 @@ def subir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
-        if cliente is None or trabajo.manifiesto.batch_id:
-            continue
-        if indice < ultima:
-            trabajo.descubrir(cliente, True, dormir,
-                              propio if avisar else None)
-        else:
-            _ubicar(trabajo, cliente, list(cliente.listar_lotes()))
 
 
 def subir_y_descubrir_partes(
@@ -1161,6 +1148,87 @@ def cargar_partes(
     return list(automaticos) + list(revisar)
 
 
+def cargar_trabajos_pendientes(
+    config: AirVaultConfig, carpeta_raiz: Path | str,
+) -> List["Trabajo"]:
+    """Recupera batches creados por la aplicacion que aun requieren trabajo.
+
+    Solo se confia en manifiestos propios. Los batches de REVISAR se dejan
+    fuera porque su indexado es deliberadamente manual, y los completados ya
+    salieron de la cola de Web Index.
+    """
+    raiz = Path(carpeta_raiz)
+    if not raiz.is_dir():
+        return []
+    trabajos: List["Trabajo"] = []
+    for ruta in sorted(raiz.rglob(manifiestos.MANIFIESTO_FILENAME)):
+        try:
+            trabajo = Trabajo.cargar(config, ruta.parent)
+        except (OSError, ValueError):
+            continue
+        manifiesto = trabajo.manifiesto
+        subida = manifiesto.etapas.get("subir")
+        completar = manifiesto.etapas.get("completar")
+        if manifiesto.solo_subir or not subida:
+            continue
+        if subida.estado not in (
+            EstadoEtapa.HECHA, EstadoEtapa.OMITIDA, EstadoEtapa.EN_CURSO,
+        ):
+            continue
+        if completar and completar.estado is EstadoEtapa.HECHA:
+            continue
+        trabajos.append(trabajo)
+    return sorted(
+        trabajos,
+        key=lambda t: (t.manifiesto.creado, str(t.carpeta).casefold()),
+    )
+
+
+def reiniciar_trabajos_incompletos(
+    trabajos: Sequence["Trabajo"],
+) -> List[Tuple["Trabajo", str]]:
+    """Reinicia solo el primer paso local que no termino en cada trabajo.
+
+    No borra paginas ni batches en AirVault. Al reiniciar indexado, la nueva
+    planificacion vuelve a leer el servidor: conserva las paginas Valid y
+    reenvia unicamente las que sigan amarillas o sin terminar.
+    """
+    reiniciados: List[Tuple["Trabajo", str]] = []
+    for trabajo in trabajos:
+        manifiesto = trabajo.manifiesto
+        subida = manifiesto.etapas.get("subir")
+        subida_hecha = bool(subida and subida.estado in (
+            EstadoEtapa.HECHA, EstadoEtapa.OMITIDA,
+        ))
+        if not subida_hecha:
+            manifiesto.batch_id = None
+            manifiesto.etapas["subir"] = Etapa()
+            manifiesto.etapas["descubrir"] = Etapa()
+            manifiesto.etapas["indexar"] = Etapa()
+            manifiesto.etapas["verificar"] = Etapa()
+            manifiesto.etapas["completar"] = Etapa()
+            reiniciados.append((trabajo, "subir"))
+        else:
+            verificada = manifiesto.etapas.get("verificar")
+            if not verificada or verificada.estado is not EstadoEtapa.HECHA:
+                manifiesto.etapas["indexar"] = Etapa()
+                manifiesto.etapas["verificar"] = Etapa()
+                manifiesto.etapas["completar"] = Etapa()
+                for registro in manifiesto.registros:
+                    if registro.es_separador:
+                        continue
+                    registro.estado = EstadoRegistro.PENDIENTE
+                    registro.avisos = []
+                reiniciados.append((trabajo, "indexar"))
+            else:
+                completar = manifiesto.etapas.get("completar")
+                if completar and completar.estado is not EstadoEtapa.HECHA:
+                    manifiesto.etapas["completar"] = Etapa()
+                    reiniciados.append((trabajo, "completar"))
+        trabajo.guardar()
+    return reiniciados
+
+
 def estado_local(trabajo: "Trabajo") -> EstadoParte:
     """En que va una parte segun su manifiesto, sin preguntar a AirVault.
 
@@ -1169,13 +1237,15 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
     lo dice :func:`comprobar_partes`, que si pregunta.
     """
     manifiesto = trabajo.manifiesto
-    if manifiesto.etapa_hecha("completar"):
+    completar = manifiesto.etapas.get("completar")
+    if completar and completar.estado is EstadoEtapa.HECHA:
         return EstadoParte(trabajo, COMPLETADO, "cerrado en AirVault")
     if not manifiesto.etapa_hecha("subir"):
         return EstadoParte(trabajo, SIN_SUBIR, "todavia sin subir")
-    if manifiesto.etapa_hecha("indexar"):
+    verificar = manifiesto.etapas.get("verificar")
+    if verificar and verificar.estado is EstadoEtapa.HECHA:
         return EstadoParte(
-            trabajo, INDEXADO, manifiesto.etapa("indexar").detalle
+            trabajo, INDEXADO, verificar.detalle
         )
     if manifiesto.solo_subir:
         return EstadoParte(trabajo, SOLO_REVISAR, "subido, se indexa a mano")
@@ -1213,10 +1283,20 @@ def _estado_de(trabajo: "Trabajo", cliente,
     """En que va una parte, mirando la cola que se acaba de pedir."""
     manifiesto = trabajo.manifiesto
     esperadas = len(manifiesto.registros)
-    if manifiesto.etapa_hecha("completar"):
+    completar = manifiesto.etapas.get("completar")
+    if completar and completar.estado is EstadoEtapa.HECHA:
         return EstadoParte(trabajo, COMPLETADO, "cerrado en AirVault")
-    if not manifiesto.etapa_hecha("subir"):
+    subida = manifiesto.etapas.get("subir")
+    subida_rastreable = bool(subida and subida.estado in (
+        EstadoEtapa.HECHA, EstadoEtapa.OMITIDA, EstadoEtapa.EN_CURSO,
+    ))
+    if not subida_rastreable:
         return EstadoParte(trabajo, SIN_SUBIR, "todavia sin subir")
+    if not manifiesto.batch_id and manifiesto.lotes_previos:
+        return EstadoParte(
+            trabajo, BUSCANDO,
+            "esperando que aparezca el conjunto completo de batches",
+        )
     lote = _ubicar(trabajo, cliente, lotes)
     if lote is None:
         return EstadoParte(
@@ -1234,9 +1314,10 @@ def _estado_de(trabajo: "Trabajo", cliente,
         return EstadoParte(
             trabajo, SOLO_REVISAR, f"{esperadas} paginas sin avion", lote
         )
-    if manifiesto.etapa_hecha("indexar"):
+    verificar = manifiesto.etapas.get("verificar")
+    if verificar and verificar.estado is EstadoEtapa.HECHA:
         return EstadoParte(
-            trabajo, INDEXADO, manifiesto.etapa("indexar").detalle, lote
+            trabajo, INDEXADO, verificar.detalle, lote
         )
     if lote.bloqueado_por:
         # Tomado por alguien, AirVault no lo entrega: abrirlo dejaria la
@@ -1245,6 +1326,118 @@ def _estado_de(trabajo: "Trabajo", cliente,
             trabajo, TOMADO, f"lo tiene abierto {lote.bloqueado_por}", lote
         )
     return EstadoParte(trabajo, LISTO, f"{esperadas} paginas", lote)
+
+
+def _asignar_batches_nuevos(
+    trabajos: Sequence["Trabajo"], cliente, lotes: Sequence[ResumenLote],
+) -> None:
+    """Asigna de una vez los resultados de varias cargas consecutivas.
+
+    Todos los Quick Upload se envian antes de esperar. Por eso varios
+    manifiestos pueden compartir la misma foto de la cola anterior y la
+    busqueda individual seria ambigua. Esta funcion espera a que aparezca el
+    conjunto completo y lo empareja por cantidad de paginas y orden de
+    recepcion, sin permitir que un batch se asigne dos veces.
+    """
+    reclamados = {
+        t.manifiesto.batch_id.strip().upper()
+        for t in trabajos if t.manifiesto.batch_id
+    }
+    pendientes: List["Trabajo"] = []
+    for trabajo in trabajos:
+        manifiesto = trabajo.manifiesto
+        if manifiesto.batch_id:
+            continue
+        subida = manifiesto.etapas.get("subir")
+        if not subida or subida.estado not in (
+            EstadoEtapa.HECHA, EstadoEtapa.OMITIDA, EstadoEtapa.EN_CURSO,
+        ):
+            continue
+        try:
+            candidato = buscar_lote(
+                lotes, manifiesto.nombre_batch, manifiesto.repo_id,
+                len(manifiesto.registros),
+            )
+        except (LoteNoEncontrado, LoteAmbiguo):
+            pendientes.append(trabajo)
+            continue
+        clave = candidato.batch_id.strip().upper()
+        if clave in reclamados:
+            pendientes.append(trabajo)
+            continue
+        if subida.estado is EstadoEtapa.EN_CURSO:
+            subida.marcar(EstadoEtapa.HECHA, "recuperado en AirVault")
+        trabajo.anotar_lote(cliente, candidato)
+        reclamados.add(clave)
+
+    grupos: dict[tuple[int, tuple[str, ...]], List["Trabajo"]] = {}
+    for trabajo in pendientes:
+        manifiesto = trabajo.manifiesto
+        if not manifiesto.lotes_previos:
+            continue
+        clave = (
+            manifiesto.repo_id,
+            tuple(str(x).strip().upper() for x in manifiesto.lotes_previos),
+        )
+        grupos.setdefault(clave, []).append(trabajo)
+
+    # Las fotos mas recientes primero: si un batch alcanzo a aparecer entre
+    # dos uploads, el manifiesto siguiente lo incluye entre sus previos. Al
+    # reclamar primero ese resultado mas nuevo, el anterior deja de ser
+    # ambiguo sin necesidad de esperar ni listar durante la carga.
+    grupos_ordenados = sorted(
+        grupos.items(), key=lambda item: len(item[0][1]), reverse=True
+    )
+    for (repo_id, previos), grupo in grupos_ordenados:
+        nuevos = [
+            lote for lote in recien_llegados(lotes, previos, repo_id)
+            if lote.batch_id.strip().upper() not in reclamados
+        ]
+        esperadas = Counter(len(t.manifiesto.registros) for t in grupo)
+        if len(nuevos) != len(grupo):
+            continue
+        # Si AirVault ya termino, las cantidades dan un emparejamiento mas
+        # fuerte. Mientras aun procesa pueden ser menores; con el conjunto
+        # completo se conserva entonces el orden de carga/recepcion y cada
+        # fila seguira como «Procesando» hasta que su cantidad cuadre.
+        if Counter(lote.paginas for lote in nuevos) != esperadas:
+            propios = sorted(grupo, key=lambda t: (
+                t.manifiesto.creado, t.manifiesto.parte,
+                str(t.carpeta).casefold(),
+            ))
+            remotos = sorted(
+                nuevos, key=lambda lote: (lote.recibido, lote.batch_id)
+            )
+            for trabajo, lote in zip(propios, remotos):
+                subida = trabajo.manifiesto.etapas.get("subir")
+                if subida and subida.estado is EstadoEtapa.EN_CURSO:
+                    subida.marcar(EstadoEtapa.HECHA, "recuperado en AirVault")
+                trabajo.anotar_lote(cliente, lote)
+                reclamados.add(lote.batch_id.strip().upper())
+            continue
+        por_paginas: dict[int, List["Trabajo"]] = {}
+        for trabajo in grupo:
+            por_paginas.setdefault(len(trabajo.manifiesto.registros), []).append(
+                trabajo
+            )
+        lotes_por_paginas: dict[int, List[ResumenLote]] = {}
+        for lote in nuevos:
+            lotes_por_paginas.setdefault(lote.paginas, []).append(lote)
+        for paginas, propios in por_paginas.items():
+            propios.sort(key=lambda t: (
+                t.manifiesto.creado, t.manifiesto.parte,
+                str(t.carpeta).casefold(),
+            ))
+            remotos = sorted(
+                lotes_por_paginas[paginas],
+                key=lambda lote: (lote.recibido, lote.batch_id),
+            )
+            for trabajo, lote in zip(propios, remotos):
+                subida = trabajo.manifiesto.etapas.get("subir")
+                if subida and subida.estado is EstadoEtapa.EN_CURSO:
+                    subida.marcar(EstadoEtapa.HECHA, "recuperado en AirVault")
+                trabajo.anotar_lote(cliente, lote)
+                reclamados.add(lote.batch_id.strip().upper())
 
 
 def comprobar_partes(
@@ -1259,8 +1452,9 @@ def comprobar_partes(
     procesa en su cola y puede tardar minutos u horas.
     """
     if avisar is not None:
-        avisar("Preguntando a AirVault por los lotes", 0, 0)
+        avisar("Preguntando a AirVault por los batches", 0, 0)
     lotes = list(cliente.listar_lotes())
+    _asignar_batches_nuevos(trabajos, cliente, lotes)
     return [_estado_de(trabajo, cliente, lotes) for trabajo in trabajos]
 
 
