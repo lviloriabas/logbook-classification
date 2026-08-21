@@ -158,7 +158,7 @@ def test_el_tiempo_agotado_menciona_el_lote_abierto():
     motivo = str(fallo.value)
     assert "un solo dueno por lote" in motivo
     # Tambien cuando lo dejo tomado el propio programa, no solo el navegador.
-    assert "intento anterior no llego a soltarlo" in motivo
+    assert "intento anterior no llego a desbloquearlo" in motivo
 
 
 def test_la_espera_crece_con_cada_intento():

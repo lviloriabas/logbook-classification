@@ -334,12 +334,33 @@ class ClienteHttp:
             {"repoId": self.config.repo_id,
              "encodedBatchId": codificar_batch_id(batch_id)},
         )
-        if isinstance(respuesta, Mapping) and respuesta.get("IsError"):
+        if not isinstance(respuesta, Mapping) or "IsError" not in respuesta:
             raise RespuestaInesperada(
-                f"AirVault no dio por terminado el lote {batch_id}: "
+                f"AirVault no confirmo si completo el batch {batch_id}: "
+                f"{_describir(respuesta)}"
+            )
+        indicador = respuesta.get("IsError")
+        if isinstance(indicador, str):
+            normalizado = indicador.strip().casefold()
+            if normalizado not in ("true", "false"):
+                raise RespuestaInesperada(
+                    f"AirVault devolvio un resultado desconocido al completar "
+                    f"el batch {batch_id}: {_describir(respuesta)}"
+                )
+            hubo_error = normalizado == "true"
+        elif isinstance(indicador, bool):
+            hubo_error = indicador
+        else:
+            raise RespuestaInesperada(
+                f"AirVault devolvio un resultado desconocido al completar "
+                f"el batch {batch_id}: {_describir(respuesta)}"
+            )
+        if hubo_error:
+            raise RespuestaInesperada(
+                f"AirVault no completo el batch {batch_id}: "
                 f"{respuesta.get('Message') or 'sin motivo'}"
             )
-        return respuesta if isinstance(respuesta, Mapping) else {}
+        return respuesta
 
     # ── paginas ────────────────────────────────────────────────────
 

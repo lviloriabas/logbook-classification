@@ -955,9 +955,9 @@ class AirVaultWindow(QDialog):
         self.boton_cancelar = QPushButton("Cancelar")
         self.boton_cancelar.setEnabled(False)
         self.boton_cancelar.setToolTip(
-            "Detiene lo que esté en marcha y suelta los batches que se hayan "
-            "tomado en AirVault. Lo ya escrito se conserva y al volver a "
-            "comprobar se retoma sin repetirlo."
+            "Detiene lo que esté en marcha y desbloquea los batches que la "
+            "aplicación haya abierto en AirVault. Lo ya escrito se conserva "
+            "y al volver a comprobar se retoma sin repetirlo."
         )
         self.boton_cancelar.clicked.connect(self._cancelar)
 
@@ -1293,6 +1293,15 @@ class AirVaultWindow(QDialog):
         self._lanzar("comprobar", estado)
 
     def _indexar(self) -> None:
+        # Una ejecucion parcial no puede adelantarse: aunque ya haya un batch
+        # listo, primero se terminan todas las cargas. Este es tambien el
+        # camino de recuperacion para trabajos que quedaron a medias.
+        if any(
+            not trabajo.manifiesto.etapa_hecha("subir")
+            for trabajo in self._trabajos
+        ):
+            self._continuar_pendiente()
+            return
         listos = self._listos()
         if not listos:
             por_completar = self._por_completar()
@@ -1618,8 +1627,11 @@ class AirVaultWindow(QDialog):
         partes = []
         if cerrados:
             texto = (
-                f" Se cerraron {len(cerrados)} batches en AirVault."
-                if len(cerrados) > 1 else " El batch quedó cerrado en AirVault."
+                f" Se completaron {len(cerrados)} batches en AirVault y "
+                "salieron de la cola de Web Index."
+                if len(cerrados) > 1 else
+                " El batch se completó en AirVault y salió de la cola de "
+                "Web Index."
             )
             quitadas = sum(len(r.quitadas) for _t, r in cierres if r.completado)
             if quitadas:
@@ -1627,13 +1639,13 @@ class AirVaultWindow(QDialog):
                 # están, y quien lo abra en AirVault no las va a encontrar.
                 texto += (
                     f" Se quitaron {quitadas} páginas separadoras, que no son "
-                    f"bitácoras y no dejan cerrar el batch."
+                    f"bitácoras y no dejan completar el batch."
                 )
             partes.append(texto)
         for trabajo, resultado in colgados:
             partes.append(
                 f" El batch {trabajo.manifiesto.nombre_batch} no se pudo "
-                f"cerrar: {resultado.detalle}"
+                f"completar: {resultado.detalle}"
             )
         return "".join(partes)
 
@@ -1660,12 +1672,14 @@ class AirVaultWindow(QDialog):
     def _al_cancelar(self) -> None:
         """Lo paró quien lo lanzó: se dice y se sueltan los lotes."""
         self.estado_label.setText("Cancelado")
-        self._anotar("Cancelado; se sueltan los batches tomados en AirVault")
+        self._anotar(
+            "Cancelado; se desbloquean los batches abiertos en AirVault"
+        )
         self._parar_vigilancia()
         self._soltar_lotes()
         self.resumen.setText(
-            "El trabajo se canceló. Los batches quedaron sueltos en AirVault "
-            "y lo que ya se hubiera escrito se conserva: al volver a "
+            "El trabajo se canceló. Los batches quedaron desbloqueados en "
+            "AirVault y lo que ya se hubiera escrito se conserva: al volver a "
             "comprobar se retoma sin repetirlo."
         )
         self._limpiar_progreso()
@@ -1740,7 +1754,8 @@ class AirVaultWindow(QDialog):
             self._cancelar()
             self.resumen.setText(
                 "Cancelando el trabajo en marcha. La ventana se cierra en "
-                "cuanto AirVault suelte los batches que tenía tomados."
+                "cuanto AirVault quite el bloqueo de edición de los batches "
+                "que había abierto."
             )
             event.ignore()
             return

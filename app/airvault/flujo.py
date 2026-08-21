@@ -797,13 +797,13 @@ class Trabajo:
             cliente.cerrar_lote(batch_id)
         except Exception as exc:  # noqa: BLE001 - cerrar nunca tumba nada
             logger.warning(
-                "No se pudo soltar el lote {} en AirVault: {}. Si la "
-                "siguiente apertura se queda esperando, hay que cerrarlo "
-                "alli a mano.",
+                "No se pudo desbloquear el batch {} en AirVault: {}. Si la "
+                "siguiente apertura se queda esperando, hay que quitarle "
+                "el bloqueo alli a mano.",
                 batch_id, exc,
             )
         else:
-            logger.info("Lote {} soltado en AirVault", batch_id)
+            logger.info("Batch {} desbloqueado en AirVault", batch_id)
 
     def indexar(
         self, indexador: Indexador, plan: Plan,

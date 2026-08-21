@@ -9,7 +9,9 @@ parámetros de cada llamada que escribe.
 
 from __future__ import annotations
 
-from app.airvault.client import ClienteHttp
+import pytest
+
+from app.airvault.client import ClienteHttp, RespuestaInesperada
 from app.airvault.config import AirVaultConfig
 from app.airvault.encoding import codificar_batch_id, decodificar_valores
 
@@ -89,3 +91,25 @@ def test_si_el_renombrado_falla_el_trabajo_sigue():
 
     cli = ClienteHttp(SesionRota(), AirVaultConfig())
     assert not cli.renombrar_lote("003SUS", "DP | BITS")
+
+
+def test_completar_exige_una_confirmacion_explicita_de_airvault():
+    cli = cliente({})
+
+    with pytest.raises(RespuestaInesperada, match="no confirmo"):
+        cli.completar_lote("003SUS")
+
+
+def test_completar_acepta_iserror_false():
+    cli = cliente({"IsError": False, "Message": ""})
+
+    respuesta = cli.completar_lote("003SUS")
+
+    assert respuesta["IsError"] is False
+
+
+def test_completar_rechaza_el_error_que_devuelve_airvault():
+    cli = cliente({"IsError": True, "Message": "faltan paginas"})
+
+    with pytest.raises(RespuestaInesperada, match="faltan paginas"):
+        cli.completar_lote("003SUS")

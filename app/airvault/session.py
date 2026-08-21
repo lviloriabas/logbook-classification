@@ -110,8 +110,8 @@ ESTADOS_DE_SESION = frozenset({401, 419, 440})
 _AYUDA_LOTE_ABIERTO = (
     " AirVault admite un solo dueno por lote y no contesta «ocupado»: deja "
     "la peticion esperando. Si el lote esta abierto —en el navegador o "
-    "porque un intento anterior no llego a soltarlo— hay que cerrarlo en "
-    "AirVault antes de indexarlo desde aqui."
+    "porque un intento anterior no llego a desbloquearlo— hay que "
+    "cerrarlo en AirVault antes de indexarlo desde aqui."
 )
 
 # Rutas que se cuelgan por un motivo concreto y no por la red. Decirlo solo

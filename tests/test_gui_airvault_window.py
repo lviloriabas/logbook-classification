@@ -264,6 +264,25 @@ def test_indexar_sin_ningun_lote_listo_no_hace_nada(ventana):
     assert ventana._worker is None
 
 
+def test_indexar_termina_primero_todas_las_subidas(ventana, monkeypatch):
+    class ManifiestoPendiente:
+        def etapa_hecha(self, nombre):
+            return nombre != "subir"
+
+    class TrabajoPendiente:
+        manifiesto = ManifiestoPendiente()
+
+    continuaciones = []
+    ventana._trabajos = [TrabajoPendiente()]
+    monkeypatch.setattr(
+        ventana, "_continuar_pendiente", lambda: continuaciones.append(True)
+    )
+
+    ventana._indexar()
+
+    assert continuaciones == [True]
+
+
 # ── lo que cuenta al terminar ──────────────────────────────────────
 
 class PlanFalso:
@@ -454,7 +473,8 @@ def test_si_el_lote_se_cerro_se_dice(ventana):
         "resultado": ResultadoFalso(), "validas": 2, "total": 2, "lotes": 1,
         "cierres": [(TrabajoFalso(), Cierre(True))],
     })
-    assert "cerrado en AirVault" in ventana.resumen.text()
+    assert "completó en AirVault" in ventana.resumen.text()
+    assert "salió de la cola de Web Index" in ventana.resumen.text()
 
 
 def test_si_airvault_no_deja_cerrarlo_se_dice_por_que(ventana):
@@ -466,7 +486,7 @@ def test_si_airvault_no_deja_cerrarlo_se_dice_por_que(ventana):
         ))],
     })
     texto = ventana.resumen.text()
-    assert "no se pudo cerrar" in texto
+    assert "no se pudo completar" in texto
     assert "no estan en verde" in texto
 
 
@@ -477,7 +497,7 @@ def test_si_hubo_que_quitar_separadores_se_dice(ventana):
         "cierres": [(TrabajoFalso(), Cierre(True, quitadas=[1, 4, 6]))],
     })
     texto = ventana.resumen.text()
-    assert "cerrado en AirVault" in texto
+    assert "completó en AirVault" in texto
     assert "3 páginas separadoras" in texto
 
 
@@ -593,6 +613,7 @@ def test_la_bitacora_cuenta_los_pasos_y_no_repite_el_mismo(ventana):
 def test_cancelado_se_cuenta_y_no_deja_la_barra_girando(ventana):
     ventana._al_cancelar()
     assert "canceló" in ventana.resumen.text()
+    assert "desbloqueados" in ventana.resumen.text()
     assert ventana.progreso.maximum() == 100
 
 
