@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.airvault.flujo import PAGINAS_POR_BATCH_POR_DEFECTO
 from app.gui.csv_utils import find_csv_files, find_run_dirs
 from app.gui.responsive import fit_to_screen
 from app.gui.widgets import APP_CHROME_QSS, DATA_TABLE_QSS, ElidedLabel
@@ -276,6 +277,8 @@ class TrabajoAirVaultWorker(QThread):
         trabajos = preparar_partes(
             estado["config"], Path(estado["carpeta_job"]), csv,
             estado["nombre_lote"], resolutor=resolutor,
+            paginas_por_batch=estado["paginas_por_batch"],
+            avisar=self._avisar,
         )
         estado["trabajos"] = trabajos
         for trabajo in trabajos:
@@ -535,14 +538,17 @@ class AirVaultWindow(QDialog):
         return tabla
 
     def _campos(self) -> QGridLayout:
-        """Las tres líneas de datos, en rejilla para que se alineen.
+        """Los datos de la carga, en rejilla para que se alineen.
 
-        En filas sueltas cada etiqueta medía lo suyo y los tres cuadros
+        En filas sueltas cada etiqueta medía lo suyo y los controles
         empezaban en sitios distintos.
         """
         grid = QGridLayout()
         grid.setColumnStretch(1, 1)
-        for fila, etiqueta in enumerate(("Ejecución:", "Lote:", "Sesión:")):
+        etiquetas = (
+            "Ejecución:", "Lote:", "Máximo por batch:", "Sesión:"
+        )
+        for fila, etiqueta in enumerate(etiquetas):
             grid.addWidget(QLabel(etiqueta), fila, 0)
 
         self.corrida_edit = QLineEdit()
@@ -572,6 +578,21 @@ class AirVaultWindow(QDialog):
         )
         grid.addWidget(self.lote_edit, 1, 1, 1, 2)
 
+        self.limite_batch_spin = QSpinBox()
+        self.limite_batch_spin.setRange(10, 5000)
+        self.limite_batch_spin.setSingleStep(50)
+        self.limite_batch_spin.setValue(PAGINAS_POR_BATCH_POR_DEFECTO)
+        self.limite_batch_spin.setSuffix(" pág.")
+        self.limite_batch_spin.setFixedHeight(
+            self.lote_edit.sizeHint().height()
+        )
+        self.limite_batch_spin.setToolTip(
+            "Cantidad máxima de páginas que se envía en cada batch de "
+            "Quick Upload, contando los separadores. Los PDF más grandes "
+            "se reparten automáticamente sin modificar la entrega original."
+        )
+        grid.addWidget(self.limite_batch_spin, 2, 1)
+
         # El campo de la sesión queda por si el navegador no puede: el
         # camino normal es que se resuelva sola.
         self.cookie_edit = QLineEdit()
@@ -587,7 +608,7 @@ class AirVaultWindow(QDialog):
             "eso falla: se pega la cookie de AirVault copiada del navegador. "
             "No se guarda en el disco."
         )
-        grid.addWidget(self.cookie_edit, 2, 1, 1, 2)
+        grid.addWidget(self.cookie_edit, 3, 1, 1, 2)
         return grid
 
     def _lotes(self) -> QTableWidget:
@@ -898,6 +919,13 @@ class AirVaultWindow(QDialog):
             self._trabajos = cargar_partes(self._config_actual(), carpeta, csv)
         except Exception:  # noqa: BLE001 - sin trabajos se empieza de cero
             self._trabajos = []
+        limites = {
+            t.manifiesto.paginas_por_batch for t in self._trabajos
+            if t.manifiesto.paginas_por_batch > 0
+        }
+        if len(limites) == 1:
+            self.limite_batch_spin.setValue(limites.pop())
+        self.limite_batch_spin.setEnabled(not bool(self._trabajos))
         # La conexion sobrevive al cambio de ejecucion: es el mismo
         # servidor, y volver a abrirla es volver a arrancar el navegador.
         self._estado = {
@@ -1039,6 +1067,7 @@ class AirVaultWindow(QDialog):
             "carpeta_job": self._raiz / carpeta_de_trabajo(job),
             "nombre_lote": self.lote_edit.text().strip(),
             "cookie": self.cookie_edit.text(),
+            "paginas_por_batch": self.limite_batch_spin.value(),
         })
         self._estado.setdefault("trabajos", self._trabajos)
         return self._estado
@@ -1093,6 +1122,7 @@ class AirVaultWindow(QDialog):
         self.boton_buscar.setEnabled(activo)
         self.lote_edit.setEnabled(activo)
         self.cookie_edit.setEnabled(activo)
+        self.limite_batch_spin.setEnabled(activo and not self._trabajos)
         self.boton_comprobar.setEnabled(activo and bool(self._trabajos))
         # Cerrar y Cancelar nunca se apagan a la vez: mientras hay trabajo
         # en vuelo tiene que haber siempre algo que pulsar, o la ventana se
@@ -1156,6 +1186,7 @@ class AirVaultWindow(QDialog):
     def _al_subir(self, datos: dict) -> None:
         self._trabajos = datos["trabajos"]
         self._estado["trabajos"] = self._trabajos
+        self.limite_batch_spin.setEnabled(False)
         cuantos = len(self._trabajos)
         lotes = "el lote" if cuantos == 1 else f"los {cuantos} lotes"
         self.resumen.setText(
@@ -1290,6 +1321,17 @@ class AirVaultWindow(QDialog):
         return "".join(partes)
 
     def _al_fallar(self, mensaje: str) -> None:
+        preparados = self._estado.get("trabajos") or []
+        if preparados and not self._trabajos:
+            # Preparar los PDF ocurre antes de conectar. Si la sesion o la
+            # subida falla despues, se conserva ese reparto para reanudarlo
+            # con el mismo limite y no mezclar manifiestos de dos repartos.
+            from app.airvault.flujo import estado_local
+
+            self._trabajos = list(preparados)
+            self._estados = [estado_local(t) for t in self._trabajos]
+            self._pintar_lotes()
+            self.limite_batch_spin.setEnabled(False)
         self.resumen.setText(mensaje)
         self.estado_label.setText("El indexado no pudo continuar")
         self._anotar(f"Se detuvo: {mensaje}")

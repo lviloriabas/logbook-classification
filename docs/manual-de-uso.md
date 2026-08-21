@@ -232,7 +232,7 @@ El CSV principal contiene las columnas seleccionadas. El CSV completo añade con
 2. Confirme que el CSV mínimo conserve matrícula, `log_number` y fecha. Conserve también `flight_number` si debe enviarse a **Description**.
 3. Abra **Indexar en AirVault…**.
 4. Elija una de las últimas 25 corridas o pulse **Otra ejecución…**.
-5. Confirme el nombre del lote. Deje **Sesión** vacío. En el primer acceso, complete el inicio de sesión y el segundo factor en Edge.
+5. Confirme el nombre del lote y el **Máximo por batch**. El valor inicial es 300 páginas; los PDF que lo superen se dividen para Quick Upload sin modificar la entrega ni el CSV. Deje **Sesión** vacío. En el primer acceso, complete el inicio de sesión y el segundo factor en Edge.
 6. Pulse **Subir y revisar**. El programa sube cada PDF, encuentra su lote y prepara el plan sin indexar.
 7. Pulse **Ver reporte…** y revise `revision.html`.
 8. Confirme `pagina_lote`, `archivo_origen`, `pagina_origen`, matrícula, flota, `log_number`, fecha, acción y avisos. Revise toda fila con `fleet_inferido=si`. Las discrepancias de firmas no aparecen en este reporte y no bloquean AirVault; revíselas antes en la corrida.
@@ -248,7 +248,7 @@ La columna **ya_indexada** indica si la página ya estaba válida. En ese caso, 
 
 Las páginas sin aeronave confirmada forman un lote terminado en `REVISAR`. BITS lo sube y lo libera, pero su clasificación e indexado son manuales.
 
-En el flujo normal, BITS escribe `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status`, `End Date` y `Batch Name`. Añade `Lessor` cuando está resuelto y `Description` cuando existe un número de vuelo válido; en AirVault queda como `<vuelo> AUTO INDEX`. Si el vuelo está vacío, conserva la descripción existente. La marca solo viaja a AirVault: no modifica el CSV ni el reporte de revisión. Al indexar también borra en AirVault las páginas separadoras del lote automático. El lote `REVISAR` conserva sus páginas y se indexa a mano. No envía los demás campos.
+En el flujo normal, BITS escribe `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status`, `End Date` y `Batch Name`. Añade `Lessor` cuando está resuelto. `Description` queda como `<vuelo> AUTO INDEX` cuando se leyó el vuelo y como `AUTO INDEX` cuando no se leyó. La marca solo viaja a AirVault: no modifica el CSV ni el reporte de revisión. Al indexar también borra en AirVault las páginas separadoras del lote automático. El lote `REVISAR` conserva sus páginas y se indexa a mano. No envía los demás campos.
 
 `Fleet` se toma primero de `airvault_flota.json`, donde BITS guarda los valores confirmados por AirVault. Si no hay dato conocido, se infiere por familia y el reporte marca `fleet_inferido=si`; confirme esa fila antes de indexar.
 

@@ -96,6 +96,19 @@ def test_completar_el_batch_no_viene_marcado(ventana):
     assert not ventana.completar_check.isChecked()
 
 
+def test_el_limite_de_quick_upload_empieza_en_300_paginas(ventana):
+    assert ventana.limite_batch_spin.value() == 300
+
+
+def test_el_usuario_puede_elegir_el_limite_antes_de_subir(ventana, tmp_path):
+    ventana.fijar_corrida(corrida(tmp_path))
+    ventana.limite_batch_spin.setValue(450)
+
+    estado = ventana._base_del_estado()
+
+    assert estado["paginas_por_batch"] == 450
+
+
 # ── el historial ───────────────────────────────────────────────────
 
 def test_el_historial_lista_las_corridas_de_la_mas_reciente(app, tmp_path):

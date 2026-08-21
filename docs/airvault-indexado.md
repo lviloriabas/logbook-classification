@@ -110,8 +110,9 @@ portable\python312\tools\python.exe run_airvault.py verificar --job varias24
   tocar el lote.
 - **`--auto`**: escribe sin detenerse.
 
-El reporte es el mismo artefacto en los tres modos, asi que lo que se
-aprueba es exactamente lo que se envia.
+El reporte es el mismo artefacto en los tres modos. Conserva el vuelo leido
+tal como aparece en el CSV; la marca `AUTO INDEX` se agrega solo al enviar
+la pagina a AirVault.
 
 ## Repartir en varios lotes
 
@@ -142,10 +143,17 @@ su separador, de modo que ninguna parte empieza con bitácoras sueltas.
 El reporte de revisión sigue siendo uno solo para toda la corrida: se
 aprueba de una vez y no lote por lote.
 
-El sufijo `-1` del lote es el mismo que lleva su archivo
-(`BITS 18 AUG 2026 05 42 -1.pdf`), y hay una prueba que comprueba que no se
-separen: si lo hicieran, el lote dejaría de poder emparejarse con el PDF que
-lo formó.
+La ventana **Indexar en AirVault** aplica además un máximo propio justo
+antes de Quick Upload. Abre en **300 páginas por batch** y el usuario puede
+cambiarlo antes de subir. Si un PDF exportado supera ese valor, se copia en
+tramos consecutivos dentro de `output/airvault/<corrida>/cargas/`; el PDF de
+la entrega, su índice y el CSV no se modifican. El mismo límite protege al
+lote `REVISAR`; si hace falta más de uno, se nombran `REVISAR -1`,
+`REVISAR -2`, etc.
+
+Los lotes automáticos se numeran `-1`, `-2`, etc. La correspondencia con el
+tramo que se subió queda en cada manifiesto y en el índice de páginas; no
+depende del nombre interno del PDF de carga.
 
 ## El lote REVISAR
 
@@ -166,8 +174,10 @@ ninguna página; queda en la cola del Web Index, marcado y a la vista, para
 que alguien lo resuelva a mano. En el reporte sus páginas aparecen con el
 aviso `revisar_a_mano`.
 
-No se numera como una parte más: no es «una de cinco», es el que queda
-aparte. Su manifiesto vive en `output/airvault/<corrida>/revisar/`.
+No se numera como una parte automática más: lleva su propia cuenta. En el
+caso normal su manifiesto vive en `output/airvault/<corrida>/revisar/`; si
+también supera el máximo de Quick Upload, usa `revisar-01/`, `revisar-02/`,
+etc.
 
 En la corrida de referencia son 17 páginas de 884.
 
@@ -237,17 +247,17 @@ conserva, asi que un indexado no pisa lo que alguien haya puesto a mano.
 | Log Page Number | columna `log_number` del CSV |
 | Audit Status | valor del trabajo |
 | End Date | columna `date` del CSV en `MM/DD/YYYY`; si no se leyo, se deduce del libro |
-| Description | columna `flight_number` del CSV seguida de `AUTO INDEX`, **solo si la trae** |
+| Description | `<flight_number> AUTO INDEX`, o solo `AUTO INDEX` si no se leyó vuelo |
 | Lessor | del cache de flota, solo si lo trae |
 
 **El vuelo.** `Description` lleva el vuelo de esa bitacora, pagina por
 pagina: un vuelo numerado (`703`, `CM137`) o un codigo de mantenimiento
-(`TCK`, `SPV`), seguido por la marca `AUTO INDEX`. La marca se agrega solo
-al payload que se guarda en AirVault: el CSV y el reporte de revision
-conservan el vuelo tal como lo dejo la lectura. No todas las bitacoras lo
-traen; en las que no, el campo **no se manda**, porque mandarlo vacio
-borraria lo que alguien haya escrito a mano. Es un campo por pagina, no del
-lote: el lote no lo lleva —Quick Upload ni siquiera expone `Description`—.
+(`TCK`, `SPV`), seguido por la marca `AUTO INDEX`. Cuando no se pudo leer
+el vuelo, `Description` lleva solamente `AUTO INDEX`. La marca se agrega
+solo al payload que se guarda en AirVault: el CSV y el reporte de revision
+conservan el vuelo tal como lo dejo la lectura. Es un campo por pagina, no
+del lote: el lote no lo lleva —Quick Upload ni siquiera expone
+`Description`—.
 
 **La fecha.** `End Date` es obligatorio: una bitacora sin fecha deja su
 pagina bloqueada, y basta una para que el lote no se pueda cerrar. Cuando la

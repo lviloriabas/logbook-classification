@@ -116,6 +116,9 @@ class Manifiesto(BaseModel):
     pdf_origen: str = ""
     parte: int = 1
     partes: int = 1
+    # Maximo elegido al preparar los archivos que van a Quick Upload.
+    # Cero identifica manifiestos antiguos, anteriores a este reparto.
+    paginas_por_batch: int = 0
     # El lote se sube pero no se indexa: recoge las bitacoras sin avion
     # confirmado, que nadie puede archivar sin mirarlas una por una.
     solo_subir: bool = False
