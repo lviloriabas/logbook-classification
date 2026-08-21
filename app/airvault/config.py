@@ -18,6 +18,7 @@ AIRVAULT_FILENAME = "airvault.json"
 # estables: los asigna el administrador de AirVault al definir el
 # repositorio, no cambian entre lotes.
 CAMPO_DOC_TYPE = 9586
+CAMPO_WORK_LOCATION = 9624
 CAMPO_WORK_TYPE = 9627
 CAMPO_MATRICULA = 9633
 CAMPO_DESCRIPCION = 9752
@@ -58,6 +59,7 @@ NOMBRE_ESTADO = {
 # mismo aviso con el nombre se resuelve mirando la bitacora.
 NOMBRE_CAMPO = {
     CAMPO_DOC_TYPE: "Doc Type",
+    CAMPO_WORK_LOCATION: "Work Location",
     CAMPO_WORK_TYPE: "Work Type",
     CAMPO_MATRICULA: "Aircraft",
     CAMPO_DESCRIPCION: "Description",

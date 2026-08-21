@@ -28,14 +28,16 @@ from app.airvault.flujo import (
     TOMADO,
     Trabajo,
     cargar_partes,
+    cargar_trabajos_pendientes,
     comprobar_partes,
     completar_partes,
     estado_local,
     preparar_partes,
+    reiniciar_trabajos_incompletos,
     ruta_indice_paginas,
     subir_partes,
 )
-from app.airvault.model import EstadoEtapa
+from app.airvault.model import EstadoEtapa, EstadoRegistro
 from tests.airvault_fake import ClienteFalso, lote, pagina
 
 CSV = (
@@ -180,9 +182,20 @@ def test_el_lote_de_revisar_no_se_ofrece_para_indexar(tmp_path):
 def test_lo_ya_indexado_deja_de_esperar_a_nada(tmp_path):
     trabajo, cliente = trabajo_subido(tmp_path)
     trabajo.manifiesto.etapa("indexar").marcar(EstadoEtapa.HECHA, "escritas 2")
+    trabajo.manifiesto.etapa("verificar").marcar(EstadoEtapa.HECHA, "2/2 en Valid")
     parte, = comprobar_partes([trabajo], cliente)
     assert parte.estado == INDEXADO
     assert parte.se_acabo
+
+
+def test_indexar_hecho_no_oculta_paginas_que_no_se_verificaron(tmp_path):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.manifiesto.etapa("indexar").marcar(EstadoEtapa.HECHA, "escritas 2")
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == LISTO
+    assert parte.se_puede_indexar
 
 
 def test_un_lote_ya_cerrado_no_se_vuelve_a_buscar(tmp_path):
@@ -193,6 +206,20 @@ def test_un_lote_ya_cerrado_no_se_vuelve_a_buscar(tmp_path):
     parte, = comprobar_partes([trabajo], cliente)
     assert parte.estado == COMPLETADO
     assert parte.se_acabo
+
+
+def test_un_cierre_omitido_no_se_confunde_con_un_batch_completado(tmp_path):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.HECHA, "2/2 en Valid"
+    )
+    trabajo.manifiesto.etapa("completar").marcar(
+        EstadoEtapa.OMITIDA, "AirVault no lo acepto"
+    )
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == INDEXADO
 
 
 def test_comprobar_pide_la_cola_una_sola_vez_para_todas_las_partes(tmp_path):
@@ -237,21 +264,89 @@ def test_un_trabajo_de_otra_ejecucion_no_se_retoma(tmp_path):
     assert cargar_partes(config, tmp_path / "job", segunda) == []
 
 
+def test_al_conectar_se_recuperan_manifiestos_subidos_y_pendientes(tmp_path):
+    csv = corrida(tmp_path)
+    raiz = tmp_path / "output" / "airvault"
+    trabajo = Trabajo.preparar(
+        AirVaultConfig(), raiz / "anterior", csv, "DP | BIT"
+    )
+    trabajo.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
+    trabajo.fijar_lote("003ANT")
+
+    encontrados = cargar_trabajos_pendientes(AirVaultConfig(), raiz)
+
+    assert [t.manifiesto.batch_id for t in encontrados] == ["003ANT"]
+
+
+def test_reiniciar_indexado_incompleto_conserva_la_subida(tmp_path):
+    trabajo, _cliente = trabajo_subido(tmp_path)
+    trabajo.fijar_lote("003SRO")
+    trabajo.manifiesto.registros[0].estado = EstadoRegistro.ESCRITA
+    trabajo.manifiesto.etapa("indexar").marcar(EstadoEtapa.HECHA, "ok")
+    trabajo.manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.ERROR, "1/2 en Valid"
+    )
+
+    reiniciados = reiniciar_trabajos_incompletos([trabajo])
+
+    assert reiniciados[0][1] == "indexar"
+    assert trabajo.manifiesto.etapa("subir").estado is EstadoEtapa.HECHA
+    assert trabajo.manifiesto.batch_id == "003SRO"
+    assert trabajo.manifiesto.registros[0].estado is EstadoRegistro.PENDIENTE
+
+
+def test_el_worker_reintenta_una_pagina_que_airvault_deja_amarilla(tmp_path):
+    from app.gui.airvault_window import TrabajoAirVaultWorker
+
+    class AmarillaUnaVez(ClienteFalso):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.intentos: dict[int, int] = {}
+
+        def guardar_pagina(self, batch_id, numero, valores, estado,
+                           pagina_siguiente=None):
+            respuesta = super().guardar_pagina(
+                batch_id, numero, valores, estado, pagina_siguiente
+            )
+            self.intentos[numero] = self.intentos.get(numero, 0) + 1
+            if numero == 1 and self.intentos[numero] == 1:
+                self.paginas[numero] = pagina(
+                    numero, estado=3, valores=valores
+                )
+            return respuesta
+
+    trabajo, base = trabajo_subido(tmp_path)
+    trabajo.fijar_lote("003SRO")
+    cliente = AmarillaUnaVez(
+        paginas=base.paginas, lotes=base.lotes,
+        picklist=base.picklist, page_count=2,
+    )
+    plan = trabajo.planificar(cliente)
+    estado = {
+        "cliente": cliente,
+        "listos": [trabajo],
+        "planes": {str(trabajo.carpeta): plan},
+        "completar": False,
+    }
+    terminado: list[dict] = []
+    worker = TrabajoAirVaultWorker("indexar", estado)
+    worker.indexado.connect(terminado.append)
+
+    worker._indexar()
+
+    assert cliente.intentos == {1: 2, 2: 1}
+    assert terminado[0]["validas"] == terminado[0]["total"] == 2
+
+
 # ── subir sin quedarse esperando ───────────────────────────────────
 
 class SesionFalsa:
     """Se traga la subida sin red."""
 
 
-def test_entre_partes_se_espera_pero_detras_de_la_ultima_no(tmp_path,
-                                                            monkeypatch):
-    """AirVault junta en un mismo lote los archivos que le llegan seguidos.
-
-    Por eso hay que esperar a que la parte anterior aparezca en la cola
-    antes de mandar la siguiente. Detras de la ultima no se espera a nada:
-    ahi la subida termina y que el servidor la procese se pregunta despues,
-    que puede tardar mucho mas que la propia subida.
-    """
+def test_primero_se_suben_todos_los_batches_y_despues_se_descubren(tmp_path,
+                                                                   monkeypatch):
+    """Ninguna carga espera a que AirVault procese la anterior."""
     csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
     config = AirVaultConfig(espera_descubrimiento_s=0, espera_maxima_s=5)
     trabajos = preparar_partes(config, tmp_path / "job", csv, "DP | BIT")
@@ -279,7 +374,11 @@ def test_entre_partes_se_espera_pero_detras_de_la_ultima_no(tmp_path,
                  dormir=lambda _s: None)
 
     assert subidas == ["DP | BIT -1", "DP | BIT -2"]
-    # Las dos quedaron en lotes distintos, que es para lo que se reparten.
+    assert [t.manifiesto.batch_id for t in trabajos] == [None, None]
+
+    comprobar_partes(trabajos, cliente)
+
+    # La espera y el descubrimiento empiezan con todas las cargas terminadas.
     assert trabajos[0].manifiesto.batch_id != trabajos[1].manifiesto.batch_id
 
 

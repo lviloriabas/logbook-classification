@@ -18,6 +18,7 @@ from app.airvault.config import (
     CAMPO_FLEET,
     CAMPO_LESSOR,
     CAMPO_MATRICULA,
+    CAMPO_WORK_LOCATION,
     ESTADO_VALIDO,
 )
 from app.airvault.guards import (
@@ -220,9 +221,17 @@ class Indexador:
                 ))
             else:
                 avisos.extend(verificar_alineacion(registro, remota.valores))
-                avisos.extend(verificar_no_pisar(
-                    registro, remota.estado, self.sobrescribir
-                ))
+                work_location = str(
+                    remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
+                ).strip()
+                # Incluso una pagina Valid se vuelve a guardar si AirVault
+                # lleno Work Location. Es el unico caso en que se toca una
+                # pagina verde sin pedir sobrescritura: el flujo exige ese
+                # campo vacio y el payload conserva el resto de sus datos.
+                if not (remota.estado == ESTADO_VALIDO and work_location):
+                    avisos.extend(verificar_no_pisar(
+                        registro, remota.estado, self.sobrescribir
+                    ))
 
             plan.paginas.append(PlanPagina(
                 seq=registro.seq,
@@ -231,7 +240,11 @@ class Indexador:
                 valores=valores,
                 avisos=avisos,
                 ya_indexada=(
-                    remota is not None and remota.estado == ESTADO_VALIDO
+                    remota is not None
+                    and remota.estado == ESTADO_VALIDO
+                    and not str(
+                        remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
+                    ).strip()
                 ),
             ))
 
@@ -303,11 +316,18 @@ class Indexador:
                 # No cuenta como omitida: nunca hubo nada que escribirle.
                 continue
             if not entrada.escribible:
-                registro.estado = EstadoRegistro.OMITIDA
-                registro.avisos = [str(a) for a in entrada.avisos]
+                # Una pagina que AirVault ya confirma en Valid no se
+                # degrada en el manifiesto solo porque la guarda contra
+                # sobreescritura la bloqueo al volver a planificar.
+                if not entrada.ya_indexada:
+                    registro.estado = EstadoRegistro.OMITIDA
+                    registro.avisos = [str(a) for a in entrada.avisos]
                 resultado.omitidas += 1
                 continue
-            if registro.estado is EstadoRegistro.ESCRITA:
+            if (
+                registro.estado is EstadoRegistro.ESCRITA
+                and entrada.ya_indexada
+            ):
                 resultado.omitidas += 1
                 continue
             try:
@@ -319,6 +339,10 @@ class Indexador:
                 valores[CAMPO_DESCRIPCION] = (
                     f"{vuelo} AUTO INDEX" if vuelo else "AUTO INDEX"
                 )
+                # Work Location no se usa en este flujo. Se envia de forma
+                # explicita para limpiar cualquier valor que AirVault haya
+                # heredado o completado por su cuenta.
+                valores[CAMPO_WORK_LOCATION] = ""
                 self.cliente.guardar_pagina(
                     plan.batch_id,
                     entrada.pagina_batch,
@@ -426,8 +450,15 @@ def verificar_lote(
             # comprobada, no como mal escrita.
             problemas.append(f"pagina {pagina}: no se pudo leer ({exc})")
             continue
-        if remota.estado == ESTADO_VALIDO:
+        work_location = str(
+            remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
+        ).strip()
+        if remota.estado == ESTADO_VALIDO and not work_location:
             validas += 1
+        elif remota.estado == ESTADO_VALIDO:
+            problemas.append(
+                f"pagina {pagina}: Work Location no quedo vacio"
+            )
         else:
             problemas.append(
                 f"pagina {pagina}: estado {remota.estado}"

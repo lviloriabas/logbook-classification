@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -66,9 +67,14 @@ COLOR_AYUDA = "#57606a"
 LIMITE_HISTORIAL = 25
 
 # Cada cuántos minutos se le pregunta a AirVault sin que nadie pulse nada.
-# Cinco es holgado a propósito: un lote tarda lo suyo en cruzar la cola del
-# servidor y preguntar cada rato no lo apura.
-MINUTOS_POR_DEFECTO = 5
+# Dos minutos mantiene la cola al dia sin convertir la espera en sondeo
+# continuo; el valor sigue siendo configurable en la ventana.
+MINUTOS_POR_DEFECTO = 2
+
+# Una respuesta de guardado puede ser aceptada por HTTP y aun dejar la pagina
+# en Need Correction durante un instante. Se relee y reenvia en el mismo
+# proceso antes de devolver el control a la persona.
+INTENTOS_INDEXADO = 3
 
 # Líneas que conserva la bitácora. Con la comprobación automática corriendo
 # toda una tarde, sin tope crecería sin fin.
@@ -76,7 +82,7 @@ LIMITE_BITACORA = 300
 
 TEXTO_SIN_SUBIR = (
     "Sin subir. «Subir a AirVault» manda los PDF de la entrega; nada se "
-    "indexa hasta que los lotes estén listos y se apruebe."
+    "indexa hasta que los batches estén listos y se apruebe."
 )
 
 AIRVAULT_TOOLTIP = (
@@ -186,8 +192,10 @@ class TrabajoAirVaultWorker(QThread):
     def run(self) -> None:  # noqa: D102 - lo describe la clase
         etapas = {
             "subir": self._subir,
+            "subir_pendientes": self._subir_pendientes,
             "comprobar": self._comprobar,
             "indexar": self._indexar,
+            "completar": self._completar,
         }
         try:
             etapas[self.modo]()
@@ -224,7 +232,7 @@ class TrabajoAirVaultWorker(QThread):
         """Devuelve el cliente de AirVault, abriendo sesión si hace falta.
 
         La comprobación periódica reusa el mismo: la sesión se renueva sola
-        cuando caduca, así que volver a abrirla cada cinco minutos serían
+        cuando caduca, así que volver a abrirla cada dos minutos serían
         dos viajes al navegador para nada.
         """
         from app.airvault.client import ClienteHttp
@@ -232,6 +240,7 @@ class TrabajoAirVaultWorker(QThread):
 
         cliente = self.estado.get("cliente")
         if cliente is not None:
+            self._detectar_pendientes()
             return cliente
 
         def avisar_texto(texto: str) -> None:
@@ -251,7 +260,32 @@ class TrabajoAirVaultWorker(QThread):
         cliente = ClienteHttp(sesion, self.estado["config"])
         self.estado["cliente"] = cliente
         self.estado["sesion"] = sesion
+        self._detectar_pendientes()
         return cliente
+
+    def _detectar_pendientes(self) -> None:
+        """Agrega manifiestos propios de batches subidos anteriormente."""
+        from app.airvault.flujo import (
+            CARPETA_TRABAJOS,
+            cargar_trabajos_pendientes,
+        )
+
+        actuales = list(self.estado.get("trabajos") or [])
+        conocidos = {str(t.carpeta.resolve()).casefold() for t in actuales}
+        encontrados = cargar_trabajos_pendientes(
+            self.estado["config"], Path(self.estado["raiz"]) / CARPETA_TRABAJOS,
+        )
+        nuevos = [
+            t for t in encontrados
+            if str(t.carpeta.resolve()).casefold() not in conocidos
+        ]
+        if nuevos:
+            actuales.extend(nuevos)
+            self._avisar(
+                f"Se recuperaron {len(nuevos)} batches pendientes de "
+                "ejecuciones anteriores", 0, 0,
+            )
+        self.estado["trabajos"] = actuales
 
     # ── subir ──────────────────────────────────────────────────────
 
@@ -284,7 +318,7 @@ class TrabajoAirVaultWorker(QThread):
         for trabajo in trabajos:
             manifiesto = trabajo.manifiesto
             self._avisar(
-                f"Lote «{manifiesto.nombre_batch}»: "
+                f"Batch «{manifiesto.nombre_batch}»: "
                 f"{len(manifiesto.bitacoras())} bitácoras y "
                 f"{len(manifiesto.separadores())} separadores", 0, 0,
             )
@@ -295,7 +329,22 @@ class TrabajoAirVaultWorker(QThread):
             dormir=self._dormir,
         )
         self.subido.emit({
-            "trabajos": trabajos, "cliente": cliente,
+            "trabajos": estado["trabajos"], "cliente": cliente,
+            "sesion": estado.get("sesion"),
+        })
+
+    def _subir_pendientes(self) -> None:
+        """Reanuda cargas locales sin volver a preparar la ejecución actual."""
+        from app.airvault.flujo import subir_partes
+
+        estado = self.estado
+        cliente = self._conectar()
+        subir_partes(
+            estado["pendientes_subida"], estado["sesion"],
+            avisar=self._avisar, cliente=cliente, dormir=self._dormir,
+        )
+        self.subido.emit({
+            "trabajos": estado["trabajos"], "cliente": cliente,
             "sesion": estado.get("sesion"),
         })
 
@@ -319,10 +368,10 @@ class TrabajoAirVaultWorker(QThread):
         estado = self.estado
         raiz = Path(estado["raiz"])
         carpeta = Path(estado["carpeta_job"])
-        trabajos = estado["trabajos"]
         planes: Dict[str, tuple] = estado.setdefault("planes", {})
 
         cliente = self._conectar()
+        trabajos = estado["trabajos"]
         estados = comprobar_partes(trabajos, cliente, avisar=self._avisar)
 
         resolutor = ResolutorFlota.load(raiz / FLOTA_CACHE_FILENAME)
@@ -332,7 +381,7 @@ class TrabajoAirVaultWorker(QThread):
             if clave in planes or not parte.se_puede_indexar:
                 continue
             self._avisar(
-                f"Leyendo el lote {parte.batch_id} para ver qué se "
+                f"Leyendo el batch {parte.batch_id} para ver qué se "
                 f"escribiría", 0, 0,
             )
             planes[clave] = parte.trabajo.planificar(
@@ -369,19 +418,54 @@ class TrabajoAirVaultWorker(QThread):
             cerrar_partes,
             completar_partes,
             indexar_partes,
+            planificar_partes,
             verificar_partes,
         )
+        from app.airvault.indexer import Resultado
 
         estado = self.estado
         cliente = estado["cliente"]
         trabajos = list(estado["listos"])
         planes = [estado["planes"][str(t.carpeta)] for t in trabajos]
         cierres: list = []
+        resultado = Resultado()
+        validas = total = 0
         try:
-            resultado = indexar_partes(trabajos, planes, avisar=self._avisar)
-            self._avisar("Comprobando cómo quedaron los lotes", 0, 0)
-            validas, total, _problemas = verificar_partes(trabajos, cliente)
-            if estado.get("completar"):
+            for intento in range(1, INTENTOS_INDEXADO + 1):
+                parcial = indexar_partes(
+                    trabajos, planes, avisar=self._avisar
+                )
+                for atributo in (
+                    "escritas", "omitidas", "fallidas",
+                    "separadores_borrados", "separadores_pendientes",
+                ):
+                    setattr(
+                        resultado, atributo,
+                        getattr(resultado, atributo) + getattr(parcial, atributo),
+                    )
+                resultado.detalles.extend(parcial.detalles)
+                resultado.interrumpido = parcial.interrumpido
+                self._avisar(
+                    "Comprobando cómo quedaron los batches", 0, 0
+                )
+                validas, total, _problemas = verificar_partes(
+                    trabajos, cliente
+                )
+                if validas == total or parcial.interrumpido:
+                    break
+                if intento < INTENTOS_INDEXADO:
+                    self._avisar(
+                        f"Reintentando páginas amarillas "
+                        f"({intento + 1}/{INTENTOS_INDEXADO})", 0, 0,
+                    )
+                    resolutor = planes[0][1].resolutor if planes else None
+                    planes = planificar_partes(
+                        trabajos, cliente, resolutor=resolutor,
+                        avisar=self._avisar,
+                    )
+                    for trabajo, plan in zip(trabajos, planes):
+                        estado["planes"][str(trabajo.carpeta)] = plan
+            if estado.get("completar") and validas == total:
                 cierres = completar_partes(
                     trabajos, cliente, avisar=self._avisar
                 )
@@ -394,6 +478,28 @@ class TrabajoAirVaultWorker(QThread):
         self.indexado.emit({
             "resultado": resultado, "validas": validas, "total": total,
             "lotes": len(trabajos), "cierres": cierres,
+            "incompleto": validas != total,
+        })
+
+    def _completar(self) -> None:
+        """Cierra batches ya verificados sin reescribir sus paginas."""
+        from app.airvault.flujo import cerrar_partes, completar_partes
+        from app.airvault.indexer import Resultado
+
+        estado = self.estado
+        cliente = self._conectar()
+        trabajos = list(estado["por_completar"])
+        try:
+            cierres = completar_partes(
+                trabajos, cliente, avisar=self._avisar
+            )
+        finally:
+            cerrar_partes(trabajos, cliente)
+        total = sum(len(t.manifiesto.bitacoras()) for t in trabajos)
+        self.indexado.emit({
+            "resultado": Resultado(), "validas": total, "total": total,
+            "lotes": len(trabajos), "cierres": cierres,
+            "incompleto": False,
         })
 
 
@@ -451,6 +557,8 @@ class AirVaultWindow(QDialog):
         # Encadena una comprobacion en cuanto termine lo que esta en vuelo:
         # subir e indexar dejan la lista desactualizada.
         self._comprobar_al_terminar = False
+        self._indexar_al_terminar = False
+        self._indexado_incompleto = False
         # Cerrar con trabajo en vuelo no bloquea: se pide la cancelación y
         # la ventana se va en cuanto el hilo suelta lo que tenía tomado.
         self._cerrar_al_terminar = False
@@ -483,9 +591,10 @@ class AirVaultWindow(QDialog):
 
         cuerpo.addWidget(self._historial(), 1)
         cuerpo.addLayout(self._campos())
-        cuerpo.addWidget(self._titulo("Lotes en AirVault"))
+        cuerpo.addWidget(self._titulo("Batches en AirVault"))
         cuerpo.addWidget(self._lotes())
         cuerpo.addLayout(self._fila_vigilancia())
+        cuerpo.addWidget(self._menu_automatizacion())
         cuerpo.addLayout(self._fila_avance())
         cuerpo.addWidget(self._bitacora())
 
@@ -546,7 +655,7 @@ class AirVaultWindow(QDialog):
         grid = QGridLayout()
         grid.setColumnStretch(1, 1)
         etiquetas = (
-            "Ejecución:", "Lote:", "Máximo por batch:", "Sesión:"
+            "Ejecución:", "Batch:", "Máximo por batch:", "Sesión:"
         )
         for fila, etiqueta in enumerate(etiquetas):
             grid.addWidget(QLabel(etiqueta), fila, 0)
@@ -570,11 +679,11 @@ class AirVaultWindow(QDialog):
         grid.addWidget(self.boton_buscar, 0, 2)
 
         self.lote_edit = QLineEdit()
-        self.lote_edit.setPlaceholderText("Nombre del lote en AirVault")
+        self.lote_edit.setPlaceholderText("Nombre del batch en AirVault")
         self.lote_edit.setToolTip(
-            "Nombre con el que el lote queda en AirVault. Lleva la fecha y "
+            "Nombre con el que el batch queda en AirVault. Lleva la fecha y "
             "la hora de la ejecución para que no se confunda con otro: en la "
-            "cola conviven lotes con nombres repetidos."
+            "cola conviven batches con nombres repetidos."
         )
         grid.addWidget(self.lote_edit, 1, 1, 1, 2)
 
@@ -620,12 +729,18 @@ class AirVaultWindow(QDialog):
         de una sola línea de estado que solo puede decir una cosa.
         """
         tabla = QTableWidget(0, 3)
-        tabla.setHorizontalHeaderLabels(["Lote", "Páginas", "Estado"])
+        tabla.setHorizontalHeaderLabels(["Batch", "Páginas", "Estado"])
         tabla.setToolTip(
-            "Lotes de esta ejecución en AirVault. Van pasando a «Listo para "
-            "indexar» según el servidor termina de procesarlos."
+            "Batches de la ejecución elegida y pendientes recuperados de "
+            "ejecuciones anteriores. Van pasando a «Listo para indexar» "
+            "según el servidor termina de procesarlos."
         )
-        tabla.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        tabla.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        tabla.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
         tabla.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         tabla.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         tabla.setAlternatingRowColors(True)
@@ -653,6 +768,7 @@ class AirVaultWindow(QDialog):
             "por esperar. Se puede apagar y usar solo «Comprobar ahora»."
         )
         self.auto_check.toggled.connect(self._ajustar_vigilancia)
+        self.auto_check.toggled.connect(self._sincronizar_espera_visible)
         fila.addWidget(self.auto_check)
 
         self.minutos_spin = QSpinBox()
@@ -660,7 +776,7 @@ class AirVaultWindow(QDialog):
         self.minutos_spin.setValue(MINUTOS_POR_DEFECTO)
         self.minutos_spin.setSuffix(" min")
         self.minutos_spin.setToolTip(
-            "Un lote tarda minutos, a veces mucho más, en salir de la cola "
+            "Un batch tarda minutos, a veces mucho más, en salir de la cola "
             "de AirVault. Preguntar más seguido no lo apura."
         )
         self.minutos_spin.valueChanged.connect(self._ajustar_vigilancia)
@@ -669,14 +785,92 @@ class AirVaultWindow(QDialog):
         self.boton_comprobar = QPushButton("Comprobar ahora")
         self.boton_comprobar.setEnabled(False)
         self.boton_comprobar.setToolTip(
-            "Pregunta a AirVault en qué van los lotes de esta ejecución, y "
+            "Pregunta a AirVault en qué van los batches de esta ejecución, y "
             "calcula qué se escribiría en los que ya estén listos. No "
             "escribe nada."
         )
         self.boton_comprobar.clicked.connect(self._comprobar)
         fila.addWidget(self.boton_comprobar)
+
+        self.boton_automatizacion = QPushButton("Automatización…")
+        self.boton_automatizacion.setCheckable(True)
+        self.boton_automatizacion.setToolTip(
+            "Muestra los pasos que se pueden encadenar automáticamente y "
+            "las acciones para continuar o reiniciar un proceso incompleto."
+        )
+        fila.addWidget(self.boton_automatizacion)
         fila.addStretch()
         return fila
+
+    def _menu_automatizacion(self) -> QGroupBox:
+        """Opciones avanzadas, escondidas hasta que se pidan."""
+        panel = QGroupBox("Hasta dónde continuar automáticamente")
+        contenido = QVBoxLayout(panel)
+
+        self.auto_subir_check = QCheckBox("Subir todos los batches")
+        self.auto_subir_check.setChecked(True)
+        self.auto_subir_check.setEnabled(False)
+        self.auto_esperar_check = QCheckBox(
+            "Esperar hasta que AirVault los deje listos"
+        )
+        self.auto_esperar_check.setChecked(True)
+        self.auto_indexar_check = QCheckBox("Indexar páginas")
+        self.auto_completar_check = QCheckBox("Completar batches")
+        for control in (
+            self.auto_esperar_check,
+            self.auto_indexar_check,
+            self.auto_completar_check,
+        ):
+            control.toggled.connect(self._ajustar_pasos_automaticos)
+        for control in (
+            self.auto_subir_check, self.auto_esperar_check,
+            self.auto_indexar_check, self.auto_completar_check,
+        ):
+            contenido.addWidget(control)
+
+        acciones = QHBoxLayout()
+        self.boton_continuar = QPushButton("Continuar pendiente")
+        self.boton_continuar.setToolTip(
+            "Consulta AirVault y continúa desde el primer paso que no haya "
+            "terminado, sin repetir páginas que ya estén en verde."
+        )
+        self.boton_continuar.clicked.connect(self._continuar_pendiente)
+        acciones.addWidget(self.boton_continuar)
+        self.boton_reiniciar = QPushButton("Reiniciar paso incompleto")
+        self.boton_reiniciar.setToolTip(
+            "Reinicia el estado local del batch seleccionado; si no hay una "
+            "fila seleccionada, reinicia todos los incompletos. No borra "
+            "nada en AirVault."
+        )
+        self.boton_reiniciar.clicked.connect(self._reiniciar_incompleto)
+        acciones.addWidget(self.boton_reiniciar)
+        acciones.addStretch()
+        contenido.addLayout(acciones)
+
+        panel.setVisible(False)
+        self.boton_automatizacion.toggled.connect(panel.setVisible)
+        self.menu_automatizacion = panel
+        self._ajustar_pasos_automaticos()
+        return panel
+
+    def _ajustar_pasos_automaticos(self) -> None:
+        """Mantiene la cadena secuencial y apaga dependencias imposibles."""
+        espera = self.auto_esperar_check.isChecked()
+        self.auto_indexar_check.setEnabled(espera)
+        if not espera:
+            self.auto_indexar_check.setChecked(False)
+        indexa = espera and self.auto_indexar_check.isChecked()
+        self.auto_completar_check.setEnabled(indexa)
+        if not indexa:
+            self.auto_completar_check.setChecked(False)
+        self.auto_check.setChecked(espera)
+        if self.auto_completar_check.isChecked():
+            self.completar_check.setChecked(True)
+
+    def _sincronizar_espera_visible(self, marcada: bool) -> None:
+        """La opción visible y el paso oculto representan la misma espera."""
+        if hasattr(self, "auto_esperar_check"):
+            self.auto_esperar_check.setChecked(marcada)
 
     def _fila_avance(self) -> QHBoxLayout:
         """Estado, reloj y barra propios: la ventana no cuelga de la principal."""
@@ -719,11 +913,11 @@ class AirVaultWindow(QDialog):
 
         self.completar_check = QCheckBox("Completar batch")
         self.completar_check.setToolTip(
-            "Al terminar de escribir, da el lote por terminado en AirVault y "
+            "Al terminar de escribir, da el batch por terminado en AirVault y "
             "lo saca de la cola del Web Index. AirVault solo lo acepta con "
             "todas las páginas en verde: si a alguna le falta un campo "
-            "obligatorio, el lote se queda en la cola y se dice cuáles son. "
-            "Sin marcar, el lote queda ahí para revisarlo."
+            "obligatorio, el batch se queda en la cola y se dice cuáles son. "
+            "Sin marcar, el batch queda ahí para revisarlo."
         )
         fila.addWidget(self.completar_check)
         fila.addStretch()
@@ -741,8 +935,8 @@ class AirVaultWindow(QDialog):
         self.boton_indexar = QPushButton("Indexar")
         self.boton_indexar.setEnabled(False)
         self.boton_indexar.setToolTip(
-            "Escribe en AirVault los datos de los lotes que ya están listos. "
-            "También borra las páginas separadoras del lote automático. "
+            "Escribe en AirVault los datos de los batches que ya están listos. "
+            "También borra las páginas separadoras del batch automático. "
             "Las páginas marcadas como bloqueadas no se escriben."
         )
         self.boton_indexar.clicked.connect(self._indexar)
@@ -761,7 +955,7 @@ class AirVaultWindow(QDialog):
         self.boton_cancelar = QPushButton("Cancelar")
         self.boton_cancelar.setEnabled(False)
         self.boton_cancelar.setToolTip(
-            "Detiene lo que esté en marcha y suelta los lotes que se hayan "
+            "Detiene lo que esté en marcha y suelta los batches que se hayan "
             "tomado en AirVault. Lo ya escrito se conserva y al volver a "
             "comprobar se retoma sin repetirlo."
         )
@@ -934,6 +1128,8 @@ class AirVaultWindow(QDialog):
         }
         self._estados = [estado_local(t) for t in self._trabajos]
         self._pintar_lotes()
+        self.boton_indexar.setEnabled(bool(self.corrida_edit.text().strip()))
+        self.boton_reiniciar.setEnabled(bool(self._trabajos))
         self._ajustar_vigilancia()
 
     def _sincronizar_entrega(self, csv: Path) -> None:
@@ -999,11 +1195,23 @@ class AirVaultWindow(QDialog):
             if parte.se_puede_indexar and str(parte.trabajo.carpeta) in planes
         ]
 
+    def _por_completar(self) -> list:
+        """Batches verificados que pueden cerrarse sin volver a escribir."""
+        from app.airvault.flujo import INDEXADO
+
+        return [
+            parte.trabajo for parte in self._estados
+            if parte.estado == INDEXADO and not parte.trabajo.manifiesto.solo_subir
+        ]
+
     def _falta_esperar(self) -> bool:
         """Si queda algún lote que AirVault todavía no ha terminado."""
         from app.airvault.flujo import LISTO
 
-        return any(
+        return (
+            self._indexado_incompleto
+            and self.auto_indexar_check.isChecked()
+        ) or any(
             not parte.se_acabo and parte.estado != LISTO
             for parte in self._estados
         )
@@ -1057,7 +1265,7 @@ class AirVaultWindow(QDialog):
             )
             return None
         if not self.lote_edit.text().strip():
-            self.resumen.setText("Falta el nombre del lote en AirVault.")
+            self.resumen.setText("Falta el nombre del batch en AirVault.")
             return None
         job = carpeta_de_corrida(csv).name
         self._estado.update({
@@ -1082,21 +1290,95 @@ class AirVaultWindow(QDialog):
         estado = self._base_del_estado()
         if estado is None:
             return
-        if not estado.get("trabajos"):
-            self.resumen.setText(
-                "Esta ejecución todavía no se ha subido, así que no hay "
-                "ningún lote que comprobar en AirVault."
-            )
-            return
         self._lanzar("comprobar", estado)
 
     def _indexar(self) -> None:
         listos = self._listos()
         if not listos:
+            por_completar = self._por_completar()
+            if self.completar_check.isChecked() and por_completar:
+                self._estado["por_completar"] = por_completar
+                self._lanzar("completar", self._estado)
+                return
+            if self.corrida_edit.text().strip():
+                # Conecta y detecta tambien batches que esta aplicacion subio
+                # en ejecuciones anteriores. Despues decide si hay que
+                # reindexar, continuar o solamente comprobar su estado.
+                self._indexar_al_terminar = True
+                self._comprobar()
             return
         self._estado["listos"] = listos
         self._estado["completar"] = self.completar_check.isChecked()
         self._lanzar("indexar", self._estado)
+
+    def _continuar_pendiente(self) -> None:
+        """Retoma el primer paso necesario sin duplicar trabajo terminado."""
+        from app.airvault.model import EstadoEtapa
+
+        estado = self._base_del_estado()
+        if estado is None:
+            return
+        if not self._trabajos:
+            self._indexar_al_terminar = self.auto_indexar_check.isChecked()
+            self._comprobar()
+            return
+        pendientes_subida = [
+            trabajo for trabajo in self._trabajos
+            if not trabajo.manifiesto.etapa_hecha("subir")
+        ]
+        if pendientes_subida:
+            # EN_CURSO puede significar que AirVault acepto el archivo y la
+            # respuesta se perdio. Primero se consulta; solo «Reiniciar»
+            # autoriza una nueva carga cuando esa duda existe.
+            if any(
+                trabajo.manifiesto.etapas.get("subir") is not None
+                and trabajo.manifiesto.etapa("subir").estado
+                is EstadoEtapa.EN_CURSO
+                for trabajo in pendientes_subida
+            ):
+                self._indexar_al_terminar = True
+                self._comprobar()
+                return
+            estado["pendientes_subida"] = pendientes_subida
+            self._lanzar("subir_pendientes", estado)
+            return
+        if self._listos():
+            self._indexar()
+            return
+        self._indexar_al_terminar = True
+        self._comprobar()
+
+    def _reiniciar_incompleto(self) -> None:
+        """Reabre el paso local incompleto del batch elegido o de todos."""
+        from app.airvault.flujo import (
+            estado_local,
+            reiniciar_trabajos_incompletos,
+        )
+
+        filas = self.lotes.selectionModel().selectedRows()
+        objetivos = (
+            [self._estados[filas[0].row()].trabajo]
+            if filas and filas[0].row() < len(self._estados)
+            else list(self._trabajos)
+        )
+        reiniciados = reiniciar_trabajos_incompletos(objetivos)
+        if not reiniciados:
+            self.resumen.setText("No hay ningún paso incompleto que reiniciar.")
+            return
+        claves = {str(trabajo.carpeta) for trabajo, _paso in reiniciados}
+        planes = self._estado.get("planes") or {}
+        self._estado["planes"] = {
+            clave: plan for clave, plan in planes.items() if clave not in claves
+        }
+        self._estados = [estado_local(t) for t in self._trabajos]
+        self._pintar_lotes()
+        pasos = ", ".join(sorted({paso for _trabajo, paso in reiniciados}))
+        self.resumen.setText(
+            f"Se reinició el paso incompleto ({pasos}) en "
+            f"{len(reiniciados)} batch"
+            + ("es." if len(reiniciados) != 1 else ".")
+        )
+        self.boton_indexar.setEnabled(True)
 
     def _lanzar(self, modo: str, estado: dict) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -1124,11 +1406,23 @@ class AirVaultWindow(QDialog):
         self.cookie_edit.setEnabled(activo)
         self.limite_batch_spin.setEnabled(activo and not self._trabajos)
         self.boton_comprobar.setEnabled(activo and bool(self._trabajos))
+        self.boton_automatizacion.setEnabled(activo)
+        self.boton_continuar.setEnabled(activo)
+        self.boton_reiniciar.setEnabled(activo and bool(self._trabajos))
         # Cerrar y Cancelar nunca se apagan a la vez: mientras hay trabajo
         # en vuelo tiene que haber siempre algo que pulsar, o la ventana se
         # queda muda durante una espera de minutos.
         self.boton_cancelar.setEnabled(not activo)
-        self.boton_indexar.setEnabled(activo and bool(self._listos()))
+        self.boton_indexar.setEnabled(
+            activo and (
+                bool(self._listos()) or bool(self._trabajos)
+                or (
+                    self.completar_check.isChecked()
+                    and bool(self._por_completar())
+                )
+                or bool(self.corrida_edit.text().strip())
+            )
+        )
 
     # ── el reloj del paso ──────────────────────────────────────────
 
@@ -1188,7 +1482,7 @@ class AirVaultWindow(QDialog):
         self._estado["trabajos"] = self._trabajos
         self.limite_batch_spin.setEnabled(False)
         cuantos = len(self._trabajos)
-        lotes = "el lote" if cuantos == 1 else f"los {cuantos} lotes"
+        lotes = "el batch" if cuantos == 1 else f"los {cuantos} batches"
         self.resumen.setText(
             f"Subida terminada. AirVault tiene que procesar {lotes} antes "
             f"de poder indexarlos, y eso tarda: se va preguntando solo y "
@@ -1196,15 +1490,17 @@ class AirVaultWindow(QDialog):
         )
         self.estado_label.setText("Subida terminada")
         self._anotar("Subida terminada; falta que AirVault los procese")
-        # Se pregunta ya, sin esperar al primer turno del reloj: a veces el
-        # lote está listo enseguida.
-        self._comprobar_al_terminar = True
+        # Solo despues de terminar todas las cargas empieza la espera. Si el
+        # paso se desactivo en el menu oculto, la subida termina aqui.
+        self._comprobar_al_terminar = self.auto_esperar_check.isChecked()
 
     def _al_comprobar(self, datos: dict) -> None:
         from app.airvault.flujo import LISTO
 
         self._estado["planes"] = datos["planes"]
+        self._trabajos = list(self._estado.get("trabajos") or self._trabajos)
         self._estados = datos["estados"]
+        self._indexado_incompleto = False
         self._pintar_lotes()
         self._ajustar_vigilancia()
         if datos.get("reporte"):
@@ -1231,17 +1527,25 @@ class AirVaultWindow(QDialog):
             + "; ".join(f"{p.nombre} {p}" for p in self._estados)
         )
         self._limpiar_progreso()
+        if self.auto_indexar_check.isChecked() and (
+            self._listos()
+            or (
+                self.auto_completar_check.isChecked()
+                and self._por_completar()
+            )
+        ):
+            self._indexar_al_terminar = True
 
     def _resumen_de_listos(self, partes) -> str:
         """Cuántas páginas se escribirían y cuántas quedan bloqueadas."""
         from app.airvault.report import _resumen_sumado
 
         if not partes:
-            return "Hay lotes listos; falta calcular qué se les escribiría."
+            return "Hay batches listos; falta calcular qué se les escribiría."
         resumen = _resumen_sumado(partes)
         donde = (
-            f"{len(partes)} lotes" if len(partes) > 1
-            else f"Lote {partes[0][0] or partes[0][1].batch_id}"
+            f"{len(partes)} batches" if len(partes) > 1
+            else f"Batch {partes[0][0] or partes[0][1].batch_id}"
         )
         return (
             f"{donde}: {resumen['total']} páginas, "
@@ -1254,7 +1558,7 @@ class AirVaultWindow(QDialog):
         resultado = datos["resultado"]
         lotes = datos.get("lotes", 1)
         self.boton_indexar.setEnabled(False)
-        donde = f" en {lotes} lotes" if lotes > 1 else ""
+        donde = f" en {lotes} batches" if lotes > 1 else ""
         cuenta = (
             f"Escritas {resultado.escritas}, omitidas {resultado.omitidas} "
             f"y fallidas {resultado.fallidas}. En AirVault quedaron "
@@ -1284,6 +1588,19 @@ class AirVaultWindow(QDialog):
             self.estado_label.setText("El indexado se cortó a medio camino")
             self._limpiar_progreso()
             return
+        if datos.get("incompleto"):
+            self._indexado_incompleto = True
+            self.resumen.setText(
+                cuenta
+                + " Aún hay páginas amarillas. Se reintentaron en esta "
+                "ejecución y el proceso queda disponible para continuar "
+                "sin repetir las páginas verdes."
+            )
+            self.estado_label.setText("Indexado incompleto")
+            self._limpiar_progreso()
+            self._ajustar_vigilancia()
+            return
+        self._indexado_incompleto = False
         self.resumen.setText(cuenta + self._cuenta_de_cierres(datos))
         self.estado_label.setText("Indexado terminado")
         self._limpiar_progreso()
@@ -1301,8 +1618,8 @@ class AirVaultWindow(QDialog):
         partes = []
         if cerrados:
             texto = (
-                f" Se cerraron {len(cerrados)} lotes en AirVault."
-                if len(cerrados) > 1 else " El lote quedó cerrado en AirVault."
+                f" Se cerraron {len(cerrados)} batches en AirVault."
+                if len(cerrados) > 1 else " El batch quedó cerrado en AirVault."
             )
             quitadas = sum(len(r.quitadas) for _t, r in cierres if r.completado)
             if quitadas:
@@ -1310,12 +1627,12 @@ class AirVaultWindow(QDialog):
                 # están, y quien lo abra en AirVault no las va a encontrar.
                 texto += (
                     f" Se quitaron {quitadas} páginas separadoras, que no son "
-                    f"bitácoras y no dejan cerrar el lote."
+                    f"bitácoras y no dejan cerrar el batch."
                 )
             partes.append(texto)
         for trabajo, resultado in colgados:
             partes.append(
-                f" El lote {trabajo.manifiesto.nombre_batch} no se pudo "
+                f" El batch {trabajo.manifiesto.nombre_batch} no se pudo "
                 f"cerrar: {resultado.detalle}"
             )
         return "".join(partes)
@@ -1335,19 +1652,19 @@ class AirVaultWindow(QDialog):
         self.resumen.setText(mensaje)
         self.estado_label.setText("El indexado no pudo continuar")
         self._anotar(f"Se detuvo: {mensaje}")
-        # Un fallo con la comprobación automática puesta se repetiría cada
-        # cinco minutos con el mismo error: se para y se vuelve a pulsar.
+        # Un fallo con la comprobación automática puesta se repetiría en el
+        # siguiente intervalo con el mismo error: se para y se vuelve a pulsar.
         self._parar_vigilancia()
         self._limpiar_progreso()
 
     def _al_cancelar(self) -> None:
         """Lo paró quien lo lanzó: se dice y se sueltan los lotes."""
         self.estado_label.setText("Cancelado")
-        self._anotar("Cancelado; se sueltan los lotes tomados en AirVault")
+        self._anotar("Cancelado; se sueltan los batches tomados en AirVault")
         self._parar_vigilancia()
         self._soltar_lotes()
         self.resumen.setText(
-            "El trabajo se canceló. Los lotes quedaron sueltos en AirVault "
+            "El trabajo se canceló. Los batches quedaron sueltos en AirVault "
             "y lo que ya se hubiera escrito se conserva: al volver a "
             "comprobar se retoma sin repetirlo."
         )
@@ -1364,6 +1681,13 @@ class AirVaultWindow(QDialog):
         if getattr(self, "_comprobar_al_terminar", False):
             self._comprobar_al_terminar = False
             self._comprobar()
+            return
+        if getattr(self, "_indexar_al_terminar", False):
+            self._indexar_al_terminar = False
+            if self._listos() or (
+                self.completar_check.isChecked() and self._por_completar()
+            ):
+                self._indexar()
 
     def _limpiar_progreso(self) -> None:
         """Deja la barra quieta en cero: lo que pasó lo cuenta el resumen."""
@@ -1416,7 +1740,7 @@ class AirVaultWindow(QDialog):
             self._cancelar()
             self.resumen.setText(
                 "Cancelando el trabajo en marcha. La ventana se cierra en "
-                "cuanto AirVault suelte los lotes que tenía tomados."
+                "cuanto AirVault suelte los batches que tenía tomados."
             )
             event.ignore()
             return

@@ -8,6 +8,7 @@ from app.airvault.config import (
     CAMPO_DESCRIPCION,
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
+    CAMPO_WORK_LOCATION,
     ESTADO_VALIDO,
 )
 from app.airvault.guards import ErrorDeGuarda
@@ -80,7 +81,21 @@ def test_escritura_manda_los_valores_correctos():
     _pagina, valores, estado = cliente.escrituras[0]
     assert valores[CAMPO_MATRICULA] == "HP-1848CMP"
     assert valores[CAMPO_LOG_NUMBER] == "2287321"
+    assert valores[CAMPO_WORK_LOCATION] == ""
     assert estado == ESTADO_VALIDO
+
+
+def test_una_pagina_localmente_escrita_se_reenvia_si_sigue_amarilla():
+    cliente = ClienteFalso(
+        paginas={1: pagina(1, estado=3)}, page_count=1
+    )
+    m = manifiesto(1)
+    m.registros[0].estado = EstadoRegistro.ESCRITA
+
+    indexador = Indexador(cliente, m, PICKLIST)
+    indexador.aplicar(indexador.planificar(1))
+
+    assert [numero for numero, _valores, _estado in cliente.escrituras] == [1]
 
 
 def test_el_vuelo_se_marca_solo_en_el_payload_automatico():
@@ -116,6 +131,25 @@ def test_pagina_ya_valida_se_respeta():
     assert plan.bloqueadas[0].avisos[0].codigo == "ya_indexada"
     indexador.aplicar(plan)
     assert cliente.escrituras == []
+
+
+def test_pagina_valida_se_reescribe_si_work_location_no_esta_vacio():
+    cliente = ClienteFalso(
+        paginas={
+            1: pagina(
+                1, estado=ESTADO_VALIDO,
+                valores={CAMPO_WORK_LOCATION: "PTY"},
+            )
+        },
+        page_count=1,
+    )
+    indexador = Indexador(cliente, manifiesto(1), PICKLIST)
+
+    plan = indexador.planificar(1)
+    indexador.aplicar(plan)
+
+    assert len(cliente.escrituras) == 1
+    assert cliente.escrituras[0][1][CAMPO_WORK_LOCATION] == ""
 
 
 def test_sobrescribir_permite_pisar():
@@ -181,6 +215,23 @@ def test_verificar_cuenta_las_validas():
     validas, total, problemas = verificar_lote(cliente, manifiesto(2))
     assert (validas, total) == (1, 2)
     assert len(problemas) == 1
+
+
+def test_verificar_exige_work_location_vacio():
+    cliente = ClienteFalso(
+        paginas={
+            1: pagina(
+                1, estado=ESTADO_VALIDO,
+                valores={CAMPO_WORK_LOCATION: "BOG"},
+            )
+        },
+        page_count=1,
+    )
+
+    validas, total, problemas = verificar_lote(cliente, manifiesto(1))
+
+    assert (validas, total) == (0, 1)
+    assert "Work Location" in problemas[0]
 
 
 def test_matricula_fuera_de_picklist_bloquea():
