@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.airvault.config import (
+    CAMPO_DESCRIPCION,
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
     ESTADO_VALIDO,
@@ -80,6 +81,31 @@ def test_escritura_manda_los_valores_correctos():
     assert valores[CAMPO_MATRICULA] == "HP-1848CMP"
     assert valores[CAMPO_LOG_NUMBER] == "2287321"
     assert estado == ESTADO_VALIDO
+
+
+def test_el_vuelo_se_marca_solo_en_el_payload_automatico():
+    cliente = ClienteFalso(page_count=1)
+    m = manifiesto(1)
+    m.registros[0].flight_number = "CM137"
+    indexador = Indexador(cliente, m, PICKLIST)
+    plan = indexador.planificar(1)
+
+    # El plan alimenta el reporte local y conserva el vuelo original.
+    assert plan.paginas[0].valores[CAMPO_DESCRIPCION] == "CM137"
+    indexador.aplicar(plan)
+
+    _pagina, valores_remotos, _estado = cliente.escrituras[0]
+    assert valores_remotos[CAMPO_DESCRIPCION] == "CM137 AUTO INDEX"
+
+
+def test_sin_vuelo_no_se_manda_la_marca_automatica():
+    cliente = ClienteFalso(page_count=1)
+    m = manifiesto(1)
+    indexador = Indexador(cliente, m, PICKLIST)
+    indexador.aplicar(indexador.planificar(1))
+
+    _pagina, valores_remotos, _estado = cliente.escrituras[0]
+    assert CAMPO_DESCRIPCION not in valores_remotos
 
 
 def test_pagina_ya_valida_se_respeta():

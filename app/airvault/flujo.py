@@ -675,7 +675,9 @@ class Trabajo:
         if avisar is not None:
             def avanzar(hechas: int, previstas: int) -> None:
                 avisar("Escribiendo en AirVault", hechas, previstas)
-        if plan.escribibles:
+        if plan.escribibles or (
+            plan.separadores and not self.manifiesto.solo_subir
+        ):
             self.tomar(indexador.cliente)
         try:
             resultado = indexador.aplicar(plan, detener_en_error, avanzar)
@@ -683,10 +685,22 @@ class Trabajo:
             # Tambien si se corto a medias: lo escrito queda escrito y el
             # lote no se queda bloqueado por un trabajo que ya no corre.
             self.cerrar(indexador.cliente)
-        self.manifiesto.etapa("indexar").marcar(
-            EstadoEtapa.HECHA if not resultado.fallidas else EstadoEtapa.ERROR,
+        con_error = bool(
+            resultado.fallidas or resultado.separadores_pendientes
+            or resultado.interrumpido
+        )
+        detalle = (
             f"escritas {resultado.escritas}, omitidas {resultado.omitidas}, "
-            f"fallidas {resultado.fallidas}",
+            f"fallidas {resultado.fallidas}, separadores borrados "
+            f"{resultado.separadores_borrados}"
+        )
+        if resultado.separadores_pendientes:
+            detalle += (
+                f", separadores sin borrar "
+                f"{resultado.separadores_pendientes}"
+            )
+        self.manifiesto.etapa("indexar").marcar(
+            EstadoEtapa.ERROR if con_error else EstadoEtapa.HECHA, detalle
         )
         self.guardar()
         return resultado
@@ -724,6 +738,11 @@ class Trabajo:
         en amarillo el lote no se cierra hoy, y entonces mas vale no
         haberlo tocado.
         """
+        if self.manifiesto.solo_subir:
+            return ResultadoCompletar(
+                False, [], len(self.manifiesto.registros),
+                "el lote REVISAR se conserva para indexarlo a mano",
+            )
         batch_id = self.manifiesto.batch_id or ""
         if not batch_id:
             raise ErrorDeCorrida(
@@ -1149,6 +1168,8 @@ def indexar_partes(
         sumado.escritas += resultado.escritas
         sumado.omitidas += resultado.omitidas
         sumado.fallidas += resultado.fallidas
+        sumado.separadores_borrados += resultado.separadores_borrados
+        sumado.separadores_pendientes += resultado.separadores_pendientes
         sumado.detalles.extend(
             f"{cabeza}{detalle}" for detalle in resultado.detalles
         )

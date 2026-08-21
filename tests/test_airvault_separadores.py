@@ -122,7 +122,7 @@ def test_contar_solo_las_bitacoras_detiene_el_trabajo():
     assert "separadores" in str(fallo.value)
 
 
-# ── el indexador los salta ─────────────────────────────────────────
+# ── el indexador automatico los borra ──────────────────────────────
 
 def manifiesto_con_separadores(tmp_path):
     from app.airvault.model import Manifiesto
@@ -146,6 +146,7 @@ def test_no_se_escribe_en_las_paginas_divisorias(tmp_path):
     escritas = [p for p, _v, _e in cliente.escrituras]
     assert 1 not in escritas and 4 not in escritas
     assert escritas == [2, 3]
+    assert cliente.borradas == [1, 4]
 
 
 def test_la_divisoria_ni_siquiera_se_lee(tmp_path):
@@ -173,7 +174,39 @@ def test_el_separador_no_cuenta_como_omitido(tmp_path):
     # La pagina 5 no tiene matricula y queda bloqueada; los dos separadores
     # no son ni escritos ni omitidos porque nunca hubo nada que escribir.
     assert resultado.omitidas == 1
+    assert resultado.separadores_borrados == 2
+    assert resultado.separadores_pendientes == 0
     assert plan.resumen()["separadores"] == 2
+
+
+def test_los_separadores_de_revisar_no_se_borran(tmp_path):
+    cliente = ClienteFalso(page_count=5)
+    manifiesto = manifiesto_con_separadores(tmp_path)
+    manifiesto.solo_subir = True
+    indexador = Indexador(cliente, manifiesto, ["HP-1848CMP"])
+
+    resultado = indexador.aplicar(indexador.planificar(5))
+
+    assert resultado.separadores_borrados == 0
+    assert cliente.borradas == []
+    assert cliente.escrituras == []
+
+
+def test_si_airvault_no_deja_borrar_un_separador_se_informa(tmp_path):
+    cliente = ClienteFalso(
+        paginas={n: pagina(n, estado=3) for n in range(1, 6)},
+        picklist=["HP-1848CMP"], page_count=5,
+        no_se_pueden_borrar={4},
+    )
+    indexador = Indexador(cliente, manifiesto_con_separadores(tmp_path),
+                          ["HP-1848CMP"])
+
+    resultado = indexador.aplicar(indexador.planificar(5))
+
+    assert resultado.separadores_borrados == 1
+    assert resultado.separadores_pendientes == 1
+    assert cliente.borradas == [1]
+    assert any("pagina 4" in detalle for detalle in resultado.detalles)
 
 
 def test_la_matricula_vacia_de_un_separador_no_es_un_aviso(tmp_path):

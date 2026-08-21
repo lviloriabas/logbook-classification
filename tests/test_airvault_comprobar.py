@@ -443,6 +443,13 @@ def test_el_lote_de_revisar_no_se_cierra_nunca(tmp_path):
     assert completar_partes([trabajo], cliente) == []
     assert cliente.completados == []
 
+    # La proteccion tambien vive en el trabajo, no solo en el recorrido de
+    # varias partes: una llamada directa tampoco lo borra ni lo completa.
+    resultado = trabajo.completar(cliente)
+    assert not resultado.completado
+    assert cliente.borradas == []
+    assert cliente.completados == []
+
 
 def test_un_lote_que_no_se_deja_cerrar_no_corta_a_los_demas(tmp_path):
     """Son lotes distintos y lo escrito en cada uno ya esta escrito."""

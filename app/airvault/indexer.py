@@ -14,6 +14,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence
 from loguru import logger
 
 from app.airvault.config import (
+    CAMPO_DESCRIPCION,
     CAMPO_FLEET,
     CAMPO_LESSOR,
     CAMPO_MATRICULA,
@@ -99,6 +100,8 @@ class Resultado:
     escritas: int = 0
     omitidas: int = 0
     fallidas: int = 0
+    separadores_borrados: int = 0
+    separadores_pendientes: int = 0
     detalles: List[str] = field(default_factory=list)
     # Motivo por el que se corto el lote entero, si se corto. Lo que queda
     # sin escribir sigue pendiente en el manifiesto y se retoma despues.
@@ -292,6 +295,7 @@ class Indexador:
         el indexador sepa que existe una interfaz.
         """
         resultado = Resultado()
+
         previstas = len(plan.escribibles)
         for entrada in plan.paginas:
             registro = entrada.registro
@@ -307,10 +311,16 @@ class Indexador:
                 resultado.omitidas += 1
                 continue
             try:
+                valores = dict(entrada.valores)
+                vuelo = registro.flight_number.strip()
+                if vuelo:
+                    # La marca identifica exclusivamente la escritura por
+                    # API. No forma parte del CSV ni del plan/reporte local.
+                    valores[CAMPO_DESCRIPCION] = f"{vuelo} AUTO INDEX"
                 self.cliente.guardar_pagina(
                     plan.batch_id,
                     entrada.pagina_batch,
-                    entrada.valores,
+                    valores,
                     ESTADO_VALIDO,
                     entrada.pagina_batch,
                 )
@@ -350,6 +360,39 @@ class Indexador:
             self._persistir()
             if al_avanzar is not None:
                 al_avanzar(resultado.escritas, previstas)
+
+        # Las divisorias conservaron hasta aqui la numeracion con la que se
+        # leyeron y escribieron las bitacoras. Ya no son documentos utiles:
+        # se marcan como borradas en el lote automatico aunque el operador
+        # no haya pedido completarlo. REVISAR se conserva entero.
+        if not resultado.interrumpido and not self.manifiesto.solo_subir:
+            for entrada in plan.separadores:
+                try:
+                    borrada = self.cliente.borrar_pagina(
+                        plan.batch_id, entrada.pagina_batch, True
+                    )
+                except FALLOS_DE_CAMINO as exc:
+                    resultado.interrumpido = str(exc)
+                    resultado.detalles.append(
+                        f"pagina {entrada.pagina_batch}: no se pudo borrar "
+                        f"el separador ({exc})"
+                    )
+                    self._persistir()
+                    break
+                except Exception as exc:  # noqa: BLE001 - se anota y sigue
+                    borrada = False
+                    logger.warning(
+                        "No se pudo borrar el separador {} del lote {}: {}",
+                        entrada.pagina_batch, plan.batch_id, exc,
+                    )
+                if borrada:
+                    resultado.separadores_borrados += 1
+                else:
+                    resultado.separadores_pendientes += 1
+                    resultado.detalles.append(
+                        f"pagina {entrada.pagina_batch}: no se pudo borrar "
+                        "el separador en AirVault"
+                    )
         return resultado
 
     def _persistir(self) -> None:

@@ -721,7 +721,8 @@ class AirVaultWindow(QDialog):
         self.boton_indexar.setEnabled(False)
         self.boton_indexar.setToolTip(
             "Escribe en AirVault los datos de los lotes que ya están listos. "
-            "Las páginas marcadas como bloqueadas no se tocan."
+            "También borra las páginas separadoras del lote automático. "
+            "Las páginas marcadas como bloqueadas no se escriben."
         )
         self.boton_indexar.clicked.connect(self._indexar)
 
@@ -1228,6 +1229,21 @@ class AirVaultWindow(QDialog):
             f"y fallidas {resultado.fallidas}. En AirVault quedaron "
             f"{datos['validas']} de {datos['total']} páginas válidas{donde}."
         )
+        separadores_borrados = getattr(resultado, "separadores_borrados", 0)
+        separadores_pendientes = getattr(
+            resultado, "separadores_pendientes", 0
+        )
+        if separadores_borrados:
+            cuenta += (
+                f" Se borraron {separadores_borrados} páginas "
+                f"separadoras del indexado automático."
+            )
+        if separadores_pendientes:
+            cuenta += (
+                f" No se pudieron borrar "
+                f"{separadores_pendientes} páginas separadoras "
+                f"en AirVault."
+            )
         if resultado.interrumpido:
             self.resumen.setText(
                 f"{cuenta} El indexado se cortó: {resultado.interrumpido} "

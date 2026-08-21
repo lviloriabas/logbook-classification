@@ -237,12 +237,14 @@ conserva, asi que un indexado no pisa lo que alguien haya puesto a mano.
 | Log Page Number | columna `log_number` del CSV |
 | Audit Status | valor del trabajo |
 | End Date | columna `date` del CSV en `MM/DD/YYYY`; si no se leyo, se deduce del libro |
-| Description | columna `flight_number` del CSV, **solo si la trae** |
+| Description | columna `flight_number` del CSV seguida de `AUTO INDEX`, **solo si la trae** |
 | Lessor | del cache de flota, solo si lo trae |
 
 **El vuelo.** `Description` lleva el vuelo de esa bitacora, pagina por
 pagina: un vuelo numerado (`703`, `CM137`) o un codigo de mantenimiento
-(`TCK`, `SPV`), tal como lo dejo la lectura. No todas las bitacoras lo
+(`TCK`, `SPV`), seguido por la marca `AUTO INDEX`. La marca se agrega solo
+al payload que se guarda en AirVault: el CSV y el reporte de revision
+conservan el vuelo tal como lo dejo la lectura. No todas las bitacoras lo
 traen; en las que no, el campo **no se manda**, porque mandarlo vacio
 borraria lo que alguien haya escrito a mano. Es un campo por pagina, no del
 lote: el lote no lo lleva —Quick Upload ni siquiera expone `Description`—.
@@ -582,12 +584,12 @@ Los cuatro estados de una pagina son los de AirVault:
 | 3 | Need Correction | no |
 
 **Las divisorias del PDF cuentan.** Medido en el lote `003SUS`: sus trece
-paginas separadoras —las que llevan la matricula de cada grupo, `REVISAR`,
-`POSIBLES DISCREPANCIAS`— quedaron en estado 1, «No Template Match», y para
-AirVault eso pesa igual que una bitacora incompleta. Asi que una entrega
-con divisorias no se va a poder cerrar mientras esas paginas sigan ahi y
-sin indexar; el programa lo dice con el numero de pagina en vez de
-intentarlo y comerse el rechazo.
+paginas separadoras quedaron en estado 1, «No Template Match», y para
+AirVault eso pesa igual que una bitacora incompleta. Al indexar un lote
+automatico, BITS las marca como borradas mediante la misma operacion de
+AirVault que se ejecuta con `Ctrl+Supr`; no depende de completar el batch.
+El lote `REVISAR` no se indexa automaticamente y conserva todas sus
+paginas para que una persona lo resuelva.
 
 Lo otro que bloquea son las bitacoras que quedaron en amarillo, casi
 siempre por la fecha: si la lectura no la trajo, `End Date` va vacio,

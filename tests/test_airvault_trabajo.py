@@ -330,6 +330,20 @@ def test_escribe_lo_que_el_plan_habia_anunciado(tmp_path):
     assert (validas, total) == (2, 2)
 
 
+def test_indexar_no_modifica_el_csv_de_la_corrida(tmp_path):
+    csv = corrida(tmp_path)
+    contenido_original = csv.read_bytes()
+    cliente = cliente_con_lote()
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.descubrir(cliente, esperar=False)
+    plan, indexador = trabajo.planificar(cliente)
+
+    trabajo.indexar(indexador, plan)
+
+    assert csv.read_bytes() == contenido_original
+
+
 def test_un_lote_con_otra_cantidad_de_paginas_no_se_toca(tmp_path):
     """Si la correspondencia por posicion esta rota, no se escribe nada."""
     from app.airvault.guards import ErrorDeGuarda
