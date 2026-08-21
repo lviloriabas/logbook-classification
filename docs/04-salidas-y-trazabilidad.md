@@ -93,7 +93,7 @@ Con separación por matrícula o mes, crea un solo PDF con páginas divisorias b
 1. matrícula ascendente;
 2. mes cronológico dentro de la matrícula;
 3. posibles discrepancias, si la opción está activa;
-4. **REVISAR**, si existen páginas sin aeronave confirmada.
+4. **REVISAR**, si existen páginas cuya matrícula no permite asignarlas con seguridad.
 
 Las páginas fuente se insertan directamente desde el PDF original. No se rasterizan ni reciben anotaciones de BITS. Las páginas en blanco se omiten.
 
@@ -107,7 +107,7 @@ Los nombres dependen de los criterios seleccionados:
 | Mes | `YYYY-MMM.pdf` |
 | Matrícula y mes | `HP-XXXXCMP_YYYY-MMM.pdf` |
 | Mes no resuelto | `sf.pdf` o sufijo `_sf` |
-| Matrícula no confirmada | `revisar.pdf` |
+| Matrícula ausente, débil o en conflicto | `revisar.pdf` |
 
 Las páginas de cada archivo se ordenan por libro y `log_number`. Las páginas con número ilegible quedan al final, en su orden de entrada.
 
@@ -122,7 +122,9 @@ El orden es global por `log_number`. La sección no se subdivide por matrícula 
 
 ## 4.10 Páginas para revisar
 
-Una página sin matrícula confirmada no se asigna a un avión supuesto.
+Una página sin matrícula confirmada no se asigna a un avión supuesto. Tampoco se asigna automáticamente cuando su propia lectura canónica contradice al consenso del libro, cuando la matrícula quedó en `WARNING`, cuando la alineación fue dudosa o cuando una inferencia solo tiene una lectura de respaldo. Una inferencia coherente respaldada por dos o más lecturas sí conserva la lógica normal del libro y no se manda a revisar por el solo hecho de ser inferida.
+
+Las advertencias de fecha no deciden esta separación. Mes, año y día pueden inferirse con las reglas del libro, incluido el último día del mes cuando corresponde.
 
 - En PDF único, cierra el documento bajo **REVISAR**.
 - En modo de varios PDF, se incorpora a `revisar.pdf`.

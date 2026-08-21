@@ -227,15 +227,16 @@ Una reconstrucción necesita al menos dos dígitos reales. Como último recurso 
 4. vota cada una de las cuatro posiciones y el sufijo por separado;
 5. si el número ganador de cuatro dígitos nunca apareció completo, usa el número completo observado con mayor peso acumulado;
 6. aplica la ganadora a páginas vacías o distintas;
-7. conserva el original en `alternatives` y registra `book_digit_consensus`.
+7. guarda en `votes` cuántas páginas independientes leyeron completa la ganadora;
+8. conserva el original en `alternatives` y registra `book_digit_consensus`.
 
-El sufijo se vota por separado. Por ello, la matrícula final completa puede no coincidir con una lectura original, aunque el número de cuatro dígitos sí debe haber aparecido. Sin evidencia útil no se crea una matrícula. Actualmente, la corrección por libro deja el campo en `OK` aunque la fuente sea `book_correction`; esa fuente identifica la corrección en el JSON.
+El sufijo se vota por separado. Por ello, la matrícula final completa puede no coincidir con una lectura original, aunque el número de cuatro dígitos sí debe haber aparecido. Sin evidencia útil no se crea una matrícula. Una inferencia desde una lectura vacía o inválida queda en `OK` cuando tiene al menos dos votos y confianza mínima `0.50`. Ese mismo respaldo puede confirmar una lectura coincidente que ya tenía la página pero estaba en `WARNING`; se registra como `book_consensus_confirmation`. Si la propia página produjo otra matrícula canónica, o si el respaldo no alcanza, el valor inferido se conserva pero el campo queda en `WARNING` y la página va a `REVISAR`.
 
 ### 6.4 Verificación contra flota
 
 La verificación es posterior al consenso y solo se ejecuta si está activa. `fleet.json` acepta `HP-XXXXCMP` y `HP-XXXXWWP`.
 
-Una matrícula fuera del catálogo se compara por costo de caracteres. Gana el candidato único de menor costo. Un empate borra el valor y deja la página en `WARNING`. Una matrícula vacía no se completa desde la lista.
+Una matrícula fuera del catálogo se compara por costo de caracteres. El candidato único de menor costo queda como propuesta en `WARNING` y la página va a `REVISAR`. Un empate borra el valor y también deja la página en `WARNING`. Una matrícula vacía no se completa desde la lista.
 
 No existe un límite máximo de distancia. Por eso el catálogo debe estar completo y toda reclasificación debe quedar visible para revisión.
 
@@ -343,7 +344,7 @@ Las validaciones comprueban la cantidad de páginas, los datos obligatorios, la 
 
 La sesión normal se obtiene con un perfil propio de Edge. Las peticiones usan `requests`, cookies de sesión y el token `AntiForgery` de cada aplicación de AirVault. Las respuestas transitorias se reintentan. El estado queda en `output/airvault/<job>/parte-XX/manifiesto.json`; `revision.html` y `revision.csv` documentan el plan. El manifiesto permite reanudar sin repetir páginas confirmadas.
 
-El PDF `REVISAR` se sube como lote separado, no se indexa y se libera para intervención manual.
+El PDF `REVISAR` recoge solo matrículas ausentes o marcadas, conflictos canónicos, alineaciones dudosas e inferencias con menos de dos respaldos. Se sube como lote separado, no se indexa y se libera para intervención manual; las advertencias de fecha no envían por sí solas una página a este lote.
 
 ### 9.1 Operación por consola
 

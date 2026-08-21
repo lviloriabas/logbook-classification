@@ -51,7 +51,9 @@ BITS usa este número para agrupar y ordenar. No inventa ni corrige un `log_numb
 
 El formato de salida es `HP-XXXXCMP` o `HP-XXXXWWP`, donde `XXXX` son cuatro dígitos. BITS acepta separadores y mayúsculas o minúsculas en la lectura, corrige confusiones comunes de escritura y normaliza el resultado.
 
-Primero se decide la matrícula dominante del libro. Después, si **Verificar matrículas** está activo, se compara con `fleet.json`. Una matrícula fuera de la lista se cambia al candidato único más parecido y queda en `WARNING`. Si hay empate, se borra el valor y la página pasa a **REVISAR**.
+Primero se decide la matrícula dominante del libro. Una página vacía o ilegible puede usarla automáticamente cuando la respaldan por lo menos dos lecturas independientes. Si la página había dado otra matrícula completa, la inferencia se conserva para ayudar a revisar pero la página pasa a **REVISAR**: no se coloca bajo un separador que contradice su propia lectura.
+
+Después, si **Verificar matrículas** está activo, se compara con `fleet.json`. Una matrícula fuera de la lista se cambia al candidato único más parecido y queda en `WARNING`, dentro de **REVISAR**; el parecido por sí solo no autoriza indexarla. Si hay empate, se borra el valor y también pasa a **REVISAR**.
 
 La lista instalada contiene 132 aeronaves:
 
@@ -74,7 +76,7 @@ La fecha manuscrita se espera en casillas `DD|MMM|AA`. El programa localiza la r
 
 Dentro del mismo libro, la fecha no puede retroceder cuando aumenta `log_number`. Varias páginas pueden tener el mismo día. La regla no cruza de un libro a otro.
 
-Cuando falta parte de la fecha, BITS puede completar mes, año o día con evidencia del mismo libro. Todo valor inferido conserva su procedencia y debe revisarse.
+Cuando falta parte de la fecha, BITS puede completar mes, año o día con evidencia del mismo libro, incluido el último día del mes cuando no se resuelve el día. Todo valor inferido conserva su procedencia. Una advertencia de fecha no manda por sí sola la bitácora al lote `REVISAR`; la guarda decisiva para el separador es la matrícula.
 
 ### 3.4 Número de vuelo
 
@@ -246,7 +248,7 @@ Las acciones del reporte significan:
 
 La columna **ya_indexada** indica si la página ya estaba válida. En ese caso, la acción es **bloqueada** y la página se omite.
 
-Las páginas sin aeronave confirmada forman un lote terminado en `REVISAR`. BITS lo sube y lo libera, pero su clasificación e indexado son manuales.
+Las páginas con matrícula ausente, marcada, contradicha o sin respaldo suficiente forman un lote terminado en `REVISAR`. BITS lo sube y lo libera, pero su clasificación e indexado son manuales. No se envían allí todas las inferencias: las de libro coherentes y respaldadas continúan en los batches automáticos.
 
 En el flujo normal, BITS escribe `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status`, `End Date` y `Batch Name`. Añade `Lessor` cuando está resuelto. `Description` queda como `<vuelo> AUTO INDEX` cuando se leyó el vuelo y como `AUTO INDEX` cuando no se leyó. La marca solo viaja a AirVault: no modifica el CSV ni el reporte de revisión. Al indexar también borra en AirVault las páginas separadoras del lote automático. El lote `REVISAR` conserva sus páginas y se indexa a mano. No envía los demás campos.
 

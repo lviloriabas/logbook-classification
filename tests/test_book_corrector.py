@@ -6,6 +6,7 @@ from __future__ import annotations
 import unittest
 
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
+from app.reports.organize import por_revisar
 from app.validation.book_corrector import correct_matricula_by_book
 from app.validation.grouping import book_key, group_books
 
@@ -185,6 +186,10 @@ class TestAggressiveCorrection(unittest.TestCase):
             self.assertEqual(_matricula(page).value, "HP-1534CMP")
         self.assertIn("Corrected from 'HP-1734CMP'",
                       _matricula(pages[5]).comment)
+        # La inferencia se conserva, pero una lectura canónica distinta no
+        # puede publicarse bajo el separador ganador sin que alguien la mire.
+        self.assertIs(_matricula(pages[5]).status, Status.WARNING)
+        self.assertTrue(por_revisar(pages[5]))
 
     def test_empty_value_inferred(self):
         pages = [
@@ -195,6 +200,76 @@ class TestAggressiveCorrection(unittest.TestCase):
         correct_matricula_by_book([_report(*pages)])
         self.assertEqual(_matricula(pages[2]).value, "HP-1534CMP")
         self.assertIn("Inferred from book readings", _matricula(pages[2]).comment)
+        self.assertIs(_matricula(pages[2]).status, Status.OK)
+        self.assertFalse(por_revisar(pages[2]))
+
+    def test_low_confidence_matching_reading_is_confirmed_by_the_book(self):
+        pages = [
+            _page(1, "2147337", "HP-1534CMP"),
+            _page(2, "2147338", "HP-1534CMP"),
+            _page(
+                3, "2147339", "HP-1534CMP",
+                status=Status.WARNING, conf=0.40,
+            ),
+        ]
+
+        correct_matricula_by_book([_report(*pages)])
+
+        confirmed = _matricula(pages[2])
+        self.assertEqual(confirmed.value, "HP-1534CMP")
+        self.assertEqual(confirmed.votes, 3)
+        self.assertEqual(
+            confirmed.inference_method, "book_consensus_confirmation"
+        )
+        self.assertIs(confirmed.status, Status.OK)
+        self.assertFalse(por_revisar(pages[2]))
+
+    def test_single_reading_still_infers_but_goes_to_review(self):
+        pages = [
+            _page(1, "2147337", "HP-1534CMP"),
+            _page(2, "2147338", ""),
+        ]
+
+        correct_matricula_by_book([_report(*pages)])
+
+        inferred = _matricula(pages[1])
+        self.assertEqual(inferred.value, "HP-1534CMP")
+        self.assertEqual(inferred.votes, 1)
+        self.assertIs(inferred.status, Status.WARNING)
+        self.assertTrue(por_revisar(pages[1]))
+
+    def test_duplicate_scan_does_not_supply_a_second_autoindex_vote(self):
+        blank = _page(2, "2147338", "")
+        first = _report(
+            _page(1, "2147337", "HP-1534CMP"),
+            blank,
+        )
+        duplicate = _report(
+            _page(1, "2147337", "HP-1534CMP"),
+        )
+
+        correct_matricula_by_book([first, duplicate])
+
+        inferred = _matricula(blank)
+        self.assertEqual(inferred.value, "HP-1534CMP")
+        self.assertEqual(inferred.votes, 1)
+        self.assertIs(inferred.status, Status.WARNING)
+        self.assertTrue(por_revisar(blank))
+
+    def test_low_confidence_consensus_still_infers_but_goes_to_review(self):
+        pages = [
+            _page(1, "2147337", "HP-1534CMP", conf=0.49),
+            _page(2, "2147338", "HP-1534CMP", conf=0.49),
+            _page(3, "2147339", ""),
+        ]
+
+        correct_matricula_by_book([_report(*pages)])
+
+        inferred = _matricula(pages[2])
+        self.assertEqual(inferred.value, "HP-1534CMP")
+        self.assertEqual(inferred.votes, 2)
+        self.assertIs(inferred.status, Status.WARNING)
+        self.assertTrue(por_revisar(pages[2]))
 
     def test_no_valid_reading_no_winner(self):
         pages = [

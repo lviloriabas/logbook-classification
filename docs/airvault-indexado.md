@@ -157,11 +157,13 @@ depende del nombre interno del PDF de carga.
 
 ## El lote REVISAR
 
-Las bitácoras cuya matrícula nadie pudo confirmar —ni el OCR, ni el consenso
-de su libro, ni la lista de flota— no se pueden indexar: sin avión no hay
-dónde archivarlas. Antes cerraban el PDF de entrega bajo el separador
-`REVISAR`, de modo que caían dentro del lote grande y allí se quedaban
-bloqueadas, en medio de cuatrocientas páginas, donde nadie las encontraba.
+Las bitácoras cuya matrícula no permite asignarlas con seguridad no se
+indexan automáticamente: una matrícula ausente o marcada, una lectura
+canónica que contradice al consenso del libro, una alineación dudosa o una
+inferencia con menos de dos lecturas de respaldo. La inferencia se conserva
+para ayudar a quien revise, pero la página no se coloca bajo ese separador.
+Una inferencia coherente y bien respaldada sí continúa por el flujo normal;
+`REVISAR` no es un destino general para toda lectura inferida.
 
 Ahora salen en su **propio archivo**, y por tanto en su propio lote:
 
@@ -601,10 +603,11 @@ AirVault que se ejecuta con `Ctrl+Supr`; no depende de completar el batch.
 El lote `REVISAR` no se indexa automaticamente y conserva todas sus
 paginas para que una persona lo resuelva.
 
-Lo otro que bloquea son las bitacoras que quedaron en amarillo, casi
-siempre por la fecha: si la lectura no la trajo, `End Date` va vacio,
-AirVault deja la pagina en «Need Correction» y el lote no cierra. En el
-mismo lote fueron dos de dieciseis.
+Lo otro que bloquea son las bitacoras que quedaron en amarillo. Antes de
+escribir, BITS exige todos los campos obligatorios; la fecha puede venir de
+las reglas del libro, incluido el ultimo dia del mes. Despues relee el lote:
+si AirVault aun deja una pagina en «Need Correction», no intenta completar
+el batch y dice cual fue.
 
 ## Reanudacion
 

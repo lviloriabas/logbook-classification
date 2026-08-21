@@ -163,7 +163,7 @@ Antes de distribuir:
 | PaddleOCR solicita un modelo | Ejecute `tools/precache_paddle.py` durante mantenimiento con red y vuelva a probar sin conexión. |
 | No aparecen PDF en **Detectar** | Compruebe que estén directamente en `input/` y tengan extensión `.pdf`. |
 | La alineación queda no confiable | Revise la página de referencia y la geometría de plantilla. |
-| Muchas páginas van a **REVISAR** | Compruebe `fleet.json`, la geometría y la lectura de matrícula; `log_number` no decide este destino. |
+| Muchas páginas van a **REVISAR** | Compruebe `fleet.json`, la geometría, la confianza de matrícula y si los libros mezclan lecturas canónicas distintas; una inferencia coherente con dos respaldos no debería ir allí. |
 | Falta un PDF en el visor histórico | Use **Ubicar PDF…** y seleccione su carpeta actual. |
 | La reexportación histórica está desactivada | Compruebe JSON consolidado, plantilla y todos los PDF fuente. |
 

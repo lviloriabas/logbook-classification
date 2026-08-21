@@ -119,7 +119,7 @@ Después de leer todos los PDF, el sistema agrupa las páginas por los cinco pri
 
 Cada libro debe corresponder a una sola aeronave. El corrector vota cada posición de la matrícula con las lecturas del libro y pondera confianza y calidad. El bloque de cuatro dígitos debe corresponder a una lectura observada. El sufijo `CMP` o `WWP` se vota por separado, por lo que la combinación final puede no haber aparecido completa en una sola página.
 
-La matrícula ganadora completa o corrige las páginas del libro. El valor anterior permanece en alternativas o comentarios para auditoría. Esta corrección queda aceptada en el estado del campo y se distingue mediante `source=book_correction`. Si el libro no aporta una lectura utilizable, la matrícula queda sin resolver.
+La matrícula ganadora completa o corrige las páginas del libro. El valor anterior permanece en alternativas o comentarios para auditoría y la inferencia se distingue mediante `source=book_correction`. Una página reparada puede seguir al indexado automático cuando la respaldan por lo menos dos lecturas independientes del libro; el mismo consenso puede confirmar una lectura coincidente que estaba marcada por confianza baja, sin cambiar su valor. Si la propia página había producido otra matrícula canónica, la ganadora se conserva como inferencia pero el campo queda en `WARNING`: esa contradicción puede significar que también se leyó mal el `log_number`, por lo que la página va a **REVISAR** y no abre un separador ajeno. Si el libro no aporta una lectura utilizable, la matrícula queda sin resolver.
 
 ### Fecha
 
@@ -140,12 +140,12 @@ Una inferencia queda identificada como tal. Un conflicto no se oculta; el campo 
 Si la verificación está activa, el sistema compara cada matrícula canónica con `fleet.json`.
 
 - Si la matrícula existe, la conserva.
-- Si no existe y hay un único avión más parecido, la reclasifica y conserva la lectura original como alternativa.
+- Si no existe y hay un único avión más parecido, la reclasifica, conserva la lectura original como alternativa y envía la página a **REVISAR**; el parecido por sí solo no basta para colocarla bajo ese separador.
 - Si hay empate o la lectura no permite comparación, elimina la asignación y envía la página a **REVISAR**.
 
 Si el archivo no existe, está vacío o no aporta matrículas válidas, el sistema registra una advertencia y deja las lecturas sin cambios.
 
-La comparación pondera las confusiones habituales entre dígitos manuscritos y el sufijo. No aplica una distancia máxima: si existe un único candidato, ese candidato gana. Toda reclasificación queda en `WARNING` y registra su origen; por esto es indispensable que el catálogo esté completo.
+La comparación pondera las confusiones habituales entre dígitos manuscritos y el sufijo. No aplica una distancia máxima: si existe un único candidato, ese candidato queda como propuesta. Toda reclasificación queda en `WARNING`, registra su origen y se revisa manualmente; por esto es indispensable que el catálogo esté completo.
 
 ## 3.10 Duplicados y discrepancias
 

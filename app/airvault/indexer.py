@@ -259,7 +259,7 @@ class Indexador:
         for indice, registro in enumerate(registros, start=1):
             avisos = [] if registro.es_separador else [Aviso(
                 registro.seq, "revisar_a_mano",
-                "sin avion confirmado; se indexa a mano en AirVault",
+                "lectura dudosa o en conflicto; se indexa a mano en AirVault",
             )]
             plan.paginas.append(PlanPagina(
                 seq=registro.seq,

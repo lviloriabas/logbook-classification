@@ -16,6 +16,7 @@ from app.reports.organize import (
     _preparar_paginas,
     agrupar_paginas,
     paginas_para_revisar,
+    por_revisar,
     clave_mes,
     escribir_pdf_discrepancias,
     escribir_pdf_unico,
@@ -105,6 +106,33 @@ class TestAgrupar(unittest.TestCase):
 
         self.assertIn(("2026-07",), grupos)
         self.assertEqual(clave_mes(page), "2026-07")
+        self.assertFalse(por_revisar(page))
+
+    def test_matricula_marcada_por_confianza_baja_no_se_autoindexa(self):
+        page = _page(1, "2147300", "HP-1534CMP")
+        matricula = next(
+            field for field in page.fields if field.field_id == "matricula"
+        )
+        matricula.confidence = 0.49
+        matricula.status = "WARNING"
+
+        self.assertTrue(por_revisar(page))
+        self.assertEqual(agrupar_paginas([_reporte(page)], ["avion"]), {})
+
+    def test_inferencia_de_libro_bien_respaldada_conserva_su_separador(self):
+        page = _page(1, "2147300", "HP-1534CMP")
+        matricula = next(
+            field for field in page.fields if field.field_id == "matricula"
+        )
+        matricula.source = "book_correction"
+        matricula.inference_method = "book_digit_consensus"
+        matricula.votes = 2
+        matricula.confidence = 0.70
+
+        grupos = agrupar_paginas([_reporte(page)], ["avion"])
+
+        self.assertFalse(por_revisar(page))
+        self.assertEqual(list(grupos), [("HP-1534CMP",)])
 
     def test_avion_y_mes_combinados(self):
         pages = [

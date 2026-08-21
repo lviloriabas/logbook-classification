@@ -119,8 +119,8 @@ class Manifiesto(BaseModel):
     # Maximo elegido al preparar los archivos que van a Quick Upload.
     # Cero identifica manifiestos antiguos, anteriores a este reparto.
     paginas_por_batch: int = 0
-    # El lote se sube pero no se indexa: recoge las bitacoras sin avion
-    # confirmado, que nadie puede archivar sin mirarlas una por una.
+    # El lote se sube pero no se indexa: recoge las bitacoras con algun dato
+    # dudoso o en conflicto, que nadie debe publicar sin mirarlas una por una.
     solo_subir: bool = False
     # Lotes que ya estaban en la cola justo antes de subir. Es lo que
     # permite reconocer el propio: Quick Upload no deja ponerle nombre al

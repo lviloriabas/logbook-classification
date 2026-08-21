@@ -38,6 +38,17 @@ LOG_NUMBER_FIELD_ID = "log_number"
 MATRICULA_FIELD_ID = "matricula"
 DATE_FIELD_IDS = ("day", "month", "year")
 
+# Una matrícula impuesta por el consenso necesita más de una lectura física.
+# Para las lecturas directas, el ``status`` ya refleja el umbral configurado
+# por el usuario; imponer aquí otro piso fijo mandaría páginas válidas a
+# Revisar de forma liberal y haría crecer innecesariamente ese lote.
+AUTO_INDEX_MIN_VOTES = 2
+_INFERRED_MATRICULA_SOURCES = frozenset({
+    "book_correction",
+    "fleet_validation",
+    "inferred",
+})
+
 _LOG_NUMBER_RE = re.compile(r"^\d{7}$")
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(?:CMP|WWP)$")
 _DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
@@ -153,6 +164,40 @@ def page_status(page: PageResult) -> Status:
     # Un dato del índice marcado ya no puede dejar la página en ERROR: los
     # tres salieron, y lo que quedó marcado es una lectura por confirmar.
     return Status.WARNING if worst is not Status.OK else Status.OK
+
+
+def ready_for_auto_index(page: PageResult) -> bool:
+    """La matrícula permite colocar la página bajo un separador automático.
+
+    No vuelve a interpretar los valores ni elimina inferencias. Un valor
+    deducido por el libro sigue siendo válido cuando lo respaldan al menos
+    dos lecturas independientes. Lo que se rechaza es una alineación dudosa,
+    una matrícula marcada por las reglas normales o una inferencia sostenida
+    por cero o una sola página.
+
+    Las fechas no deciden el separador. Pueden inferirse por la secuencia del
+    libro o completarse con el último día del mes; las guardas de AirVault
+    comprueban después que la fecha resultante y los demás campos obligatorios
+    estén presentes para que la página se guarde en verde.
+    """
+    if page.blank:
+        return False
+    if page.alignment_quality != "ok":
+        return False
+
+    field = field_of(page, MATRICULA_FIELD_ID)
+    if field is None or not has_matricula(page):
+        return False
+    if field.status is not Status.OK:
+        return False
+    if (
+        field.source in _INFERRED_MATRICULA_SOURCES
+        and (field.votes is None or field.votes < AUTO_INDEX_MIN_VOTES)
+    ):
+        return False
+    if field.votes is not None and field.votes < AUTO_INDEX_MIN_VOTES:
+        return False
+    return True
 
 
 def recompute_page_status(page: PageResult) -> None:
