@@ -113,3 +113,25 @@ def test_completar_rechaza_el_error_que_devuelve_airvault():
 
     with pytest.raises(RespuestaInesperada, match="faltan paginas"):
         cli.completar_lote("003SUS")
+
+
+def test_validar_batch_usa_la_ruta_y_el_formato_del_boton_complete():
+    cli = cliente([{"Sequence": 2, "Status": 0}])
+
+    respuesta = cli.validar_batch("003SUS", [7, 2, 7])
+
+    ruta, datos = cli.sesion.posts[0]
+    assert ruta.endswith("/Batch/UpdateBatchValidationQuery")
+    assert datos == {
+        "batchId": "003SUS",
+        "repoId": 3209,
+        "pageRangeDelimiter": "2,7",
+    }
+    assert respuesta == [{"Sequence": 2, "Status": 0}]
+
+
+def test_validar_batch_rechaza_una_respuesta_que_no_se_puede_comprobar():
+    cli = cliente({"ok": True})
+
+    with pytest.raises(RespuestaInesperada, match="resultado de validar"):
+        cli.validar_batch("003SUS", [1])

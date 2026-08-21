@@ -895,13 +895,21 @@ class Trabajo:
                 "El trabajo todavia no tiene lote; no hay nada que terminar."
             )
         paginas = list(cliente.paginas_del_lote(batch_id))
+        separadores = {r.seq for r in self.manifiesto.separadores()}
         bloqueadas = [
             p.pagina for p in paginas
-            if not p.borrada and p.encabeza_documento and not p.valida
+            if (
+                not p.borrada and p.encabeza_documento and not p.valida
+                and p.pagina not in separadores
+            )
         ]
-        separadores = {r.seq for r in self.manifiesto.separadores()}
-        quitables = [n for n in bloqueadas if n in separadores]
-        bloqueadas = [n for n in bloqueadas if n not in separadores]
+        # Todo separador debe salir del batch automatico, incluso si por un
+        # estado remoto raro ya aparece verde. Publicarlo crearia un
+        # documento sin bitacora; limitarse a los amarillos no lo evita.
+        quitables = [
+            p.pagina for p in paginas
+            if not p.borrada and p.pagina in separadores
+        ]
         if bloqueadas:
             detalle = (
                 f"{len(bloqueadas)} de {len(paginas)} paginas no estan en "
@@ -920,7 +928,15 @@ class Trabajo:
             for numero in quitables:
                 if cliente.borrar_pagina(batch_id, numero, True):
                     quitadas.append(numero)
-            faltan = [n for n in quitables if n not in quitadas]
+            # La respuesta de MarkPageDeleted no basta: se relee el mapa,
+            # igual que la tira de paginas del cliente web, y solo se cree
+            # que se borro lo que el servidor ya marca como borrado.
+            tras_borrar = list(cliente.paginas_del_lote(batch_id))
+            presentes = {
+                p.pagina for p in tras_borrar if not p.borrada
+            }
+            faltan = [n for n in quitables if n in presentes]
+            quitadas = [n for n in quitables if n not in presentes]
             if faltan:
                 # Quitar paginas pide un permiso aparte. Sin el, el lote se
                 # queda como estaba y hay que sacarlas en AirVault a mano.
@@ -937,6 +953,44 @@ class Trabajo:
                 logger.info("El lote {} no se cierra: {}", batch_id, detalle)
                 return ResultadoCompletar(
                     False, faltan, len(paginas), detalle, quitadas
+                )
+
+            # El boton Complete de AirVault ejecuta esta validacion de todo
+            # el batch antes de FormsProcessing/CompleteBatch. MXDocs la
+            # tiene activa y puede devolver a amarillo una pagina que parecia
+            # verde por tener llenos los campos obligatorios.
+            cabeceras = [
+                p.pagina for p in tras_borrar
+                if not p.borrada and p.encabeza_documento and p.valida
+            ]
+            cliente.validar_batch(batch_id, cabeceras)
+            tras_validar = list(cliente.paginas_del_lote(batch_id))
+            rechazadas = [
+                p.pagina for p in tras_validar
+                if not p.borrada and p.encabeza_documento and not p.valida
+            ]
+            if rechazadas:
+                detalle = (
+                    f"la validacion final de AirVault dejo "
+                    f"{len(rechazadas)} paginas fuera de verde "
+                    f"({_enumerar(rechazadas)}); no se envio CompleteBatch"
+                )
+                self.cerrar(cliente)
+                self.manifiesto.etapa("completar").marcar(
+                    EstadoEtapa.OMITIDA, detalle
+                )
+                self.manifiesto.etapa("verificar").marcar(
+                    EstadoEtapa.ERROR,
+                    f"{len(tras_validar) - len(rechazadas)}/"
+                    f"{len(tras_validar)} en Valid despues de validar",
+                )
+                self.guardar()
+                logger.info(
+                    "El batch {} no se completa despues de validarlo: {}",
+                    batch_id, detalle,
+                )
+                return ResultadoCompletar(
+                    False, rechazadas, len(paginas), detalle, quitadas
                 )
             cliente.completar_lote(batch_id)
         except BaseException:
