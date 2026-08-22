@@ -475,14 +475,15 @@ class SesionFalsa:
     """Se traga la subida sin red."""
 
 
-def test_subir_confirma_todos_y_carga_solo_la_division_faltante(
+def test_subir_confirma_todos_y_carga_solo_la_division_pendiente(
     tmp_path, monkeypatch
 ):
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     for indice, trabajo in enumerate(trabajos):
-        trabajo.manifiesto.etapa("subir").marcar(
-            EstadoEtapa.HECHA, "supuestamente subido"
-        )
+        if indice != 1:
+            trabajo.manifiesto.etapa("subir").marcar(
+                EstadoEtapa.HECHA, "subido"
+            )
         trabajo.manifiesto.batch_id = f"ID-VIEJO-{indice}"
         trabajo.guardar()
     cliente = ClienteFalso(lotes=[
@@ -505,6 +506,31 @@ def test_subir_confirma_todos_y_carga_solo_la_division_faltante(
     assert subidas == ["DP | BIT -2"]
     assert trabajos[0].manifiesto.batch_id == "003PRI"
     assert trabajos[2].manifiesto.batch_id == "003REV"
+
+
+def test_no_repite_un_batch_que_quick_upload_ya_confirmo_mientras_procesa(
+    tmp_path, monkeypatch
+):
+    """La demora entre Quick Upload y Web Index no autoriza un duplicado."""
+    trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
+    trabajo.manifiesto.etapa("subir").marcar(
+        EstadoEtapa.HECHA, "division-02.pdf"
+    )
+    trabajo.guardar()
+    subidas = []
+    avisos = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
+    )
+
+    subir_partes(
+        [trabajo], SesionFalsa(), cliente=ClienteFalso(),
+        avisar=lambda texto, hechas, total: avisos.append(texto),
+    )
+
+    assert subidas == []
+    assert trabajo.manifiesto.etapa("subir").estado is EstadoEtapa.HECHA
+    assert any("1 sigue procesándose" in texto for texto in avisos)
 
 
 def test_todos_los_batches_se_suben_antes_de_confirmar_el_primero(
