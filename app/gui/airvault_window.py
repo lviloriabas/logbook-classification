@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -62,6 +63,7 @@ from app.gui.widgets import (
     PANE_STATUS_COLORS,
     ElidedLabel,
 )
+from app.utils.io import send_to_trash
 
 # Gris con el que la ventana principal escribe las líneas de ayuda.
 COLOR_AYUDA = "#57606a"
@@ -690,6 +692,18 @@ class AirVaultWindow(QDialog):
         self.boton_buscar.clicked.connect(self._elegir_corrida)
         grid.addWidget(self.boton_buscar, 0, 2)
 
+        self.boton_eliminar_registro = QPushButton("Eliminar registro")
+        self.boton_eliminar_registro.setEnabled(False)
+        self.boton_eliminar_registro.setToolTip(
+            "Envía a la Papelera el estado local de AirVault de esta "
+            "ejecución para empezar nuevamente. No borra el CSV, los PDF "
+            "exportados ni los batches que ya existan en AirVault."
+        )
+        self.boton_eliminar_registro.clicked.connect(
+            self._eliminar_registro
+        )
+        grid.addWidget(self.boton_eliminar_registro, 0, 3)
+
         self.lote_edit = QLineEdit()
         self.lote_edit.setPlaceholderText("Nombre del batch en AirVault")
         self.lote_edit.setToolTip(
@@ -1152,8 +1166,102 @@ class AirVaultWindow(QDialog):
         self._pintar_lotes()
         self.boton_indexar.setEnabled(bool(self.corrida_edit.text().strip()))
         self.boton_revisar.setEnabled(bool(self._trabajos))
+        self.boton_eliminar_registro.setEnabled(
+            bool(self._rutas_del_registro())
+        )
         self.boton_reiniciar.setEnabled(bool(self._trabajos))
         self._ajustar_vigilancia()
+
+    def _carpeta_del_registro(self) -> Optional[Path]:
+        """Carpeta local exacta de la ejecución elegida, si es segura."""
+        from app.airvault.flujo import (
+            CARPETA_TRABAJOS,
+            carpeta_de_corrida,
+            carpeta_de_trabajo,
+        )
+
+        csv = self.corrida_edit.text().strip()
+        if not csv:
+            return None
+        raiz_trabajos = (self._raiz / CARPETA_TRABAJOS).resolve()
+        carpeta = (
+            self._raiz
+            / carpeta_de_trabajo(carpeta_de_corrida(csv).name)
+        ).resolve()
+        if (
+            carpeta == raiz_trabajos
+            or not carpeta.is_relative_to(raiz_trabajos)
+        ):
+            return None
+        return carpeta
+
+    def _rutas_del_registro(self) -> list[Path]:
+        """Manifiestos locales de la ejecución elegida, nunca de otra."""
+        from app.airvault.manifest import MANIFIESTO_FILENAME
+
+        carpeta = self._carpeta_del_registro()
+        if carpeta is None:
+            return []
+        return sorted(
+            ruta for ruta in carpeta.rglob(MANIFIESTO_FILENAME)
+            if ruta.is_file() and ruta.resolve().is_relative_to(carpeta)
+        )
+
+    def _eliminar_registro(self) -> None:
+        """Reinicia la ejecución borrando solo su memoria local de AirVault."""
+        rutas = self._rutas_del_registro()
+        if not rutas:
+            QMessageBox.information(
+                self,
+                "Eliminar registro",
+                "Esta ejecución no tiene un registro local de AirVault.",
+            )
+            return
+        cuenta = f"{len(rutas)} batch" + (
+            "es" if len(rutas) != 1 else ""
+        )
+        respuesta = QMessageBox.warning(
+            self,
+            "Eliminar registro de AirVault",
+            "Se enviará a la Papelera el registro local de esta ejecución "
+            f"({cuenta}).\n\n"
+            "No se borrarán el CSV, los PDF ni los batches existentes en "
+            "AirVault. Al volver a subir, se reconstruirá el proceso y se "
+            "buscarán otra vez por título.\n\n¿Desea continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if respuesta != QMessageBox.StandardButton.Yes:
+            return
+
+        carpeta = self._carpeta_del_registro()
+        if carpeta is None:
+            return
+        movidos, fallidos = send_to_trash(rutas)
+        if movidos:
+            self._parar_vigilancia()
+            self._indexado_incompleto = False
+            self.boton_reporte.setEnabled(False)
+            csv = Path(self.corrida_edit.text())
+            self._cargar_trabajos(carpeta, csv)
+            self.estado_label.setText("Registro local eliminado")
+            self.resumen.setText(
+                "Se eliminó el registro local de AirVault. La ejecución "
+                "puede iniciarse nuevamente; los batches remotos no se "
+                "modificaron."
+            )
+            self._anotar("Registro local de AirVault eliminado")
+
+        if fallidos:
+            detalle = "\n".join(
+                f"- {ruta.name}: {error}" for ruta, error in fallidos
+            )
+            QMessageBox.warning(
+                self,
+                "Registro eliminado parcialmente",
+                f"Se eliminaron {len(movidos)} de {len(rutas)} registros.\n\n"
+                "No se pudieron eliminar:\n" + detalle,
+            )
 
     def _sincronizar_entrega(self, csv: Path) -> None:
         """Dice si la ejecución elegida se puede subir, antes de intentarlo."""
@@ -1459,6 +1567,9 @@ class AirVaultWindow(QDialog):
         self.historial.setEnabled(activo)
         self.boton_subir.setEnabled(activo and self._listo_para_subir)
         self.boton_buscar.setEnabled(activo)
+        self.boton_eliminar_registro.setEnabled(
+            activo and bool(self._rutas_del_registro())
+        )
         self.lote_edit.setEnabled(activo)
         self.cookie_edit.setEnabled(activo)
         self.limite_batch_spin.setEnabled(activo and not self._trabajos)
