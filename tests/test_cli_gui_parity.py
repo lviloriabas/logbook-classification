@@ -11,9 +11,11 @@ lista de aviones no se consultaba nunca—. Esta prueba es la alarma.
 from __future__ import annotations
 
 import dataclasses
+import sys
 from pathlib import Path
 
 from app.reports.outputs import OutputOptions
+from run_cli import parse_args
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +40,12 @@ _SOLO_LINEA_DE_COMANDOS = {
 
 def _campos() -> set[str]:
     return {field.name for field in dataclasses.fields(OutputOptions)}
+
+
+def test_la_linea_de_comandos_construye_sus_argumentos(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["run_cli.py", "--pdf", "una.pdf"])
+    args = parse_args()
+    assert args.pdf == "una.pdf"
 
 
 def test_la_linea_de_comandos_rellena_todas_las_opciones_de_salida():
