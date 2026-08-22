@@ -8,6 +8,7 @@ las anteriores.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import ClassVar, Dict, List, Optional
@@ -177,6 +178,25 @@ class Manifiesto(BaseModel):
 
     def separadores(self) -> List[Registro]:
         return [r for r in self.registros if r.es_separador]
+
+    def separadores_borrados(self) -> int:
+        """Divisorias que el ultimo indexado confirmo borradas en AirVault."""
+        etapa = self.etapas.get("indexar")
+        if etapa is None:
+            return 0
+        coincidencia = re.search(
+            r"separadores borrados\s+(\d+)", etapa.detalle or "",
+            flags=re.IGNORECASE,
+        )
+        if coincidencia is None:
+            return 0
+        return min(int(coincidencia.group(1)), len(self.separadores()))
+
+    def cantidades_paginas_compatibles(self) -> set[int]:
+        """Cantidades validas antes y despues de borrar divisorias."""
+        total = len(self.registros)
+        borrados = self.separadores_borrados()
+        return {total, total - borrados} if borrados else {total}
 
     def resumen(self) -> Dict[str, int]:
         return {

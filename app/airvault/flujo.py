@@ -337,6 +337,7 @@ def _enumerar(numeros: Sequence[int], cuantos: int = 8) -> str:
 SIN_SUBIR = "sin_subir"
 BUSCANDO = "buscando"
 PROCESANDO = "procesando"
+NOMBRE_INCORRECTO = "nombre_incorrecto"
 LISTO = "listo"
 TOMADO = "tomado"
 SOLO_REVISAR = "solo_revisar"
@@ -347,6 +348,7 @@ NOMBRE_ESTADO_PARTE = {
     SIN_SUBIR: "Sin subir",
     BUSCANDO: "Subido; esperando a AirVault",
     PROCESANDO: "Procesandose en AirVault",
+    NOMBRE_INCORRECTO: "Nombre distinto en AirVault",
     LISTO: "Listo para indexar",
     TOMADO: "Abierto por otra persona",
     SOLO_REVISAR: "Para revisar a mano",
@@ -1039,6 +1041,13 @@ def preparar_partes(
     manifiesto y sus guardas. Repartirlas asi es lo que deja que una parte
     se caiga o se retome sin arrastrar a las demas.
     """
+    existentes = cargar_partes(config, carpeta, csv)
+    if existentes:
+        # Un trabajo antiguo puede tener un unico batch sin «-numero» aunque
+        # hoy el limite propuesto lo repartiera. Ese nombre ya existe en
+        # AirVault y se conserva: volver a preparar crearia otra identidad y
+        # haria desaparecer el batch correcto de la lista.
+        return existentes
     partes = partes_para_airvault(
         comprobar_entrega(csv), carpeta, paginas_por_batch, avisar
     )
@@ -1196,10 +1205,8 @@ def cargar_partes(
     trabajos: List["Trabajo"] = []
     for propia in carpetas:
         trabajo = Trabajo.cargar(config, propia)
-        if Path(trabajo.manifiesto.csv_origen or "") != objetivo:
+        if not _reubicar_trabajo(trabajo, objetivo, carpeta):
             continue
-        if not Path(trabajo.manifiesto.pdf_origen or "").is_file():
-            return []
         trabajos.append(trabajo)
     if not trabajos:
         return []
@@ -1238,6 +1245,46 @@ def cargar_partes(
         # Una preparacion cortada no se presenta como una entrega completa.
         return []
     return list(automaticos) + list(revisar)
+
+
+def _reubicar_trabajo(
+    trabajo: "Trabajo", csv: Path, carpeta_job: Path,
+) -> bool:
+    """Recupera un manifiesto cuando toda la carpeta portable se movio.
+
+    Los manifiestos antiguos guardaban rutas absolutas. La identidad estable
+    es el nombre de la ejecucion y del archivo, no la letra de unidad ni el
+    usuario de Windows en el que se creo.
+    """
+    manifiesto = trabajo.manifiesto
+    csv_guardado = Path(manifiesto.csv_origen or "")
+    misma_ruta = csv_guardado == csv
+    misma_ejecucion = (
+        csv_guardado.name.casefold() == csv.name.casefold()
+        and csv_guardado.parent.parent.name.casefold()
+        == csv.parent.parent.name.casefold()
+    )
+    if not (misma_ruta or misma_ejecucion):
+        return False
+
+    pdf_guardado = Path(manifiesto.pdf_origen or "")
+    candidatos = [pdf_guardado]
+    if pdf_guardado.name:
+        candidatos.extend((
+            carpeta_de_corrida(csv) / pdf_guardado.name,
+            carpeta_job / "cargas" / pdf_guardado.name,
+        ))
+    pdf_actual = next(
+        (ruta.resolve() for ruta in candidatos if ruta.is_file()), None
+    )
+    if pdf_actual is None:
+        return False
+
+    if csv_guardado != csv or pdf_guardado != pdf_actual:
+        manifiesto.csv_origen = str(csv)
+        manifiesto.pdf_origen = str(pdf_actual)
+        trabajo.guardar()
+    return True
 
 
 def cargar_trabajos_pendientes(
@@ -1346,25 +1393,30 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
 
 def _ubicar(trabajo: "Trabajo", cliente,
             lotes: Sequence[ResumenLote]) -> Optional[ResumenLote]:
-    """El lote de esta parte en la cola, buscandolo si aun no se sabia.
+    """Busca la parte por su nombre esperado y actualiza su ID.
 
     Devuelve ``None`` mientras AirVault no lo haya sacado, que no es un
-    fallo: un lote recien subido tarda en cruzar su procesamiento.
+    fallo: un lote recien subido tarda en cruzar su procesamiento. El nombre
+    manda sobre un ID guardado: si alguien corrigio manualmente un
+    ``Index Batch``, esa coincidencia recupera el batch correcto.
     """
     manifiesto = trabajo.manifiesto
-    if manifiesto.batch_id:
-        lote = buscar_por_id(lotes, manifiesto.batch_id)
-        if lote is not None:
-            return lote
-        # El ID local puede pertenecer a una comprobacion anterior o haber
-        # quedado mal asociado. Se vuelve a buscar por nombre antes de dar
-        # la parte por ausente y subir un duplicado.
     esperadas = len(manifiesto.registros)
     try:
         lote = buscar_lote(
             lotes, manifiesto.nombre_batch, manifiesto.repo_id, esperadas
         )
     except LoteNoEncontrado:
+        lote_por_id = (
+            buscar_por_id(lotes, manifiesto.batch_id)
+            if manifiesto.batch_id else None
+        )
+        if (
+            lote_por_id is not None
+            and normalizar_nombre(lote_por_id.nombre).startswith("empty batch")
+        ):
+            trabajo.anotar_lote(cliente, lote_por_id)
+            return lote_por_id
         previos = manifiesto.lotes_previos
         # La diferencia contra la foto previa solo identifica resultados
         # crudos de Quick Upload. Un batch que ya tiene otro nombre pertenece
@@ -1399,6 +1451,17 @@ def _estado_de(trabajo: "Trabajo", cliente,
     # y REVISAR, y un batch remoto recupera su ID en vez de volver a subirse.
     lote = _ubicar(trabajo, cliente, lotes)
     if lote is None:
+        lote_con_otro_nombre = (
+            buscar_por_id(lotes, manifiesto.batch_id)
+            if manifiesto.batch_id else None
+        )
+        if lote_con_otro_nombre is not None:
+            return EstadoParte(
+                trabajo, NOMBRE_INCORRECTO,
+                f"se llama «{lote_con_otro_nombre.nombre}»; debe llamarse "
+                f"«{manifiesto.nombre_batch}»",
+                lote_con_otro_nombre,
+            )
         if not subida_rastreable:
             return EstadoParte(trabajo, SIN_SUBIR, "no esta en AirVault")
         return EstadoParte(
@@ -1409,13 +1472,20 @@ def _estado_de(trabajo: "Trabajo", cliente,
             EstadoEtapa.HECHA, "confirmado en AirVault"
         )
         trabajo.guardar()
-    if lote.paginas != esperadas:
+    cantidades_compatibles = manifiesto.cantidades_paginas_compatibles()
+    if lote.paginas not in cantidades_compatibles:
         # Aparece en la cola antes de estar entero. Escribir asi correria
         # cada dato a la bitacora de al lado, asi que hasta que las
         # paginas cuadren la parte no esta lista.
+        cantidades = sorted(cantidades_compatibles)
+        detalle = (
+            f"{lote.paginas} de {cantidades[0]} paginas"
+            if len(cantidades) == 1 else
+            f"{lote.paginas} paginas; se esperaban "
+            + " o ".join(str(n) for n in cantidades)
+        )
         return EstadoParte(
-            trabajo, PROCESANDO,
-            f"{lote.paginas} de {esperadas} paginas", lote,
+            trabajo, PROCESANDO, detalle, lote,
         )
     if manifiesto.solo_subir:
         return EstadoParte(
@@ -1432,7 +1502,7 @@ def _estado_de(trabajo: "Trabajo", cliente,
         return EstadoParte(
             trabajo, TOMADO, f"lo tiene abierto {lote.bloqueado_por}", lote
         )
-    return EstadoParte(trabajo, LISTO, f"{esperadas} paginas", lote)
+    return EstadoParte(trabajo, LISTO, f"{lote.paginas} paginas", lote)
 
 
 def _asignar_batches_nuevos(

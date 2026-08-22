@@ -39,7 +39,8 @@ class ErrorDeGuarda(RuntimeError):
 
 
 def verificar_cantidad(
-    registros: Sequence[Registro], paginas_lote: int
+    registros: Sequence[Registro], paginas_lote: int,
+    separadores_borrados: int = 0,
 ) -> None:
     """El manifiesto y el lote tienen que tener las mismas paginas.
 
@@ -50,7 +51,10 @@ def verificar_cantidad(
     Los separadores cuentan: en el lote ocupan una pagina cada uno, igual
     que en el PDF que se subio.
     """
-    if paginas_lote == len(registros):
+    cantidades_validas = {len(registros)}
+    if separadores_borrados:
+        cantidades_validas.add(len(registros) - separadores_borrados)
+    if paginas_lote in cantidades_validas:
         return
     separadores = sum(1 for r in registros if r.es_separador)
     detalle = f", {separadores} de ellos separadores" if separadores else ""

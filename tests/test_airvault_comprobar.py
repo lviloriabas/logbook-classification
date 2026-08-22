@@ -12,6 +12,7 @@ Nada de esto toca la red: todo va contra el cliente falso.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -22,6 +23,7 @@ from app.airvault.flujo import (
     COMPLETADO,
     INDEXADO,
     LISTO,
+    NOMBRE_INCORRECTO,
     PROCESANDO,
     SIN_SUBIR,
     SOLO_REVISAR,
@@ -29,6 +31,7 @@ from app.airvault.flujo import (
     Trabajo,
     cargar_partes,
     cargar_trabajos_pendientes,
+    comprobar_entrega,
     comprobar_partes,
     completar_partes,
     estado_local,
@@ -155,6 +158,39 @@ def test_el_lote_encontrado_queda_anotado_y_con_su_nombre(tmp_path):
     comprobar_partes([trabajo], cliente)
     assert trabajo.manifiesto.batch_id == "003SRO"
     assert trabajo.manifiesto.etapa_hecha("descubrir")
+
+
+def test_el_nombre_corregido_a_mano_reemplaza_un_id_de_index_batch(tmp_path):
+    trabajo, _cliente = trabajo_subido(tmp_path, batch_id="003MAL")
+    trabajo.fijar_lote("003MAL")
+    cliente = ClienteFalso(lotes=[
+        lote("003MAL", "Index Batch", 2),
+        lote("003BIEN", trabajo.manifiesto.nombre_batch, 2),
+    ])
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == LISTO
+    assert trabajo.manifiesto.batch_id == "003BIEN"
+
+
+def test_index_batch_no_se_confunde_con_ausente_ni_se_vuelve_a_subir(
+    tmp_path, monkeypatch
+):
+    trabajo, _cliente = trabajo_subido(tmp_path, batch_id="003MAL")
+    trabajo.fijar_lote("003MAL")
+    cliente = ClienteFalso(lotes=[lote("003MAL", "Index Batch", 2)])
+    subidas = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
+    )
+
+    parte, = comprobar_partes([trabajo], cliente)
+    subir_partes([trabajo], object(), cliente=cliente)
+
+    assert parte.estado == NOMBRE_INCORRECTO
+    assert "debe llamarse" in parte.detalle
+    assert subidas == []
 
 
 def _trabajos_principal_division_y_revisar(tmp_path):
@@ -305,6 +341,39 @@ def test_una_ejecucion_ya_preparada_se_retoma_sin_rehacerla(tmp_path):
     trabajos = cargar_partes(config, tmp_path / "job", csv)
     assert len(trabajos) == 1
     assert trabajos[0].manifiesto.nombre_batch == "DP | BIT"
+
+
+def test_un_batch_antiguo_sin_numero_se_reubica_y_no_se_reparte(tmp_path):
+    csv = corrida(tmp_path)
+    parte_original = comprobar_entrega(csv)[0]
+    trabajo = Trabajo.preparar(
+        AirVaultConfig(), tmp_path / "job", csv,
+        "DP | BIT", parte=parte_original, paginas_por_batch=0,
+    )
+    trabajo.fijar_lote("003ANT")
+    trabajo.manifiesto.csv_origen = str(
+        Path("C:/Users/otro/Desktop/BITS/output")
+        / csv.parent.parent.name / "datos" / csv.name
+    )
+    trabajo.manifiesto.pdf_origen = str(
+        Path("C:/Users/otro/Desktop/BITS/output")
+        / csv.parent.parent.name / parte_original.pdf.name
+    )
+    trabajo.guardar()
+
+    retomados = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv,
+        "DP | BIT", paginas_por_batch=1,
+    )
+
+    assert len(retomados) == 1
+    assert retomados[0].manifiesto.nombre_batch == "DP | BIT"
+    assert retomados[0].manifiesto.batch_id == "003ANT"
+    assert Path(retomados[0].manifiesto.csv_origen) == csv.resolve()
+    assert (
+        Path(retomados[0].manifiesto.pdf_origen)
+        == parte_original.pdf.resolve()
+    )
 
 
 def test_sin_manifiesto_no_hay_nada_que_retomar(tmp_path):
@@ -534,6 +603,23 @@ def trabajo_con_divisoria(tmp_path, batch_id: str = "003SRO"):
         page_count=3,
     )
     return trabajo, cliente
+
+
+def test_un_batch_con_separadores_ya_borrados_vuelve_a_quedar_listo(tmp_path):
+    trabajo, cliente = trabajo_con_divisoria(tmp_path)
+    trabajo.manifiesto.etapa("indexar").marcar(
+        EstadoEtapa.HECHA,
+        "escritas 2, omitidas 0, fallidas 0, separadores borrados 1",
+    )
+    trabajo.guardar()
+    cliente.lotes = [lote("003SRO", trabajo.manifiesto.nombre_batch, 2)]
+    cliente.page_count = 2
+
+    parte, = comprobar_partes([trabajo], cliente)
+    plan, _indexador = trabajo.planificar(cliente)
+
+    assert parte.estado == LISTO
+    assert plan.batch_id == "003SRO"
 
 
 def test_las_divisorias_se_quitan_del_lote_para_poder_cerrarlo(tmp_path):
