@@ -158,6 +158,25 @@ def test_el_lote_encontrado_queda_anotado_y_con_su_nombre(tmp_path):
     assert trabajo.manifiesto.etapa_hecha("descubrir")
 
 
+def test_la_comprobacion_periodica_recupera_un_empty_batch_interrumpido(
+    tmp_path,
+):
+    """Cerrar la UI tras Quick Upload no deja el batch perdido ni lo repite."""
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.lotes = [
+        lote("003VIEJO", "DP | LO DE ANTES", 9),
+        lote("003NUEVO", "Empty-Batch", 2),
+    ]
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == LISTO
+    assert parte.batch_id == "003NUEVO"
+    assert trabajo.manifiesto.batch_id == "003NUEVO"
+    assert trabajo.manifiesto.etapa_hecha("subir")
+    assert trabajo.manifiesto.etapa_hecha("descubrir")
+
+
 def test_el_nombre_corregido_a_mano_reemplaza_un_id_de_index_batch(tmp_path):
     trabajo, _cliente = trabajo_subido(tmp_path, batch_id="003MAL")
     trabajo.fijar_lote("003MAL")
@@ -304,6 +323,29 @@ def test_un_lote_ya_cerrado_no_se_vuelve_a_buscar(tmp_path):
     parte, = comprobar_partes([trabajo], cliente)
     assert parte.estado == COMPLETADO
     assert parte.se_acabo
+
+
+def test_un_empty_batch_tardio_no_reabre_ni_resube_un_lote_completado(
+    tmp_path, monkeypatch
+):
+    """Un duplicado que aparece tarde no se confunde con el original cerrado."""
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.fijar_lote("003ORIGINAL")
+    trabajo.manifiesto.etapa("completar").marcar(
+        EstadoEtapa.HECHA, "2 paginas en verde"
+    )
+    trabajo.guardar()
+    cliente.lotes = [lote("003TARDIO", "Empty-Batch", 2)]
+    subidas = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
+    )
+
+    subir_partes([trabajo], SesionFalsa(), cliente=cliente)
+
+    assert subidas == []
+    assert trabajo.manifiesto.batch_id == "003ORIGINAL"
+    assert trabajo.manifiesto.etapa_hecha("completar")
 
 
 def test_un_cierre_omitido_no_se_confunde_con_un_batch_completado(tmp_path):
@@ -546,10 +588,10 @@ def test_no_repite_un_batch_que_quick_upload_ya_confirmo_mientras_procesa(
     assert any("1 sigue procesándose" in texto for texto in avisos)
 
 
-def test_todos_los_batches_se_suben_antes_de_confirmar_el_primero(
+def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
     tmp_path, monkeypatch
 ):
-    """Quick Upload termina todos los envios antes de buscar ningun ID."""
+    """Dos Empty-Batch iguales necesitan instantaneas distintas de la cola."""
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     cliente = ClienteFalso()
     eventos: list[tuple[str, str]] = []
@@ -576,13 +618,48 @@ def test_todos_los_batches_se_suben_antes_de_confirmar_el_primero(
 
     assert eventos == [
         ("subir", "DP | BIT"),
-        ("subir", "DP | BIT -2"),
-        ("subir", "DP | BIT REVISAR"),
         ("actualizar", "3"),
         ("confirmar", "DP | BIT"),
+        ("subir", "DP | BIT -2"),
+        ("actualizar", "3"),
         ("confirmar", "DP | BIT -2"),
+        ("subir", "DP | BIT REVISAR"),
+        ("actualizar", "3"),
         ("confirmar", "DP | BIT REVISAR"),
     ]
+
+
+def test_varios_empty_batch_del_mismo_tamano_conservan_su_id(
+    tmp_path, monkeypatch
+):
+    """La siguiente instantanea incluye el batch que acaba de aparecer."""
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    cliente = ClienteFalso(lotes=[
+        lote("003VIEJO", "DP | LO DE ANTES", 9),
+    ])
+    ids = iter(("003UNO", "003DOS", "003TRE"))
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        self.manifiesto.lotes_previos = [
+            actual.batch_id for actual in cliente.listar_lotes()
+        ]
+        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
+        cliente.lotes.append(lote(next(ids), "Empty-Batch", 2))
+        self.guardar()
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    subir_partes(
+        trabajos, SesionFalsa(), cliente=cliente, dormir=lambda _s: None,
+    )
+
+    assert [trabajo.manifiesto.batch_id for trabajo in trabajos] == [
+        "003UNO", "003DOS", "003TRE",
+    ]
+    assert all(
+        trabajo.manifiesto.etapa_hecha("descubrir")
+        for trabajo in trabajos
+    )
 
 
 def test_un_automatico_con_titulo_revisar_no_se_sube(tmp_path, monkeypatch):
