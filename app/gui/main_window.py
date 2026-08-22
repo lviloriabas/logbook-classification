@@ -409,6 +409,7 @@ class MainWindow(QMainWindow):
         self._preprocess_geometry: dict[tuple[str, int], dict] = {}
         self._preprocessed_active = False
         self._log_sink = QtLogSink()
+        self._log_handler_id: int | None = None
         self._processed_template: Template | None = None
         self._processed_dpi: int | None = None
         self._last_run_cancelled = False
@@ -476,6 +477,7 @@ class MainWindow(QMainWindow):
         self._preview_loader.moveToThread(self._preview_thread)
         self._preview_loader.requested.connect(self._preview_loader.run)
         self._preview_loader.previewReady.connect(self._on_preview_ready)
+        self._preview_thread.finished.connect(self._preview_loader.deleteLater)
         self._preview_thread.start()
         self._preview_pending: tuple[int, str] | None = None
         self._preview_results: dict[tuple[str, int], object] = {}
@@ -1688,7 +1690,7 @@ class MainWindow(QMainWindow):
     def _attach_logger(self) -> None:
         from loguru import logger as lg
 
-        lg.add(
+        self._log_handler_id = lg.add(
             self._log_sink,
             level="INFO",
             format="{time:HH:mm:ss} | {level: <8} | {message}",
@@ -1696,6 +1698,15 @@ class MainWindow(QMainWindow):
         )
         self._log_sink.message.connect(self._on_log_message)
         logger.info("GUI iniciada")
+
+    def _detach_logger(self) -> None:
+        """Retira el destino de esta ventana antes de destruir sus widgets."""
+        handler_id = self._log_handler_id
+        self._log_handler_id = None
+        if handler_id is None:
+            return
+        logger.remove(handler_id)
+        self._log_sink.message.disconnect(self._on_log_message)
 
     def _on_log_message(self, message: str) -> None:
         """Acumula líneas de log y las descarga por lotes: la GUI nunca
@@ -4042,6 +4053,7 @@ class MainWindow(QMainWindow):
         if self._torn_down:
             return
         self._torn_down = True
+        self._detach_logger()
         for timer in (
             self._timer, self._table_timer, self._log_timer,
             self._shutdown_timer, self._resize_preview_timer,
