@@ -23,7 +23,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QLineEdit
+from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
 from app.gui.airvault_window import (
     ANCHO_MAXIMO_NOMBRE_BATCH,
@@ -72,6 +72,24 @@ def corrida(
     return csv
 
 
+def registrar_en_airvault(raiz: Path, csv: Path) -> Path:
+    """Deja el manifiesto local mínimo de la ejecución seleccionada."""
+    from app.airvault.flujo import carpeta_de_corrida, carpeta_de_trabajo
+    from app.airvault.manifest import guardar
+    from app.airvault.model import Manifiesto
+
+    nombre = carpeta_de_corrida(csv).name
+    carpeta = raiz / carpeta_de_trabajo(nombre)
+    pdf = csv.parent.parent / f"{nombre}.pdf"
+    manifiesto = Manifiesto(
+        job_id=nombre,
+        nombre_batch=f"DP | {nombre}",
+        csv_origen=str(csv.resolve()),
+        pdf_origen=str(pdf.resolve()),
+    )
+    return guardar(manifiesto, carpeta)
+
+
 # ── forma de la ventana ────────────────────────────────────────────
 
 def test_es_una_ventana_aparte_y_arranca_escondida(ventana):
@@ -97,6 +115,10 @@ def test_sin_corrida_elegida_no_hay_nada_que_subir(ventana):
 def test_sin_nada_subido_no_hay_nada_que_comprobar(ventana):
     """Comprobar es preguntar por lotes; sin subir no hay ninguno."""
     assert not ventana.boton_comprobar.isEnabled()
+
+
+def test_sin_registro_no_hay_nada_que_eliminar(ventana):
+    assert not ventana.boton_eliminar_registro.isEnabled()
 
 
 def test_completar_el_batch_no_viene_marcado(ventana):
@@ -266,6 +288,42 @@ def test_cambiar_de_corrida_tira_lo_que_se_sabia_de_la_anterior(ventana,
     # Indexar tambien sirve para conectarse y recuperar batches que esta
     # aplicacion hubiera subido en una ejecucion anterior.
     assert ventana.boton_indexar.isEnabled()
+
+
+def test_eliminar_registro_reinicia_solo_el_estado_local(
+    app, tmp_path, monkeypatch
+):
+    csv = corrida(tmp_path)
+    pdf = csv.parent.parent / f"{csv.parent.parent.name}.pdf"
+    manifiesto = registrar_en_airvault(tmp_path, csv)
+    ventana = AirVaultWindow(tmp_path)
+    ventana.fijar_corrida(csv)
+    enviados = []
+
+    def papelera(rutas):
+        enviados.extend(rutas)
+        for ruta in rutas:
+            ruta.unlink()
+        return list(rutas), []
+
+    monkeypatch.setattr(
+        "app.gui.airvault_window.send_to_trash", papelera
+    )
+    monkeypatch.setattr(
+        "app.gui.airvault_window.QMessageBox.warning",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    assert ventana.boton_eliminar_registro.isEnabled()
+    ventana._eliminar_registro()
+
+    assert enviados == [manifiesto]
+    assert not manifiesto.exists()
+    assert csv.exists() and pdf.exists()
+    assert ventana._trabajos == []
+    assert ventana.lotes.rowCount() == 0
+    assert not ventana.boton_eliminar_registro.isEnabled()
+    assert "batches remotos no se modificaron" in ventana.resumen.text()
 
 
 # ── no se arranca sin lo imprescindible ────────────────────────────
