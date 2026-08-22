@@ -21,6 +21,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLineEdit
 
 from app.gui.airvault_window import AirVaultWindow, csv_de_corrida
@@ -357,6 +358,24 @@ def test_la_lista_dice_en_que_va_cada_lote(ventana):
     assert ventana.lotes.item(0, 1).text() == "5"
     assert "Listo para indexar" in ventana.lotes.item(0, 2).text()
     assert "Procesandose" in ventana.lotes.item(1, 2).text()
+
+
+def test_todos_los_batches_confirmados_quedan_activos_en_blanco(ventana):
+    from app.airvault.flujo import LISTO, SOLO_REVISAR
+
+    ventana._estados = [
+        parte(LISTO, "DP | BIT"),
+        parte(LISTO, "DP | BIT -2", carpeta="parte-02"),
+        parte(SOLO_REVISAR, "DP | BIT REVISAR", carpeta="revisar"),
+    ]
+
+    ventana._pintar_lotes()
+
+    assert all(
+        ventana.lotes.item(fila, 0).foreground().style()
+        is Qt.BrushStyle.NoBrush
+        for fila in range(ventana.lotes.rowCount())
+    )
 
 
 def test_un_lote_listo_se_puede_indexar_y_dice_cuanto_escribiria(ventana):

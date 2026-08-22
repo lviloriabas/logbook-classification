@@ -926,10 +926,10 @@ class AirVaultWindow(QDialog):
         self.boton_subir.setObjectName("primaryButton")
         self.boton_subir.setEnabled(False)
         self.boton_subir.setToolTip(
-            "Manda a AirVault los PDF de la entrega y después comprueba que "
-            "cada batch exista allí, aunque la aplicación ya lo tuviera "
-            "marcado como subido. El indexado solo se habilita cuando "
-            "AirVault confirma el batch y sus páginas."
+            "Busca en AirVault todos los batches de la entrega, incluidos "
+            "el principal sin número, sus divisiones y REVISAR. Conserva "
+            "los encontrados con su ID y sube solamente los que falten. "
+            "El indexado se habilita cuando AirVault confirma sus páginas."
         )
         self.boton_subir.clicked.connect(self._subir)
 
