@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -56,10 +56,16 @@ from PySide6.QtWidgets import (
 from app.airvault.flujo import PAGINAS_POR_BATCH_POR_DEFECTO
 from app.gui.csv_utils import find_csv_files, find_run_dirs
 from app.gui.responsive import fit_to_screen
-from app.gui.widgets import APP_CHROME_QSS, DATA_TABLE_QSS, ElidedLabel
+from app.gui.widgets import (
+    APP_CHROME_QSS,
+    DATA_TABLE_QSS,
+    PANE_STATUS_COLORS,
+    ElidedLabel,
+)
 
 # Gris con el que la ventana principal escribe las líneas de ayuda.
 COLOR_AYUDA = "#57606a"
+COLOR_INDEXADO = PANE_STATUS_COLORS["OK"]
 
 # Ejecuciones que lista el historial, las mismas que el visor de CSV: es la
 # ventana de trabajo de un turno. Lo de más atrás sigue en output/ y se
@@ -79,6 +85,12 @@ INTENTOS_INDEXADO = 3
 # Líneas que conserva la bitácora. Con la comprobación automática corriendo
 # toda una tarde, sin tope crecería sin fin.
 LIMITE_BITACORA = 300
+
+# El nombre distingue las divisiones y REVISAR, así que no puede quedar
+# reducido a unas pocas letras. A partir de este ancho se conserva espacio
+# para Páginas y Estado; el texto completo sigue disponible en la ayuda.
+ANCHO_MINIMO_NOMBRE_BATCH = 220
+ANCHO_MAXIMO_NOMBRE_BATCH = 420
 
 TEXTO_SIN_SUBIR = (
     "Sin subir. «Subir a AirVault» manda los PDF de la entrega; nada se "
@@ -728,8 +740,10 @@ class AirVaultWindow(QDialog):
         Aquí se ve cuál ya se puede indexar y cuál sigue esperando, en vez
         de una sola línea de estado que solo puede decir una cosa.
         """
-        tabla = QTableWidget(0, 3)
-        tabla.setHorizontalHeaderLabels(["Batch", "Páginas", "Estado"])
+        tabla = QTableWidget(0, 4)
+        tabla.setHorizontalHeaderLabels(
+            ["ID", "Batch", "Páginas", "Estado"]
+        )
         tabla.setToolTip(
             "Batches de la ejecución elegida y pendientes recuperados de "
             "ejecuciones anteriores. Van pasando a «Listo para indexar» "
@@ -747,25 +761,29 @@ class AirVaultWindow(QDialog):
         tabla.verticalHeader().setVisible(False)
         tabla.setMaximumHeight(132)
         cabecera = tabla.horizontalHeader()
-        cabecera.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         cabecera.setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        cabecera.setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Interactive
         )
         cabecera.setSectionResizeMode(
             2, QHeaderView.ResizeMode.ResizeToContents
         )
+        cabecera.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        tabla.setColumnWidth(1, ANCHO_MINIMO_NOMBRE_BATCH)
         self.lotes = tabla
         return tabla
 
     def _fila_vigilancia(self) -> QHBoxLayout:
-        """Cada cuánto se pregunta solo, y el botón para preguntar ya."""
+        """Cada cuánto se pregunta automáticamente a AirVault."""
         fila = QHBoxLayout()
         self.auto_check = QCheckBox("Comprobar cada")
         self.auto_check.setChecked(True)
         self.auto_check.setToolTip(
             "Le pregunta a AirVault cada tantos minutos si ya terminó de "
             "procesar lo subido, y deja de preguntar cuando no queda nada "
-            "por esperar. Se puede apagar y usar solo «Comprobar ahora»."
+            "por esperar. Se puede apagar y usar «Revisar en AirVault»."
         )
         self.auto_check.toggled.connect(self._ajustar_vigilancia)
         self.auto_check.toggled.connect(self._sincronizar_espera_visible)
@@ -781,16 +799,6 @@ class AirVaultWindow(QDialog):
         )
         self.minutos_spin.valueChanged.connect(self._ajustar_vigilancia)
         fila.addWidget(self.minutos_spin)
-
-        self.boton_comprobar = QPushButton("Comprobar ahora")
-        self.boton_comprobar.setEnabled(False)
-        self.boton_comprobar.setToolTip(
-            "Pregunta a AirVault en qué van los batches de esta ejecución, y "
-            "calcula qué se escribiría en los que ya estén listos. No "
-            "escribe nada."
-        )
-        self.boton_comprobar.clicked.connect(self._comprobar)
-        fila.addWidget(self.boton_comprobar)
 
         self.boton_automatizacion = QPushButton("Automatización…")
         self.boton_automatizacion.setCheckable(True)
@@ -934,6 +942,18 @@ class AirVaultWindow(QDialog):
         )
         self.boton_subir.clicked.connect(self._subir)
 
+        self.boton_revisar = QPushButton("Revisar en AirVault")
+        self.boton_revisar.setEnabled(False)
+        self.boton_revisar.setToolTip(
+            "Busca por título cada batch de la lista en AirVault. Los que "
+            "ya estén listos quedan en blanco y se habilitan para indexar; "
+            "los que ya se hayan indexado quedan en verde. No escribe nada."
+        )
+        self.boton_revisar.clicked.connect(self._comprobar)
+        # Conserva el nombre interno que usa la comprobación automática y
+        # el código que habilita los controles mientras trabaja el hilo.
+        self.boton_comprobar = self.boton_revisar
+
         self.boton_indexar = QPushButton("Indexar")
         self.boton_indexar.setEnabled(False)
         self.boton_indexar.setToolTip(
@@ -967,8 +987,8 @@ class AirVaultWindow(QDialog):
         self.boton_cerrar.clicked.connect(self.close)
 
         for boton in (
-            self.boton_reporte, self.boton_subir, self.boton_indexar,
-            self.boton_cancelar, self.boton_cerrar,
+            self.boton_reporte, self.boton_subir, self.boton_revisar,
+            self.boton_indexar, self.boton_cancelar, self.boton_cerrar,
         ):
             fila.addWidget(boton)
         return fila
@@ -1131,6 +1151,7 @@ class AirVaultWindow(QDialog):
         self._estados = [estado_local(t) for t in self._trabajos]
         self._pintar_lotes()
         self.boton_indexar.setEnabled(bool(self.corrida_edit.text().strip()))
+        self.boton_revisar.setEnabled(bool(self._trabajos))
         self.boton_reiniciar.setEnabled(bool(self._trabajos))
         self._ajustar_vigilancia()
 
@@ -1164,7 +1185,8 @@ class AirVaultWindow(QDialog):
 
     def _pintar_lotes(self) -> None:
         """Vuelca en la tabla en qué va cada lote."""
-        from app.airvault.flujo import LISTO
+        from app.airvault.flujo import COMPLETADO, INDEXADO, LISTO
+        from app.airvault.model import EstadoEtapa, EstadoRegistro
 
         tabla = self.lotes
         tabla.setRowCount(0)
@@ -1172,22 +1194,46 @@ class AirVaultWindow(QDialog):
             fila = tabla.rowCount()
             tabla.insertRow(fila)
             nombre = parte.nombre or "(sin nombre)"
-            if parte.batch_id:
-                nombre = f"{nombre}  ·  {parte.batch_id}"
             esperadas = len(parte.trabajo.manifiesto.registros)
-            celdas = (nombre, str(esperadas), str(parte))
+            celdas = (
+                parte.batch_id, nombre, str(esperadas), str(parte),
+            )
+            etapa_indexar = getattr(
+                parte.trabajo.manifiesto, "etapas", {}
+            ).get("indexar")
+            ya_indexado = parte.estado in (INDEXADO, COMPLETADO) or bool(
+                etapa_indexar
+                and etapa_indexar.estado in (
+                    EstadoEtapa.HECHA, EstadoEtapa.ERROR,
+                )
+            ) or any(
+                getattr(registro, "estado", None) is EstadoRegistro.ESCRITA
+                for registro in parte.trabajo.manifiesto.registros
+            )
             for columna, texto in enumerate(celdas):
                 item = QTableWidgetItem(texto)
                 if columna == 1:
+                    item.setToolTip(nombre)
+                if columna == 2:
                     item.setTextAlignment(
                         Qt.AlignmentFlag.AlignRight
                         | Qt.AlignmentFlag.AlignVCenter
                     )
-                if parte.estado != LISTO and not parte.se_acabo:
+                if ya_indexado:
+                    item.setForeground(QColor(COLOR_INDEXADO))
+                elif parte.estado != LISTO and not parte.se_acabo:
                     # Todavía no hay nada que hacer con él: se ve, pero sin
                     # llamar la atención de quien busca cuál puede indexar.
                     item.setForeground(Qt.GlobalColor.gray)
                 tabla.setItem(fila, columna, item)
+        ancho_nombre = min(
+            max(
+                tabla.sizeHintForColumn(1) + 16,
+                ANCHO_MINIMO_NOMBRE_BATCH,
+            ),
+            ANCHO_MAXIMO_NOMBRE_BATCH,
+        )
+        tabla.setColumnWidth(1, ancho_nombre)
 
     def _listos(self) -> list:
         """Partes que ya se pueden escribir y tienen su plan calculado."""
