@@ -56,7 +56,6 @@ from app.airvault.flujo import (  # noqa: E402
 from app.airvault.mapping import (  # noqa: E402
     FLOTA_CACHE_FILENAME,
     ResolutorFlota,
-    valores_de_indice,
 )
 from app.airvault.model import EstadoEtapa, Manifiesto  # noqa: E402
 from app.airvault.naming import PREFIJO_POR_DEFECTO  # noqa: E402
@@ -110,9 +109,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--audit-status", default=None, help="Audit Status")
 
     p = sub.add_parser("subir", parents=[comun],
-                       help="Sube los PDFs del lote por Quick Upload")
-    p.add_argument("--pdf", action="append", required=True,
-                   help="PDF a subir (repetible)")
+                       help="Sube el PDF del trabajo por Quick Upload")
+    p.add_argument("--pdf", required=True,
+                   help="PDF de este trabajo que se va a subir")
 
     p = sub.add_parser("descubrir", parents=[comun],
                        help="Ubica el lote en AirVault por su nombre")
@@ -137,6 +136,11 @@ def parse_args() -> argparse.Namespace:
                    help="No detenerse en la primera pagina que falle")
     p.add_argument("--completar", action="store_true",
                    help="Al terminar, dar el lote por terminado en AirVault. Solo lo acepta con todas las paginas en verde.")
+    p.add_argument(
+        "--permitir-log-distinto", action="store_true",
+        help="Permitir reemplazar el Log Page Number que AirVault ya leyo. "
+             "Usar solo en una prueba controlada.",
+    )
 
     p = sub.add_parser("verificar", parents=[comun],
                        help="Relee el lote y confirma como quedo")
@@ -242,37 +246,15 @@ def etapa_preparar(args, config: AirVaultConfig) -> int:
 
 
 def etapa_subir(args, config: AirVaultConfig) -> int:
-    from app.airvault.uploader import SubidorQuickUpload
-
     carpeta = carpeta_job(args.job)
     manifiesto = manifiestos.cargar(carpeta)
     sesion = abrir_sesion(config, args)
-    # Antes de subir se anota la cola: Quick Upload no admite nombre de
-    # lote y todos llegan como «Empty-Batch», asi que la diferencia con
-    # esta lista es lo unico con lo que despues se reconoce el propio.
+    cliente = ClienteHttp(sesion, config)
     trabajo = Trabajo(config, carpeta, manifiesto)
-    trabajo.anotar_lotes_previos(ClienteHttp(sesion, config))
-    subidor = SubidorQuickUpload(sesion, config.repo_id)
-    # De la primera bitacora, no de la primera pagina: la primera suele ser
-    # un separador, sin avion, y Aircraft es obligatorio en Quick Upload.
-    bitacoras = manifiesto.bitacoras()
-    plantilla = valores_de_indice(
-        bitacoras[0] if bitacoras else manifiesto.registros[0],
-        manifiesto.doc_type, manifiesto.audit_status,
-        manifiesto.nombre_batch,
-    )
-    fallos = 0
-    for ruta in args.pdf:
-        resultado = subidor.subir(Path(ruta), plantilla)
-        estado = "ok" if resultado.ok else f"error: {resultado.detalle}"
-        print(f"  {resultado.archivo}: {estado}")
-        fallos += 0 if resultado.ok else 1
-    manifiesto.etapa("subir").marcar(
-        EstadoEtapa.HECHA if not fallos else EstadoEtapa.ERROR,
-        f"{len(args.pdf)} archivo(s)",
-    )
-    manifiestos.guardar(manifiesto, carpeta)
-    return 1 if fallos else 0
+    archivo = Path(args.pdf)
+    trabajo.subir(sesion, archivo, cliente=cliente)
+    print(f"  {archivo.name}: ok")
+    return 0
 
 
 def etapa_descubrir(args, config: AirVaultConfig,
@@ -334,6 +316,7 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
         cliente, manifiesto, picklist, sobrescribir,
         al_guardar=lambda m: manifiestos.guardar(m, carpeta),
         resolutor=resolutor,
+        permitir_log_distinto=getattr(args, "permitir_log_distinto", False),
     )
     try:
         plan = indexador.planificar(paginas)

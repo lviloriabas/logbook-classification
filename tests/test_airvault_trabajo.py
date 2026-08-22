@@ -301,6 +301,40 @@ def test_quick_upload_recibe_el_titulo_del_manifiesto(tmp_path, monkeypatch):
     assert falso.valores[0][CAMPO_BATCH_NAME] == "DP | BIT -2"
 
 
+def test_la_subida_guarda_la_cola_previa_para_reconocer_empty_batch(
+    tmp_path, monkeypatch
+):
+    from app.airvault import uploader
+
+    csv = corrida(tmp_path)
+    falso = SubidorFalso()
+    monkeypatch.setattr(uploader, "SubidorQuickUpload", falso)
+    cliente = ClienteFalso(lotes=[lote("003VIEJO", "Empty-Batch", 2)])
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv)
+
+    trabajo.subir(object(), cliente=cliente)
+
+    assert trabajo.manifiesto.lotes_previos == ["003VIEJO"]
+
+
+def test_descubre_el_empty_batch_que_no_estaba_antes(tmp_path):
+    csv = corrida(tmp_path)
+    trabajo = Trabajo.preparar(
+        AirVaultConfig(), tmp_path / "job", csv, "DP | BIT PRUEBA"
+    )
+    trabajo.manifiesto.lotes_previos = ["003VIEJO"]
+    trabajo.guardar()
+    cliente = ClienteFalso(lotes=[
+        lote("003VIEJO", "Empty-Batch", 2),
+        lote("003NUEVO", "Empty-Batch", 2),
+    ])
+
+    assert trabajo.descubrir(cliente, esperar=True, dormir=lambda _s: None) == (
+        "003NUEVO"
+    )
+    assert trabajo.manifiesto.nombre_batch == "DP | BIT PRUEBA"
+
+
 def test_la_subida_a_mano_se_puede_dar_por_hecha(tmp_path):
     csv = corrida(tmp_path)
     trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv)

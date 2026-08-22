@@ -124,7 +124,8 @@ def verificar_obligatorios(
 
 
 def verificar_alineacion(
-    registro: Registro, valores_en_airvault: Mapping[int, str]
+    registro: Registro, valores_en_airvault: Mapping[int, str],
+    permitir_log_distinto: bool = False,
 ) -> List[Aviso]:
     """Contrasta la pagina del lote con lo que dice el manifiesto.
 
@@ -138,7 +139,12 @@ def verificar_alineacion(
     """
     avisos: List[Aviso] = []
     log_remoto = str(valores_en_airvault.get(CAMPO_LOG_NUMBER, "")).strip()
-    if log_remoto and registro.log_number and log_remoto != registro.log_number:
+    if (
+        log_remoto
+        and registro.log_number
+        and log_remoto != registro.log_number
+        and not permitir_log_distinto
+    ):
         avisos.append(Aviso(
             registro.seq, "desalineado",
             f"AirVault tiene el log {log_remoto} y el manifiesto "

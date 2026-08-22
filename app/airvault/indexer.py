@@ -120,11 +120,13 @@ class Indexador:
         sobrescribir: bool = False,
         al_guardar: Optional[Callable[[Manifiesto], None]] = None,
         resolutor: Optional[ResolutorFlota] = None,
+        permitir_log_distinto: bool = False,
     ):
         self.cliente = cliente
         self.manifiesto = manifiesto
         self.picklist = list(picklist_matriculas)
         self.sobrescribir = sobrescribir
+        self.permitir_log_distinto = permitir_log_distinto
         self._al_guardar = al_guardar
         # El resolutor aprende del propio lote: AirVault ya trae la flota
         # resuelta por su lookup en las paginas preindexadas, y eso vale
@@ -223,7 +225,9 @@ class Indexador:
                     f"{ilegibles.get(registro.seq, 'sin respuesta')}",
                 ))
             else:
-                avisos.extend(verificar_alineacion(registro, remota.valores))
+                avisos.extend(verificar_alineacion(
+                    registro, remota.valores, self.permitir_log_distinto
+                ))
                 work_location = str(
                     remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
                 ).strip()

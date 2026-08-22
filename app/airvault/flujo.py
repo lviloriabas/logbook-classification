@@ -554,6 +554,14 @@ class Trabajo:
             raise ErrorDeCorrida(
                 f"No esta el archivo de entrega {archivo.name}"
             )
+        if cliente is not None:
+            # AirVault publica lo cargado como ``Empty-Batch`` aunque Quick
+            # Upload reciba C_BatchName. La unica identidad segura es la
+            # diferencia contra la cola tomada inmediatamente antes.
+            self.manifiesto.lotes_previos = [
+                lote.batch_id for lote in cliente.listar_lotes()
+            ]
+            self.guardar()
         # De la primera bitacora, no de la primera pagina: la primera
         # suele ser un separador, sin avion, y Aircraft es obligatorio en
         # Quick Upload. Estos valores son solo la clasificacion inicial del
@@ -604,6 +612,7 @@ class Trabajo:
                 cliente.listar_lotes, nombre, self.manifiesto.repo_id,
                 esperadas, self.config.espera_descubrimiento_s,
                 self.config.espera_maxima_s, dormir=dormir,
+                previos=self.manifiesto.lotes_previos or None,
             )
         else:
             lote = buscar_lote(
