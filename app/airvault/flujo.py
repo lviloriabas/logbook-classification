@@ -541,8 +541,8 @@ class Trabajo:
         cual escribir.
 
         El titulo viaja dentro de los valores de Quick Upload. La
-        confirmacion posterior exige que AirVault devuelva ese mismo titulo
-        antes de permitir que se suba la siguiente parte.
+        confirmacion posterior exige que AirVault devuelva ese mismo titulo;
+        el coordinador la hace despues de enviar todas las partes.
         """
         from app.airvault.uploader import SubidorQuickUpload
 
@@ -1092,11 +1092,10 @@ def subir_partes(
     ausentes vuelven a Quick Upload. Sin cliente se conserva el recorrido
     local para los usos antiguos del modulo.
 
-    La comprobacion solo reconoce cada batch por su titulo esperado. Cada
-    carga se confirma antes de mandar la siguiente porque AirVault puede
-    juntar archivos consecutivos y dejarles el titulo del ultimo. Un
-    resultado generico o con el titulo de otra division sigue ausente y no
-    recibe ningun ID local.
+    La comprobacion solo reconoce cada batch por su titulo esperado. Primero
+    se mandan todos los archivos faltantes y solo despues se espera a que
+    aparezca cada batch. Un resultado generico o con el titulo de otra
+    division sigue ausente y no recibe ningun ID local.
     """
     _validar_nombres_de_batches(trabajos)
     por_subir = list(trabajos)
@@ -1126,11 +1125,17 @@ def subir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
-        if cliente is not None:
-            trabajo.descubrir(
-                cliente, esperar=True, dormir=dormir,
-                avisar=propio if avisar else None,
+
+    if cliente is not None and por_subir:
+        if avisar is not None:
+            avisar(
+                "Todos los batches pendientes se subieron; "
+                "comprobando cuales aparecen en AirVault",
+                0, 0,
             )
+        descubrir_partes(
+            por_subir, cliente, esperar=True, dormir=dormir, avisar=avisar,
+        )
 
 
 def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:
@@ -1153,15 +1158,11 @@ def subir_y_descubrir_partes(
     dormir: Callable[[float], None] = time.sleep,
     avisar: Optional[Aviso] = None,
 ) -> None:
-    """Sube cada parte y espera a su lote antes de mandar la siguiente.
+    """Sube todas las partes y despues ubica todos sus batches.
 
-    De una en una y no todas de golpe: AirVault junta en un mismo lote los
-    archivos que le llegan seguidos —comprobado subiendo la entrega y la
-    parte de Revisar una detras de otra: quedaron los dos en un solo lote
-    de 33 paginas—, y dos partes en el mismo lote no se pueden indexar por
-    separado, que es justo para lo que se reparten. Esperar a que la
-    anterior aparezca en la cola las mantiene aparte, y de paso la lista de
-    lotes que se anota antes de subir queda exacta.
+    Ninguna consulta de descubrimiento se intercala con Quick Upload: la
+    primera fase termina de enviar todos los archivos y la segunda espera
+    a que AirVault vaya mostrando cada titulo esperado.
     """
     for trabajo in trabajos:
         cabeza = _prefijo(trabajo)
@@ -1173,8 +1174,9 @@ def subir_y_descubrir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
-        trabajo.descubrir(cliente, esperar, dormir,
-                          propio if avisar else None)
+    descubrir_partes(
+        trabajos, cliente, esperar=esperar, dormir=dormir, avisar=avisar,
+    )
 
 
 def descubrir_partes(
