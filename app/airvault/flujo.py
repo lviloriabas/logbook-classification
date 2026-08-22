@@ -1086,11 +1086,12 @@ def subir_partes(
 ) -> None:
     """Confirma todos los batches y sube solamente los que falten.
 
-    Con cliente, AirVault es la fuente de verdad aunque el manifiesto local
-    diga que una parte ya se subio: se buscan tambien el batch sin sufijo y
-    los de REVISAR. Los encontrados conservan o recuperan su ID; solo los
-    ausentes vuelven a Quick Upload. Sin cliente se conserva el recorrido
-    local para los usos antiguos del modulo.
+    Con cliente se buscan tambien el batch sin sufijo y los de REVISAR. Los
+    encontrados conservan o recuperan su ID. Si Quick Upload ya confirmo un
+    archivo pero el titulo aun no aparece en Web Index, se conserva como
+    ``BUSCANDO`` y no se vuelve a cargar: AirVault puede tardar en procesarlo.
+    Solo un trabajo local realmente pendiente vuelve a Quick Upload. Sin
+    cliente se conserva el recorrido local para los usos antiguos del modulo.
 
     La comprobacion solo reconoce cada batch por su titulo esperado. Primero
     se mandan todos los archivos faltantes y solo despues se espera a que
@@ -1103,13 +1104,22 @@ def subir_partes(
         estados = comprobar_partes(trabajos, cliente, avisar=avisar)
         por_subir = [
             parte.trabajo for parte in estados
-            if parte.estado in (SIN_SUBIR, BUSCANDO)
+            if parte.estado == SIN_SUBIR
         ]
-        encontrados = len(trabajos) - len(por_subir)
+        procesandose = sum(
+            parte.estado == BUSCANDO for parte in estados
+        )
+        encontrados = len(trabajos) - len(por_subir) - procesandose
         if avisar is not None:
+            unidad = "batch" if len(trabajos) == 1 else "batches"
+            espera = (
+                f"; {procesandose} "
+                f"{'sigue' if procesandose == 1 else 'siguen'} procesándose"
+                if procesandose else ""
+            )
             avisar(
-                f"AirVault confirmo {encontrados} de {len(trabajos)} "
-                f"batches; se subiran {len(por_subir)} faltantes",
+                f"AirVault confirmó {encontrados} de {len(trabajos)} "
+                f"{unidad}{espera}; se subirán {len(por_subir)} faltantes",
                 0, 0,
             )
         for trabajo in por_subir:
