@@ -1,5 +1,5 @@
 """Pruebas del re-export: las salidas se escriben sobre la carpeta de la
-corrida (mismo CSV, PDFs regenerados, sin artefactos de la separación
+ejecución (mismo CSV, PDFs regenerados, sin artefactos de la separación
 anterior)."""
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ class TestReexport(unittest.TestCase):
             csv_primero = primer / "datos" / f"{nombre}.CSV"
             self.assertTrue(csv_primero.exists())
             # Re-export con otra separación apuntando a la misma carpeta:
-            # no se crea una corrida nueva y los PDFs se regeneran ahí.
+            # no se crea una ejecución nueva y los PDFs se regeneran ahí.
             segundo = write_outputs(
                 self.reports, self._options(root, ("avion",), primer)
             )

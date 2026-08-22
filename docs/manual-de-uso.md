@@ -5,7 +5,7 @@
 | Aplicación | BITS, Logbook Classification |
 | Plataforma | Windows, ejecución local en CPU |
 | Entrada normal | Archivos PDF |
-| Salida | Datos de corrida y PDF de entrega |
+| Salida | Datos de ejecución y PDF de entrega |
 | Revisión del manual | 20 AUG 2026 |
 
 ## 1. Objeto
@@ -76,7 +76,7 @@ La fecha manuscrita se espera en casillas `DD|MMM|AA`. El programa localiza la r
 
 Dentro del mismo libro, la fecha no puede retroceder cuando aumenta `log_number`. Varias páginas pueden tener el mismo día. La regla no cruza de un libro a otro.
 
-Cuando falta parte de la fecha, BITS puede completar mes, año o día con evidencia del mismo libro, incluido el último día del mes cuando no se resuelve el día. Todo valor inferido conserva su procedencia. Una advertencia de fecha no manda por sí sola la bitácora al lote `REVISAR`; la guarda decisiva para el separador es la matrícula.
+Cuando falta parte de la fecha, BITS puede completar mes, año o día con evidencia del mismo libro, incluido el último día del mes cuando no se resuelve el día. Todo valor inferido conserva su procedencia. Una advertencia de fecha no manda por sí sola la bitácora al batch `REVISAR`; la guarda decisiva para el separador es la matrícula.
 
 ### 3.4 Número de vuelo
 
@@ -107,7 +107,7 @@ El tipo se decide por la licencia del técnico:
 | Corrección por libro | Usa la regla de una aeronave por libro y la secuencia de fechas. |
 | Verificación de flota | Compara la matrícula resuelta con `fleet.json`. |
 | Discrepancias | Comprueba las firmas exigidas para vuelo o mantenimiento. |
-| Depuración | Retira duplicados posteriores y páginas en blanco de la corrida. |
+| Depuración | Retira duplicados posteriores y páginas en blanco de la ejecución. |
 | Exportación | Compone los PDF y actualiza los datos de entrega. |
 | Indexado | Escribe en AirVault solo las páginas aprobadas en la revisión. |
 
@@ -118,7 +118,7 @@ El tipo se decide por la licencia del técnico:
 1. Copie los PDF directamente en `input/`, o téngalos disponibles en otra carpeta.
 2. Abra `LogbookClassification.exe`.
 3. Use **Detectar** para cargar `input/` o **Seleccionar archivos…** para elegir documentos externos.
-4. Revise el orden mostrado. **Detectar** ordena por nombre; **Seleccionar archivos…** conserva el orden entregado por el selector. La interfaz no permite reordenarlos y el rango de páginas se numera de forma continua sobre todo el lote.
+4. Revise el orden mostrado. **Detectar** ordena por nombre; **Seleccionar archivos…** conserva el orden entregado por el selector. La interfaz no permite reordenarlos y el rango de páginas se numera de forma continua sobre todo el batch.
 5. Si solo procesará una parte, indique la primera y la última página global.
 
 Los archivos que no aportan páginas al rango no entran al OCR.
@@ -136,7 +136,7 @@ La plantilla normal es `template/aircraft_log.json`. Use otra solo si sus region
 
 Mantenga activadas **Corrección de inclinación**, **Alineación** y **Preprocesar recortes** durante la operación normal. Seleccione los hilos de CPU que puede usar el equipo. **Reservar un núcleo** deja capacidad para otras tareas.
 
-La **Página de referencia** debe estar completa y ser nítida. Se interpreta dentro del tramo seleccionado de cada PDF, no como una página global del lote.
+La **Página de referencia** debe estar completa y ser nítida. Se interpreta dentro del tramo seleccionado de cada PDF, no como una página global del batch.
 
 Si la geometría del escaneo es dudosa:
 
@@ -146,7 +146,7 @@ Si la geometría del escaneo es dudosa:
 4. confirme que los recuadros cubren los datos correctos;
 5. ajuste plantilla o referencia si los recuadros se desplazan.
 
-**Preprocesar** solo calcula geometría. No ejecuta OCR ni crea una corrida. La casilla **Preprocesar recortes** sí actúa durante el OCR.
+**Preprocesar** solo calcula geometría. No ejecuta OCR ni crea una ejecución. La casilla **Preprocesar recortes** sí actúa durante el OCR.
 
 ### 4.4 Definir la entrega
 
@@ -201,14 +201,14 @@ Use **Depurar** antes de la entrega para quitar páginas repetidas o en blanco.
 3. Pulse **Eliminar**.
 4. Exporte de nuevo si ya existían PDF de entrega.
 
-Se conserva la primera aparición de cada `log_number`. Las páginas en blanco ya se excluyen del PDF de entrega; **Depurar** también las quita del CSV, JSON y estadísticas. Los duplicados permanecen en el PDF hasta depurarlos. La operación reescribe los datos de la corrida y no puede dejarla sin páginas. Los PDF anteriores nunca se modifican; cada exportación crea otra copia con sufijo `-2`, `-3` o posterior.
+Se conserva la primera aparición de cada `log_number`. Las páginas en blanco ya se excluyen del PDF de entrega; **Depurar** también las quita del CSV, JSON y estadísticas. Los duplicados permanecen en el PDF hasta depurarlos. La operación reescribe los datos de la ejecución y no puede dejarla sin páginas. Los PDF anteriores nunca se modifican; cada exportación crea otra copia con sufijo `-2`, `-3` o posterior.
 
 ### 4.8 Exportar
 
 1. Confirme las opciones de organización.
 2. Pulse **Exportar**.
 3. Espere el mensaje de terminación.
-4. Abra la carpeta de la corrida y compruebe los PDF.
+4. Abra la carpeta de la ejecución y compruebe los PDF.
 
 Una reexportación no repite OCR. Reescribe los datos y estadísticas, conserva los PDF anteriores y agrega `-2`, `-3` y siguientes cuando un nombre ya existe.
 
@@ -230,15 +230,15 @@ El CSV principal contiene las columnas seleccionadas. El CSV completo añade con
 
 ### 4.9 Indexar en AirVault
 
-1. Exporte la corrida con **Un solo PDF**. Puede usar **Repartir en** para limitar el tamaño de cada parte. Esta modalidad crea el PDF de entrega y su índice de páginas. Si falta el índice, reexporte de esta forma.
+1. Exporte la ejecución con **Un solo PDF**. Puede usar **Repartir en** para limitar el tamaño de cada parte. Esta modalidad crea el PDF de entrega y su índice de páginas. Si falta el índice, reexporte de esta forma.
 2. Confirme que el CSV mínimo conserve matrícula, `log_number` y fecha. Conserve también `flight_number` si debe enviarse a **Description**.
 3. Abra **Indexar en AirVault…**.
-4. Elija una de las últimas 25 corridas o pulse **Otra ejecución…**.
-5. Confirme el nombre del lote y el **Máximo por batch**. El valor inicial es 300 páginas; los PDF que lo superen se dividen para Quick Upload sin modificar la entrega ni el CSV. Deje **Sesión** vacío. En el primer acceso, complete el inicio de sesión y el segundo factor en Edge.
-6. Pulse **Subir y revisar**. El programa sube cada PDF, encuentra su lote y prepara el plan sin indexar.
+4. Elija una de las últimas 25 ejecuciones o pulse **Otra ejecución…**.
+5. Confirme el nombre del batch y el **Máximo por batch**. El valor inicial es 300 páginas; los PDF que lo superen se dividen para Quick Upload sin modificar la entrega ni el CSV. Deje **Sesión** vacío. En el primer acceso, complete el inicio de sesión y el segundo factor en Edge.
+6. Pulse **Subir y revisar**. El programa sube cada PDF, encuentra su batch y prepara el plan sin indexar.
 7. Pulse **Ver reporte…** y revise `revision.html`.
-8. Confirme `pagina_lote`, `archivo_origen`, `pagina_origen`, matrícula, flota, `log_number`, fecha, acción y avisos. Revise toda fila con `fleet_inferido=si`. Las discrepancias de firmas no aparecen en este reporte y no bloquean AirVault; revíselas antes en la corrida.
-9. Pulse **Indexar** solo después de aprobar el reporte completo. El programa escribirá todas las filas cuya acción sea **escribir**; no hay aprobación individual por página. Si una fila habilitada es incorrecta, no indexe: corrija o reprocese la corrida, expórtela y repita la revisión.
+8. Confirme `pagina_lote`, `archivo_origen`, `pagina_origen`, matrícula, flota, `log_number`, fecha, acción y avisos. Revise toda fila con `fleet_inferido=si`. Las discrepancias de firmas no aparecen en este reporte y no bloquean AirVault; revíselas antes en la ejecución.
+9. Pulse **Indexar** solo después de aprobar el reporte completo. El programa escribirá todas las filas cuya acción sea **escribir**; no hay aprobación individual por página. Si una fila habilitada es incorrecta, no indexe: corrija o reprocese la ejecución, expórtela y repita la revisión.
 
 Las acciones del reporte significan:
 
@@ -248,25 +248,25 @@ Las acciones del reporte significan:
 
 La columna **ya_indexada** indica si la página ya estaba válida. En ese caso, la acción es **bloqueada** y la página se omite.
 
-Las páginas con matrícula ausente, marcada, contradicha o sin respaldo suficiente forman un lote terminado en `REVISAR`. BITS lo sube y lo libera, pero su clasificación e indexado son manuales. No se envían allí todas las inferencias: las de libro coherentes y respaldadas continúan en los batches automáticos.
+Las páginas con matrícula ausente, marcada, contradicha o sin respaldo suficiente forman un batch terminado en `REVISAR`. BITS lo sube y lo libera, pero su clasificación e indexado son manuales. No se envían allí todas las inferencias: las de libro coherentes y respaldadas continúan en los batches automáticos.
 
-En el flujo normal, BITS escribe `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status`, `End Date` y `Batch Name`. Añade `Lessor` cuando está resuelto. `Description` queda como `<vuelo> AUTO INDEX` cuando se leyó el vuelo y como `AUTO INDEX` cuando no se leyó. La marca solo viaja a AirVault: no modifica el CSV ni el reporte de revisión. Al indexar también borra en AirVault las páginas separadoras del lote automático. El lote `REVISAR` conserva sus páginas y se indexa a mano. No envía los demás campos.
+En el flujo normal, BITS escribe `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status`, `End Date` y `Batch Name`. Añade `Lessor` cuando está resuelto. `Description` queda como `<vuelo> AUTO INDEX` cuando se leyó el vuelo y como `AUTO INDEX` cuando no se leyó. La marca solo viaja a AirVault: no modifica el CSV ni el reporte de revisión. Al indexar también borra en AirVault las páginas separadoras del batch automático. El batch `REVISAR` conserva sus páginas y se indexa a mano. No envía los demás campos.
 
 `Fleet` se toma primero de `airvault_flota.json`, donde BITS guarda los valores confirmados por AirVault. Si no hay dato conocido, se infiere por familia y el reporte marca `fleet_inferido=si`; confirme esa fila antes de indexar.
 
-Una diferencia en la cantidad de páginas detiene el lote completo. Un dato obligatorio vacío, un número de bitácora duplicado, datos existentes en AirVault que no coinciden con el manifiesto o una lectura fallida bloquean solo la página afectada. Una matrícula desconocida también bloquea cuando fue posible leer el catálogo remoto. La interfaz no sobrescribe páginas `Valid` ni campos ajenos al índice controlado.
+Una diferencia en la cantidad de páginas detiene el batch completo. Un dato obligatorio vacío, un número de bitácora duplicado, datos existentes en AirVault que no coinciden con el manifiesto o una lectura fallida bloquean solo la página afectada. Una matrícula desconocida también bloquea cuando fue posible leer el catálogo remoto. La interfaz no sobrescribe páginas `Valid` ni campos ajenos al índice controlado.
 
-El manifiesto se guarda después de cada página. Si se repite **Subir y revisar**, se reutiliza lo terminado y no se reescriben páginas válidas. **Cancelar** se atiende al terminar la solicitud remota en curso y conserva lo ya escrito. Espere el estado **Cancelado** y confirme en AirVault que ningún lote quedó tomado.
+El manifiesto se guarda después de cada página. Si se repite **Subir y revisar**, se reutiliza lo terminado y no se reescriben páginas válidas. **Cancelar** se atiende al terminar la solicitud remota en curso y conserva lo ya escrito. Espere el estado **Cancelado** y confirme en AirVault que ningún batch quedó tomado.
 
 ## 5. Terminación y contingencias
 
 ### Cancelación del OCR
 
-Pulse **Cancelar** una vez y espere a que termine el procesamiento de las páginas en curso. BITS guarda datos parciales, no genera PDF de entrega y deja los originales en su sitio. No use una corrida cancelada como entrega final.
+Pulse **Cancelar** una vez y espere a que termine el procesamiento de las páginas en curso. BITS guarda datos parciales, no genera PDF de entrega y deja los originales en su sitio. No use una ejecución cancelada como entrega final.
 
 ### Original no localizado
 
-Abra **Visor de CSV…**, seleccione la corrida y use **Ubicar PDF…**. La reexportación necesita el JSON consolidado, la plantilla usada y todos los PDF fuente.
+Abra **Visor de CSV…**, seleccione la ejecución y use **Ubicar PDF…**. La reexportación necesita el JSON consolidado, la plantilla usada y todos los PDF fuente.
 
 ### Cierre con trabajo activo
 

@@ -1,8 +1,8 @@
-"""Descarte de páginas repetidas o en blanco de una corrida ya procesada.
+"""Descarte de páginas repetidas o en blanco de una ejecución ya procesada.
 
 Comprueba el criterio que comparten la ventana principal y el visor de CSV:
 qué página se va, cuál se conserva de un log_number repetido y qué queda en
-el resumen de cada reporte cuando la corrida se reescribe sin ellas.
+el resumen de cada reporte cuando la ejecución se reescribe sin ellas.
 """
 
 from __future__ import annotations

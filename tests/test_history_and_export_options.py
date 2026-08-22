@@ -1,9 +1,9 @@
-"""El historial del visor y las casillas con las que arranca una corrida.
+"""El historial del visor y las casillas con las que arranca una ejecución.
 
-El visor abre una corrida sin tener que buscarla a mano: lista las últimas y
+El visor abre una ejecución sin tener que buscarla a mano: lista las últimas y
 carga la elegida. Y el cuadro «Salidas» arranca marcado como se entrega
 habitualmente —un solo PDF separado por matrícula, con las posibles
-discrepancias al final— para no tener que marcarlo en cada corrida.
+discrepancias al final— para no tener que marcarlo en cada ejecución.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def test_las_corridas_se_listan_de_la_mas_reciente_a_la_mas_antigua(tmp_path: Pa
     vieja = _run(tmp_path, "BITS 16 AUG 2026 20 54", 1_000_000)
     nueva = _run(tmp_path, "BITS 18 AUG 2026 05 42", 3_000_000)
     media = _run(tmp_path, "BITS 17 AUG 2026 05 50", 2_000_000)
-    # Junto a las corridas viven carpetas que no lo son.
+    # Junto a las ejecuciones viven carpetas que no lo son.
     (tmp_path / "logs").mkdir()
     (tmp_path / "firmas_dataset").mkdir()
     (tmp_path / ".performance.json").write_text("{}", encoding="utf-8")
@@ -68,7 +68,7 @@ def test_el_historial_abre_la_corrida_elegida(tmp_path: Path):
 
         assert viewer._folder == nueva
         assert viewer.table.rowCount() == 1
-        # La corrida abierta queda marcada en la lista, se haya llegado a ella
+        # La ejecución abierta queda marcada en la lista, se haya llegado a ella
         # por el historial o buscándola a mano.
         viewer.load_folder(tmp_path / "BITS 16 AUG 2026 20 54")
         assert viewer.history_combo.currentText() == "BITS 16 AUG 2026 20 54"
@@ -83,7 +83,7 @@ def test_sin_corridas_el_historial_lo_dice_y_no_se_puede_usar(tmp_path: Path):
     viewer = CsvViewerWindow(tmp_path)
     try:
         assert not viewer.history_combo.isEnabled()
-        assert "No hay corridas" in viewer.history_combo.currentText()
+        assert "No hay ejecuciones" in viewer.history_combo.currentText()
         assert viewer.history_combo.currentData() is None
     finally:
         viewer.pdf_viewer.shutdown()

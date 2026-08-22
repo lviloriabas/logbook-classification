@@ -1,4 +1,4 @@
-"""Deteccion de log_number repetidos dentro de una corrida."""
+"""Deteccion de log_number repetidos dentro de una ejecución."""
 
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.validation.duplicates import detect_duplicate_log_pages

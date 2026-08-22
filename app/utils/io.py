@@ -28,10 +28,10 @@ def sanitize_filename(name: str) -> str:
 def unique_path(path: Path) -> Path:
     """Devuelve una ruta libre añadiendo ``-2``, ``-3``… al nombre.
 
-    Al exportar de nuevo sobre una corrida existente los archivos previos
+    Al exportar de nuevo sobre una ejecución existente los archivos previos
     se conservan: si ``bitacoras.pdf`` ya está, la copia nueva se llama
     ``bitacoras-2.pdf``. Es la misma convención que usan las carpetas de
-    corrida cuando el nombre con fecha y hora ya existe.
+    ejecución cuando el nombre con fecha y hora ya existe.
     """
     path = Path(path)
     if not path.exists():

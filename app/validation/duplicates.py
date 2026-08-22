@@ -1,4 +1,4 @@
-"""Deteccion de paginas de bitacora repetidas dentro de un lote."""
+"""Deteccion de paginas de bitacora repetidas dentro de un batch."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from app.validation.grouping import log_number
 
 @dataclass(frozen=True)
 class DuplicateLogPage:
-    """Resultado de duplicidad para una pagina, en el orden del lote."""
+    """Resultado de duplicidad para una pagina, en el orden del batch."""
 
     pdf_path: str
     page_number: int

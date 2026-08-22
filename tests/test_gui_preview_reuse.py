@@ -1,7 +1,7 @@
 """La ventana no reabre un PDF para contar paginas que ya conto.
 
 Contar paginas abre el documento, y en el hilo de la interfaz eso se nota
-justo al terminar una corrida o al cambiar de bitacora en la vista previa.
+justo al terminar una ejecución o al cambiar de bitacora en la vista previa.
 La deteccion de DPI ya recorre la entrada contandolas.
 """
 

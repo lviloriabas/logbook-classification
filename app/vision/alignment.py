@@ -8,7 +8,7 @@ de fase como fallback de traslación.
 Se usa una transformación de **similitud** (rotación + escala uniforme +
 traslación) en lugar de una homografía completa: es la que produce un
 escáner, tiene menos grados de libertad y, por tanto, estimaciones mucho
-más estables entre bitácoras del mismo lote.
+más estables entre bitácoras del mismo batch.
 """
 
 from __future__ import annotations
@@ -214,7 +214,7 @@ def compute_similarity_transform(
 
     Guardarraíles: si hay pocos inliers o los parámetros son absurdos
     (rotación/escala/traslación fuera de rango de escáner), la página se
-    marca ``reliable=False`` para que el ancla por lote tome el control.
+    marca ``reliable=False`` para que el ancla por batch tome el control.
     AKAZE y la correlación de fase solo se prueban cuando ORB no es fiable.
     """
     if page.shape[:2] != template.shape[:2]:

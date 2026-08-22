@@ -28,9 +28,9 @@ class ClienteFalso:
         self.picklist = picklist or []
         self.page_count = page_count or len(self.paginas)
         self.fallar_en = fallar_en or set()
-        # Como ve AirVault el lote entero. Sin decir nada, cada pagina es
+        # Como ve AirVault el batch entero. Sin decir nada, cada pagina es
         # su propio documento y esta en verde: lo que hace falta para que
-        # el lote se pueda dar por terminado.
+        # el batch se pueda dar por terminado.
         self.mapa = mapa
         # Paginas que AirVault no deja quitar: es lo que pasa sin el
         # permiso «Delete Batch Image».

@@ -1,18 +1,18 @@
-"""Nombre del lote en AirVault.
+"""Nombre del batch en AirVault.
 
 El nombre es lo unico que el sistema y AirVault comparten para reconocer un
-lote, asi que tiene que ser unico y reconstruible. Se arma con un prefijo
-fijo y la marca de tiempo de la corrida, en el mismo formato que ya usa el
-nombre del CSV (``BITS 18 AUG 2026 05 42``), de modo que el lote y la
-carpeta de la corrida se puedan cruzar de un vistazo.
+batch, asi que tiene que ser unico y reconstruible. Se arma con un prefijo
+fijo y la marca de tiempo de la ejecución, en el mismo formato que ya usa el
+nombre del CSV (``BITS 18 AUG 2026 05 42``), de modo que el batch y la
+carpeta de la ejecución se puedan cruzar de un vistazo.
 
     DP | BITS 18 AUG 2026 05 42
 
-La marca es la del **procesamiento**, no la de la subida: el lote se llama
-igual que la corrida que lo produjo y los dos se cruzan de un vistazo. Todo
-el nombre va en mayusculas, como los lotes que ya hay en la cola.
+La marca es la del **procesamiento**, no la de la subida: el batch se llama
+igual que la ejecución que lo produjo y los dos se cruzan de un vistazo. Todo
+el nombre va en mayusculas, como los batches que ya hay en la cola.
 
-Hace falta que sea unico: hoy conviven en la cola dos lotes llamados
+Hace falta que sea unico: hoy conviven en la cola dos batches llamados
 ``DP | BIT Mix | Viernes 14 AUG`` y dos ``DP | BIT Mix 5 | Viernes 14 AUG``,
 y con nombres repetidos no hay forma de saber en cual escribir.
 """
@@ -27,7 +27,7 @@ from typing import Optional
 
 PREFIJO_POR_DEFECTO = "DP | BITS"
 
-# Marca del lote que recoge las bitacoras cuya matricula requiere revision.
+# Marca del batch que recoge las bitacoras cuya matricula requiere revision.
 # No se indexa: se sube para que alguien la resuelva a mano en el Web Index.
 ETIQUETA_REVISAR = "REVISAR"
 
@@ -44,17 +44,17 @@ _MARCA_RE = re.compile(
 
 
 def marca_de_tiempo(momento: Optional[datetime] = None) -> str:
-    """Marca ``DD MON YYYY HH MM``, igual que el nombre del CSV de corrida."""
+    """Marca ``DD MON YYYY HH MM``, igual que el nombre del CSV de ejecución."""
     momento = momento or datetime.now()
     return (f"{momento.day:02d} {_MESES[momento.month - 1]} "
             f"{momento.year:04d} {momento.hour:02d} {momento.minute:02d}")
 
 
 def en_mayusculas(nombre: str) -> str:
-    """Deja el nombre como se escriben los lotes en AirVault.
+    """Deja el nombre como se escriben los batches en AirVault.
 
     No es cosmetico: el filtro del servidor no distingue mayusculas, pero la
-    cola si las muestra, y un lote escrito distinto de los demas se lee como
+    cola si las muestra, y un batch escrito distinto de los demas se lee como
     de otra procedencia.
     """
     return " ".join(str(nombre or "").upper().split())
@@ -62,14 +62,14 @@ def en_mayusculas(nombre: str) -> str:
 
 def nombre_de_lote(prefijo: str = PREFIJO_POR_DEFECTO,
                    momento: Optional[datetime] = None) -> str:
-    """Nombre completo del lote: prefijo mas marca de tiempo."""
+    """Nombre completo del batch: prefijo mas marca de tiempo."""
     return en_mayusculas(f"{prefijo.strip()} {marca_de_tiempo(momento)}")
 
 
 def marca_de_corrida(ruta: Path | str) -> Optional[str]:
-    """Saca la marca de tiempo del nombre de un CSV o carpeta de corrida.
+    """Saca la marca de tiempo del nombre de un CSV o carpeta de ejecución.
 
-    Sirve para que el lote se llame igual que la corrida que lo produjo, en
+    Sirve para que el batch se llame igual que la ejecución que lo produjo, en
     vez de con la hora en que alguien se acordo de subirlo.
     """
     texto = str(ruta)
@@ -81,10 +81,10 @@ def marca_de_corrida(ruta: Path | str) -> Optional[str]:
 
 
 def momento_de_procesamiento(ruta: Path | str) -> Optional[datetime]:
-    """Cuando se proceso la corrida, segun sus propios archivos.
+    """Cuando se proceso la ejecución, segun sus propios archivos.
 
-    Es el respaldo para las corridas cuya carpeta no lleva la marca en el
-    nombre. Vale mucho mas que la hora actual: el lote tiene que decir
+    Es el respaldo para las ejecuciones cuya carpeta no lleva la marca en el
+    nombre. Vale mucho mas que la hora actual: el batch tiene que decir
     cuando se proceso la bitacora, no cuando alguien se acordo de subirla.
     """
     archivo = Path(ruta)
@@ -101,9 +101,9 @@ def nombre_desde_corrida(
     ruta: Path | str, prefijo: str = PREFIJO_POR_DEFECTO,
     momento: Optional[datetime] = None,
 ) -> str:
-    """Nombre del lote a partir de la ruta de la corrida.
+    """Nombre del batch a partir de la ruta de la ejecución.
 
-    La marca sale del nombre de la carpeta de la corrida, que es la hora en
+    La marca sale del nombre de la carpeta de la ejecución, que es la hora en
     que se proceso. Si la carpeta no la trae, se toma la del archivo, que
     sigue siendo la del procesamiento; la hora actual es el ultimo recurso y
     solo aparece cuando no hay ni archivo que mirar.
@@ -115,10 +115,10 @@ def nombre_desde_corrida(
 
 
 def nombre_de_parte(base: str, indice: int, total: int) -> str:
-    """Nombre del lote de una parte: ``<base> -2``.
+    """Nombre del batch de una parte: ``<base> -2``.
 
     Con una sola parte devuelve el nombre a secas, que es el de siempre.
-    El sufijo hace falta porque cada parte es un lote distinto y los lotes
+    El sufijo hace falta porque cada parte es un batch distinto y los batches
     se localizan por nombre: dos con el mismo no habria forma de separarlos.
     """
     if total <= 1:
@@ -127,11 +127,11 @@ def nombre_de_parte(base: str, indice: int, total: int) -> str:
 
 
 def nombre_de_revisar(base: str) -> str:
-    """Nombre del lote que recoge las bitacoras para revision manual.
+    """Nombre del batch que recoge las bitacoras para revision manual.
 
     Va aparte y no se indexa. Mezcladas con las demas quedarian bloqueadas
-    en medio de un lote de cuatrocientas paginas, donde nadie las encuentra;
-    en su propio lote, marcado, se ven en la cola y se resuelven a mano.
+    en medio de un batch de cuatrocientas paginas, donde nadie las encuentra;
+    en su propio batch, marcado, se ven en la cola y se resuelven a mano.
     """
     return en_mayusculas(f"{base} {ETIQUETA_REVISAR}")
 

@@ -1,4 +1,4 @@
-"""La línea de comandos y la ventana entregan la misma corrida.
+"""La línea de comandos y la ventana entregan la misma ejecución.
 
 Las dos superficies escriben sus salidas con ``write_outputs``, así que la
 paridad se reduce a una pregunta comprobable: ¿las dos rellenan las mismas
@@ -29,7 +29,7 @@ GUI_SOURCE = "\n".join(
 _INTERNAS = {"template", "output_root", "run_dir"}
 # Diferencias con motivo, no descuidos. Si aparece una cuarta, es un descuido.
 _SOLO_VENTANA = {
-    # Solo la ventana puede cancelar un lote a mitad de camino.
+    # Solo la ventana puede cancelar un batch a mitad de camino.
     "skip_pdfs",
 }
 _SOLO_LINEA_DE_COMANDOS = {

@@ -3,7 +3,7 @@
 La escritura es atomica (archivo temporal y ``os.replace``) porque el
 indexado guarda el manifiesto despues de cada pagina: si el proceso muere a
 mitad de la escritura, un JSON truncado dejaria el trabajo irrecuperable y
-habria que volver a indexar todo el lote.
+habria que volver a indexar todo el batch.
 """
 
 from __future__ import annotations

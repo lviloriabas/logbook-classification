@@ -1,7 +1,7 @@
-"""Recorrido del lote: comprueba, escribe y deja constancia.
+"""Recorrido del batch: comprueba, escribe y deja constancia.
 
 El indexador es deliberadamente aburrido. Antes de tocar nada verifica el
-lote completo; despues escribe pagina por pagina guardando el manifiesto
+batch completo; despues escribe pagina por pagina guardando el manifiesto
 tras cada una, de modo que una interrupcion no obliga a repetir trabajo ni
 deja dudas sobre que se alcanzo a escribir.
 """
@@ -59,7 +59,7 @@ class PlanPagina:
 
 @dataclass
 class Plan:
-    """Plan completo del lote: lo que se escribiria y lo que no."""
+    """Plan completo del batch: lo que se escribiria y lo que no."""
 
     batch_id: str
     paginas: List[PlanPagina] = field(default_factory=list)
@@ -104,13 +104,13 @@ class Resultado:
     separadores_borrados: int = 0
     separadores_pendientes: int = 0
     detalles: List[str] = field(default_factory=list)
-    # Motivo por el que se corto el lote entero, si se corto. Lo que queda
+    # Motivo por el que se corto el batch entero, si se corto. Lo que queda
     # sin escribir sigue pendiente en el manifiesto y se retoma despues.
     interrumpido: str = ""
 
 
 class Indexador:
-    """Aplica un manifiesto sobre un lote de AirVault."""
+    """Aplica un manifiesto sobre un batch de AirVault."""
 
     def __init__(
         self,
@@ -128,7 +128,7 @@ class Indexador:
         self.sobrescribir = sobrescribir
         self.permitir_log_distinto = permitir_log_distinto
         self._al_guardar = al_guardar
-        # El resolutor aprende del propio lote: AirVault ya trae la flota
+        # El resolutor aprende del propio batch: AirVault ya trae la flota
         # resuelta por su lookup en las paginas preindexadas, y eso vale
         # mucho mas que la regla de prefijos que usamos de respaldo.
         self.resolutor = resolutor or ResolutorFlota()
@@ -144,7 +144,7 @@ class Indexador:
         """
         batch_id = self.manifiesto.batch_id or ""
         if not batch_id:
-            raise ErrorDeGuarda("El manifiesto no tiene lote asignado")
+            raise ErrorDeGuarda("El manifiesto no tiene batch asignado")
 
         registros = self.manifiesto.registros
         verificar_cantidad(
@@ -153,7 +153,7 @@ class Indexador:
         )
 
         if self.manifiesto.solo_subir:
-            # El lote esta subido para que alguien lo resuelva a mano. No se
+            # El batch esta subido para que alguien lo resuelva a mano. No se
             # lee ni se escribe: leerlo serian peticiones de mas y escribirlo
             # es justo lo que no se puede hacer sin mirar la bitacora.
             return self._plan_para_revisar(registros)
@@ -162,7 +162,7 @@ class Indexador:
         globales.extend(verificar_matriculas(registros, self.picklist))
         globales.extend(verificar_duplicados(registros))
 
-        # Primero se lee todo el lote y se aprende la flota que AirVault ya
+        # Primero se lee todo el batch y se aprende la flota que AirVault ya
         # tiene resuelta; asi los registros cuya flota veniamos infiriendo se
         # corrigen antes de construir los valores que se van a escribir.
         remotas: Dict[int, object] = {}
@@ -184,12 +184,12 @@ class Indexador:
                 raise
             except Exception as exc:  # noqa: BLE001 - se anota y se sigue
                 # Una pagina que no carga bloquea solo a esa pagina. Sin
-                # poder leerla no se puede comprobar que el lote y el
+                # poder leerla no se puede comprobar que el batch y el
                 # manifiesto hablan de la misma bitacora, asi que no se
-                # escribe; el resto del lote no tiene por que esperarla.
+                # escribe; el resto del batch no tiene por que esperarla.
                 ilegibles[registro.seq] = str(exc)
                 logger.warning(
-                    "No se pudo leer la pagina {} del lote {}: {}",
+                    "No se pudo leer la pagina {} del batch {}: {}",
                     pagina, batch_id, exc,
                 )
         self._aprender_flota(remotas.values())
@@ -261,7 +261,7 @@ class Indexador:
         return plan
 
     def _plan_para_revisar(self, registros) -> Plan:
-        """Plan de un lote que se sube pero no se indexa."""
+        """Plan de un batch que se sube pero no se indexa."""
         plan = Plan(batch_id=self.manifiesto.batch_id or "")
         for indice, registro in enumerate(registros, start=1):
             avisos = [] if registro.es_separador else [Aviso(
@@ -396,7 +396,7 @@ class Indexador:
 
         # Las divisorias conservaron hasta aqui la numeracion con la que se
         # leyeron y escribieron las bitacoras. Ya no son documentos utiles:
-        # se marcan como borradas en el lote automatico aunque el operador
+        # se marcan como borradas en el batch automatico aunque el operador
         # no haya pedido completarlo. REVISAR se conserva entero.
         if not resultado.interrumpido and not self.manifiesto.solo_subir:
             for entrada in plan.separadores:
@@ -415,7 +415,7 @@ class Indexador:
                 except Exception as exc:  # noqa: BLE001 - se anota y sigue
                     borrada = False
                     logger.warning(
-                        "No se pudo borrar el separador {} del lote {}: {}",
+                        "No se pudo borrar el separador {} del batch {}: {}",
                         entrada.pagina_batch, plan.batch_id, exc,
                     )
                 if borrada:
@@ -436,7 +436,7 @@ class Indexador:
 def verificar_lote(
     cliente, manifiesto: Manifiesto
 ) -> tuple[int, int, List[str]]:
-    """Relee el lote y cuenta cuantas paginas quedaron validas.
+    """Relee el batch y cuenta cuantas paginas quedaron validas.
 
     Devuelve ``(validas, revisadas, problemas)``. Se usa despues de escribir
     para confirmar contra el servidor, no contra lo que creemos haber

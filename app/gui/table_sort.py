@@ -82,7 +82,7 @@ class ColumnSortController(QObject):
         self._sync_indicator()
 
     def suspend(self) -> None:
-        """Ignora los clics mientras la tabla se llena por lotes."""
+        """Ignora los clics mientras la tabla se llena por batches."""
         self.reset()
         self._ready = False
 

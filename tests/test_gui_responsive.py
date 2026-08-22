@@ -292,6 +292,6 @@ def test_la_etiqueta_recortada_conserva_su_texto():
 def test_una_explicacion_propia_gana_al_tooltip_automatico():
     _app()
     etiqueta = ElidedLabel("")
-    etiqueta.setToolTip("Rango de páginas contando el lote entero")
+    etiqueta.setToolTip("Rango de páginas contando el batch entero")
     etiqueta.setText("de 35 pág.")
-    assert etiqueta.toolTip() == "Rango de páginas contando el lote entero"
+    assert etiqueta.toolTip() == "Rango de páginas contando el batch entero"

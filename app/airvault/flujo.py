@@ -52,7 +52,7 @@ from app.airvault.naming import (
 
 CARPETA_TRABAJOS = Path("output") / "airvault"
 
-# AirVault/Quick Upload trabaja de forma mas estable con lotes acotados.
+# AirVault/Quick Upload trabaja de forma mas estable con batches acotados.
 # La ventana deja cambiarlo antes de preparar la carga.
 PAGINAS_POR_BATCH_POR_DEFECTO = 300
 
@@ -62,14 +62,14 @@ Aviso = Callable[[str, int, int], None]
 
 
 class ErrorDeCorrida(RuntimeError):
-    """La corrida no trae lo que hace falta para indexarla."""
+    """La ejecución no trae lo que hace falta para indexarla."""
 
 
 def paginas_de_lote(info) -> int:
-    """Cuantas paginas dice AirVault que tiene el lote recien abierto.
+    """Cuantas paginas dice AirVault que tiene el batch recien abierto.
 
     Devuelve 0 cuando la respuesta no lo trae, que es una situacion real
-    —lote a medio procesar, lote borrado— y la guarda de cantidad explica
+    —batch a medio procesar, batch borrado— y la guarda de cantidad explica
     mejor que un error de atributo a mitad de camino.
     """
     if not isinstance(info, Mapping):
@@ -87,13 +87,13 @@ def carpeta_de_trabajo(job: str, raiz: Optional[Path] = None) -> Path:
 
 
 def carpeta_de_corrida(csv: Path | str) -> Path:
-    """Carpeta de la corrida a partir de su CSV (``<corrida>/datos/x.CSV``)."""
+    """Carpeta de la ejecución a partir de su CSV (``<corrida>/datos/x.CSV``)."""
     ruta = Path(csv).resolve()
     return ruta.parent.parent if ruta.parent.name == "datos" else ruta.parent
 
 
 def ruta_indice_paginas(csv: Path | str) -> Path:
-    """Indice de paginas que la corrida deja junto al CSV."""
+    """Indice de paginas que la ejecución deja junto al CSV."""
     from app.reports.organize import NOMBRE_INDICE_PAGINAS
 
     ruta = Path(csv)
@@ -101,7 +101,7 @@ def ruta_indice_paginas(csv: Path | str) -> Path:
 
 
 def pdfs_de_corrida(csv: Path | str) -> List[Path]:
-    """PDFs de entrega que dejo la corrida, en orden de nombre."""
+    """PDFs de entrega que dejo la ejecución, en orden de nombre."""
     carpeta = carpeta_de_corrida(csv)
     if not carpeta.is_dir():
         return []
@@ -110,7 +110,7 @@ def pdfs_de_corrida(csv: Path | str) -> List[Path]:
 
 @dataclass(frozen=True)
 class ParteDeEntrega:
-    """Un archivo de la entrega, que sera un lote propio en AirVault."""
+    """Un archivo de la entrega, que sera un batch propio en AirVault."""
 
     indice: int
     total: int
@@ -129,11 +129,11 @@ class ParteDeEntrega:
 
 
 def partes_de_corrida(csv: Path | str) -> List[ParteDeEntrega]:
-    """Archivos de entrega de la corrida, con lo que lleva cada uno.
+    """Archivos de entrega de la ejecución, con lo que lleva cada uno.
 
     Sale del indice que escribe la exportacion, no de listar la carpeta: el
     indice dice ademas en que orden van las paginas dentro de cada archivo,
-    que es lo unico que permite emparejarlas con el lote sin adivinar.
+    que es lo unico que permite emparejarlas con el batch sin adivinar.
     """
     indice = leer_indice_paginas(ruta_indice_paginas(csv))
     if not indice:
@@ -165,23 +165,23 @@ def partes_de_corrida(csv: Path | str) -> List[ParteDeEntrega]:
 
 
 def comprobar_entrega(csv: Path | str) -> List[ParteDeEntrega]:
-    """Partes de la corrida, o un error que explica que le falta."""
+    """Partes de la ejecución, o un error que explica que le falta."""
     partes = partes_de_corrida(csv)
     if not partes:
         if pdfs_de_corrida(csv):
             raise ErrorDeCorrida(
-                "La corrida se exporto antes de que existiera el indice de "
+                "La ejecución se exporto antes de que existiera el indice de "
                 "paginas. Hay que volver a exportarla para poder indexarla."
             )
         raise ErrorDeCorrida(
-            "La corrida no tiene ningun PDF de entrega. Hay que exportarla "
+            "La ejecución no tiene ningun PDF de entrega. Hay que exportarla "
             "antes de subirla a AirVault."
         )
     faltan = [p.pdf.name for p in partes if not p.pdf.is_file()]
     if faltan:
         raise ErrorDeCorrida(
             f"El indice nombra archivos que no estan en la carpeta de la "
-            f"corrida: {', '.join(faltan[:4])}. Volver a exportarla."
+            f"ejecución: {', '.join(faltan[:4])}. Volver a exportarla."
         )
     return partes
 
@@ -305,14 +305,14 @@ def partes_para_airvault(
 
 @dataclass(frozen=True)
 class ResultadoCompletar:
-    """Como quedo el intento de dar un lote por terminado."""
+    """Como quedo el intento de dar un batch por terminado."""
 
     completado: bool
-    # Paginas que impiden cerrarlo, por numero de pagina del lote.
+    # Paginas que impiden cerrarlo, por numero de pagina del batch.
     bloqueadas: List[int]
     paginas: int
     detalle: str = ""
-    # Separadores del PDF que se quitaron del lote para poder cerrarlo.
+    # Separadores del PDF que se quitaron del batch para poder cerrarlo.
     quitadas: List[int] = field(default_factory=list)
 
 
@@ -325,7 +325,7 @@ def _enumerar(numeros: Sequence[int], cuantos: int = 8) -> str:
 
 # ── en que va cada parte en AirVault ───────────────────────────────
 #
-# Un lote recien subido no esta listo al instante: AirVault lo procesa en
+# Un batch recien subido no esta listo al instante: AirVault lo procesa en
 # su cola y puede tardar minutos u horas. Estos son los estados por los
 # que pasa, y son lo que se consulta cada tanto en vez de dejar el
 # programa esperando delante.
@@ -394,7 +394,7 @@ class Trabajo:
         self.config = config
         self.carpeta = Path(carpeta)
         self.manifiesto = manifiesto
-        # Si el lote esta tomado ahora mismo por este trabajo. Soltarlo dos
+        # Si el batch esta tomado ahora mismo por este trabajo. Soltarlo dos
         # veces es un error del servidor, no una limpieza de mas.
         self._tomado = False
 
@@ -411,12 +411,12 @@ class Trabajo:
         """Arma el manifiesto de un archivo de entrega.
 
         El orden manda el PDF, no el CSV: el archivo que se sube lleva
-        separadores entre las secciones y el lote de AirVault tendra una
+        separadores entre las secciones y el batch de AirVault tendra una
         pagina por cada uno. Si se contaran solo las bitacoras, todo lo que
         va detras del primer separador se escribiria una pagina corrida.
 
-        Sin ``parte`` se toma la de la corrida, y se exige que sea una sola:
-        con varias hay varios lotes y el reparto lo hace
+        Sin ``parte`` se toma la de la ejecución, y se exige que sea una sola:
+        con varias hay varios batches y el reparto lo hace
         :func:`preparar_partes`.
         """
         resolutor = resolutor or ResolutorFlota()
@@ -426,8 +426,8 @@ class Trabajo:
             disponibles = partes_de_corrida(csv)
             if len(disponibles) > 1:
                 raise ErrorDeCorrida(
-                    f"La corrida esta repartida en {len(disponibles)} partes; "
-                    f"cada una es un lote distinto."
+                    f"La ejecución esta repartida en {len(disponibles)} partes; "
+                    f"cada una es un batch distinto."
                 )
             parte = disponibles[0] if disponibles else None
 
@@ -439,19 +439,19 @@ class Trabajo:
                 f"{sum(1 for r in registros if r.es_separador)} separadores"
             )
         else:
-            # Corridas exportadas antes de que existiera el indice. Se sigue
-            # el orden del CSV, que solo coincide con el lote si el PDF no
+            # Ejecuciones exportadas antes de que existiera el indice. Se sigue
+            # el orden del CSV, que solo coincide con el batch si el PDF no
             # llevaba ningun separador; si llevaba, la guarda de cantidad lo
             # para antes de escribir nada.
             logger.warning(
-                "La corrida no tiene indice de paginas; se asume que el PDF "
+                "La ejecución no tiene indice de paginas; se asume que el PDF "
                 "no lleva separadores"
             )
             registros = registros_desde_csv(filas, resolutor)
             detalle_orden = "sin indice de paginas"
         if not registros:
             raise ErrorDeCorrida(
-                "El CSV de la corrida no tiene ninguna bitacora utilizable"
+                "El CSV de la ejecución no tiene ninguna bitacora utilizable"
             )
         carpeta = Path(carpeta)
         manifiesto = Manifiesto(
@@ -494,8 +494,8 @@ class Trabajo:
 
         Es lo que hace que apretar el boton dos veces no empiece de cero:
         un trabajo a medias conserva que paginas ya se escribieron. Si la
-        carpeta guarda un trabajo de otra corrida, se rehace: seguir con el
-        anterior escribiria los datos de una corrida en el lote de otra.
+        carpeta guarda un trabajo de otra ejecución, se rehace: seguir con el
+        anterior escribiria los datos de una ejecución en el batch de otra.
         """
         carpeta = Path(carpeta)
         if manifiestos.existe(carpeta):
@@ -521,7 +521,7 @@ class Trabajo:
                     trabajo.guardar()
                 return trabajo
             logger.info(
-                "El trabajo {} era de otra corrida; se rehace", carpeta.name
+                "El trabajo {} era de otra ejecución; se rehace", carpeta.name
             )
         return cls.preparar(
             config, carpeta, csv, nombre_lote, prefijo, resolutor, parte,
@@ -535,10 +535,10 @@ class Trabajo:
 
     def subir(self, sesion, pdf: Path | str = "",
               avisar: Optional[Aviso] = None, cliente=None) -> None:
-        """Sube el PDF de la corrida por Quick Upload.
+        """Sube el PDF de la ejecución por Quick Upload.
 
-        Se salta sola si el lote ya se subio en un intento anterior: volver
-        a subirlo crearia un segundo lote y no habria forma de saber en
+        Se salta sola si el batch ya se subio en un intento anterior: volver
+        a subirlo crearia un segundo batch y no habria forma de saber en
         cual escribir.
 
         El titulo viaja dentro de los valores de Quick Upload, aunque AirVault
@@ -548,7 +548,7 @@ class Trabajo:
         from app.airvault.uploader import SubidorQuickUpload
 
         if self.manifiesto.etapa_hecha("subir"):
-            logger.info("El lote ya estaba subido; no se vuelve a subir")
+            logger.info("El batch ya estaba subido; no se vuelve a subir")
             return
         archivo = Path(pdf or self.manifiesto.pdf_origen)
         if not archivo.is_file():
@@ -598,16 +598,16 @@ class Trabajo:
         dormir: Callable[[float], None] = time.sleep,
         avisar: Optional[Aviso] = None,
     ) -> str:
-        """Ubica el lote en AirVault por su nombre y lo deja anotado.
+        """Ubica el batch en AirVault por su nombre y lo deja anotado.
 
-        Un lote recien subido tarda en cruzar el procesamiento del servidor,
+        Un batch recien subido tarda en cruzar el procesamiento del servidor,
         asi que no aparecer todavia no es un error hasta que vence el limite
         de espera.
         """
         esperadas = len(self.manifiesto.registros)
         nombre = self.manifiesto.nombre_batch
         if avisar is not None:
-            avisar(f"Buscando el lote {nombre} en AirVault", 0, 0)
+            avisar(f"Buscando el batch {nombre} en AirVault", 0, 0)
         if esperar:
             lote = esperar_lote(
                 cliente.listar_lotes, nombre, self.manifiesto.repo_id,
@@ -624,10 +624,10 @@ class Trabajo:
 
     def anotar_lote(self, cliente, lote: ResumenLote,
                     avisar: Optional[Aviso] = None) -> str:
-        """Da por propio el lote encontrado y le pone su nombre.
+        """Da por propio el batch encontrado y le pone su nombre.
 
         Esta aparte de :meth:`descubrir` porque la comprobacion periodica
-        ubica lotes sin esperar a nada, y encontrarlo tiene que dejar el
+        ubica batches sin esperar a nada, y encontrarlo tiene que dejar el
         trabajo igual de anotado se haya llegado por donde se haya llegado.
         """
         self.manifiesto.batch_id = lote.batch_id
@@ -640,10 +640,10 @@ class Trabajo:
 
     def _ponerle_nombre(self, cliente, lote, avisar: Optional[Aviso] = None
                         ) -> None:
-        """Deja el lote con su nombre en la cola de AirVault.
+        """Deja el batch con su nombre en la cola de AirVault.
 
         Quick Upload no admite ninguno y todo lo que sube el programa llega
-        como «Empty-Batch», que en la pantalla no distingue un lote de
+        como «Empty-Batch», que en la pantalla no distingue un batch de
         otro. Se le pone aqui, en cuanto se sabe cual es.
         """
         nombre = self.manifiesto.nombre_batch
@@ -653,11 +653,11 @@ class Trabajo:
         if renombrar is None:
             return
         if avisar is not None:
-            avisar(f"Nombrando el lote {nombre}", 0, 0)
+            avisar(f"Nombrando el batch {nombre}", 0, 0)
         renombrar(lote.batch_id, nombre)
 
     def fijar_lote(self, batch_id: str) -> None:
-        """Salta la busqueda y apunta el lote a mano."""
+        """Salta la busqueda y apunta el batch a mano."""
         self.manifiesto.batch_id = str(batch_id).strip()
         self.manifiesto.etapa("descubrir").marcar(
             EstadoEtapa.HECHA, f"fijado a mano: {self.manifiesto.batch_id}"
@@ -675,7 +675,7 @@ class Trabajo:
         """
         if not self.manifiesto.batch_id:
             raise ErrorDeCorrida(
-                "El trabajo todavia no tiene lote. Hay que buscarlo primero."
+                "El trabajo todavia no tiene batch. Hay que buscarlo primero."
             )
         info = self._abrir_lote(cliente)
         paginas = paginas_de_lote(info)
@@ -685,7 +685,7 @@ class Trabajo:
             logger.warning("No se pudo leer el picklist de matriculas: {}", exc)
             picklist = []
         if avisar is not None:
-            avisar("Leyendo las paginas del lote", 0, paginas)
+            avisar("Leyendo las paginas del batch", 0, paginas)
         def persistir(_manifiesto: Manifiesto) -> None:
             self.guardar()
 
@@ -697,7 +697,7 @@ class Trabajo:
         try:
             plan = indexador.planificar(paginas)
         finally:
-            # Planificar solo lee. Antes el lote se quedaba tomado hasta
+            # Planificar solo lee. Antes el batch se quedaba tomado hasta
             # que alguien pulsara «Indexar», y entre una cosa y otra puede
             # pasar un rato largo o no pulsarse nunca: AirVault admite un
             # solo dueno, asi que mientras tanto nadie mas podia abrirlo,
@@ -709,19 +709,19 @@ class Trabajo:
         return plan, indexador
 
     def tomar(self, cliente):
-        """Toma el lote para escribirlo, y dice quien lo tiene si no se deja.
+        """Toma el batch para escribirlo, y dice quien lo tiene si no se deja.
 
-        Escribir una pagina exige ser el dueno del lote. Se toma justo
+        Escribir una pagina exige ser el dueno del batch. Se toma justo
         antes de escribir y se suelta al terminar, en vez de quedarselo
-        desde la revision: un lote tomado no da error, deja colgada la
+        desde la revision: un batch tomado no da error, deja colgada la
         siguiente apertura.
         """
         return self._abrir_lote(cliente)
 
     def _abrir_lote(self, cliente):
-        """Toma el lote y, si no contesta, dice quien lo tiene tomado.
+        """Toma el batch y, si no contesta, dice quien lo tiene tomado.
 
-        AirVault admite un solo dueno por lote y no responde «esta
+        AirVault admite un solo dueno por batch y no responde «esta
         ocupado»: deja la peticion colgada hasta que vence el tiempo
         limite. El listado si dice quien lo tiene, asi que se pregunta
         justo cuando hace falta y el mensaje deja de ser un tiempo agotado
@@ -736,7 +736,7 @@ class Trabajo:
             if not dueno:
                 raise
             raise ErrorDeConexion(
-                f"El lote {self.manifiesto.nombre_batch} esta abierto por "
+                f"El batch {self.manifiesto.nombre_batch} esta abierto por "
                 f"{dueno} y AirVault no lo entrega a nadie mas: la peticion "
                 f"se queda esperando sin contestar. Hay que cerrarlo en "
                 f"AirVault —abrirlo y salir con Close— y volver a intentar."
@@ -745,11 +745,11 @@ class Trabajo:
         return info
 
     def _quien_lo_tiene(self, cliente) -> str:
-        """Usuario que tiene tomado el lote, o vacio si no se pudo saber."""
+        """Usuario que tiene tomado el batch, o vacio si no se pudo saber."""
         try:
             lotes = cliente.listar_lotes(self.manifiesto.nombre_batch)
         except Exception as exc:  # noqa: BLE001 - es solo para el mensaje
-            logger.debug("No se pudo averiguar quien tiene el lote: {}", exc)
+            logger.debug("No se pudo averiguar quien tiene el batch: {}", exc)
             return ""
         for lote in lotes or []:
             if lote.batch_id == self.manifiesto.batch_id:
@@ -757,17 +757,17 @@ class Trabajo:
         return ""
 
     def cerrar(self, cliente) -> None:
-        """Suelta el lote en AirVault. No levanta: es limpieza.
+        """Suelta el batch en AirVault. No levanta: es limpieza.
 
         Se llama al terminar y tambien cuando algo se corta a medias. Un
-        lote que queda tomado no da error: cuelga la siguiente apertura,
+        batch que queda tomado no da error: cuelga la siguiente apertura,
         que es mucho peor de diagnosticar.
 
-        Soltar dos veces no se intenta. El lote de Revisar ya se suelta al
+        Soltar dos veces no se intenta. El batch de Revisar ya se suelta al
         planificarlo —nadie va a escribir en el—, y volver a pedirlo hacia
         que AirVault contestara «Batch no esta tomado por este usuario» con
         un 500, que ademas se reintentaba tres veces y terminaba en un
-        aviso que hacia pensar que el lote habia quedado colgado.
+        aviso que hacia pensar que el batch habia quedado colgado.
         """
         batch_id = self.manifiesto.batch_id
         if not batch_id or not self._tomado:
@@ -791,7 +791,7 @@ class Trabajo:
     ) -> Resultado:
         """Escribe las paginas del plan que quedaron habilitadas.
 
-        Toma el lote antes de escribir y lo suelta al terminar. La revision
+        Toma el batch antes de escribir y lo suelta al terminar. La revision
         ya no se lo queda: entre revisar y escribir puede pasar un rato
         largo, y AirVault admite un solo dueno.
         """
@@ -809,7 +809,7 @@ class Trabajo:
             resultado = indexador.aplicar(plan, detener_en_error, avanzar)
         finally:
             # Tambien si se corto a medias: lo escrito queda escrito y el
-            # lote no se queda bloqueado por un trabajo que ya no corre.
+            # batch no se queda bloqueado por un trabajo que ya no corre.
             self.cerrar(indexador.cliente)
         con_error = bool(
             resultado.fallidas or resultado.separadores_pendientes
@@ -832,7 +832,7 @@ class Trabajo:
         return resultado
 
     def verificar(self, cliente) -> Tuple[int, int, Sequence[str]]:
-        """Relee el lote y confirma contra el servidor como quedo."""
+        """Relee el batch y confirma contra el servidor como quedo."""
         validas, total, problemas = verificar_lote(cliente, self.manifiesto)
         self.manifiesto.etapa("verificar").marcar(
             EstadoEtapa.HECHA if validas == total else EstadoEtapa.ERROR,
@@ -842,13 +842,13 @@ class Trabajo:
         return validas, total, problemas
 
     def completar(self, cliente) -> "ResultadoCompletar":
-        """Da el lote por terminado y lo saca de la cola del Web Index.
+        """Da el batch por terminado y lo saca de la cola del Web Index.
 
         AirVault solo lo acepta con **todas** las paginas en verde: basta
         una a la que le falte un campo obligatorio —casi siempre la fecha—
-        para que no deje cerrar el lote. Asi que primero se miran las
+        para que no deje cerrar el batch. Asi que primero se miran las
         paginas y, si alguna bloquea, no se intenta: se dice cuales son y
-        el lote se queda en la cola, que es justo donde tiene que quedarse
+        el batch se queda en la cola, que es justo donde tiene que quedarse
         para que alguien las arregle.
 
         La misma comprobacion que hace la pantalla antes de habilitar su
@@ -858,21 +858,21 @@ class Trabajo:
         Las paginas separadoras del PDF —la matricula de cada grupo,
         «REVISAR», «POSIBLES DISCREPANCIAS»— tambien cuentan, y nunca van a
         estar en verde: no son bitacoras, no tienen fecha ni avion que
-        escribirles. Como no son documentos, se quitan del lote antes de
+        escribirles. Como no son documentos, se quitan del batch antes de
         cerrarlo, que es lo mismo que hace a mano quien indexa. Se quitan
-        solo si con eso el lote queda cerrable: si ademas hay una bitacora
-        en amarillo el lote no se cierra hoy, y entonces mas vale no
+        solo si con eso el batch queda cerrable: si ademas hay una bitacora
+        en amarillo el batch no se cierra hoy, y entonces mas vale no
         haberlo tocado.
         """
         if self.manifiesto.solo_subir:
             return ResultadoCompletar(
                 False, [], len(self.manifiesto.registros),
-                "el lote REVISAR se conserva para indexarlo a mano",
+                "el batch REVISAR se conserva para indexarlo a mano",
             )
         batch_id = self.manifiesto.batch_id or ""
         if not batch_id:
             raise ErrorDeCorrida(
-                "El trabajo todavia no tiene lote; no hay nada que terminar."
+                "El trabajo todavia no tiene batch; no hay nada que terminar."
             )
         paginas = list(cliente.paginas_del_lote(batch_id))
         separadores = {r.seq for r in self.manifiesto.separadores()}
@@ -894,13 +894,13 @@ class Trabajo:
             detalle = (
                 f"{len(bloqueadas)} de {len(paginas)} paginas no estan en "
                 f"verde ({_enumerar(bloqueadas)}); AirVault no deja cerrar "
-                f"el lote hasta que se completen"
+                f"el batch hasta que se completen"
             )
             self.manifiesto.etapa("completar").marcar(
                 EstadoEtapa.OMITIDA, detalle
             )
             self.guardar()
-            logger.info("El lote {} no se cierra: {}", batch_id, detalle)
+            logger.info("El batch {} no se cierra: {}", batch_id, detalle)
             return ResultadoCompletar(False, bloqueadas, len(paginas), detalle)
         self.tomar(cliente)
         quitadas: List[int] = []
@@ -918,10 +918,10 @@ class Trabajo:
             faltan = [n for n in quitables if n in presentes]
             quitadas = [n for n in quitables if n not in presentes]
             if faltan:
-                # Quitar paginas pide un permiso aparte. Sin el, el lote se
+                # Quitar paginas pide un permiso aparte. Sin el, el batch se
                 # queda como estaba y hay que sacarlas en AirVault a mano.
                 detalle = (
-                    f"quedaron {len(faltan)} paginas separadoras en el lote "
+                    f"quedaron {len(faltan)} paginas separadoras en el batch "
                     f"({_enumerar(faltan)}) y AirVault no deja cerrarlo con "
                     f"ellas; hace falta el permiso «Delete Batch Image»"
                 )
@@ -930,7 +930,7 @@ class Trabajo:
                     EstadoEtapa.OMITIDA, detalle
                 )
                 self.guardar()
-                logger.info("El lote {} no se cierra: {}", batch_id, detalle)
+                logger.info("El batch {} no se cierra: {}", batch_id, detalle)
                 return ResultadoCompletar(
                     False, faltan, len(paginas), detalle, quitadas
                 )
@@ -976,25 +976,25 @@ class Trabajo:
         except BaseException:
             self.cerrar(cliente)
             raise
-        # Terminado, el lote sale de la cola del Web Index: soltarlo seria
+        # Terminado, el batch sale de la cola del Web Index: soltarlo seria
         # pedirle a AirVault que suelte algo que ya no esta ahi.
         self._tomado = False
         detalle = f"{len(paginas) - len(quitadas)} paginas en verde"
         if quitadas:
-            detalle += f", {len(quitadas)} separadores quitados del lote"
+            detalle += f", {len(quitadas)} separadores quitados del batch"
         self.manifiesto.etapa("completar").marcar(EstadoEtapa.HECHA, detalle)
         self.guardar()
-        logger.info("Lote {} dado por terminado en AirVault", batch_id)
+        logger.info("Batch {} dado por terminado en AirVault", batch_id)
         return ResultadoCompletar(True, [], len(paginas), detalle, quitadas)
 
 
-# ── la corrida entera, parte por parte ─────────────────────────────
+# ── la ejecución entera, parte por parte ─────────────────────────────
 
 def carpeta_de_parte(carpeta: Path | str, parte: ParteDeEntrega) -> Path:
-    """Carpeta del trabajo de una parte dentro del trabajo de la corrida.
+    """Carpeta del trabajo de una parte dentro del trabajo de la ejecución.
 
     Con una sola parte se usa la carpeta tal cual, que es donde han vivido
-    siempre los trabajos de una corrida sin repartir.
+    siempre los trabajos de una ejecución sin repartir.
     """
     carpeta = Path(carpeta)
     if parte.revisar:
@@ -1013,9 +1013,9 @@ def preparar_partes(
     paginas_por_batch: int = PAGINAS_POR_BATCH_POR_DEFECTO,
     avisar: Optional[Aviso] = None,
 ) -> List["Trabajo"]:
-    """Un trabajo por cada archivo de entrega de la corrida.
+    """Un trabajo por cada archivo de entrega de la ejecución.
 
-    Cada parte es un lote distinto en AirVault, con su nombre, su
+    Cada parte es un batch distinto en AirVault, con su nombre, su
     manifiesto y sus guardas. Repartirlas asi es lo que deja que una parte
     se caiga o se retome sin arrastrar a las demas.
     """
@@ -1214,7 +1214,7 @@ def descubrir_partes(
     dormir: Callable[[float], None] = time.sleep,
     avisar: Optional[Aviso] = None,
 ) -> None:
-    """Ubica en AirVault el lote de cada parte."""
+    """Ubica en AirVault el batch de cada parte."""
     for trabajo in trabajos:
         cabeza = _prefijo(trabajo)
 
@@ -1234,7 +1234,7 @@ def cargar_partes(
 
     Es lo que permite retomar una ejecucion subida ayer: los manifiestos
     dicen en que quedo cada parte, asi que la ventana puede enseñar sus
-    lotes sin tocar la red ni volver a escribir nada en el disco.
+    batches sin tocar la red ni volver a escribir nada en el disco.
 
     Devuelve la lista vacia si falta el manifiesto de alguna parte: media
     ejecucion cargada seria peor que ninguna, porque las partes que
@@ -1421,7 +1421,7 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
     """En que va una parte segun su manifiesto, sin preguntar a AirVault.
 
     Sirve para pintar la lista en cuanto se elige una ejecucion. Lo que no
-    puede saber es si el servidor ya termino de procesar el lote: eso solo
+    puede saber es si el servidor ya termino de procesar el batch: eso solo
     lo dice :func:`comprobar_partes`, que si pregunta.
     """
     manifiesto = trabajo.manifiesto
@@ -1445,7 +1445,7 @@ def _ubicar(trabajo: "Trabajo", cliente,
     """Busca la parte por su nombre o por la instantanea previa y actualiza ID.
 
     Devuelve ``None`` mientras AirVault no lo haya sacado, que no es un
-    fallo: un lote recien subido tarda en cruzar su procesamiento. El nombre
+    fallo: un batch recien subido tarda en cruzar su procesamiento. El nombre
     manda sobre cualquier ID guardado: si alguien corrigio manualmente el
     titulo, esa coincidencia recupera el batch correcto. Si Quick Upload lo
     dejo como ``Empty-Batch``, se usa la diferencia contra la cola guardada
@@ -1545,7 +1545,7 @@ def comprobar_partes(
     Es lo que responde «¿ya se subio?». Una sola consulta a la cola sirve
     para todas las partes, y de paso ubica las que todavia no se habian
     encontrado, asi que se puede repetir cada tanto sin cargar el
-    servidor. Que un lote tarde en aparecer no es un fallo: AirVault lo
+    servidor. Que un batch tarde en aparecer no es un fallo: AirVault lo
     procesa en su cola y puede tardar minutos u horas.
     """
     if avisar is not None:
@@ -1557,26 +1557,26 @@ def comprobar_partes(
 def completar_partes(
     trabajos: Sequence["Trabajo"], cliente, avisar: Optional[Aviso] = None,
 ) -> List[Tuple["Trabajo", ResultadoCompletar]]:
-    """Da por terminados los lotes que AirVault vaya a aceptar.
+    """Da por terminados los batches que AirVault vaya a aceptar.
 
     El que tenga una sola pagina fuera de verde se queda en la cola con el
-    motivo anotado. Un lote que no se deja cerrar no corta a los demas:
-    son lotes distintos y lo escrito en cada uno ya esta escrito.
+    motivo anotado. Un batch que no se deja cerrar no corta a los demas:
+    son batches distintos y lo escrito en cada uno ya esta escrito.
     """
     hechos: List[Tuple["Trabajo", ResultadoCompletar]] = []
     for trabajo in trabajos:
         if trabajo.manifiesto.solo_subir:
-            # El lote de Revisar existe justamente para que una persona lo
+            # El batch de Revisar existe justamente para que una persona lo
             # indexe a mano; cerrarlo seria archivarlo sin mirarlo.
             continue
         cabeza = _prefijo(trabajo)
         if avisar is not None:
-            avisar(f"{cabeza}Cerrando el lote en AirVault", 0, 0)
+            avisar(f"{cabeza}Cerrando el batch en AirVault", 0, 0)
         try:
             hechos.append((trabajo, trabajo.completar(cliente)))
         except Exception as exc:  # noqa: BLE001 - se anota y siguen los demas
             logger.warning(
-                "No se pudo cerrar el lote {}: {}",
+                "No se pudo cerrar el batch {}: {}",
                 trabajo.manifiesto.batch_id, exc,
             )
             hechos.append((trabajo, ResultadoCompletar(
@@ -1607,14 +1607,14 @@ def planificar_partes(
             ))
         except BaseException:
             # Una parte que falla no puede dejar tomadas las anteriores:
-            # son lotes distintos y ya nadie va a escribir en ellos.
+            # son batches distintos y ya nadie va a escribir en ellos.
             cerrar_partes(trabajos[:len(planes)], cliente)
             raise
     return planes
 
 
 def cerrar_partes(trabajos: Sequence["Trabajo"], cliente) -> None:
-    """Suelta en AirVault todos los lotes que el recorrido dejo abiertos."""
+    """Suelta en AirVault todos los batches que el recorrido dejo abiertos."""
     for trabajo in trabajos:
         trabajo.cerrar(cliente)
 
@@ -1625,7 +1625,7 @@ def indexar_partes(
 ) -> Resultado:
     """Escribe todas las partes y devuelve el resultado sumado.
 
-    El avance se cuenta sobre el total de la corrida, no sobre cada parte:
+    El avance se cuenta sobre el total de la ejecución, no sobre cada parte:
     quien mira la barra quiere saber cuanto falta para terminar, no cuanto
     falta del archivo tres.
     """

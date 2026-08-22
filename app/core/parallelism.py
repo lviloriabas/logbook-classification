@@ -69,7 +69,7 @@ _MAX_WORKERS = 32
 # Techo de hilos internos por motor: la inferencia satura en 3 (782 -> 592 ms
 # por recorte; con 6 y 12 hilos mide lo mismo que con 3).
 _MAX_ENGINE_THREADS = 3
-# Memoria residente por proceso worker, medida durante una corrida real y no
+# Memoria residente por proceso worker, medida durante una ejecución real y no
 # en un proceso aislado: los picos por proceso llegan a 842-898 MB y la media
 # ronda 815-823 MB (0001.pdf y test2.pdf, 8 y 12 procesos). Desglose de lo que
 # lo compone: 77 MB de intérprete con numpy y OpenCV, +329 MB al cargar el
@@ -89,7 +89,7 @@ _WORKER_MEMORY_MB = 850
 # Memoria que se deja libre para el sistema, la GUI y las salidas PDF. Escala
 # con el equipo entre un suelo y un techo: en uno de 16 GB el suelo de 1,5 GB
 # deja el margen demasiado corto en cuanto el usuario abre el visor de CSV o un
-# navegador, y quedarse sin memoria a mitad de un lote cuesta mucho más que un
+# navegador, y quedarse sin memoria a mitad de un batch cuesta mucho más que un
 # proceso menos. El techo evita el error contrario: en un equipo de 32 GB una
 # fracción fija reservaría casi 5 GB y renunciaría a procesos sin motivo, ya
 # que lo que hay que cubrir —sistema, interfaz, salidas— no crece con la RAM.
@@ -251,7 +251,7 @@ def reserved_memory_mb() -> int:
 
     Proporcional al equipo, con un suelo. En uno de 16 GB el suelo fijo de
     1,5 GB dejaba el margen demasiado corto —basta con que el usuario abra el
-    visor de CSV o un navegador— y quedarse sin memoria a mitad de un lote
+    visor de CSV o un navegador— y quedarse sin memoria a mitad de un batch
     cuesta mucho más que renunciar a un proceso.
     """
     total = total_memory_mb()

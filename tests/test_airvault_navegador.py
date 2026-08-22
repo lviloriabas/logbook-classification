@@ -361,7 +361,7 @@ def test_si_la_del_perfil_no_sirve_se_abre_la_ventana(monkeypatch, tmp_path):
 def test_la_sesion_se_guarda_al_cerrar_el_navegador():
     """La cookie de federacion es de sesion y se pierde sin esta bandera.
 
-    Sin ella hay que entrar con segundo factor en cada corrida, que es lo
+    Sin ella hay que entrar con segundo factor en cada ejecución, que es lo
     que el perfil propio viene a evitar. Se fija aqui porque parece una
     preferencia de pestanas y no lo es.
     """

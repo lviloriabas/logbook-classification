@@ -70,7 +70,7 @@ def test_archivo_vacio_manda_un_trozo(tmp_path):
 
 
 def test_la_subida_no_lleva_el_vuelo():
-    """``Description`` es de cada pagina, no del lote.
+    """``Description`` es de cada pagina, no del batch.
 
     La subida clasifica el archivo entero con un solo juego de valores; el
     vuelo cambia de una bitacora a la siguiente y ponerlo ahi seria darle a

@@ -37,7 +37,7 @@ def _window(tmp_path: Path, sizes=(10, 20, 5)) -> MainWindow:
 
 
 def test_the_batch_starts_on_the_first_and_last_page_of_the_input(tmp_path):
-    """Los dos extremos son números reales: 1 y la última del lote."""
+    """Los dos extremos son números reales: 1 y la última del batch."""
     window = _window(tmp_path)
     try:
         assert window.page_from_spin.value() == 1
@@ -78,7 +78,7 @@ def test_an_empty_input_leaves_the_controls_at_one(tmp_path):
 
 
 def test_a_range_across_two_files_cuts_each_one(tmp_path):
-    """8-22 del lote: las tres últimas del primero y doce del segundo."""
+    """8-22 del batch: las tres últimas del primero y doce del segundo."""
     window = _window(tmp_path)
     try:
         window.page_from_spin.setValue(8)

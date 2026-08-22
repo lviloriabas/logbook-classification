@@ -1,4 +1,4 @@
-"""Los separadores del PDF ocupan página en el lote y no se indexan.
+"""Los separadores del PDF ocupan página en el batch y no se indexan.
 
 El PDF que se sube lleva páginas divisorias que el CSV no tiene. Cuentan
 para la correspondencia por posición —en AirVault son una página más— pero
@@ -84,7 +84,7 @@ def test_el_indice_se_lee_del_archivo_de_la_corrida(tmp_path):
     ruta = tmp_path / "corrida_paginas.json"
     ruta.write_text(
         json.dumps({"version": 2, "partes": [
-            {"pdf": "corrida.pdf", "paginas": INDICE}
+            {"pdf": "ejecución.pdf", "paginas": INDICE}
         ]}),
         encoding="utf-8",
     )
@@ -93,10 +93,10 @@ def test_el_indice_se_lee_del_archivo_de_la_corrida(tmp_path):
 
 
 def test_un_indice_de_la_primera_version_se_sigue_leyendo(tmp_path):
-    """Corridas exportadas antes de que la entrega pudiera repartirse."""
+    """Ejecuciones exportadas antes de que la entrega pudiera repartirse."""
     ruta = tmp_path / "corrida_paginas.json"
     ruta.write_text(
-        json.dumps({"version": 1, "pdf": "corrida.pdf", "paginas": INDICE}),
+        json.dumps({"version": 1, "pdf": "ejecución.pdf", "paginas": INDICE}),
         encoding="utf-8",
     )
     partes = leer_indice_paginas(ruta)
@@ -110,7 +110,7 @@ def test_sin_indice_no_se_inventa_nada(tmp_path):
     assert leer_indice_paginas(roto) == []
 
 
-# ── la cuenta del lote incluye los separadores ─────────────────────
+# ── la cuenta del batch incluye los separadores ─────────────────────
 
 def test_el_lote_tiene_una_pagina_por_separador():
     verificar_cantidad(registros(), 5)
@@ -239,7 +239,7 @@ def test_la_verificacion_no_espera_que_una_divisoria_sea_valida(tmp_path):
     assert problemas == []
 
 
-# ── de punta a punta con el indice de la corrida ───────────────────
+# ── de punta a punta con el indice de la ejecución ───────────────────
 
 def test_el_trabajo_toma_el_orden_del_pdf(tmp_path):
     carpeta = tmp_path / "output" / "BITS 18 AUG 2026 05 42"
@@ -268,7 +268,7 @@ def test_el_trabajo_toma_el_orden_del_pdf(tmp_path):
 
 
 def test_sin_indice_se_sigue_el_csv_y_la_guarda_protege(tmp_path):
-    """Corridas viejas: si el PDF traia separadores, no se escribe nada."""
+    """Ejecuciones viejas: si el PDF traia separadores, no se escribe nada."""
     carpeta = tmp_path / "output" / "BITS 18 AUG 2026 05 42"
     (carpeta / "datos").mkdir(parents=True)
     csv = carpeta / "datos" / "BITS 18 AUG 2026 05 42.CSV"

@@ -1,8 +1,8 @@
 """El cuadro «Depurar páginas» y su botón en las dos vistas de CSV y PDF.
 
 Comprueba lo que la ventana promete: que el conteo que se ve antes de borrar
-sea el de la corrida abierta, que no se pueda eliminar sin marcar nada y que
-el botón espere a tener una corrida guardada y ninguna escritura en curso.
+sea el de la ejecución abierta, que no se pueda eliminar sin marcar nada y que
+el botón espere a tener una ejecución guardada y ninguna escritura en curso.
 """
 
 from __future__ import annotations
@@ -140,7 +140,7 @@ def test_la_ventana_principal_no_depura_sin_corrida_guardada(app):
 
         window._reports = corrida()
         window._sync_depurar_button()
-        # Todavía sin carpeta: la escritura reutiliza la de la corrida y sin
+        # Todavía sin carpeta: la escritura reutiliza la de la ejecución y sin
         # ella dejaría una segunda entrega de lo mismo.
         assert not window.btn_depurar.isEnabled()
 
@@ -189,7 +189,7 @@ def test_al_depurar_la_ventana_rehace_la_tabla_y_reescribe_la_corrida(app):
             window._depurar_paginas()
 
         # De las tres páginas se van la repetida y la vacía; queda una sola,
-        # y el PDF que se quedó sin ninguna sale de la corrida.
+        # y el PDF que se quedó sin ninguna sale de la ejecución.
         assert [r.pdf_path for r in window._reports] == ["primero.pdf"]
         assert [p.page_number for p in window._reports[0].pages] == [1]
 
@@ -199,7 +199,7 @@ def test_al_depurar_la_ventana_rehace_la_tabla_y_reescribe_la_corrida(app):
         assert window.table.rowCount() == 1
         assert window.duplicates_label.text() == "Duplicados: 0"
 
-        # La reescritura va sobre la corrida y sin rehacer los PDF.
+        # La reescritura va sobre la ejecución y sin rehacer los PDF.
         assert escrituras == [(1, "depurar", True)]
     finally:
         window.close()
@@ -210,12 +210,12 @@ def test_el_visor_de_csv_no_depura_un_csv_suelto(app, tmp_path):
     """Sin el JSON al lado no hay páginas que quitar, y el botón lo dice."""
     datos = tmp_path / "corrida" / "datos"
     datos.mkdir(parents=True)
-    (datos / "corrida.csv").write_text(
+    (datos / "ejecución.csv").write_text(
         "file,page,log_number\na.pdf,1,2147300\n", encoding="utf-8"
     )
     window = CsvViewerWindow(tmp_path)
     try:
-        assert window.load_csv_file(datos / "corrida.csv") is True
+        assert window.load_csv_file(datos / "ejecución.csv") is True
         assert not window.btn_depurar.isEnabled()
         assert "no viene acompañado del JSON" in window.btn_depurar.toolTip()
     finally:

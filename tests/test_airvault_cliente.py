@@ -2,8 +2,8 @@
 
 No es cosmética. El Web Index guarda una página por POST y esa ruta **no
 existe** por GET: ASP.NET contesta «The resource cannot be found» con un
-404, que llegaba al reporte como «esa página ya no está en el lote» y dejó
-un lote entero sin escribir una sola página. Aquí se fija el método y los
+404, que llegaba al reporte como «esa página ya no está en el batch» y dejó
+un batch entero sin escribir una sola página. Aquí se fija el método y los
 parámetros de cada llamada que escribe.
 """
 
@@ -64,7 +64,7 @@ def test_ponerle_nombre_al_lote_va_por_post_y_en_base64():
     """Quick Upload no admite nombre: todos llegan como «Empty-Batch».
 
     El nombre se le pone después, con la misma acción «Rename» que ofrece
-    el Web Index; sin ella, en la pantalla no se distingue un lote de otro.
+    el Web Index; sin ella, en la pantalla no se distingue un batch de otro.
     """
     cli = cliente({})
     assert cli.renombrar_lote("003SUS", "DP | BITS 19 AUG 2026 17 33")
@@ -77,14 +77,14 @@ def test_ponerle_nombre_al_lote_va_por_post_y_en_base64():
 
 
 def test_un_nombre_vacio_no_se_manda():
-    """Renombrar a nada dejaría el lote peor de lo que estaba."""
+    """Renombrar a nada dejaría el batch peor de lo que estaba."""
     cli = cliente({})
     assert not cli.renombrar_lote("003SUS", "  ")
     assert cli.sesion.posts == []
 
 
 def test_si_el_renombrado_falla_el_trabajo_sigue():
-    """El lote ya está subido y encontrado; el nombre no vale un fallo."""
+    """El batch ya está subido y encontrado; el nombre no vale un fallo."""
     class SesionRota(SesionFalsa):
         def post(self, *_a, **_k):
             raise RuntimeError("500")

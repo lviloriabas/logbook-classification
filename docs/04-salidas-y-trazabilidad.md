@@ -1,8 +1,8 @@
 # 4. Salidas y trazabilidad
 
-## 4.1 Carpeta de corrida
+## 4.1 Carpeta de ejecución
 
-Cada corrida nueva crea una carpeta con fecha y hora:
+Cada ejecución nueva crea una carpeta con fecha y hora:
 
 ```text
 output/
@@ -17,7 +17,7 @@ output/
     └── otros PDF opcionales
 ```
 
-Si el nombre ya existe, el sistema añade `-2`, `-3`, etc. No sobrescribe otra corrida.
+Si el nombre ya existe, el sistema añade `-2`, `-3`, etc. No sobrescribe otra ejecución.
 
 ## 4.2 CSV mínimo
 
@@ -44,7 +44,7 @@ Además contiene:
 - `dup`: `true` desde la segunda aparición de un `log_number`; la primera queda en `false`;
 - `disc`: `true` cuando la página presenta una posible discrepancia de firmas;
 - `date`: fecha normalizada `YYYY/MM/DD`;
-- `time_ms`: parte proporcional del tiempo real de la corrida.
+- `time_ms`: parte proporcional del tiempo real de la ejecución.
 
 ## 4.4 Política de fecha del CSV
 
@@ -57,7 +57,7 @@ Cuando la política sustituye el día, el CSV identifica la fuente como `csv_dat
 
 ## 4.5 JSON consolidado
 
-El JSON tiene el mismo nombre base que la corrida. Contiene:
+El JSON tiene el mismo nombre base que la ejecución. Contiene:
 
 - nombre y fecha de generación;
 - cantidad de documentos;
@@ -149,7 +149,7 @@ Si la misma página también tiene una posible discrepancia, el resultado depend
 Los registros se llaman `app_YYYY-MM-DD.log`, rotan a diario y se conservan siete días.
 
 - GUI y editor: `output/logs/`.
-- CLI: `logs/` dentro de la carpeta de la corrida.
+- CLI: `logs/` dentro de la carpeta de la ejecución.
 
 El archivo registra detalle de depuración aunque la terminal muestre solo información normal.
 
@@ -162,4 +162,4 @@ Una reexportación usa resultados existentes y no modifica el OCR.
 - Si un PDF nuevo repite un nombre, añade `-2`, `-3`, etc.
 - Limpia y regenera otros artefactos derivados, como los recortes de auditoría.
 
-> **PRECAUCIÓN:** No use una reexportación como sustituto de un OCR nuevo cuando cambió la plantilla, la flota o el contenido del PDF fuente. Esos cambios requieren procesar otra corrida.
+> **PRECAUCIÓN:** No use una reexportación como sustituto de un OCR nuevo cuando cambió la plantilla, la flota o el contenido del PDF fuente. Esos cambios requieren procesar otra ejecución.

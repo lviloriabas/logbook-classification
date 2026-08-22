@@ -38,14 +38,14 @@ class CsvReporter:
         <field>_comment, <field>_source, ..., date, time_ms
 
     - ``file``: nombre del PDF del que proviene la página.
-    - ``dup``: ``true`` cuando el ``log_number`` ya apareció antes en el lote.
+    - ``dup``: ``true`` cuando el ``log_number`` ya apareció antes en el batch.
     - ``disc``: ``true`` cuando la bitácora quedó marcada como discrepancia
       de firmas. Sale de ``page.discrepancy``, que fija ``clasificar_lote``
       (``app/validation/discrepancias.py``) antes de escribir el reporte; si
       esa clasificación no se ejecutó, la columna queda en ``false``.
     - ``date``: fecha normalizada (YYYY/MM/dd) combinando day/month/year.
     - ``time_ms``: tiempo de procesamiento de la página, repartido sobre el
-      reloj real de la corrida (ver ``page_time_ms``), de modo que la suma
+      reloj real de la ejecución (ver ``page_time_ms``), de modo que la suma
       de la columna es lo que tardó el procesamiento completo.
 
     Las columnas ``<field>_status`` y ``<field>_comment`` se omiten para
@@ -226,12 +226,12 @@ class CsvReporter:
 
     @staticmethod
     def run_wall_ms(reports: List[ValidationReport]) -> float:
-        """Reloj de pared de la corrida completa, sin contar dos veces.
+        """Reloj de pared de la ejecución completa, sin contar dos veces.
 
         Con un proceso por archivo las bitácoras se solapan: cada una mide su
         propio reloj mientras comparte la CPU con las demás, así que sumar
         ``processing_ms`` cuenta el mismo minuto una vez por archivo. El
-        tiempo real de la corrida es el intervalo que va del primer arranque
+        tiempo real de la ejecución es el intervalo que va del primer arranque
         al último final.
         """
         stamped = [
@@ -251,13 +251,13 @@ class CsvReporter:
 
     @classmethod
     def run_time_factor(cls, reports: List[ValidationReport]) -> float:
-        """Escala que lleva los tiempos medidos al reloj real de la corrida."""
+        """Escala que lleva los tiempos medidos al reloj real de la ejecución."""
         measured = sum(
             page.processing_ms for report in reports for page in report.pages
         )
         wall = cls.run_wall_ms(reports)
         if measured <= 0 or wall <= 0:
-            # Sin reloj de corrida no hay nada contra qué normalizar: se
+            # Sin reloj de ejecución no hay nada contra qué normalizar: se
             # conserva el tiempo medido en cada página.
             return 1.0
         return wall / measured
@@ -268,19 +268,19 @@ class CsvReporter:
         page: PageResult,
         factor: Optional[float] = None,
     ) -> float:
-        """Tiempo de la página repartido sobre el reloj real de la corrida.
+        """Tiempo de la página repartido sobre el reloj real de la ejecución.
 
         ``page.processing_ms`` es tiempo de pared medido *dentro* del proceso
         que atendió la página. Con el OCR repartido en un proceso por núcleo,
         varias páginas transcurren a la vez y además cada una tarda más por
         competir por CPU y memoria, así que sumar la columna no daba el
-        tiempo de la corrida sino varias veces ese tiempo: 50 páginas que el
+        tiempo de la ejecución sino varias veces ese tiempo: 50 páginas que el
         reloj midió en 150 s sumaban 693 s en el CSV.
 
         Se conserva la proporción entre páginas —una página lenta sigue
         destacando frente a las demás— y se escala el conjunto para que la
-        suma sea lo que tardó realmente la corrida. ``factor`` viene de
-        ``run_time_factor`` y cubre el lote completo; sin él se normaliza
+        suma sea lo que tardó realmente la ejecución. ``factor`` viene de
+        ``run_time_factor`` y cubre el batch completo; sin él se normaliza
         contra el reloj de la propia bitácora, que es lo correcto cuando el
         reporte se mira por separado.
         """

@@ -178,7 +178,7 @@ def test_reanudar_no_reescribe_lo_ya_hecho():
     indexador = Indexador(cliente, m, PICKLIST)
     indexador.aplicar(indexador.planificar(3))
 
-    # Segunda corrida: la pagina 1 ya esta escrita y no se vuelve a tocar.
+    # Segunda ejecución: la pagina 1 ya esta escrita y no se vuelve a tocar.
     cliente.fallar_en = set()
     m.registros[1].estado = EstadoRegistro.PENDIENTE
     m.registros[1].avisos = []

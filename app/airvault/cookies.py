@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 # Cookies que **autentican**. ``Critical`` es la de AirVault: la pone el
 # sitio al volver de Entra ID y es la unica que abre la sesion, medido
-# pidiendo el listado de lotes con cada cookie por separado. Las otras dos
+# pidiendo el listado de batches con cada cookie por separado. Las otras dos
 # son las formas habituales de ASP.NET —``FedAuth`` se parte en
 # ``FedAuth1``, ``FedAuth2``... cuando el token no cabe en una sola, asi que
 # se compara por prefijo— y se dejan por si otra instalacion las usa.
@@ -37,7 +37,7 @@ PREFIJOS_DE_AUTENTICACION = ("Critical", "FedAuth", ".ASPXAUTH")
 # Cookies que acompanan pero no autentican. ``ASP.NET_SessionId`` lo pone el
 # servidor al primer contacto, antes de saber quien eres: darla por buena
 # hacia pasar por sesion abierta una que todavia estaba en la pagina de
-# Microsoft, y el lote moria en la primera pagina.
+# Microsoft, y el batch moria en la primera pagina.
 PREFIJOS_DE_ACOMPANAMIENTO = ("ASP.NET_SessionId",)
 
 PREFIJOS_DE_SESION = PREFIJOS_DE_AUTENTICACION + PREFIJOS_DE_ACOMPANAMIENTO
@@ -80,7 +80,7 @@ def sostienen_sesion(cookies: Mapping[str, str]) -> bool:
     """Dice si entre las cookies esta la que de verdad autentica.
 
     Sirve para avisar temprano de que lo pegado no es lo que hace falta, en
-    vez de descubrirlo a mitad de un lote de 400 paginas. Una
+    vez de descubrirlo a mitad de un batch de 400 paginas. Una
     ``ASP.NET_SessionId`` sola no cuenta: la pone el servidor antes de saber
     quien eres.
     """

@@ -1,10 +1,10 @@
-"""Esperar a AirVault y cerrar el lote cuando lo acepta.
+"""Esperar a AirVault y cerrar el batch cuando lo acepta.
 
-Subir no es lo mismo que estar listo. AirVault mete el lote en su cola y
+Subir no es lo mismo que estar listo. AirVault mete el batch en su cola y
 tarda —minutos, a veces mucho mas— en dejarlo indexable, asi que el
 programa pregunta cada tanto en vez de quedarse esperando delante. Aqui se
 fija que responde esa pregunta en cada momento, y en que condiciones el
-lote se puede dar por terminado.
+batch se puede dar por terminado.
 
 Nada de esto toca la red: todo va contra el cliente falso.
 """
@@ -60,7 +60,7 @@ def corrida(tmp_path, nombre: str = "BITS 18 AUG 2026 05 42",
     """La carpeta que deja una ejecucion exportada.
 
     Con ``con_divisoria`` el PDF lleva delante la pagina que abre el grupo
-    de un avion, como la entrega de verdad: ocupa sitio en el lote sin ser
+    de un avion, como la entrega de verdad: ocupa sitio en el batch sin ser
     una bitacora.
     """
     carpeta = tmp_path / "output" / nombre
@@ -121,7 +121,7 @@ def test_sin_subir_lo_dice_y_no_pregunta_por_ningun_lote(tmp_path):
 
 
 def test_subido_pero_todavia_no_en_la_cola_no_es_un_fallo(tmp_path):
-    """AirVault tarda en sacar un lote recien subido; eso es lo normal."""
+    """AirVault tarda en sacar un batch recien subido; eso es lo normal."""
     trabajo, cliente = trabajo_subido(tmp_path)
     cliente.lotes = []
     parte, = comprobar_partes([trabajo], cliente)
@@ -442,7 +442,7 @@ def test_sin_manifiesto_no_hay_nada_que_retomar(tmp_path):
 
 
 def test_un_trabajo_de_otra_ejecucion_no_se_retoma(tmp_path):
-    """Seguir con el anterior escribiria los datos de una en el lote de otra."""
+    """Seguir con el anterior escribiria los datos de una en el batch de otra."""
     config = AirVaultConfig()
     primera = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
     segunda = corrida(tmp_path, "BITS 19 AUG 2026 06 10")
@@ -676,10 +676,10 @@ def test_un_automatico_con_titulo_revisar_no_se_sube(tmp_path, monkeypatch):
     assert subidas == []
 
 
-# ── dar el lote por terminado ──────────────────────────────────────
+# ── dar el batch por terminado ──────────────────────────────────────
 
 def mapa(*estados: int) -> list[PaginaDelLote]:
-    """El lote tal como lo devuelve AirVault, una pagina por documento."""
+    """El batch tal como lo devuelve AirVault, una pagina por documento."""
     return [
         PaginaDelLote(pagina=n, estado=e, inicio_documento=n)
         for n, e in enumerate(estados, start=1)
@@ -700,7 +700,7 @@ def test_un_lote_entero_en_verde_se_cierra(tmp_path):
 def test_una_pagina_fuera_de_verde_impide_cerrarlo_y_se_dice_cual(tmp_path):
     """Casi siempre es la fecha, que AirVault deja en «Need Correction».
 
-    No se intenta cerrarlo: AirVault lo rechazaria igual, y el lote tiene
+    No se intenta cerrarlo: AirVault lo rechazaria igual, y el batch tiene
     que quedarse en la cola para que alguien arregle esa pagina.
     """
     trabajo, cliente = trabajo_subido(tmp_path)
@@ -716,7 +716,7 @@ def test_una_pagina_fuera_de_verde_impide_cerrarlo_y_se_dice_cual(tmp_path):
 def test_una_pagina_sin_plantilla_tambien_impide_cerrar(tmp_path):
     """«No Template Match» tampoco es verde, aunque no sea amarillo.
 
-    Medido en el lote 003SUS: sus trece paginas separadoras quedaron en
+    Medido en el batch 003SUS: sus trece paginas separadoras quedaron en
     estado 1 y AirVault las contaba igual que a una bitacora incompleta.
     """
     trabajo, cliente = trabajo_subido(tmp_path)
@@ -826,7 +826,7 @@ def test_reiniciar_un_cierre_pendiente_no_reinicia_la_subida(tmp_path):
 
 
 def test_con_una_bitacora_en_amarillo_no_se_toca_ninguna_divisoria(tmp_path):
-    """El lote no se va a cerrar hoy; mas vale dejarlo como estaba."""
+    """El batch no se va a cerrar hoy; mas vale dejarlo como estaba."""
     trabajo, cliente = trabajo_con_divisoria(tmp_path)
     cliente.mapa = mapa(1, 0, 3)
     resultado = trabajo.completar(cliente)
@@ -846,7 +846,7 @@ def test_sin_permiso_para_quitar_paginas_el_lote_no_se_cierra(tmp_path):
     assert resultado.bloqueadas == [1]
     assert "Delete Batch Image" in resultado.detalle
     assert cliente.completados == []
-    # Y el lote queda suelto: nadie se queda con el en la mano.
+    # Y el batch queda suelto: nadie se queda con el en la mano.
     assert cliente.cerrados == ["003SRO"]
 
 
@@ -912,7 +912,7 @@ def test_el_lote_de_revisar_no_se_cierra_nunca(tmp_path):
 
 
 def test_un_lote_que_no_se_deja_cerrar_no_corta_a_los_demas(tmp_path):
-    """Son lotes distintos y lo escrito en cada uno ya esta escrito."""
+    """Son batches distintos y lo escrito en cada uno ya esta escrito."""
     primero, cliente = trabajo_subido(tmp_path)
     segundo, _ = trabajo_subido(tmp_path / "otra")
     primero.fijar_lote("003SRO")

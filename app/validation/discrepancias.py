@@ -231,7 +231,7 @@ def _clasificar_pagina(page: PageResult, template: Template
 
 def clasificar_lote(reports: List[ValidationReport], template: Template
                     ) -> List[Discrepancia]:
-    """Clasifica todas las páginas del lote y devuelve las discrepancias.
+    """Clasifica todas las páginas del batch y devuelve las discrepancias.
 
     Marca ``page.discrepancy`` en las páginas afectadas y ordena el resultado
     globalmente por ``log_number`` ascendente (libro + logpage), y dentro del

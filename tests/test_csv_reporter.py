@@ -278,7 +278,7 @@ class TestPageTime(unittest.TestCase):
 
 
 class TestRunTime(unittest.TestCase):
-    """El lote se normaliza contra el reloj de la corrida, no por archivo."""
+    """El batch se normaliza contra el reloj de la ejecución, no por archivo."""
 
     def _report(
         self, page_times, total_ms, started_at=0.0
@@ -304,7 +304,7 @@ class TestRunTime(unittest.TestCase):
                 return [float(row["time_ms"]) for row in csv.DictReader(fh)]
 
     def test_overlapping_files_are_not_counted_once_per_file(self):
-        # Cuatro archivos arrancados a la vez, 100 s cada uno: la corrida duró
+        # Cuatro archivos arrancados a la vez, 100 s cada uno: la ejecución duró
         # 100 s, no 400. Sumar los relojes multiplicaba la columna por cuatro.
         reports = [
             self._report([50_000.0, 50_000.0], 100_000.0, started_at=1_000.0)

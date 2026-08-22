@@ -16,7 +16,7 @@ AIRVAULT_FILENAME = "airvault.json"
 
 # Identificadores de campo del repositorio MXDocs (repoId 3209). Son
 # estables: los asigna el administrador de AirVault al definir el
-# repositorio, no cambian entre lotes.
+# repositorio, no cambian entre batches.
 CAMPO_DOC_TYPE = 9586
 CAMPO_WORK_LOCATION = 9624
 CAMPO_WORK_TYPE = 9627
@@ -92,17 +92,17 @@ class AirVaultConfig:
     )
     repo_id: int = 3209
     index_scheme_id: int = 137
-    # El picklist de Doc Type contiene "Log Page"; los lotes cargados hasta
+    # El picklist de Doc Type contiene "Log Page"; los batches cargados hasta
     # hoy llevan "LOG PAGE", que no existe en ese picklist y la interfaz
     # solo conserva porque lo agrega al combo. Se deja configurable para no
     # decidir por el administrador, con el valor valido como defecto.
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
-    # Segundos de espera entre sondeos al buscar el lote por nombre.
+    # Segundos de espera entre sondeos al buscar el batch por nombre.
     espera_descubrimiento_s: float = 20.0
     espera_maxima_s: float = 900.0
     # Tiempo limite de cada peticion. El servidor cuelga la peticion de
-    # apertura cuando el mismo usuario tiene el lote abierto en otra sesion,
+    # apertura cuando el mismo usuario tiene el batch abierto en otra sesion,
     # asi que sin limite el proceso se queda esperando para siempre.
     timeout_s: float = 60.0
     reintentos: int = 3

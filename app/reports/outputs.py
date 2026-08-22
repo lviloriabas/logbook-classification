@@ -1,4 +1,4 @@
-"""Generación de todas las salidas de una corrida.
+"""Generación de todas las salidas de una ejecución.
 
 Este módulo no depende de Qt. La función pública puede ejecutarse en un
 hilo de fondo sin leer ni modificar widgets de la interfaz.
@@ -47,8 +47,8 @@ class OutputOptions:
     csv_date_mode: str = CSV_DATE_SPECIFIC
     important_csv_columns: tuple[str, ...] = ()
     # Páginas por parte del PDF único. Cero deja la entrega en un solo
-    # archivo; con un tope se reparte, para que ningún lote de AirVault
-    # cargue con una corrida entera.
+    # archivo; con un tope se reparte, para que ningún batch de AirVault
+    # cargue con una ejecución entera.
     paginas_por_parte: int = 0
 
 
@@ -59,16 +59,16 @@ def complete_csv_path(csv_path: Path) -> Path:
 
 
 def run_csv_name() -> str:
-    """Nombre de corrida en el formato ``BITS <DD MON YYYY> <HH MM>.CSV``."""
+    """Nombre de ejecución en el formato ``BITS <DD MON YYYY> <HH MM>.CSV``."""
     now = datetime.now()
     stamp = now.strftime(f"%d {_MONTHS[now.month - 1]} %Y %H %M").upper()
     return f"BITS {stamp}.CSV"
 
 
 def new_run_dir(output_root: Path) -> Path:
-    """Carpeta de una corrida nueva, sin pisar ninguna anterior.
+    """Carpeta de una ejecución nueva, sin pisar ninguna anterior.
 
-    Dos corridas lanzadas dentro del mismo minuto comparten nombre, así que
+    Dos ejecuciones lanzadas dentro del mismo minuto comparten nombre, así que
     la segunda se desempata con un sufijo. La carpeta se crea aquí porque la
     línea de comandos necesita el sitio de los logs antes de procesar, y
     tiene que ser exactamente la misma carpeta donde luego se escriban las
@@ -92,7 +92,7 @@ def _clean_stale_artifacts(run_dir: Path) -> None:
     Conserva ``datos/`` (se sobreescribe), ``logs/`` y **todos los PDFs ya
     exportados**: un re-export nunca destruye una entrega anterior, sino que
     escribe copias con sufijo numérico junto a ellas. Solo se limpia lo que
-    la corrida vuelve a escribir entero (stats, recortes de auditoría).
+    la ejecución vuelve a escribir entero (stats, recortes de auditoría).
     """
     keep = {"datos", "logs"}
     for child in run_dir.iterdir():
@@ -115,24 +115,24 @@ def write_outputs(
     vlm_stats: Sequence[dict] | None = None,
     on_stage: Optional[Callable[[str, int], None]] = None,
 ) -> Path:
-    """Escribe los reportes y PDFs de una corrida completa.
+    """Escribe los reportes y PDFs de una ejecución completa.
 
     Todas las operaciones son de disco/renderizado y no deben ejecutarse en
     el hilo de la interfaz. ``on_stage`` recibe (mensaje, porcentaje 0-100)
     al avanzar de cada fase.
 
-    Si ``options.run_dir`` viene, la corrida se escribe SOBRE esa carpeta
-    (mismo nombre de CSV y mismo carpeta de corrida): es el modo re-export,
-    usado por la GUI para regenerar las salidas sin crear una corrida nueva.
-    Si no, se crea una carpeta de corrida nueva con timestamp.
+    Si ``options.run_dir`` viene, la ejecución se escribe SOBRE esa carpeta
+    (mismo nombre de CSV y mismo carpeta de ejecución): es el modo re-export,
+    usado por la GUI para regenerar las salidas sin crear una ejecución nueva.
+    Si no, se crea una carpeta de ejecución nueva con timestamp.
 
     Un re-export NO borra los PDFs ya exportados: los conserva y escribe
     los nuevos junto a ellos con sufijo numérico cuando el nombre coincide
     (``HP-1534CMP.pdf`` → ``HP-1534CMP-2.pdf``).
 
-    Con ``options.skip_pdfs`` (corrida cancelada a mitad de camino) se
+    Con ``options.skip_pdfs`` (ejecución cancelada a mitad de camino) se
     guardan solo los datos (CSV, JSON, stats) y NO se generan PDFs, para
-    que la corrida quede guardada exactamente hasta donde se canceló.
+    que la ejecución quede guardada exactamente hasta donde se canceló.
     """
 
     def stage(message: str, percent: int) -> None:
@@ -155,7 +155,7 @@ def write_outputs(
         reexport = (run_dir / "datos").is_dir()
         _clean_stale_artifacts(run_dir)
         if reexport:
-            logger.info(f"Re-export sobre la corrida existente: {run_dir}")
+            logger.info(f"Re-export sobre la ejecución existente: {run_dir}")
     else:
         run_dir = new_run_dir(output_root)
         corrida = run_dir.name
@@ -293,7 +293,7 @@ def write_outputs(
         vlm_stats=vlm_stats,
         pdf_paths=pdf_paths,
     )
-    logger.info(f"Stats de la corrida: {stats_path}")
+    logger.info(f"Stats de la ejecución: {stats_path}")
     stage("Finalizando…", 100)
     logger.info(f"Outputs generados en: {run_dir}")
 

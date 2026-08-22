@@ -66,7 +66,7 @@ _UBICACIONES_EDGE = (
 # Chromium solo escribe esas cookies en disco cuando el perfil arranca
 # restaurando la sesion anterior. Sin esta bandera el perfil pierde el
 # acceso cada vez que se cierra el navegador y hay que entrar de nuevo con
-# el segundo factor en cada corrida, que es justo lo que el perfil propio
+# el segundo factor en cada ejecución, que es justo lo que el perfil propio
 # viene a evitar. Comprobado midiendo la cookie antes y despues de cerrar.
 _ARGUMENTOS = (
     "--no-first-run",

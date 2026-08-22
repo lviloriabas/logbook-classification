@@ -1,6 +1,6 @@
-"""Indexado automatico de lotes de bitacoras en AirVault.
+"""Indexado automatico de batches de bitacoras en AirVault.
 
-El modulo toma el CSV que ya produce la corrida de clasificacion y escribe
+El modulo toma el CSV que ya produce la ejecución de clasificacion y escribe
 esos valores en las paginas del batch correspondiente de AirVault, sin que
 nadie tenga que teclear pagina por pagina.
 

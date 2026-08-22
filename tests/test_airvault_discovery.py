@@ -1,8 +1,8 @@
-"""Ubicar el lote, sin adivinar cuando hay dudas.
+"""Ubicar el batch, sin adivinar cuando hay dudas.
 
 Por nombre cuando alguien lo subio a mano poniendoselo, y por lo que
 aparecio despues de subir cuando lo sube el programa: Quick Upload no
-admite nombre de lote y la cola los recibe todos como «Empty-Batch».
+admite nombre de batch y la cola los recibe todos como «Empty-Batch».
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def test_sufijo_de_quick_upload_no_estorba():
 
 def test_nombre_inexistente():
     with pytest.raises(LoteNoEncontrado):
-        buscar([lote("003AAA", "otro lote", 5)], "DP | BITS VARIAS 24")
+        buscar([lote("003AAA", "otro batch", 5)], "DP | BITS VARIAS 24")
 
 
 def test_nombre_vacio():
@@ -178,7 +178,7 @@ def test_con_varios_nuevos_desempata_la_cantidad_de_paginas():
 
 
 def test_si_no_hay_forma_de_desempatar_no_se_adivina():
-    """Escribir en el lote equivocado es peor que pedir el batch id."""
+    """Escribir en el batch equivocado es peor que pedir el batch id."""
     ahora = [lote("003BBB", "Empty-Batch", 29),
              lote("003CCC", "Empty-Batch", 29)]
     with pytest.raises(LoteAmbiguo):

@@ -147,7 +147,7 @@ def test_reading_without_registration_format_is_not_kept(tmp_path: Path):
 def test_an_unconfirmed_registration_never_opens_a_group_of_its_own(
     tmp_path: Path,
 ):
-    """El caso que reportó la corrida: aviones que no existen en la entrega.
+    """El caso que reportó la ejecución: aviones que no existen en la entrega.
 
     Con la verificación activa, una lectura que no es ningún avión de la
     flota se quedaba escrita y abría su propia sección en el PDF y su

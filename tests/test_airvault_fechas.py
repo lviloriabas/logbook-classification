@@ -1,7 +1,7 @@
 """Fecha deducida para las bitacoras que llegan sin ella.
 
 End Date es obligatorio: una bitacora sin fecha bloquea su pagina y deja el
-lote sin poder cerrarse. Estas pruebas fijan de donde sale la fecha que se
+batch sin poder cerrarse. Estas pruebas fijan de donde sale la fecha que se
 le pone y, sobre todo, hasta donde llega la deduccion.
 """
 

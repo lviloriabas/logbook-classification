@@ -1,6 +1,6 @@
 """Opciones de salida compartidas por la ventana principal y el visor de CSV.
 
-Las dos ventanas exportan la misma corrida con los mismos criterios, así que
+Las dos ventanas exportan la misma ejecución con los mismos criterios, así que
 el cuadro «Salidas» se construye una sola vez: el formato del PDF, los
 criterios de separación y la fecha representada en el CSV son exactamente los
 mismos textos y las mismas casillas en ambas.
@@ -56,13 +56,13 @@ class ExportOptionsGroup(QGroupBox):
         self.radio_unico = QRadioButton("Un solo PDF")
         self.radio_unico.setToolTip(
             "Genera un único PDF con el mismo nombre que la carpeta de la "
-            "corrida, con páginas separadoras de matrícula/mes para los "
+            "ejecución, con páginas separadoras de matrícula/mes para los "
             "criterios marcados"
         )
         self.modo_grupo.addButton(self.radio_varios)
         self.modo_grupo.addButton(self.radio_unico)
         # La entrega habitual es un único PDF separado por matrícula: es lo
-        # que se marcaba a mano en cada corrida. El mes no entra porque
+        # que se marcaba a mano en cada ejecución. El mes no entra porque
         # subdivide de más una entrega que ya va por avión.
         self.radio_unico.setChecked(True)
         formato_row.addWidget(self.radio_varios)
@@ -72,9 +72,9 @@ class ExportOptionsGroup(QGroupBox):
         self.partes_check = QCheckBox("Repartir en")
         self.partes_check.setToolTip(
             "Escribe la entrega en varios PDF en lugar de uno solo. Una "
-            "corrida completa son cientos de páginas y casi dos gigas, que "
-            "en AirVault forman un lote incómodo de subir y de revisar; "
-            "cada parte es un lote aparte. El reparto corta entre secciones "
+            "ejecución completa son cientos de páginas y casi dos gigas, que "
+            "en AirVault forman un batch incómodo de subir y de revisar; "
+            "cada parte es un batch aparte. El reparto corta entre secciones "
             "para no separar las bitácoras de un mismo avión."
         )
         formato_row.addWidget(self.partes_check)

@@ -1,4 +1,4 @@
-"""La ventana pinta el avance del lote, no el del documento en curso.
+"""La ventana pinta el avance del batch, no el del documento en curso.
 
 El par que llega en la señal es del PDF abierto (o de los archivos ya
 vistos): la barra encogía al cambiar de archivo y el texto anunciaba "52 de

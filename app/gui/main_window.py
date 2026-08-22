@@ -118,14 +118,14 @@ from app.validation.duplicates import DuplicateLogPage, detect_duplicate_log_pag
 
 SCRIPT_DIR = Path(__file__).resolve().parents[2]
 PERF_CACHE = SCRIPT_DIR / "output" / ".performance.json"
-_DEFAULT_MS_PER_PAGE = 2500.0  # costo nominal antes de la primera corrida
+_DEFAULT_MS_PER_PAGE = 2500.0  # costo nominal antes de la primera ejecución
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 # Celdas —no filas— por tick del QTimer. El costo de llenar la tabla es por
 # celda (medido: ~16 µs cada una), así que un presupuesto en filas escala con
 # el número de columnas: 400 filas del CSV completo son 34.000 celdas, medio
 # segundo de interfaz bloqueada por tick. Con un presupuesto en celdas cada
-# tick cuesta lo mismo tenga la corrida 3 columnas o 90.
+# tick cuesta lo mismo tenga la ejecución 3 columnas o 90.
 _TABLE_CELL_CHUNK = 2000
 # Espera entre comprobaciones mientras se detiene el trabajo para cerrar.
 _SHUTDOWN_POLL_MS = 150
@@ -229,7 +229,7 @@ def _format_clock(seconds: float) -> str:
 
 
 def _load_ms_per_page() -> float:
-    """Costo por página (ms) aprendido de la última corrida."""
+    """Costo por página (ms) aprendido de la última ejecución."""
     try:
         import json
 
@@ -382,7 +382,7 @@ class MainWindow(QMainWindow):
         self._pdf_paths: list[Path] = []
         self._template_path: Path | None = None
         self._reports: list[ValidationReport] | None = None
-        # Estadísticas de la corrida, copiadas al terminar: el worker se libera
+        # Estadísticas de la ejecución, copiadas al terminar: el worker se libera
         # en cuanto acaba y una re-exportación posterior las sigue necesitando.
         self._vlm_stats: list[dict] = []
         self._worker: PipelineWorker | None = None
@@ -417,7 +417,7 @@ class MainWindow(QMainWindow):
         self._detected_dpi = 200
         self._detected_dpis: dict[str, int] = {}
         # Páginas de cada PDF de la entrada, alineado con ``_pdf_paths``: es
-        # lo que convierte el rango global del lote en tramos por archivo.
+        # lo que convierte el rango global del batch en tramos por archivo.
         self._input_page_counts: list[int] = []
         # Lectura de la entrada en curso. Va en un hilo porque abre todos los
         # PDFs de ``input/``, y la generación distingue el recorrido vigente
@@ -454,7 +454,7 @@ class MainWindow(QMainWindow):
         self._table_pending: list = []
         # Lo que cada tramo necesita para armar sus filas. Se fija al empezar
         # el llenado y no cambia mientras dura, para que todas las filas de
-        # una corrida salgan con el mismo criterio.
+        # una ejecución salgan con el mismo criterio.
         self._table_reporter = CsvReporter()
         self._table_fields: list[str] = []
         self._table_time_factor: float = 1.0
@@ -467,7 +467,7 @@ class MainWindow(QMainWindow):
         )
         self._csv_viewer: CsvViewerWindow | None = None
         # La ventana del indexado nace cuando se pide; hasta entonces la
-        # corrida que le tocaría se guarda aquí, para que abrirla después de
+        # ejecución que le tocaría se guarda aquí, para que abrirla después de
         # exportar la encuentre ya elegida.
         self._airvault_window: AirVaultWindow | None = None
         self._airvault_corrida: Path | None = None
@@ -726,7 +726,7 @@ class MainWindow(QMainWindow):
 
         bottom = self._build_bottom_splitter()
         # Cuatro archivos visibles sin desplazar: por debajo de esto el panel
-        # se queda en dos filas y deja de servir para seguir un lote. En
+        # se queda en dos filas y deja de servir para seguir un batch. En
         # pantallas bajas se conforma con menos, que es preferible a no
         # caber.
         bottom.setMinimumHeight(self._density.bottom_min_height)
@@ -888,7 +888,7 @@ class MainWindow(QMainWindow):
         self.btn_clear_output.setIcon(trash_icon)
         self.btn_clear_output.setIconSize(ICON_SIZE)
         self.btn_clear_output.setToolTip(
-            "Mover todas las corridas de output/ a la Papelera de reciclaje"
+            "Mover todas las ejecuciones de output/ a la Papelera de reciclaje"
         )
         self.btn_clear_output.clicked.connect(self._clear_output_folder)
         grid.addWidget(self.btn_clear_output, 0, 5)
@@ -914,7 +914,7 @@ class MainWindow(QMainWindow):
 
         self.btn_csv_viewer = QPushButton("Visor de CSV…")
         self.btn_csv_viewer.setToolTip(
-            "Abrir una ventana independiente con el historial de corridas "
+            "Abrir una ventana independiente con el historial de ejecuciones "
             "procesadas y sus CSV"
         )
         self.btn_csv_viewer.clicked.connect(self._open_csv_viewer)
@@ -942,10 +942,10 @@ class MainWindow(QMainWindow):
         )
         row.addWidget(engine_label)
 
-        # El lote se numera de corrido, igual que lo navega el visor: un solo
+        # El batch se numera de corrido, igual que lo navega el visor: un solo
         # rango decide qué páginas entran, caigan en los archivos que caigan.
         range_tip = (
-            "Rango de páginas contando el lote entero de corrido, como en el "
+            "Rango de páginas contando el batch entero de corrido, como en el "
             "visor: la página 1 es la primera del primer archivo y la "
             "numeración sigue en el siguiente sin reiniciarse. Arranca en la "
             "primera y la última página de todos los archivos seleccionados. "
@@ -963,7 +963,7 @@ class MainWindow(QMainWindow):
         row.addWidget(QLabel("a"))
         self.page_to_spin = QSpinBox()
         # Ambos extremos son números de página reales: el final arranca en la
-        # última del lote, para que se lea de un vistazo cuánto abarca.
+        # última del batch, para que se lea de un vistazo cuánto abarca.
         self.page_to_spin.setRange(1, 1)
         self.page_to_spin.setValue(1)
         self.page_to_spin.setToolTip(range_tip)
@@ -1158,7 +1158,7 @@ class MainWindow(QMainWindow):
         # El indexado ya no cuelga de este cuadro: vive en su propia ventana
         # y de aquí solo sale el botón que la abre. Empotrado, desplegarlo
         # cambiaba el mínimo de la ventana y descuadraba el reparto de los
-        # cuadros; y la corrida que se sube ya no tiene por qué ser la que
+        # cuadros; y la ejecución que se sube ya no tiene por qué ser la que
         # acaba de terminar, que es lo que ese sitio daba a entender.
         self.btn_airvault = QPushButton("Indexar en AirVault…")
         self.btn_airvault.setToolTip(AIRVAULT_TOOLTIP)
@@ -1360,7 +1360,7 @@ class MainWindow(QMainWindow):
         self.page_edit = QLineEdit()
         self.page_edit.setValidator(QIntValidator(1, 1, self.page_edit))
         self.page_edit.setToolTip(
-            "Escriba el número de página del lote; el salto se aplica al terminar"
+            "Escriba el número de página del batch; el salto se aplica al terminar"
         )
         self.page_edit.setAccessibleName("Página actual")
         self.page_edit.setFixedWidth(48)
@@ -1467,7 +1467,7 @@ class MainWindow(QMainWindow):
         self.duplicates_label = QLabel("Duplicados: 0")
         self.duplicates_label.setAccessibleName("Resumen de duplicados")
         self.duplicates_label.setToolTip(
-            "No hay log_number repetidos en el lote procesado."
+            "No hay log_number repetidos en el batch procesado."
         )
         self.duplicates_label.setStyleSheet("color: #57606a;")
         table_controls.addWidget(self.duplicates_label)
@@ -1478,7 +1478,7 @@ class MainWindow(QMainWindow):
         # Oculto no debe encoger la fila: sin esto, la barra de abajo de la
         # tabla queda mas baja que la de la vista previa (que siempre tiene
         # botones) y el panel derecho se ve mas corto que el izquierdo hasta
-        # que se procesa un lote.
+        # que se procesa un batch.
         toggle_policy = self.csv_columns_toggle.sizePolicy()
         toggle_policy.setRetainSizeWhenHidden(True)
         self.csv_columns_toggle.setSizePolicy(toggle_policy)
@@ -1629,7 +1629,7 @@ class MainWindow(QMainWindow):
         row["bar"].setValue(round(done * 100 / total) if total else 0)
 
     def _prepare_file_rows(self, paths: list[Path]) -> None:
-        """Lista el lote completo antes de empezar, con sus páginas y 0 %.
+        """Lista el batch completo antes de empezar, con sus páginas y 0 %.
 
         El planificador puede arrancar varios archivos a la vez, así que las
         filas no pueden aparecer a medida que cada uno empieza: la lista se
@@ -1668,14 +1668,14 @@ class MainWindow(QMainWindow):
         self.times_vbox.addStretch()
 
     def _set_file_page_counts(self, slices: list[FileSlice]) -> None:
-        """Páginas previstas de cada archivo de la corrida, ya recortadas."""
+        """Páginas previstas de cada archivo de la ejecución, ya recortadas."""
         self._file_page_counts = [item.count or 0 for item in slices]
 
     def _on_file_progress(self, index: int, done: int, total: int) -> None:
         """Avance real del archivo ``index`` (1-based), venga de donde venga.
 
         El planificador reparte páginas de un archivo o archivos completos
-        según el tamaño del lote, y antes solo la primera estrategia movía
+        según el tamaño del batch, y antes solo la primera estrategia movía
         las barras: la global se repartía en orden de archivo, así que con
         varios PDF en vuelo se llenaban los de arriba mientras avanzaban
         otros. Con el avance por archivo las dos estrategias se ven igual.
@@ -1709,7 +1709,7 @@ class MainWindow(QMainWindow):
         self._log_sink.message.disconnect(self._on_log_message)
 
     def _on_log_message(self, message: str) -> None:
-        """Acumula líneas de log y las descarga por lotes: la GUI nunca
+        """Acumula líneas de log y las descarga por batches: la GUI nunca
         procesa una señal Qt por mensaje ni un append por línea."""
         line = str(message).strip()
         if not line:
@@ -1740,7 +1740,7 @@ class MainWindow(QMainWindow):
             self._set_input_paths([])
             return
         # La carpeta de lo ya procesado existe desde el primer arranque, no
-        # desde la primera corrida: es donde van a parar los archivos al
+        # desde la primera ejecución: es donde van a parar los archivos al
         # terminar, y así se ve de entrada dónde se guardan en vez de
         # aparecer un día sin avisar.
         try:
@@ -2015,7 +2015,7 @@ class MainWindow(QMainWindow):
         """Manda a leer la entrada en un hilo y deja la ventana usable.
 
         Hasta que el hilo conteste no se sabe cuántas páginas hay, así que el
-        rango queda en blanco y no se puede procesar: arrancar con un lote
+        rango queda en blanco y no se puede procesar: arrancar con un batch
         que se cree de cero páginas recortaría el trabajo sin que nadie lo
         haya pedido. Son unas décimas y la ventana las pasa viva.
         """
@@ -2141,9 +2141,9 @@ class MainWindow(QMainWindow):
         self.input_edit.setToolTip("\n".join(str(p) for p in self._pdf_paths))
 
     def _page_range(self) -> PageRange:
-        """Rango elegido, contando el lote de corrido.
+        """Rango elegido, contando el batch de corrido.
 
-        Un final que llega a la última página del lote se devuelve abierto:
+        Un final que llega a la última página del batch se devuelve abierto:
         es el mismo tramo y así el rango se reconoce como completo (nadie
         vuelve a contar páginas y los mensajes lo dicen en esos términos),
         aunque el control siga mostrando el número real.
@@ -2193,8 +2193,8 @@ class MainWindow(QMainWindow):
         """Deja el rango cubriendo la entrada actual, de la primera a la última.
 
         Se llama al cambiar los archivos: los números del rango anterior no
-        señalan las mismas páginas en otro lote, así que conservarlos
-        recortaría la corrida sin que nadie lo haya pedido.
+        señalan las mismas páginas en otro batch, así que conservarlos
+        recortaría la ejecución sin que nadie lo haya pedido.
         """
         top = max(1, self._batch_total_pages())
         for spin in (self.page_from_spin, self.page_to_spin):
@@ -2206,7 +2206,7 @@ class MainWindow(QMainWindow):
         self._refresh_page_range_label()
 
     def _refresh_page_range_label(self) -> None:
-        """Indica cuántas páginas del lote deja seleccionadas el rango."""
+        """Indica cuántas páginas del batch deja seleccionadas el rango."""
         total = self._batch_total_pages()
         if not total:
             self.page_range_label.setText("")
@@ -2239,7 +2239,7 @@ class MainWindow(QMainWindow):
         elif self._pdf_paths:
             self.estimate_label.setText(
                 f"El rango ({self._page_range().label()}) no incluye ninguna "
-                f"página del lote"
+                f"página del batch"
             )
         else:
             self.estimate_label.setText("")
@@ -2370,7 +2370,7 @@ class MainWindow(QMainWindow):
             self,
             "Confirmar vaciado",
             f"Se moverán {len(contents)} elemento(s) de output/ a la "
-            "Papelera de reciclaje. Esto incluye todas las corridas "
+            "Papelera de reciclaje. Esto incluye todas las ejecuciones "
             "exportadas.\n\n¿Desea continuar?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -2435,7 +2435,7 @@ class MainWindow(QMainWindow):
         logger.info("Editor de plantillas abierto")
 
     def _open_csv_viewer(self) -> None:
-        """Abre el visor de corridas como una ventana independiente."""
+        """Abre el visor de ejecuciones como una ventana independiente."""
         if self._csv_viewer is None:
             self._csv_viewer = CsvViewerWindow(SCRIPT_DIR / "output", self)
             self._csv_viewer.setWindowIcon(self.windowIcon())
@@ -2465,7 +2465,7 @@ class MainWindow(QMainWindow):
         self._rewrite_current_csv()
 
     def _rewrite_current_csv(self) -> None:
-        """Reescribe solo el CSV de la corrida con la política seleccionada."""
+        """Reescribe solo el CSV de la ejecución con la política seleccionada."""
         if not self._reports or self._corrida_dir is None:
             return
         template = self._processed_template or self._load_template()
@@ -2506,13 +2506,13 @@ class MainWindow(QMainWindow):
         reuse_dir: bool = False,
         skip_pdfs: bool = False,
     ) -> OutputOptions:
-        """Captura opciones y datos de la corrida sin tocar el OCR.
+        """Captura opciones y datos de la ejecución sin tocar el OCR.
 
         Args:
             reuse_dir: Si ``True`` (re-export), las salidas se escriben
-                sobre la carpeta de la corrida actual (``self._corrida_dir``)
+                sobre la carpeta de la ejecución actual (``self._corrida_dir``)
                 en vez de crear una carpeta nueva.
-            skip_pdfs: Si ``True`` (corrida cancelada), se guardan solo
+            skip_pdfs: Si ``True`` (ejecución cancelada), se guardan solo
                 los datos (CSV, JSON, stats) sin generar PDFs.
         """
         template = self._processed_template or self._load_template()
@@ -2619,7 +2619,7 @@ class MainWindow(QMainWindow):
         self._config = self._current_processing_config()
         self._preprocess_geometry = {}
         self._preprocessed_active = False
-        # El rango numera el lote completo, así que el worker recibe la
+        # El rango numera el batch completo, así que el worker recibe la
         # entrada entera y lo reparte él: recortar antes lo renumeraría.
         worker = PreprocessWorker(
             self._pdf_paths,
@@ -2661,11 +2661,11 @@ class MainWindow(QMainWindow):
             return "No hay archivos para procesar."
         return (
             f"El rango elegido ({self._page_range().label()}) no incluye "
-            f"ninguna página: el lote tiene {total} en total."
+            f"ninguna página: el batch tiene {total} en total."
         )
 
     def _confirm_discard_results(self) -> bool:
-        """Pide confirmación antes de borrar de la vista una corrida previa.
+        """Pide confirmación antes de borrar de la vista una ejecución previa.
 
         Los archivos guardados en ``output/`` no se tocan; lo que se pierde es
         la tabla, la vista previa y el avance por archivo en pantalla.
@@ -2677,7 +2677,7 @@ class MainWindow(QMainWindow):
             "Procesar de nuevo",
             "Ya hay un procesamiento en pantalla.\n\n"
             "Al procesar de nuevo se borran de la vista la tabla, la vista "
-            "previa y el avance por archivo de la corrida actual. Los "
+            "previa y el avance por archivo de la ejecución actual. Los "
             "archivos ya guardados en output/ no se borran.\n\n"
             "¿Desea continuar?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -2739,7 +2739,7 @@ class MainWindow(QMainWindow):
         effective_threads = self._effective_threads(selected_threads)
         workers, threads = recommended_parallelism(effective_threads)
 
-        # Igual que en el preprocesado: el worker recibe el lote completo y
+        # Igual que en el preprocesado: el worker recibe el batch completo y
         # aplica el rango, que está numerado sobre toda la entrada.
         self._worker = PipelineWorker(
             self._pdf_paths,
@@ -2756,8 +2756,8 @@ class MainWindow(QMainWindow):
         self._worker.file_finished.connect(self._on_file_finished)
         self._worker.succeeded.connect(self._on_succeeded)
         self._worker.failed.connect(self._on_failed)
-        # Sin esto el hilo terminado quedaba retenido hasta la corrida
-        # siguiente, con todos los reportes del lote dentro.
+        # Sin esto el hilo terminado quedaba retenido hasta la ejecución
+        # siguiente, con todos los reportes del batch dentro.
         self._worker.finished.connect(self._on_pipeline_thread_finished)
         self._worker.finished.connect(self._worker.deleteLater)
 
@@ -2946,9 +2946,9 @@ class MainWindow(QMainWindow):
                 row["secs"].setText(_format_clock(time.monotonic() - started))
 
     def _on_progress(self, done: int, total: int, message: str) -> None:
-        """Pinta el avance del lote: barra, contador del texto y ETA.
+        """Pinta el avance del batch: barra, contador del texto y ETA.
 
-        El total es el del lote, fijado al arrancar la corrida con los
+        El total es el del batch, fijado al arrancar la ejecución con los
         recuentos que la ventana ya tenía: el que llega en la señal es el del
         documento en curso o el de los archivos ya vistos, y encogía la barra
         al cambiar de archivo. Y el contador solo puede subir, porque con una
@@ -2979,7 +2979,7 @@ class MainWindow(QMainWindow):
             for page in report.pages
         }
         # Los recuentos ya los tiene la ventana desde la detección de DPI: sin
-        # pasarlos, el visor reabría cada PDF del lote para volver a contarlos.
+        # pasarlos, el visor reabría cada PDF del batch para volver a contarlos.
         processed = [Path(report.pdf_path) for report in reports]
         self._set_preview_documents(
             processed, [self._known_page_count(path) for path in processed]
@@ -3012,7 +3012,7 @@ class MainWindow(QMainWindow):
         warn = sum(r.summary.get("warning_pages", 0) for r in reports)
         err = sum(r.summary.get("error_pages", 0) for r in reports)
         blank = sum(r.summary.get("blank_pages", 0) for r in reports)
-        # Reloj de la corrida, no la suma de relojes: con un proceso por
+        # Reloj de la ejecución, no la suma de relojes: con un proceso por
         # archivo los tiempos se solapan y sumarlos daba un total imposible,
         # varias veces mayor que lo que el usuario esperó. Se prefiere el
         # cronómetro de la ventana, que es el que estuvo a la vista.
@@ -3036,7 +3036,7 @@ class MainWindow(QMainWindow):
         )
 
         if cancelled_any:
-            # La corrida se guarda hasta donde se canceló (CSV/JSON/stats),
+            # La ejecución se guarda hasta donde se canceló (CSV/JSON/stats),
             # sin generar PDFs; la pantalla queda limpia para poder
             # procesar los archivos restantes.
             self._clear_results_display()
@@ -3073,7 +3073,7 @@ class MainWindow(QMainWindow):
         Args:
             context: ``"proceso"`` (automática tras el OCR) o ``"export"``
                 (re-export manual).
-            skip_pdfs: Si la corrida fue cancelada, solo se guardan los
+            skip_pdfs: Si la ejecución fue cancelada, solo se guardan los
                 datos (CSV/JSON/stats) sin generar PDFs.
         """
         if self._outputs_worker is not None and self._outputs_worker.isRunning():
@@ -3109,7 +3109,7 @@ class MainWindow(QMainWindow):
         # desde ahí seguiría pareciendo que no hay ninguna escritura en curso.
         self.btn_depurar.setEnabled(False)
         self._spinner_active = True
-        # La barra general representa siempre páginas del lote; la exportación
+        # La barra general representa siempre páginas del batch; la exportación
         # no debe sustituir ese total por una barra indeterminada.
         self.progress.setRange(0, max(1, self._total_global))
         self.progress.setValue(self._done_global or self._total_global)
@@ -3124,13 +3124,13 @@ class MainWindow(QMainWindow):
     def _on_outputs_written(self, output_dir: Path) -> None:
         """Actualiza la interfaz cuando termina una exportación."""
         self._corrida_dir = Path(output_dir)
-        # El indexado trabaja sobre el CSV mínimo de la corrida recién
+        # El indexado trabaja sobre el CSV mínimo de la ejecución recién
         # escrita, que es el que lleva las columnas que van a AirVault.
         self._airvault_corrida = (
             Path(output_dir) / "datos" / f"{Path(output_dir).name}.CSV"
         )
         ventana = self._airvault_window
-        # Con un lote a medio escribir no se le cambia la corrida debajo:
+        # Con un batch a medio escribir no se le cambia la ejecución debajo:
         # el trabajo en vuelo es de la que estaba elegida al arrancarlo.
         if ventana is not None and ventana.hilo() is None:
             ventana.fijar_corrida(self._airvault_corrida)
@@ -3141,16 +3141,16 @@ class MainWindow(QMainWindow):
             logger.info(f"Exportación completada en: {output_dir}")
         elif self._outputs_context == "depurar":
             self.status_label.setText(
-                "Páginas eliminadas de la corrida. Exporte para rehacer los "
+                "Páginas eliminadas de la ejecución. Exporte para rehacer los "
                 "PDF sin ellas."
             )
-            logger.info(f"Corrida depurada en: {output_dir}")
+            logger.info(f"Ejecución depurada en: {output_dir}")
         elif self._last_run_cancelled:
             self.status_label.setText(
                 "Procesamiento cancelado — resultados parciales guardados "
                 f"en {output_dir.name} (sin PDF)."
             )
-            logger.info(f"Corrida cancelada guardada (datos sin PDF) en: {output_dir}")
+            logger.info(f"Ejecución cancelada guardada (datos sin PDF) en: {output_dir}")
         else:
             # Los archivos ya dieron todo lo que tenían que dar: el OCR está
             # hecho y los datos escritos. Se apartan aquí, y la ventana
@@ -3163,7 +3163,7 @@ class MainWindow(QMainWindow):
             logger.info(f"Outputs generados en: {output_dir}")
 
     def _archive_processed_inputs(self) -> None:
-        """Saca de input/ los PDF de la corrida que acaba de terminar.
+        """Saca de input/ los PDF de la ejecución que acaba de terminar.
 
         La entrada queda con lo que falta por procesar y nada más; lo hecho
         se guarda en ``input/processed``. La ventana sigue apuntando a los
@@ -3216,7 +3216,7 @@ class MainWindow(QMainWindow):
         if self._preview_pdf is not None:
             self._preview_pdf = relocated(self._preview_pdf)
         # Los recuentos de páginas ya están hechos y no cambian al mover el
-        # archivo: se reutilizan para no reabrir el lote entero. Si de alguno
+        # archivo: se reutilizan para no reabrir el batch entero. Si de alguno
         # no se sabe, se dejan contar todos: un cero se leería como un PDF sin
         # páginas y dejaría ese documento sin paginación.
         documents = [Path(report.pdf_path) for report in self._reports]
@@ -3260,7 +3260,7 @@ class MainWindow(QMainWindow):
         self.btn_cancel.setEnabled(False)
         self.btn_process.setEnabled(True)
         self.btn_preprocess.setEnabled(True)
-        # Tras una corrida cancelada no hay Exportar: da la opción de
+        # Tras una ejecución cancelada no hay Exportar: da la opción de
         # procesar los archivos restantes en vez de hacer PDFs parciales.
         self.btn_export.setEnabled(bool(self._reports) and not self._last_run_cancelled)
         self._sync_depurar_button()
@@ -3287,9 +3287,9 @@ class MainWindow(QMainWindow):
             _save_ms_per_page(self._ms_per_page)
 
     def _sync_depurar_button(self) -> None:
-        """Solo se depura una corrida ya guardada y sin escrituras en curso.
+        """Solo se depura una ejecución ya guardada y sin escrituras en curso.
 
-        Sin carpeta de corrida la reescritura crearía una segunda entrega de
+        Sin carpeta de ejecución la reescritura crearía una segunda entrega de
         lo mismo, así que el botón espera a que la escritura automática del
         procesamiento termine y deje su carpeta.
         """
@@ -3304,9 +3304,9 @@ class MainWindow(QMainWindow):
         )
 
     def _depurar_paginas(self) -> None:
-        """Quita de la corrida las páginas repetidas o en blanco.
+        """Quita de la ejecución las páginas repetidas o en blanco.
 
-        Se reescriben los datos de la corrida —CSV, JSON y estadísticas— sin
+        Se reescriben los datos de la ejecución —CSV, JSON y estadísticas— sin
         ellas, igual que en el visor de CSV. Los PDF no se rehacen aquí: son
         la entrega y se componen al exportar, cuando ya no queda nada más que
         quitar.
@@ -3328,22 +3328,22 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Depurar páginas",
-                "Quedaría una corrida sin ninguna página. Para deshacerse de "
-                "la corrida entera, elimine su carpeta desde output/.",
+                "Quedaría una ejecución sin ninguna página. Para deshacerse de "
+                "la ejecución entera, elimine su carpeta desde output/.",
             )
             return
 
         self._reports = remaining
         # La tabla, el contador de duplicados y el visor cuelgan de la lista
         # de reportes: si no se rehacen aquí, la pantalla seguiría enseñando
-        # las páginas que acaban de salir de la corrida.
+        # las páginas que acaban de salir de la ejecución.
         self._refresh_after_depuracion()
         logger.info(
-            f"Depuradas {resumen.total} página(s) de la corrida "
+            f"Depuradas {resumen.total} página(s) de la ejecución "
             f"{Path(self._corrida_dir).name}"
         )
         self.status_label.setText(
-            f"Eliminando {resumen.total} página(s) de la corrida…"
+            f"Eliminando {resumen.total} página(s) de la ejecución…"
         )
         self._timer.start()
         self._start_outputs(remaining, context="depurar", skip_pdfs=True)
@@ -3384,7 +3384,7 @@ class MainWindow(QMainWindow):
             return
         # Las casillas se capturan al hacer clic en Exportar, no al procesar:
         # cambiar la separación nunca vuelve a ejecutar OCR. El re-export se
-        # escribe sobre la carpeta de la corrida actual (self._corrida_dir).
+        # escribe sobre la carpeta de la ejecución actual (self._corrida_dir).
         self.status_label.setText("Exportando salidas…")
         self._start_outputs(self._reports, context="export")
 
@@ -3411,7 +3411,7 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "Error de procesamiento", message)
 
     def _populate_table(self, reports: list[ValidationReport]) -> None:
-        """Prepara las filas y las inserta por lotes para no congelar la UI.
+        """Prepara las filas y las inserta por batches para no congelar la UI.
 
         El llenado completo de miles de filas bloquea el hilo de interfaz;
         con ``_table_timer`` se inserta un tramo de ``_TABLE_CELL_CHUNK``
@@ -3420,7 +3420,7 @@ class MainWindow(QMainWindow):
         Aquí solo se apunta qué página va en cada fila. Armar los valores
         (``row_for_page`` formatea una columna por campo, más confianza,
         estado, comentario y origen) se hace dentro de cada tramo: hacerlo
-        de golpe para todo el lote dejaba la ventana congelada antes de que
+        de golpe para todo el batch dejaba la ventana congelada antes de que
         el troceado llegara a empezar.
         """
         self.table.setUpdatesEnabled(False)
@@ -3473,7 +3473,7 @@ class MainWindow(QMainWindow):
             self._table_important_field_ids.add(_DUP_COLUMN)
             self._table_important_field_ids.add(_DISC_COLUMN)
             # La selección guardada se conserva completa: recortarla contra
-            # las columnas de esta corrida perdería las marcas de un CSV con
+            # las columnas de esta ejecución perdería las marcas de un CSV con
             # otras columnas la próxima vez que el usuario edite la lista.
             self._selected_important_columns = self._current_important_columns(
                 columns
@@ -3526,7 +3526,7 @@ class MainWindow(QMainWindow):
         if not count:
             self.duplicates_label.setStyleSheet("color: #57606a;")
             self.duplicates_label.setToolTip(
-                "No hay log_number repetidos en el lote procesado."
+                "No hay log_number repetidos en el batch procesado."
             )
             return
 
@@ -3558,10 +3558,10 @@ class MainWindow(QMainWindow):
             return "dup=false: log_number ausente o inválido."
         if duplicate.duplicate:
             return (
-                "dup=true: este log_number ya apareció antes en el lote "
+                "dup=true: este log_number ya apareció antes en el batch "
                 "procesado."
             )
-        return "dup=false: primera aparición de este log_number en el lote."
+        return "dup=false: primera aparición de este log_number en el batch."
 
     def _apply_csv_table_view(self, _checked: bool | None = None) -> None:
         """Alterna la tabla entre valores principales y todas las columnas."""
@@ -3834,7 +3834,7 @@ class MainWindow(QMainWindow):
         self._update_preview_nav()
         self._preview_pending = (page_number, str(pdf_path))
         # Tras procesar, la geometría guardada en PageResult refleja exactamente
-        # la alineación (incluido el anclaje por lote) usada por el OCR, así que
+        # la alineación (incluido el anclaje por batch) usada por el OCR, así que
         # tiene prioridad: el preprocesado previo pudo usar otro anclaje.
         geometry = self._current_preview_geometry()
         if geometry is None and self._preprocessed_active:
@@ -4062,7 +4062,7 @@ class MainWindow(QMainWindow):
         if self._csv_viewer is not None:
             self._csv_viewer.close()
         if self._airvault_window is not None:
-            # Suelta los lotes que una revisión sin indexar dejó tomados en
+            # Suelta los batches que una revisión sin indexar dejó tomados en
             # AirVault. Uno que queda tomado no da error: cuelga la próxima
             # vez que alguien lo abra en el Web Index.
             try:

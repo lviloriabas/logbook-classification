@@ -1,4 +1,4 @@
-"""Pruebas de stats.json (estadísticas de la corrida) y del JSON
+"""Pruebas de stats.json (estadísticas de la ejecución) y del JSON
 consolidado de la carpeta datos/."""
 
 from __future__ import annotations
@@ -65,8 +65,8 @@ class TestConstruirStats(unittest.TestCase):
         ]
 
     def test_totales(self):
-        stats = construir_stats(self.reports, corrida="corrida X")
-        self.assertEqual(stats["corrida"], "corrida X")
+        stats = construir_stats(self.reports, corrida="ejecución X")
+        self.assertEqual(stats["corrida"], "ejecución X")
         self.assertEqual(stats["total_bitacoras"], 2)
         self.assertEqual(stats["total_paginas"], 6)
         self.assertEqual(stats["paginas_en_blanco"], 1)
@@ -188,11 +188,11 @@ class TestEscribirStats(unittest.TestCase):
         reports = [_reporte("a.pdf", _page(1, "2147300", "HP-1534CMP",
                                            date="2026/07/15"))]
         with tempfile.TemporaryDirectory() as tmp:
-            ruta = escribir_stats(reports, Path(tmp), corrida="corrida X",
+            ruta = escribir_stats(reports, Path(tmp), corrida="ejecución X",
                                   separar_por=["mes"])
             self.assertEqual(ruta, Path(tmp) / "stats.json")
             stats = json.loads(ruta.read_text(encoding="utf-8"))
-        self.assertEqual(stats["corrida"], "corrida X")
+        self.assertEqual(stats["corrida"], "ejecución X")
         self.assertEqual(stats["por_mes"], {"2026-07": 1})
         self.assertTrue(stats["separacion"]["completa"])
 

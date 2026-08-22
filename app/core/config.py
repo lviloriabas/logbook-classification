@@ -104,7 +104,7 @@ class AppConfig(BaseModel):
     vlm_max_crops: int = Field(
         default=120, ge=0,
         description="Límite de recortes evaluados por el verificador VLM "
-                    "en una corrida (cada consulta cuesta ~1-4 s en CPU).",
+                    "en una ejecución (cada consulta cuesta ~1-4 s en CPU).",
     )
     vlm_timeout: float = Field(
         default=60.0, ge=5.0,

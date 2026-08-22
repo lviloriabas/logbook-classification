@@ -3,7 +3,7 @@
 La entrada solo debe mostrar lo que falta por procesar. Lo ya procesado se
 guarda en ``input/processed``, y todo lo que la ventana tenía apuntando al
 archivo —los reportes, la vista previa, las filas de la tabla— tiene que
-apuntar a la ruta nueva: si no, la corrida recién terminada se queda sin
+apuntar a la ruta nueva: si no, la ejecución recién terminada se queda sin
 vista previa y sin poder exportarse otra vez.
 """
 
@@ -83,7 +83,7 @@ def _report(pdf_path: Path):
 
 
 def test_la_ventana_reapunta_a_la_carpeta_de_procesados(tmp_path: Path):
-    """Terminadas las salidas, la corrida sigue completa con los PDF movidos."""
+    """Terminadas las salidas, la ejecución sigue completa con los PDF movidos."""
     app = QApplication.instance() or QApplication([])
     entrada = tmp_path / "input"
     pdf = _pdf(entrada / "bitacora.pdf")
@@ -114,7 +114,7 @@ def test_la_ventana_reapunta_a_la_carpeta_de_procesados(tmp_path: Path):
 
 
 def test_la_carpeta_de_procesados_existe_desde_el_arranque(tmp_path: Path):
-    """No aparece el día que termina la primera corrida: está desde el inicio."""
+    """No aparece el día que termina la primera ejecución: está desde el inicio."""
     app = QApplication.instance() or QApplication([])
     entrada = tmp_path / "input"
     entrada.mkdir()
@@ -130,7 +130,7 @@ def test_la_carpeta_de_procesados_existe_desde_el_arranque(tmp_path: Path):
 
 
 def test_una_corrida_cancelada_deja_los_archivos_en_la_entrada(tmp_path: Path):
-    """Cancelar no procesa el lote entero: esos archivos siguen pendientes."""
+    """Cancelar no procesa el batch entero: esos archivos siguen pendientes."""
     app = QApplication.instance() or QApplication([])
     entrada = tmp_path / "input"
     pdf = _pdf(entrada / "bitacora.pdf")

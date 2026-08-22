@@ -18,7 +18,7 @@ Dos familias de campos no deciden el estado:
 - **Las firmas.** Que una bitácora de vuelo no traiga firma de técnico es lo
   normal, no un error de lectura; quién debía firmar cada tipo de página lo
   juzga ``app.validation.discrepancias``. Contarlas aquí ponía en ERROR a
-  casi toda la corrida por páginas perfectamente indexables.
+  casi toda la ejecución por páginas perfectamente indexables.
 - **Las celdas de carácter** (``day_1``, ``month_2``…). Son evidencia
   auxiliar de la fecha: si día, mes y año quedaron resueltos, da igual que
   una casilla suelta no se leyera.
@@ -41,7 +41,7 @@ DATE_FIELD_IDS = ("day", "month", "year")
 # Una matrícula impuesta por el consenso necesita más de una lectura física.
 # Para las lecturas directas, el ``status`` ya refleja el umbral configurado
 # por el usuario; imponer aquí otro piso fijo mandaría páginas válidas a
-# Revisar de forma liberal y haría crecer innecesariamente ese lote.
+# Revisar de forma liberal y haría crecer innecesariamente ese batch.
 AUTO_INDEX_MIN_VOTES = 2
 _INFERRED_MATRICULA_SOURCES = frozenset({
     "book_correction",

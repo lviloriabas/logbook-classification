@@ -111,7 +111,7 @@ def test_la_cookie_pegada_va_al_tarro_y_no_a_una_cabecera_fija():
 
 
 def test_una_cookie_del_servidor_no_borra_la_pegada():
-    """El fallo que esto evita: perder la sesion a mitad de un lote."""
+    """El fallo que esto evita: perder la sesion a mitad de un batch."""
     config = AirVaultConfig()
     sesion = SesionAirVault(config)
     sesion.usar_cookie(f"FedAuth={FEDAUTH}")
