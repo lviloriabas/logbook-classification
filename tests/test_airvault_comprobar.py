@@ -23,7 +23,6 @@ from app.airvault.flujo import (
     COMPLETADO,
     INDEXADO,
     LISTO,
-    NOMBRE_INCORRECTO,
     PROCESANDO,
     SIN_SUBIR,
     SOLO_REVISAR,
@@ -94,15 +93,13 @@ def trabajo_subido(tmp_path, paginas_en_airvault: int = 2,
     trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
                                "DP | BIT 18 AUG 2026 05 42")
     trabajo.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "entrega.pdf")
-    # Lo que la subida anota antes de mandar nada: es lo unico con lo que
-    # despues se reconoce el lote propio, porque Quick Upload los llama a
-    # todos «Empty-Batch».
     trabajo.manifiesto.lotes_previos = ["003VIEJO"]
     trabajo.guardar()
     cliente = ClienteFalso(
         paginas={n: pagina(n, estado=3) for n in range(1, 3)},
         lotes=[lote("003VIEJO", "DP | LO DE ANTES", 9),
-               lote(batch_id, "Empty-Batch", paginas_en_airvault)],
+               lote(batch_id, trabajo.manifiesto.nombre_batch,
+                    paginas_en_airvault)],
         picklist=["HP-1848CMP"],
         page_count=2,
     )
@@ -153,7 +150,6 @@ def test_con_todas_las_paginas_queda_listo_para_indexar(tmp_path):
 
 
 def test_el_lote_encontrado_queda_anotado_y_con_su_nombre(tmp_path):
-    """Quick Upload no admite nombre: todos llegan como «Empty-Batch»."""
     trabajo, cliente = trabajo_subido(tmp_path)
     comprobar_partes([trabajo], cliente)
     assert trabajo.manifiesto.batch_id == "003SRO"
@@ -174,23 +170,17 @@ def test_el_nombre_corregido_a_mano_reemplaza_un_id_de_index_batch(tmp_path):
     assert trabajo.manifiesto.batch_id == "003BIEN"
 
 
-def test_index_batch_no_se_confunde_con_ausente_ni_se_vuelve_a_subir(
-    tmp_path, monkeypatch
-):
+def test_un_id_cuyo_titulo_no_coincide_se_elimina(tmp_path):
     trabajo, _cliente = trabajo_subido(tmp_path, batch_id="003MAL")
     trabajo.fijar_lote("003MAL")
     cliente = ClienteFalso(lotes=[lote("003MAL", "Index Batch", 2)])
-    subidas = []
-    monkeypatch.setattr(
-        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
-    )
 
     parte, = comprobar_partes([trabajo], cliente)
-    subir_partes([trabajo], object(), cliente=cliente)
 
-    assert parte.estado == NOMBRE_INCORRECTO
-    assert "debe llamarse" in parte.detalle
-    assert subidas == []
+    assert parte.estado == BUSCANDO
+    assert parte.batch_id == ""
+    assert trabajo.manifiesto.batch_id is None
+    assert not trabajo.manifiesto.etapa_hecha("descubrir")
 
 
 def _trabajos_principal_division_y_revisar(tmp_path):
@@ -228,25 +218,24 @@ def test_comprobar_busca_principal_divisiones_y_revisar(tmp_path):
     assert all(t.manifiesto.etapa_hecha("subir") for t in trabajos)
 
 
-def test_ids_viejos_no_impiden_recuperar_todos_los_empty_batches(tmp_path):
+def test_revisar_no_se_asigna_a_las_divisiones_sin_titulo(tmp_path):
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
-    for indice, trabajo in enumerate(trabajos):
+    for trabajo in trabajos:
         trabajo.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "subido")
-        trabajo.manifiesto.batch_id = f"ID-VIEJO-{indice}"
+        trabajo.manifiesto.batch_id = "003REV"
+        trabajo.manifiesto.etapa("descubrir").marcar(
+            EstadoEtapa.HECHA, "003REV"
+        )
         trabajo.guardar()
     cliente = ClienteFalso(lotes=[
-        lote("003N01", "Empty-Batch", 2),
-        lote("003N02", "Empty-Batch", 2),
-        lote("003N03", "Empty-Batch", 2),
+        lote("003REV", "DP | BIT REVISAR", 2),
     ])
 
     estados = comprobar_partes(trabajos, cliente)
 
-    assert [t.manifiesto.batch_id for t in trabajos] == [
-        "003N01", "003N02", "003N03"
-    ]
+    assert [t.manifiesto.batch_id for t in trabajos] == [None, None, "003REV"]
     assert [parte.estado for parte in estados] == [
-        LISTO, LISTO, SOLO_REVISAR
+        BUSCANDO, BUSCANDO, SOLO_REVISAR
     ]
 
 
@@ -254,7 +243,7 @@ def test_un_lote_abierto_por_otro_no_se_ofrece_para_indexar(tmp_path):
     """AirVault no lo entrega: abrirlo deja la peticion colgada."""
     trabajo, cliente = trabajo_subido(tmp_path)
     cliente.lotes = [lote("003VIEJO", "DP | LO DE ANTES", 9),
-                     lote("003SRO", "Empty-Batch", 2,
+                     lote("003SRO", trabajo.manifiesto.nombre_batch, 2,
                           bloqueado_por="Diego Vargas")]
     parte, = comprobar_partes([trabajo], cliente)
     assert parte.estado == TOMADO
@@ -531,10 +520,13 @@ def test_primero_se_suben_todos_los_batches_y_despues_se_descubren(tmp_path,
     assert subidas == ["DP | BIT -1", "DP | BIT -2"]
     assert [t.manifiesto.batch_id for t in trabajos] == [None, None]
 
+    cliente.lotes = [
+        lote("001", trabajos[0].manifiesto.nombre_batch, 1),
+        lote("002", trabajos[1].manifiesto.nombre_batch, 1),
+    ]
     comprobar_partes(trabajos, cliente)
 
-    # La espera y el descubrimiento empiezan con todas las cargas terminadas.
-    assert trabajos[0].manifiesto.batch_id != trabajos[1].manifiesto.batch_id
+    assert [t.manifiesto.batch_id for t in trabajos] == ["001", "002"]
 
 
 # ── dar el lote por terminado ──────────────────────────────────────
@@ -599,7 +591,7 @@ def trabajo_con_divisoria(tmp_path, batch_id: str = "003SRO"):
     trabajo.fijar_lote(batch_id)
     cliente = ClienteFalso(
         lotes=[lote("003VIEJO", "DP | LO DE ANTES", 9),
-               lote(batch_id, "Empty-Batch", 3)],
+               lote(batch_id, trabajo.manifiesto.nombre_batch, 3)],
         page_count=3,
     )
     return trabajo, cliente
