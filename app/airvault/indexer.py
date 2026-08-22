@@ -145,7 +145,10 @@ class Indexador:
             raise ErrorDeGuarda("El manifiesto no tiene lote asignado")
 
         registros = self.manifiesto.registros
-        verificar_cantidad(registros, paginas_lote)
+        verificar_cantidad(
+            registros, paginas_lote,
+            self.manifiesto.separadores_borrados(),
+        )
 
         if self.manifiesto.solo_subir:
             # El lote esta subido para que alguien lo resuelva a mano. No se
