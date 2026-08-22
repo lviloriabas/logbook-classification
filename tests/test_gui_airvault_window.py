@@ -22,9 +22,16 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QLineEdit
 
-from app.gui.airvault_window import AirVaultWindow, csv_de_corrida
+from app.gui.airvault_window import (
+    ANCHO_MAXIMO_NOMBRE_BATCH,
+    ANCHO_MINIMO_NOMBRE_BATCH,
+    COLOR_INDEXADO,
+    AirVaultWindow,
+    csv_de_corrida,
+)
 
 RAIZ = Path(__file__).resolve().parents[1]
 
@@ -121,8 +128,25 @@ def test_el_menu_de_automatizacion_empieza_oculto_y_es_secuencial(ventana):
 
 
 def test_la_ventana_usa_batch_en_sus_campos_y_tabla(ventana):
-    assert ventana.lotes.horizontalHeaderItem(0).text() == "Batch"
+    assert [
+        ventana.lotes.horizontalHeaderItem(columna).text()
+        for columna in range(ventana.lotes.columnCount())
+    ] == ["ID", "Batch", "Páginas", "Estado"]
     assert "batch" in ventana.lote_edit.placeholderText().lower()
+
+
+def test_revisar_airvault_esta_a_la_derecha_de_subir(ventana):
+    botones = ventana.layout().itemAt(ventana.layout().count() - 1).layout()
+    widgets = [
+        botones.itemAt(indice).widget()
+        for indice in range(botones.count())
+        if botones.itemAt(indice).widget() is not None
+    ]
+
+    assert ventana.boton_revisar.text() == "Revisar en AirVault"
+    assert widgets.index(ventana.boton_revisar) == (
+        widgets.index(ventana.boton_subir) + 1
+    )
 
 
 def test_el_usuario_puede_elegir_el_limite_antes_de_subir(ventana, tmp_path):
@@ -354,10 +378,42 @@ def test_la_lista_dice_en_que_va_cada_lote(ventana):
     ]
     ventana._pintar_lotes()
     assert ventana.lotes.rowCount() == 2
-    assert "DP | BITS" in ventana.lotes.item(0, 0).text()
-    assert ventana.lotes.item(0, 1).text() == "5"
-    assert "Listo para indexar" in ventana.lotes.item(0, 2).text()
-    assert "Procesandose" in ventana.lotes.item(1, 2).text()
+    assert ventana.lotes.item(0, 0).text() == "003SRO"
+    assert ventana.lotes.item(0, 1).text() == "DP | BITS"
+    assert ventana.lotes.item(0, 2).text() == "5"
+    assert "Listo para indexar" in ventana.lotes.item(0, 3).text()
+    assert "Procesandose" in ventana.lotes.item(1, 3).text()
+
+
+def test_el_id_solo_aparece_cuando_airvault_lo_encuentra(ventana):
+    from app.airvault.flujo import BUSCANDO
+
+    sin_encontrar = parte(BUSCANDO)
+    sin_encontrar.trabajo.manifiesto.batch_id = None
+    ventana._estados = [sin_encontrar]
+
+    ventana._pintar_lotes()
+
+    assert ventana.lotes.item(0, 0).text() == ""
+
+
+def test_batch_conserva_el_nombre_hasta_un_ancho_razonable(ventana):
+    from app.airvault.flujo import LISTO
+
+    nombre = "DP | BIT 18 AUG 2026 05 42 - DIVISION PRINCIPAL"
+    ventana._estados = [parte(LISTO, nombre)]
+
+    ventana._pintar_lotes()
+
+    assert ventana.lotes.item(0, 1).text() == nombre
+    assert ventana.lotes.item(0, 1).toolTip() == nombre
+    assert ventana.lotes.columnWidth(1) == min(
+        max(
+            ventana.lotes.sizeHintForColumn(1) + 16,
+            ANCHO_MINIMO_NOMBRE_BATCH,
+        ),
+        ANCHO_MAXIMO_NOMBRE_BATCH,
+    )
 
 
 def test_todos_los_batches_confirmados_quedan_activos_en_blanco(ventana):
@@ -375,6 +431,25 @@ def test_todos_los_batches_confirmados_quedan_activos_en_blanco(ventana):
         ventana.lotes.item(fila, 0).foreground().style()
         is Qt.BrushStyle.NoBrush
         for fila in range(ventana.lotes.rowCount())
+    )
+
+
+def test_un_batch_indexado_por_lo_menos_una_vez_queda_verde(ventana):
+    from app.airvault.flujo import LISTO
+    from app.airvault.model import EstadoEtapa, Etapa
+
+    indexado = parte(LISTO)
+    indexado.trabajo.manifiesto.etapas = {
+        "indexar": Etapa(estado=EstadoEtapa.ERROR),
+    }
+    ventana._estados = [indexado]
+
+    ventana._pintar_lotes()
+
+    assert all(
+        ventana.lotes.item(0, columna).foreground().color()
+        == QColor(COLOR_INDEXADO)
+        for columna in range(ventana.lotes.columnCount())
     )
 
 
