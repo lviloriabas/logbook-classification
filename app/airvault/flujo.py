@@ -32,7 +32,6 @@ from app.airvault.discovery import (
 )
 from app.airvault.discovery import esperar as esperar_lote
 from app.airvault.discovery import buscar as buscar_lote
-from app.airvault.discovery import buscar_nuevo as buscar_lote_nuevo
 from app.airvault.indexer import Indexador, Plan, Resultado, verificar_lote
 from app.airvault.mapping import (
     ResolutorFlota,
@@ -541,9 +540,9 @@ class Trabajo:
         a subirlo crearia un segundo lote y no habria forma de saber en
         cual escribir.
 
-        Con ``cliente`` se anota antes que lotes habia en la cola. Es lo
-        unico con lo que despues se reconoce el propio: Quick Upload no
-        admite nombre de lote y todos llegan como «Empty-Batch».
+        El titulo viaja dentro de los valores de Quick Upload. La
+        confirmacion posterior exige que AirVault devuelva ese mismo titulo
+        antes de permitir que se suba la siguiente parte.
         """
         from app.airvault.uploader import SubidorQuickUpload
 
@@ -565,8 +564,6 @@ class Trabajo:
             primera, self.manifiesto.doc_type,
             self.manifiesto.audit_status, self.manifiesto.nombre_batch,
         )
-        if cliente is not None:
-            self.anotar_lotes_previos(cliente)
         subidor = SubidorQuickUpload(sesion, self.manifiesto.repo_id)
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.EN_CURSO)
         self.guardar()
@@ -581,20 +578,6 @@ class Trabajo:
             )
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, archivo.name)
         self.guardar()
-
-    def anotar_lotes_previos(self, cliente) -> None:
-        """Guarda la cola tal como esta antes de subir.
-
-        Si no se puede leer no se corta la subida: se pierde el atajo para
-        reconocer el lote, no el trabajo.
-        """
-        try:
-            previos = [lote.batch_id for lote in cliente.listar_lotes()]
-        except Exception as exc:  # noqa: BLE001 - la subida sigue igual
-            logger.info("No se pudo anotar la cola antes de subir: {}", exc)
-            return
-        self.manifiesto.lotes_previos = previos
-        logger.debug("En la cola habia {} lotes antes de subir", len(previos))
 
     def omitir_subida(self, motivo: str = "subido a mano") -> None:
         """Marca la subida como hecha por fuera del programa."""
@@ -616,26 +599,17 @@ class Trabajo:
         nombre = self.manifiesto.nombre_batch
         if avisar is not None:
             avisar(f"Buscando el lote {nombre} en AirVault", 0, 0)
-        previos = self.manifiesto.lotes_previos or None
         if esperar:
             lote = esperar_lote(
                 cliente.listar_lotes, nombre, self.manifiesto.repo_id,
                 esperadas, self.config.espera_descubrimiento_s,
                 self.config.espera_maxima_s, dormir=dormir,
-                previos=previos,
             )
         else:
-            lotes = cliente.listar_lotes()
-            try:
-                lote = buscar_lote(
-                    lotes, nombre, self.manifiesto.repo_id, esperadas,
-                )
-            except LoteNoEncontrado:
-                lote = previos is not None and buscar_lote_nuevo(
-                    lotes, previos, self.manifiesto.repo_id, esperadas,
-                )
-                if not lote:
-                    raise
+            lote = buscar_lote(
+                cliente.listar_lotes(), nombre,
+                self.manifiesto.repo_id, esperadas,
+            )
         return self.anotar_lote(cliente, lote, avisar)
 
     def anotar_lote(self, cliente, lote: ResumenLote,
@@ -1065,6 +1039,47 @@ def _prefijo(trabajo: "Trabajo") -> str:
     return f"Parte {manifiesto.parte} de {manifiesto.partes}: "
 
 
+def _validar_nombres_de_batches(trabajos: Sequence["Trabajo"]) -> None:
+    """Impide subir un PDF con el titulo de otra clase de batch.
+
+    ``REVISAR`` lleva una identidad propia y nunca puede ser el nombre de
+    una division automatica. Tambien se rechazan dos manifiestos con el
+    mismo titulo: AirVault no permitiria distinguir cual ID corresponde a
+    cada archivo despues de subirlos.
+    """
+    vistos: dict[str, "Trabajo"] = {}
+    for trabajo in trabajos:
+        manifiesto = trabajo.manifiesto
+        nombre = str(manifiesto.nombre_batch or "").strip()
+        normalizado = normalizar_nombre(nombre)
+        palabras = normalizado.split()
+        nombre_de_revisar = bool(
+            palabras
+            and (
+                palabras[-1] == "revisar"
+                or (
+                    len(palabras) >= 2
+                    and palabras[-2] == "revisar"
+                    and palabras[-1].isdigit()
+                )
+            )
+        )
+        if not normalizado:
+            raise ErrorDeCorrida("Hay un batch sin titulo; no se sube")
+        if nombre_de_revisar != manifiesto.solo_subir:
+            clase = "REVISAR" if manifiesto.solo_subir else "automatico"
+            raise ErrorDeCorrida(
+                f"El batch {nombre!r} esta marcado como {clase}, pero su "
+                "titulo corresponde a otra clase; no se sube"
+            )
+        if normalizado in vistos:
+            raise ErrorDeCorrida(
+                f"Dos archivos intentan usar el mismo titulo {nombre!r}; "
+                "no se suben porque recibirian IDs ambiguos"
+            )
+        vistos[normalizado] = trabajo
+
+
 def subir_partes(
     trabajos: Sequence["Trabajo"], sesion, avisar: Optional[Aviso] = None,
     cliente=None, dormir: Callable[[float], None] = time.sleep,
@@ -1077,10 +1092,13 @@ def subir_partes(
     ausentes vuelven a Quick Upload. Sin cliente se conserva el recorrido
     local para los usos antiguos del modulo.
 
-    La comprobacion solo reconoce cada batch por su titulo esperado. Un
+    La comprobacion solo reconoce cada batch por su titulo esperado. Cada
+    carga se confirma antes de mandar la siguiente porque AirVault puede
+    juntar archivos consecutivos y dejarles el titulo del ultimo. Un
     resultado generico o con el titulo de otra division sigue ausente y no
     recibe ningun ID local.
     """
+    _validar_nombres_de_batches(trabajos)
     por_subir = list(trabajos)
     if cliente is not None:
         estados = comprobar_partes(trabajos, cliente, avisar=avisar)
@@ -1108,6 +1126,11 @@ def subir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
+        if cliente is not None:
+            trabajo.descubrir(
+                cliente, esperar=True, dormir=dormir,
+                avisar=propio if avisar else None,
+            )
 
 
 def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:

@@ -18,9 +18,11 @@ import pytest
 
 from app.airvault.client import PaginaDelLote
 from app.airvault.config import AirVaultConfig
+from app.airvault.discovery import LoteNoEncontrado
 from app.airvault.flujo import (
     BUSCANDO,
     COMPLETADO,
+    ErrorDeCorrida,
     INDEXADO,
     LISTO,
     PROCESANDO,
@@ -237,6 +239,20 @@ def test_revisar_no_se_asigna_a_las_divisiones_sin_titulo(tmp_path):
     assert [parte.estado for parte in estados] == [
         BUSCANDO, BUSCANDO, SOLO_REVISAR
     ]
+
+
+def test_descubrir_tampoco_toma_revisar_para_un_automatico(tmp_path):
+    automatico, _division, revisar = (
+        _trabajos_principal_division_y_revisar(tmp_path)
+    )
+    cliente = ClienteFalso(lotes=[
+        lote("003REV", revisar.manifiesto.nombre_batch, 2),
+    ])
+
+    with pytest.raises(LoteNoEncontrado):
+        automatico.descubrir(cliente, esperar=False)
+
+    assert automatico.manifiesto.batch_id is None
 
 
 def test_un_lote_abierto_por_otro_no_se_ofrece_para_indexar(tmp_path):
@@ -478,6 +494,9 @@ def test_subir_confirma_todos_y_carga_solo_la_division_faltante(
     def subir(self, sesion, pdf="", avisar=None, cliente=None):
         subidas.append(self.manifiesto.nombre_batch)
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "subido")
+        cliente.lotes.append(
+            lote("003DOS", self.manifiesto.nombre_batch, 2)
+        )
 
     monkeypatch.setattr(Trabajo, "subir", subir)
 
@@ -488,45 +507,50 @@ def test_subir_confirma_todos_y_carga_solo_la_division_faltante(
     assert trabajos[2].manifiesto.batch_id == "003REV"
 
 
-def test_primero_se_suben_todos_los_batches_y_despues_se_descubren(tmp_path,
-                                                                   monkeypatch):
-    """Ninguna carga espera a que AirVault procese la anterior."""
-    csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
-    config = AirVaultConfig(espera_descubrimiento_s=0, espera_maxima_s=5)
-    trabajos = preparar_partes(config, tmp_path / "job", csv, "DP | BIT")
-    cliente = ClienteFalso(lotes=[lote("003VIEJO", "otro", 9)])
-
-    subidas: list[str] = []
+def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
+    tmp_path, monkeypatch
+):
+    """Evita que AirVault junte un automático con el batch de REVISAR."""
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    cliente = ClienteFalso()
+    eventos: list[tuple[str, str]] = []
 
     def subir(self, sesion, pdf="", avisar=None, cliente=None):
-        # Igual que la subida de verdad: anota la cola antes de mandar
-        # nada, que es lo unico con lo que despues se reconoce el lote
-        # propio —Quick Upload los llama a todos «Empty-Batch»—.
-        self.manifiesto.lotes_previos = [
-            l.batch_id for l in cliente.listar_lotes()
-        ]
-        subidas.append(self.manifiesto.nombre_batch)
-        # Al terminar cada subida el lote aparece en la cola, como en
-        # AirVault: es lo que deja seguir con la siguiente parte.
-        cliente.lotes.append(
-            lote(f"00{len(subidas)}", "Empty-Batch", 1)
-        )
+        eventos.append(("subir", self.manifiesto.nombre_batch))
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
 
+    def descubrir(self, cliente, esperar=True, dormir=None, avisar=None):
+        eventos.append(("confirmar", self.manifiesto.nombre_batch))
+        self.manifiesto.batch_id = f"ID-{len(eventos)}"
+        return self.manifiesto.batch_id
+
     monkeypatch.setattr(Trabajo, "subir", subir)
-    subir_partes(trabajos, SesionFalsa(), cliente=cliente,
-                 dormir=lambda _s: None)
+    monkeypatch.setattr(Trabajo, "descubrir", descubrir)
 
-    assert subidas == ["DP | BIT -1", "DP | BIT -2"]
-    assert [t.manifiesto.batch_id for t in trabajos] == [None, None]
+    subir_partes(trabajos, SesionFalsa(), cliente=cliente)
 
-    cliente.lotes = [
-        lote("001", trabajos[0].manifiesto.nombre_batch, 1),
-        lote("002", trabajos[1].manifiesto.nombre_batch, 1),
+    assert eventos == [
+        ("subir", "DP | BIT"),
+        ("confirmar", "DP | BIT"),
+        ("subir", "DP | BIT -2"),
+        ("confirmar", "DP | BIT -2"),
+        ("subir", "DP | BIT REVISAR"),
+        ("confirmar", "DP | BIT REVISAR"),
     ]
-    comprobar_partes(trabajos, cliente)
 
-    assert [t.manifiesto.batch_id for t in trabajos] == ["001", "002"]
+
+def test_un_automatico_con_titulo_revisar_no_se_sube(tmp_path, monkeypatch):
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    trabajos[0].manifiesto.nombre_batch = "DP | BIT REVISAR -1"
+    subidas = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
+    )
+
+    with pytest.raises(ErrorDeCorrida, match="marcado como automatico"):
+        subir_partes(trabajos, SesionFalsa(), cliente=ClienteFalso())
+
+    assert subidas == []
 
 
 # ── dar el lote por terminado ──────────────────────────────────────

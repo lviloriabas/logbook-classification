@@ -255,6 +255,7 @@ def test_otra_corrida_en_la_misma_carpeta_rehace_el_trabajo(tmp_path):
 class SubidorFalso:
     def __init__(self):
         self.subidos = []
+        self.valores = []
 
     def __call__(self, sesion, repo_id):
         return self
@@ -263,6 +264,7 @@ class SubidorFalso:
         from app.airvault.uploader import ResultadoSubida
 
         self.subidos.append(ruta)
+        self.valores.append(dict(valores))
         if avisar is not None:
             avisar("Subiendo", 1, 1)
         return ResultadoSubida(str(ruta), True)
@@ -281,6 +283,22 @@ def test_el_lote_no_se_sube_dos_veces(tmp_path, monkeypatch):
     trabajo.subir(object())
     assert len(falso.subidos) == 1
     assert trabajo.manifiesto.etapa_hecha("subir")
+
+
+def test_quick_upload_recibe_el_titulo_del_manifiesto(tmp_path, monkeypatch):
+    from app.airvault import uploader
+    from app.airvault.config import CAMPO_BATCH_NAME
+
+    csv = corrida(tmp_path)
+    falso = SubidorFalso()
+    monkeypatch.setattr(uploader, "SubidorQuickUpload", falso)
+    trabajo = Trabajo.preparar(
+        AirVaultConfig(), tmp_path / "job", csv, "DP | BIT -2"
+    )
+
+    trabajo.subir(object())
+
+    assert falso.valores[0][CAMPO_BATCH_NAME] == "DP | BIT -2"
 
 
 def test_la_subida_a_mano_se_puede_dar_por_hecha(tmp_path):

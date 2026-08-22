@@ -123,10 +123,9 @@ class Manifiesto(BaseModel):
     # El lote se sube pero no se indexa: recoge las bitacoras con algun dato
     # dudoso o en conflicto, que nadie debe publicar sin mirarlas una por una.
     solo_subir: bool = False
-    # Lotes que ya estaban en la cola justo antes de subir. Es lo que
-    # permite reconocer el propio: Quick Upload no deja ponerle nombre al
-    # lote —todos llegan como «Empty-Batch»—, asi que el nombre no
-    # distingue nada y la diferencia con esta lista si.
+    # Foto de la cola que guardaban versiones anteriores. Se conserva para
+    # leer sus manifiestos, pero ya no identifica batches: solo el titulo
+    # esperado puede asignar un ID.
     lotes_previos: List[str] = Field(default_factory=list)
 
     doc_type: str = "Log Page"
