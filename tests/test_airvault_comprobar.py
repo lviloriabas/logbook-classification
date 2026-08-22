@@ -507,10 +507,10 @@ def test_subir_confirma_todos_y_carga_solo_la_division_faltante(
     assert trabajos[2].manifiesto.batch_id == "003REV"
 
 
-def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
+def test_todos_los_batches_se_suben_antes_de_confirmar_el_primero(
     tmp_path, monkeypatch
 ):
-    """Evita que AirVault junte un automático con el batch de REVISAR."""
+    """Quick Upload termina todos los envios antes de buscar ningun ID."""
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     cliente = ClienteFalso()
     eventos: list[tuple[str, str]] = []
@@ -531,10 +531,10 @@ def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
 
     assert eventos == [
         ("subir", "DP | BIT"),
-        ("confirmar", "DP | BIT"),
         ("subir", "DP | BIT -2"),
-        ("confirmar", "DP | BIT -2"),
         ("subir", "DP | BIT REVISAR"),
+        ("confirmar", "DP | BIT"),
+        ("confirmar", "DP | BIT -2"),
         ("confirmar", "DP | BIT REVISAR"),
     ]
 
