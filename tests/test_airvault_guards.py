@@ -69,6 +69,14 @@ def test_log_distinto_es_desalineacion():
     assert [a.codigo for a in avisos] == ["desalineado"]
 
 
+def test_una_prueba_controlada_puede_permitir_log_distinto():
+    assert verificar_alineacion(
+        registro(log="7777777"),
+        {CAMPO_LOG_NUMBER: "2287325"},
+        permitir_log_distinto=True,
+    ) == []
+
+
 def test_log_igual_no_avisa():
     assert verificar_alineacion(registro(log="2287325"),
                                 {CAMPO_LOG_NUMBER: "2287325"}) == []

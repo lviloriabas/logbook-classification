@@ -123,9 +123,9 @@ class Manifiesto(BaseModel):
     # El lote se sube pero no se indexa: recoge las bitacoras con algun dato
     # dudoso o en conflicto, que nadie debe publicar sin mirarlas una por una.
     solo_subir: bool = False
-    # Foto de la cola que guardaban versiones anteriores. Se conserva para
-    # leer sus manifiestos, pero ya no identifica batches: solo el titulo
-    # esperado puede asignar un ID.
+    # Foto de la cola inmediatamente anterior a Quick Upload. AirVault suele
+    # publicar esos archivos como ``Empty-Batch`` aunque reciba C_BatchName;
+    # la diferencia de IDs permite reconocer el batch propio sin adivinar.
     lotes_previos: List[str] = Field(default_factory=list)
 
     doc_type: str = "Log Page"
