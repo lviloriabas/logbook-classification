@@ -28,6 +28,7 @@ from app.airvault.config import AirVaultConfig
 from app.airvault.client import ResumenLote
 from app.airvault.discovery import (
     LoteNoEncontrado,
+    buscar_nuevo,
     normalizar_nombre,
 )
 from app.airvault.discovery import esperar as esperar_lote
@@ -540,9 +541,9 @@ class Trabajo:
         a subirlo crearia un segundo lote y no habria forma de saber en
         cual escribir.
 
-        El titulo viaja dentro de los valores de Quick Upload. La
-        confirmacion posterior exige que AirVault devuelva ese mismo titulo;
-        el coordinador la hace despues de enviar todas las partes.
+        El titulo viaja dentro de los valores de Quick Upload, aunque AirVault
+        publica primero ``Empty-Batch``. El coordinador identifica y nombra
+        esta parte antes de permitir que empiece la subida de la siguiente.
         """
         from app.airvault.uploader import SubidorQuickUpload
 
@@ -1105,10 +1106,11 @@ def subir_partes(
     Solo un trabajo local realmente pendiente vuelve a Quick Upload. Sin
     cliente se conserva el recorrido local para los usos antiguos del modulo.
 
-    La comprobacion solo reconoce cada batch por su titulo esperado. Primero
-    se mandan todos los archivos faltantes y solo despues se espera a que
-    aparezca cada batch. Un resultado generico o con el titulo de otra
-    division sigue ausente y no recibe ningun ID local.
+    Cada archivo nuevo se confirma y se nombra antes de mandar el siguiente.
+    Quick Upload publica primero ``Empty-Batch`` y dos cargas simultaneas del
+    mismo tamano no se podrian distinguir con seguridad. La instantanea de la
+    cola tomada antes de cada subida permite recuperar tambien una carga cuya
+    confirmacion se interrumpio.
     """
     _validar_nombres_de_batches(trabajos)
     por_subir = list(trabajos)
@@ -1147,20 +1149,22 @@ def subir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
+        if al_finalizar_subidas is not None:
+            # La UI debe reflejar que Quick Upload ya acepto este archivo
+            # incluso si AirVault tarda o falla antes de publicar su ID.
+            al_finalizar_subidas(trabajos)
 
-    if al_finalizar_subidas is not None:
-        al_finalizar_subidas(trabajos)
-
-    if cliente is not None and por_subir:
-        if avisar is not None:
-            avisar(
-                "Todos los batches pendientes se subieron; "
-                "comprobando cuales aparecen en AirVault",
-                0, 0,
+        if cliente is not None:
+            if avisar is not None:
+                avisar(
+                    f"{cabeza}Subido; esperando a que AirVault publique "
+                    "y nombre el batch antes de continuar",
+                    0, 0,
+                )
+            trabajo.descubrir(
+                cliente, esperar=True, dormir=dormir,
+                avisar=propio if avisar else None,
             )
-        descubrir_partes(
-            por_subir, cliente, esperar=True, dormir=dormir, avisar=avisar,
-        )
 
 
 def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:
@@ -1183,11 +1187,11 @@ def subir_y_descubrir_partes(
     dormir: Callable[[float], None] = time.sleep,
     avisar: Optional[Aviso] = None,
 ) -> None:
-    """Sube todas las partes y despues ubica todos sus batches.
+    """Sube y ubica cada parte antes de empezar la siguiente.
 
-    Ninguna consulta de descubrimiento se intercala con Quick Upload: la
-    primera fase termina de enviar todos los archivos y la segunda espera
-    a que AirVault vaya mostrando cada titulo esperado.
+    La separacion conserva una instantanea distinta de la cola para cada
+    archivo. Asi varios resultados llamados ``Empty-Batch`` nunca quedan
+    mezclados entre si aunque tengan la misma cantidad de paginas.
     """
     for trabajo in trabajos:
         cabeza = _prefijo(trabajo)
@@ -1199,9 +1203,10 @@ def subir_y_descubrir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
-    descubrir_partes(
-        trabajos, cliente, esperar=esperar, dormir=dormir, avisar=avisar,
-    )
+        trabajo.descubrir(
+            cliente, esperar=esperar, dormir=dormir,
+            avisar=propio if avisar else None,
+        )
 
 
 def descubrir_partes(
@@ -1437,14 +1442,15 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
 
 def _ubicar(trabajo: "Trabajo", cliente,
             lotes: Sequence[ResumenLote]) -> Optional[ResumenLote]:
-    """Busca la parte por su nombre esperado y actualiza su ID.
+    """Busca la parte por su nombre o por la instantanea previa y actualiza ID.
 
     Devuelve ``None`` mientras AirVault no lo haya sacado, que no es un
     fallo: un lote recien subido tarda en cruzar su procesamiento. El nombre
     manda sobre cualquier ID guardado: si alguien corrigio manualmente el
-    titulo, esa coincidencia recupera el batch correcto. Un ID cuyo titulo
-    no coincide se descarta; ni el orden de llegada ni la cantidad de
-    paginas identifican una division.
+    titulo, esa coincidencia recupera el batch correcto. Si Quick Upload lo
+    dejo como ``Empty-Batch``, se usa la diferencia contra la cola guardada
+    antes de subir. Una diferencia ambigua se propaga como error en vez de
+    escribir o renombrar el batch equivocado.
     """
     manifiesto = trabajo.manifiesto
     esperadas = len(manifiesto.registros)
@@ -1453,6 +1459,15 @@ def _ubicar(trabajo: "Trabajo", cliente,
             lotes, manifiesto.nombre_batch, manifiesto.repo_id, esperadas
         )
     except LoteNoEncontrado:
+        lote = None
+        if not manifiesto.batch_id and manifiesto.lotes_previos:
+            lote = buscar_nuevo(
+                lotes, manifiesto.lotes_previos,
+                manifiesto.repo_id, esperadas,
+            )
+        if lote is not None:
+            trabajo.anotar_lote(cliente, lote)
+            return lote
         if manifiesto.batch_id:
             manifiesto.batch_id = None
             manifiesto.etapas["descubrir"] = Etapa()
