@@ -1066,13 +1066,36 @@ def subir_partes(
     trabajos: Sequence["Trabajo"], sesion, avisar: Optional[Aviso] = None,
     cliente=None, dormir: Callable[[float], None] = time.sleep,
 ) -> None:
-    """Sube primero todos los archivos, sin esperar ni descubrir entre ellos.
+    """Confirma todos los batches y sube solamente los que falten.
+
+    Con cliente, AirVault es la fuente de verdad aunque el manifiesto local
+    diga que una parte ya se subio: se buscan tambien el batch sin sufijo y
+    los de REVISAR. Los encontrados conservan o recuperan su ID; solo los
+    ausentes vuelven a Quick Upload. Sin cliente se conserva el recorrido
+    local para los usos antiguos del modulo.
 
     La espera de procesamiento empieza unicamente cuando todas las cargas
-    terminaron. La comprobacion conjunta reconoce despues cada batch nuevo
-    y evita que dos trabajos reclamen el mismo resultado de Quick Upload.
+    faltantes terminaron. La comprobacion conjunta reconoce despues cada
+    batch nuevo y evita que dos trabajos reclamen el mismo resultado.
     """
-    for trabajo in trabajos:
+    por_subir = list(trabajos)
+    if cliente is not None:
+        estados = comprobar_partes(trabajos, cliente, avisar=avisar)
+        por_subir = [
+            parte.trabajo for parte in estados
+            if parte.estado in (SIN_SUBIR, BUSCANDO)
+        ]
+        encontrados = len(trabajos) - len(por_subir)
+        if avisar is not None:
+            avisar(
+                f"AirVault confirmo {encontrados} de {len(trabajos)} "
+                f"batches; se subiran {len(por_subir)} faltantes",
+                0, 0,
+            )
+        for trabajo in por_subir:
+            _reiniciar_subida_ausente(trabajo)
+
+    for trabajo in por_subir:
         cabeza = _prefijo(trabajo)
 
         def propio(texto: str, hechas: int, total: int,
@@ -1082,6 +1105,21 @@ def subir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
+
+
+def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:
+    """Quita la suposicion local de un batch que AirVault no devolvio."""
+    manifiesto = trabajo.manifiesto
+    manifiesto.batch_id = None
+    manifiesto.lotes_previos = []
+    for nombre in (
+        "subir", "descubrir", "indexar", "verificar", "completar",
+    ):
+        manifiesto.etapas[nombre] = Etapa()
+    for registro in manifiesto.registros:
+        registro.estado = EstadoRegistro.PENDIENTE
+        registro.avisos = []
+    trabajo.guardar()
 
 
 def subir_y_descubrir_partes(
@@ -1315,7 +1353,12 @@ def _ubicar(trabajo: "Trabajo", cliente,
     """
     manifiesto = trabajo.manifiesto
     if manifiesto.batch_id:
-        return buscar_por_id(lotes, manifiesto.batch_id)
+        lote = buscar_por_id(lotes, manifiesto.batch_id)
+        if lote is not None:
+            return lote
+        # El ID local puede pertenecer a una comprobacion anterior o haber
+        # quedado mal asociado. Se vuelve a buscar por nombre antes de dar
+        # la parte por ausente y subir un duplicado.
     esperadas = len(manifiesto.registros)
     try:
         lote = buscar_lote(
@@ -1323,8 +1366,15 @@ def _ubicar(trabajo: "Trabajo", cliente,
         )
     except LoteNoEncontrado:
         previos = manifiesto.lotes_previos
+        # La diferencia contra la foto previa solo identifica resultados
+        # crudos de Quick Upload. Un batch que ya tiene otro nombre pertenece
+        # a otra parte y no puede usarse para rellenar la que falta.
+        genericos = [
+            remoto for remoto in lotes
+            if normalizar_nombre(remoto.nombre).startswith("empty batch")
+        ]
         lote = buscar_lote_nuevo(
-            lotes, previos, manifiesto.repo_id, esperadas
+            genericos, previos, manifiesto.repo_id, esperadas
         ) if previos else None
     if lote is None:
         return None
@@ -1344,18 +1394,21 @@ def _estado_de(trabajo: "Trabajo", cliente,
     subida_rastreable = bool(subida and subida.estado in (
         EstadoEtapa.HECHA, EstadoEtapa.OMITIDA, EstadoEtapa.EN_CURSO,
     ))
-    if not subida_rastreable:
-        return EstadoParte(trabajo, SIN_SUBIR, "todavia sin subir")
-    if not manifiesto.batch_id and manifiesto.lotes_previos:
-        return EstadoParte(
-            trabajo, BUSCANDO,
-            "esperando que aparezca el conjunto completo de batches",
-        )
+    # Se busca siempre, incluso si el manifiesto no alcanzo a registrar la
+    # subida. Asi aparecen el batch principal sin «-numero», sus divisiones
+    # y REVISAR, y un batch remoto recupera su ID en vez de volver a subirse.
     lote = _ubicar(trabajo, cliente, lotes)
     if lote is None:
+        if not subida_rastreable:
+            return EstadoParte(trabajo, SIN_SUBIR, "no esta en AirVault")
         return EstadoParte(
             trabajo, BUSCANDO, "AirVault todavia no lo saca en la cola"
         )
+    if not subida_rastreable:
+        manifiesto.etapa("subir").marcar(
+            EstadoEtapa.HECHA, "confirmado en AirVault"
+        )
+        trabajo.guardar()
     if lote.paginas != esperadas:
         # Aparece en la cola antes de estar entero. Escribir asi correria
         # cada dato a la bitacora de al lado, asi que hasta que las
@@ -1393,14 +1446,20 @@ def _asignar_batches_nuevos(
     conjunto completo y lo empareja por cantidad de paginas y orden de
     recepcion, sin permitir que un batch se asigne dos veces.
     """
+    ids_remotos = {lote.batch_id.strip().upper() for lote in lotes}
     reclamados = {
         t.manifiesto.batch_id.strip().upper()
-        for t in trabajos if t.manifiesto.batch_id
+        for t in trabajos
+        if t.manifiesto.batch_id
+        and t.manifiesto.batch_id.strip().upper() in ids_remotos
     }
     pendientes: List["Trabajo"] = []
     for trabajo in trabajos:
         manifiesto = trabajo.manifiesto
-        if manifiesto.batch_id:
+        if (
+            manifiesto.batch_id
+            and manifiesto.batch_id.strip().upper() in ids_remotos
+        ):
             continue
         subida = manifiesto.etapas.get("subir")
         if not subida or subida.estado not in (
@@ -1446,6 +1505,7 @@ def _asignar_batches_nuevos(
         nuevos = [
             lote for lote in recien_llegados(lotes, previos, repo_id)
             if lote.batch_id.strip().upper() not in reclamados
+            and normalizar_nombre(lote.nombre).startswith("empty batch")
         ]
         esperadas = Counter(len(t.manifiesto.registros) for t in grupo)
         if len(nuevos) != len(grupo):

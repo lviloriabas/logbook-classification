@@ -157,6 +157,63 @@ def test_el_lote_encontrado_queda_anotado_y_con_su_nombre(tmp_path):
     assert trabajo.manifiesto.etapa_hecha("descubrir")
 
 
+def _trabajos_principal_division_y_revisar(tmp_path):
+    """Tres nombres esperados, incluidos los dos que no terminan en numero."""
+    csv = corrida(tmp_path)
+    nombres = ("DP | BIT", "DP | BIT -2", "DP | BIT REVISAR")
+    trabajos = []
+    for indice, nombre in enumerate(nombres, start=1):
+        trabajo = Trabajo.preparar(
+            AirVaultConfig(), tmp_path / f"job-{indice}", csv, nombre
+        )
+        trabajo.manifiesto.solo_subir = nombre.endswith("REVISAR")
+        trabajo.manifiesto.lotes_previos = ["003VIEJO"]
+        trabajo.guardar()
+        trabajos.append(trabajo)
+    return trabajos
+
+
+def test_comprobar_busca_principal_divisiones_y_revisar(tmp_path):
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    cliente = ClienteFalso(lotes=[
+        lote("003PRI", "DP | BIT", 2),
+        lote("003DOS", "DP | BIT -2", 2),
+        lote("003REV", "DP | BIT REVISAR", 2),
+    ])
+
+    estados = comprobar_partes(trabajos, cliente)
+
+    assert [t.manifiesto.batch_id for t in trabajos] == [
+        "003PRI", "003DOS", "003REV"
+    ]
+    assert [parte.estado for parte in estados] == [
+        LISTO, LISTO, SOLO_REVISAR
+    ]
+    assert all(t.manifiesto.etapa_hecha("subir") for t in trabajos)
+
+
+def test_ids_viejos_no_impiden_recuperar_todos_los_empty_batches(tmp_path):
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    for indice, trabajo in enumerate(trabajos):
+        trabajo.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "subido")
+        trabajo.manifiesto.batch_id = f"ID-VIEJO-{indice}"
+        trabajo.guardar()
+    cliente = ClienteFalso(lotes=[
+        lote("003N01", "Empty-Batch", 2),
+        lote("003N02", "Empty-Batch", 2),
+        lote("003N03", "Empty-Batch", 2),
+    ])
+
+    estados = comprobar_partes(trabajos, cliente)
+
+    assert [t.manifiesto.batch_id for t in trabajos] == [
+        "003N01", "003N02", "003N03"
+    ]
+    assert [parte.estado for parte in estados] == [
+        LISTO, LISTO, SOLO_REVISAR
+    ]
+
+
 def test_un_lote_abierto_por_otro_no_se_ofrece_para_indexar(tmp_path):
     """AirVault no lo entrega: abrirlo deja la peticion colgada."""
     trabajo, cliente = trabajo_subido(tmp_path)
@@ -342,6 +399,35 @@ def test_el_worker_reintenta_una_pagina_que_airvault_deja_amarilla(tmp_path):
 
 class SesionFalsa:
     """Se traga la subida sin red."""
+
+
+def test_subir_confirma_todos_y_carga_solo_la_division_faltante(
+    tmp_path, monkeypatch
+):
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    for indice, trabajo in enumerate(trabajos):
+        trabajo.manifiesto.etapa("subir").marcar(
+            EstadoEtapa.HECHA, "supuestamente subido"
+        )
+        trabajo.manifiesto.batch_id = f"ID-VIEJO-{indice}"
+        trabajo.guardar()
+    cliente = ClienteFalso(lotes=[
+        lote("003PRI", "DP | BIT", 2),
+        lote("003REV", "DP | BIT REVISAR", 2),
+    ])
+    subidas = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        subidas.append(self.manifiesto.nombre_batch)
+        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "subido")
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    subir_partes(trabajos, SesionFalsa(), cliente=cliente)
+
+    assert subidas == ["DP | BIT -2"]
+    assert trabajos[0].manifiesto.batch_id == "003PRI"
+    assert trabajos[2].manifiesto.batch_id == "003REV"
 
 
 def test_primero_se_suben_todos_los_batches_y_despues_se_descubren(tmp_path,
