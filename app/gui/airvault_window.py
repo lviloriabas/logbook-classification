@@ -926,9 +926,10 @@ class AirVaultWindow(QDialog):
         self.boton_subir.setObjectName("primaryButton")
         self.boton_subir.setEnabled(False)
         self.boton_subir.setToolTip(
-            "Manda a AirVault los PDF de la entrega. Termina cuando termina "
-            "la subida; que el servidor los procese tarda más y se comprueba "
-            "después."
+            "Manda a AirVault los PDF de la entrega y después comprueba que "
+            "cada batch exista allí, aunque la aplicación ya lo tuviera "
+            "marcado como subido. El indexado solo se habilita cuando "
+            "AirVault confirma el batch y sus páginas."
         )
         self.boton_subir.clicked.connect(self._subir)
 
@@ -1498,10 +1499,14 @@ class AirVaultWindow(QDialog):
             f"la lista de arriba dice en qué van."
         )
         self.estado_label.setText("Subida terminada")
-        self._anotar("Subida terminada; falta que AirVault los procese")
-        # Solo despues de terminar todas las cargas empieza la espera. Si el
-        # paso se desactivo en el menu oculto, la subida termina aqui.
-        self._comprobar_al_terminar = self.auto_esperar_check.isChecked()
+        self._anotar(
+            "Subida terminada; se confirma cada batch en AirVault"
+        )
+        # «Subir» no confia en la marca local: en cada clic consulta la cola
+        # remota, recupera el ID que falte y solo entonces deja indexar. La
+        # opcion de espera automatica decide si se seguira preguntando cuando
+        # AirVault aun lo procese, pero nunca elimina esta primera comprobacion.
+        self._comprobar_al_terminar = True
 
     def _al_comprobar(self, datos: dict) -> None:
         from app.airvault.flujo import LISTO

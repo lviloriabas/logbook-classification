@@ -323,6 +323,26 @@ def test_subir_no_indexa_nada_y_dice_que_falta_esperar(ventana):
     assert not ventana.boton_indexar.isEnabled()
 
 
+def test_cada_click_en_subir_confirma_los_batches_en_airvault(
+    ventana, monkeypatch
+):
+    """La marca local de subida no basta para habilitar el indexado."""
+    comprobaciones = []
+    monkeypatch.setattr(
+        ventana, "_comprobar", lambda: comprobaciones.append(True)
+    )
+    ventana.auto_esperar_check.setChecked(False)
+    ventana._comprobar_al_terminar = False
+
+    ventana._al_subir({"trabajos": [TrabajoFalso()], "cliente": object()})
+    ventana._al_terminar()
+
+    assert comprobaciones == [True]
+    assert "confirma cada batch" in ventana.bitacora.item(
+        ventana.bitacora.count() - 1
+    ).text()
+
+
 def test_la_lista_dice_en_que_va_cada_lote(ventana):
     from app.airvault.flujo import LISTO, PROCESANDO
 
