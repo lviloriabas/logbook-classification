@@ -178,6 +178,7 @@ class TrabajoAirVaultWorker(QThread):
     """
 
     paso = Signal(str, int, int)
+    subidas_actualizadas = Signal(object)
     subido = Signal(object)
     comprobado = Signal(object)
     indexado = Signal(object)
@@ -239,6 +240,11 @@ class TrabajoAirVaultWorker(QThread):
             restante -= 0.5
         if self.hay_que_parar():
             raise TrabajoCancelado()
+
+    def _notificar_subidas(self, trabajos) -> None:
+        """Publica el estado local antes de empezar a buscar los IDs."""
+        actuales = self.estado.get("trabajos") or trabajos
+        self.subidas_actualizadas.emit({"trabajos": list(actuales)})
 
     # ── la conexión ────────────────────────────────────────────────
 
@@ -341,6 +347,7 @@ class TrabajoAirVaultWorker(QThread):
         subir_partes(
             trabajos, estado["sesion"], avisar=self._avisar, cliente=cliente,
             dormir=self._dormir,
+            al_finalizar_subidas=self._notificar_subidas,
         )
         self.subido.emit({
             "trabajos": estado["trabajos"], "cliente": cliente,
@@ -356,6 +363,7 @@ class TrabajoAirVaultWorker(QThread):
         subir_partes(
             estado["pendientes_subida"], estado["sesion"],
             avisar=self._avisar, cliente=cliente, dormir=self._dormir,
+            al_finalizar_subidas=self._notificar_subidas,
         )
         self.subido.emit({
             "trabajos": estado["trabajos"], "cliente": cliente,
@@ -1551,6 +1559,7 @@ class AirVaultWindow(QDialog):
         self._habilitar(False)
         worker = TrabajoAirVaultWorker(modo, estado, self)
         worker.paso.connect(self._mostrar_paso)
+        worker.subidas_actualizadas.connect(self._al_actualizar_subidas)
         worker.subido.connect(self._al_subir)
         worker.comprobado.connect(self._al_comprobar)
         worker.indexado.connect(self._al_indexar)
@@ -1646,8 +1655,7 @@ class AirVaultWindow(QDialog):
         self.bitacora.scrollToBottom()
 
     def _al_subir(self, datos: dict) -> None:
-        self._trabajos = datos["trabajos"]
-        self._estado["trabajos"] = self._trabajos
+        self._al_actualizar_subidas(datos)
         self.limite_batch_spin.setEnabled(False)
         cuantos = len(self._trabajos)
         lotes = "el batch" if cuantos == 1 else f"los {cuantos} batches"
@@ -1665,6 +1673,15 @@ class AirVaultWindow(QDialog):
         # opcion de espera automatica decide si se seguira preguntando cuando
         # AirVault aun lo procese, pero nunca elimina esta primera comprobacion.
         self._comprobar_al_terminar = True
+
+    def _al_actualizar_subidas(self, datos: dict) -> None:
+        """Refleja en la tabla las cargas antes de buscar sus IDs."""
+        from app.airvault.flujo import estado_local
+
+        self._trabajos = list(datos["trabajos"])
+        self._estado["trabajos"] = self._trabajos
+        self._estados = [estado_local(t) for t in self._trabajos]
+        self._pintar_lotes()
 
     def _al_comprobar(self, datos: dict) -> None:
         from app.airvault.flujo import LISTO
