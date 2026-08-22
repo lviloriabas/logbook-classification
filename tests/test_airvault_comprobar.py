@@ -337,6 +337,19 @@ def test_el_estado_local_no_le_pregunta_nada_a_airvault(tmp_path):
     assert "falta comprobar" in parte.detalle
 
 
+def test_revisar_subido_sigue_esperando_hasta_que_tenga_id(tmp_path):
+    revisar = _trabajos_principal_division_y_revisar(tmp_path)[2]
+    revisar.manifiesto.etapa("subir").marcar(
+        EstadoEtapa.HECHA, "revisar.pdf"
+    )
+    revisar.guardar()
+
+    parte = estado_local(revisar)
+
+    assert parte.estado == BUSCANDO
+    assert parte.batch_id == ""
+
+
 # ── retomar una ejecucion de ayer ──────────────────────────────────
 
 def test_una_ejecucion_ya_preparada_se_retoma_sin_rehacerla(tmp_path):
@@ -550,15 +563,22 @@ def test_todos_los_batches_se_suben_antes_de_confirmar_el_primero(
         self.manifiesto.batch_id = f"ID-{len(eventos)}"
         return self.manifiesto.batch_id
 
+    def actualizar(trabajos_actualizados):
+        eventos.append(("actualizar", str(len(trabajos_actualizados))))
+
     monkeypatch.setattr(Trabajo, "subir", subir)
     monkeypatch.setattr(Trabajo, "descubrir", descubrir)
 
-    subir_partes(trabajos, SesionFalsa(), cliente=cliente)
+    subir_partes(
+        trabajos, SesionFalsa(), cliente=cliente,
+        al_finalizar_subidas=actualizar,
+    )
 
     assert eventos == [
         ("subir", "DP | BIT"),
         ("subir", "DP | BIT -2"),
         ("subir", "DP | BIT REVISAR"),
+        ("actualizar", "3"),
         ("confirmar", "DP | BIT"),
         ("confirmar", "DP | BIT -2"),
         ("confirmar", "DP | BIT REVISAR"),

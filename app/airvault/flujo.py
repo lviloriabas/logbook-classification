@@ -341,7 +341,7 @@ COMPLETADO = "completado"
 NOMBRE_ESTADO_PARTE = {
     SIN_SUBIR: "Sin subir",
     BUSCANDO: "Subido; esperando a AirVault",
-    PROCESANDO: "Procesandose en AirVault",
+    PROCESANDO: "Procesándose en AirVault",
     LISTO: "Listo para indexar",
     TOMADO: "Abierto por otra persona",
     SOLO_REVISAR: "Para revisar a mano",
@@ -1083,6 +1083,9 @@ def _validar_nombres_de_batches(trabajos: Sequence["Trabajo"]) -> None:
 def subir_partes(
     trabajos: Sequence["Trabajo"], sesion, avisar: Optional[Aviso] = None,
     cliente=None, dormir: Callable[[float], None] = time.sleep,
+    al_finalizar_subidas: Optional[
+        Callable[[Sequence["Trabajo"]], None]
+    ] = None,
 ) -> None:
     """Confirma todos los batches y sube solamente los que falten.
 
@@ -1135,6 +1138,9 @@ def subir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
+
+    if al_finalizar_subidas is not None:
+        al_finalizar_subidas(trabajos)
 
     if cliente is not None and por_subir:
         if avisar is not None:
@@ -1415,7 +1421,7 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
         return EstadoParte(
             trabajo, INDEXADO, verificar.detalle
         )
-    if manifiesto.solo_subir:
+    if manifiesto.solo_subir and manifiesto.batch_id:
         return EstadoParte(trabajo, SOLO_REVISAR, "subido, se indexa a mano")
     return EstadoParte(trabajo, BUSCANDO, "subido; falta comprobar")
 

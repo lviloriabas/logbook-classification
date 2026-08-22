@@ -381,6 +381,12 @@ class ManifiestoFalso:
         self.nombre_batch = nombre
         self.registros = [None] * paginas
         self.batch_id = batch_id
+        self.etapas = {}
+        self.solo_subir = False
+
+    @staticmethod
+    def etapa_hecha(nombre):
+        return nombre == "subir"
 
 
 class TrabajoFalso:
@@ -404,6 +410,17 @@ def test_subir_no_indexa_nada_y_dice_que_falta_esperar(ventana):
     assert "Subida terminada" in texto
     assert "procesar" in texto
     assert not ventana.boton_indexar.isEnabled()
+
+
+def test_la_tabla_marca_subido_antes_de_que_airvault_devuelva_el_id(ventana):
+    trabajo = TrabajoFalso(batch_id=None)
+
+    ventana._al_actualizar_subidas({"trabajos": [trabajo]})
+
+    assert ventana.lotes.item(0, 0).text() == ""
+    assert "Subido; esperando a AirVault" in (
+        ventana.lotes.item(0, 3).text()
+    )
 
 
 def test_cada_click_en_subir_confirma_los_batches_en_airvault(
@@ -440,7 +457,7 @@ def test_la_lista_dice_en_que_va_cada_lote(ventana):
     assert ventana.lotes.item(0, 1).text() == "DP | BITS"
     assert ventana.lotes.item(0, 2).text() == "5"
     assert "Listo para indexar" in ventana.lotes.item(0, 3).text()
-    assert "Procesandose" in ventana.lotes.item(1, 3).text()
+    assert "Procesándose" in ventana.lotes.item(1, 3).text()
 
 
 def test_el_id_solo_aparece_cuando_airvault_lo_encuentra(ventana):
