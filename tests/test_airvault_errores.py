@@ -1,6 +1,6 @@
-"""Lo que pasa cuando AirVault falla a mitad de un lote.
+"""Lo que pasa cuando AirVault falla a mitad de un batch.
 
-Un lote son cientos de peticiones y una subida completa casi dos mil: a esa
+Un batch son cientos de peticiones y una subida completa casi dos mil: a esa
 escala un corte de red o una página que no carga dejan de ser raros. Lo que
 no puede pasar es que un tropiezo tire el trabajo entero, ni que una caída
 marque como fallidas cuatrocientas páginas que nadie llegó a intentar.
@@ -132,7 +132,7 @@ def test_lo_que_no_mejora_insistiendo_no_se_reintenta():
 
 
 def test_un_rechazo_de_una_pagina_no_es_un_fallo_del_camino():
-    """Un 404 frena esa pagina; el lote entero sigue.
+    """Un 404 frena esa pagina; el batch entero sigue.
 
     Si se anunciara como error de conexion, el indexador daria por caido el
     camino y marcaria como fallidas cientos de paginas que nadie intento.
@@ -156,7 +156,7 @@ def test_el_tiempo_agotado_menciona_el_lote_abierto():
     with pytest.raises(ErrorDeConexion) as fallo:
         s.get("/index/Batch/LockAndGetBatchInfo")
     motivo = str(fallo.value)
-    assert "un solo dueno por lote" in motivo
+    assert "un solo dueno por batch" in motivo
     # Tambien cuando lo dejo tomado el propio programa, no solo el navegador.
     assert "intento anterior no llego a desbloquearlo" in motivo
 
@@ -356,7 +356,7 @@ def test_una_sesion_caducada_se_renueva_sin_ventana_y_sigue(monkeypatch):
 
     El perfil de Edge sabe volver a entrar solo —pasa otra vez por el
     enlace federado y Microsoft lo reconoce sin preguntar nada—, asi que
-    una caducidad no tiene por que tumbar un lote de cuatrocientas
+    una caducidad no tiene por que tumbar un batch de cuatrocientas
     paginas: se rehace la sesion y se repite la peticion.
     """
     from app.airvault import navegador
@@ -440,7 +440,7 @@ def test_lo_que_escribe_lleva_el_token_del_sitio():
 
 
 def test_leer_no_pide_token_ni_gasta_una_peticion_de_mas():
-    """Son cientos de lecturas por lote; una portada por cada una sobra."""
+    """Son cientos de lecturas por batch; una portada por cada una sobra."""
     s = sesion([RespuestaFalsa(json_data={"rows": []})])
     s.get("/index/Batch/GetBatches")
     assert s.http.portadas == []

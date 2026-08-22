@@ -1,7 +1,7 @@
-"""Descarte de páginas repetidas o en blanco dentro de una corrida.
+"""Descarte de páginas repetidas o en blanco dentro de una ejecución.
 
 La ventana principal y el visor de CSV ofrecen lo mismo sobre los datos que
-ya están procesados: quitar de la corrida las páginas que no aportan nada a
+ya están procesados: quitar de la ejecución las páginas que no aportan nada a
 la entrega. Como el criterio tiene que ser el mismo en las dos, vive aquí y
 no en ninguna de ellas.
 
@@ -82,7 +82,7 @@ def depurar(
     """Quita las páginas marcadas y devuelve los reportes que quedan.
 
     Los reportes se modifican en el sitio, igual que el resto de los pasos
-    que corrigen una corrida ya procesada, y se recalcula el resumen de cada
+    que corrigen una ejecución ya procesada, y se recalcula el resumen de cada
     uno para que el JSON y las estadísticas cuadren con sus páginas. El que
     se queda sin ninguna no entra en la lista devuelta: un PDF sin páginas no
     tiene nada que escribir.

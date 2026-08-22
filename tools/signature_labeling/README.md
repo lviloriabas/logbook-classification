@@ -17,7 +17,7 @@ portable/python312/tools/python.exe tools/signature_labeling/extract.py --pages 
 ```
 
 Lee los PDF de `input/`, repite la geometría exacta del pipeline (corrección
-de inclinación + alineación con las anclas del lote) y guarda un PNG por cada
+de inclinación + alineación con las anclas del batch) y guarda un PNG por cada
 campo de firma en `output/firmas_dataset/recortes/`.
 
 Los recortes se guardan con más margen del que usa el detector: usted ve el
@@ -38,7 +38,7 @@ Cada página aporta 5 recortes (los cinco campos de firma de la plantilla).
 Con 100 páginas ya hay 500 recortes, que es más que suficiente: **entre 300 y
 600 recortes** dan una calibración sólida sin que etiquetarlos se haga eterno.
 Conviene que vengan de PDF distintos, porque la calidad del escaneo es lo que
-más cambia entre lotes.
+más cambia entre batches.
 
 Volver a ejecutarlo añade lo que falte y **no borra las etiquetas ya puestas**.
 

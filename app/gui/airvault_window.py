@@ -18,7 +18,7 @@ El trabajo va en tres tiempos, separados porque duran cosas muy distintas:
 2. **Comprobar** pregunta si AirVault ya procesó lo subido. Eso puede
    tardar minutos u horas, así que no se espera delante: se pregunta cada
    tantos minutos, o cuando alguien pulse. Según van quedando listos, los
-   lotes aparecen en la lista con lo que se les escribiría.
+   batches aparecen en la lista con lo que se les escribiría.
 3. **Indexar** escribe los que ya están listos, y con «Completar batch»
    marcado los da además por terminados en AirVault.
 """
@@ -149,7 +149,7 @@ def estado_de_entrega(csv: Path | str) -> tuple[str, bool]:
         return "Sin exportar", False
     if not ruta_indice_paginas(csv).is_file():
         # Exportada antes de que existiera el índice de páginas: hay PDF,
-        # pero nada que diga qué página del lote es cuál.
+        # pero nada que diga qué página del batch es cuál.
         return "Falta reexportar", False
     return ("1 archivo" if len(pdfs) == 1 else f"{len(pdfs)} archivos"), True
 
@@ -161,7 +161,7 @@ class TrabajoCancelado(BaseException):
     atrapa ``Exception`` en varios sitios para anotar la página que falló y
     seguir, y una cancelación no puede quedarse ahí anotada como si fuera
     el error de una página. Así atraviesa todo hasta el hilo, pasando por
-    los ``finally`` que sueltan los lotes en AirVault.
+    los ``finally`` que sueltan los batches en AirVault.
     """
 
 
@@ -228,7 +228,7 @@ class TrabajoAirVaultWorker(QThread):
     def _dormir(self, segundos: float) -> None:
         """Espera troceada, para que cancelar no tarde lo que tarde la espera.
 
-        AirVault puede tardar minutos en sacar el lote de su cola. Dormir
+        AirVault puede tardar minutos en sacar el batch de su cola. Dormir
         eso de una vez dejaba el botón de cancelar sin efecto hasta el
         siguiente sondeo.
         """
@@ -375,7 +375,7 @@ class TrabajoAirVaultWorker(QThread):
     def _comprobar(self) -> None:
         """Pregunta a AirVault y planifica lo que ya esté listo.
 
-        Planificar es solo leer: abre el lote, lee sus páginas, calcula qué
+        Planificar es solo leer: abre el batch, lee sus páginas, calcula qué
         se escribiría y lo suelta. Se hace aquí, en cuanto una parte queda
         lista, para que la lista pueda decir «14 se escribirían, 5
         bloqueadas» en vez de un «listo» a secas.
@@ -414,7 +414,7 @@ class TrabajoAirVaultWorker(QThread):
             resolutor.guardar(raiz / FLOTA_CACHE_FILENAME)
 
         # Un solo reporte para toda la ejecución: se aprueba de una vez, no
-        # lote por lote.
+        # batch por batch.
         partes = [
             (t.manifiesto.nombre_batch, planes[str(t.carpeta)][0])
             for t in trabajos if str(t.carpeta) in planes
@@ -492,8 +492,8 @@ class TrabajoAirVaultWorker(QThread):
                     trabajos, cliente, avisar=self._avisar
                 )
         finally:
-            # Escribir toma el lote y lo suelta al terminar; esto es la red
-            # de seguridad para cuando algo se corta por el medio. Un lote
+            # Escribir toma el batch y lo suelta al terminar; esto es la red
+            # de seguridad para cuando algo se corta por el medio. Un batch
             # que queda tomado no da error: cuelga la próxima vez que
             # alguien lo abra.
             cerrar_partes(trabajos, cliente)
@@ -526,7 +526,7 @@ class TrabajoAirVaultWorker(QThread):
 
 
 def _soltar(trabajos, cliente) -> None:
-    """Suelta los lotes y se calla si no puede: es limpieza, no trabajo."""
+    """Suelta los batches y se calla si no puede: es limpieza, no trabajo."""
     from app.airvault.flujo import cerrar_partes
 
     try:
@@ -536,9 +536,9 @@ def _soltar(trabajos, cliente) -> None:
 
 
 class SoltarLotesWorker(QThread):
-    """Suelta los lotes fuera del hilo de la ventana.
+    """Suelta los batches fuera del hilo de la ventana.
 
-    Es una petición por lote contra un servidor que puede tardar un minuto
+    Es una petición por batch contra un servidor que puede tardar un minuto
     en contestar. En el hilo de la ventana, cambiar de ejecución o cancelar
     la dejaba congelada todo ese rato.
     """
@@ -574,7 +574,7 @@ class AirVaultWindow(QDialog):
         self._reloj: Optional[QTimer] = None
         self._inicio_paso = time.monotonic()
         self._ultimo_paso = ""
-        # El que pregunta solo por los lotes cada tantos minutos.
+        # El que pregunta solo por los batches cada tantos minutos.
         self._vigilante: Optional[QTimer] = None
         # Encadena una comprobacion en cuanto termine lo que esta en vuelo:
         # subir e indexar dejan la lista desactualizada.
@@ -584,7 +584,7 @@ class AirVaultWindow(QDialog):
         # Cerrar con trabajo en vuelo no bloquea: se pide la cancelación y
         # la ventana se va en cuanto el hilo suelta lo que tenía tomado.
         self._cerrar_al_terminar = False
-        # Hilos que están soltando lotes en AirVault, para que Qt no los
+        # Hilos que están soltando batches en AirVault, para que Qt no los
         # destruya a media petición.
         self._soltando: list[QThread] = []
 
@@ -755,9 +755,9 @@ class AirVaultWindow(QDialog):
         return grid
 
     def _lotes(self) -> QTableWidget:
-        """En qué va cada lote de esta ejecución dentro de AirVault.
+        """En qué va cada batch de esta ejecución dentro de AirVault.
 
-        Una entrega puede ser varios lotes —las partes, y el de REVISAR—, y
+        Una entrega puede ser varios batches —las partes, y el de REVISAR—, y
         no llegan a estar listos a la vez: AirVault los procesa en su cola.
         Aquí se ve cuál ya se puede indexar y cuál sigue esperando, en vez
         de una sola línea de estado que solo puede decir una cosa.
@@ -925,8 +925,8 @@ class AirVaultWindow(QDialog):
     def _bitacora(self) -> QListWidget:
         """Lo que va haciendo, paso a paso y con la hora.
 
-        Un lote tarda lo suyo y pasa por etapas muy distintas —subir,
-        esperar a que AirVault lo procese, leer el lote, escribir—. Con una
+        Un batch tarda lo suyo y pasa por etapas muy distintas —subir,
+        esperar a que AirVault lo procese, leer el batch, escribir—. Con una
         sola línea de estado no había forma de saber en cuál estaba ni
         cuánto llevaba, y una espera larga no se distinguía de un cuelgue.
         """
@@ -994,7 +994,7 @@ class AirVaultWindow(QDialog):
 
         # Siempre disponible mientras hay trabajo en vuelo. Es lo que
         # convierte una espera larga en algo de lo que se puede salir: sin
-        # él, una sesión que no llega o un lote que AirVault no suelta
+        # él, una sesión que no llega o un batch que AirVault no suelta
         # dejaban la ventana sin nada que pulsar durante minutos.
         self.boton_cancelar = QPushButton("Cancelar")
         self.boton_cancelar.setEnabled(False)
@@ -1128,11 +1128,11 @@ class AirVaultWindow(QDialog):
     # ── estado de la ejecución ─────────────────────────────────────
 
     def fijar_corrida(self, csv: Path | str) -> None:
-        """Apunta la ventana a una ejecución y propone el nombre del lote."""
+        """Apunta la ventana a una ejecución y propone el nombre del batch."""
         from app.airvault.flujo import carpeta_de_corrida, carpeta_de_trabajo
         from app.airvault.naming import nombre_desde_corrida
 
-        # Cambiar de ejecución tira lo hecho, y con ello los lotes que
+        # Cambiar de ejecución tira lo hecho, y con ello los batches que
         # hubieran quedado tomados en AirVault: sin soltarlos quedan
         # colgados para quien los abra después.
         self._soltar_lotes()
@@ -1297,10 +1297,10 @@ class AirVaultWindow(QDialog):
         if ruta:
             self.fijar_corrida(ruta)
 
-    # ── la lista de lotes ──────────────────────────────────────────
+    # ── la lista de batches ──────────────────────────────────────────
 
     def _pintar_lotes(self) -> None:
-        """Vuelca en la tabla en qué va cada lote."""
+        """Vuelca en la tabla en qué va cada batch."""
         from app.airvault.flujo import COMPLETADO, INDEXADO, LISTO
         from app.airvault.model import EstadoEtapa, EstadoRegistro
 
@@ -1369,7 +1369,7 @@ class AirVaultWindow(QDialog):
         ]
 
     def _falta_esperar(self) -> bool:
-        """Si queda algún lote que AirVault todavía no ha terminado."""
+        """Si queda algún batch que AirVault todavía no ha terminado."""
         from app.airvault.flujo import LISTO
 
         return (
@@ -1385,7 +1385,7 @@ class AirVaultWindow(QDialog):
     def _ajustar_vigilancia(self) -> None:
         """Arranca o para la comprobación automática según haga falta.
 
-        Se pregunta mientras quede algo que esperar. Cuando todos los lotes
+        Se pregunta mientras quede algo que esperar. Cuando todos los batches
         están listos —o ya indexados, o son el de REVISAR— no hay nada que
         AirVault vaya a cambiar solo, así que se deja de preguntar en vez
         de golpear el servidor toda la tarde.
@@ -1607,7 +1607,7 @@ class AirVaultWindow(QDialog):
         """Deja a la vista que el trabajo sigue vivo mientras espera.
 
         La barra sola no basta: en las etapas sin cuenta —entrar a
-        AirVault, esperar a que el lote salga de la cola— no se mueve, y
+        AirVault, esperar a que el batch salga de la cola— no se mueve, y
         una espera de diez minutos se lee como un cuelgue.
         """
         self._inicio_paso = time.monotonic()
@@ -1794,7 +1794,7 @@ class AirVaultWindow(QDialog):
         self.estado_label.setText("Indexado terminado")
         self._limpiar_progreso()
         # Vuelve a preguntar para que la lista quede diciendo cómo acabó
-        # cada lote, en vez de con lo que se sabía antes de escribir.
+        # cada batch, en vez de con lo que se sabía antes de escribir.
         self._comprobar_al_terminar = True
 
     def _cuenta_de_cierres(self, datos: dict) -> str:
@@ -1815,7 +1815,7 @@ class AirVaultWindow(QDialog):
             )
             quitadas = sum(len(r.quitadas) for _t, r in cierres if r.completado)
             if quitadas:
-                # Se dice porque es un cambio en el lote: esas páginas ya no
+                # Se dice porque es un cambio en el batch: esas páginas ya no
                 # están, y quien lo abra en AirVault no las va a encontrar.
                 texto += (
                     f" Se quitaron {quitadas} páginas separadoras, que no son "
@@ -1850,7 +1850,7 @@ class AirVaultWindow(QDialog):
         self._limpiar_progreso()
 
     def _al_cancelar(self) -> None:
-        """Lo paró quien lo lanzó: se dice y se sueltan los lotes."""
+        """Lo paró quien lo lanzó: se dice y se sueltan los batches."""
         self.estado_label.setText("Cancelado")
         self._anotar(
             "Cancelado; se desbloquean los batches abiertos en AirVault"
@@ -1900,7 +1900,7 @@ class AirVaultWindow(QDialog):
         """Hilo del indexado si está en marcha, para que el cierre lo espere.
 
         Cerrar el programa destruyendo un ``QThread`` vivo lo mata, y este
-        puede estar a medio escribir un lote.
+        puede estar a medio escribir un batch.
         """
         worker = self._worker
         if worker is None:
@@ -1918,14 +1918,14 @@ class AirVaultWindow(QDialog):
         hilo podía estar esperando cinco minutos a que alguien entrara a
         AirVault, la ventana se quedaba sin salida: ni cerraba, ni avanzaba,
         ni había nada que pulsar. Ahora se pide la cancelación y la ventana
-        se va sola en cuanto el hilo suelta los lotes que tuviera tomados,
+        se va sola en cuanto el hilo suelta los batches que tuviera tomados,
         que es lo que no se puede dejar a medias.
 
         Lo comprobado sí sobrevive a un cierre sin trabajo en vuelo: los
-        manifiestos guardan en qué quedó cada lote y al reabrir se retoma.
+        manifiestos guardan en qué quedó cada batch y al reabrir se retoma.
 
         Cerrarla **no** apaga la comprobación automática. Esperar a que
-        AirVault procese un lote puede llevar horas, y lo normal es cerrar
+        AirVault procese un batch puede llevar horas, y lo normal es cerrar
         esta ventana y seguir procesando en la principal; al volver, la
         lista ya está al día. El que sí la apaga es el cierre del programa.
         """
@@ -1957,26 +1957,26 @@ class AirVaultWindow(QDialog):
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancelar()
             self._worker.wait(5000)
-        # Aquí sí se espera: el programa se está cerrando y un lote que
+        # Aquí sí se espera: el programa se está cerrando y un batch que
         # queda tomado deja colgada la próxima apertura.
         self._soltar_lotes(esperar=True)
         # Y a los que ya estuvieran soltando en su propio hilo: destruirlos
-        # a media petición deja el lote tomado, que es lo que se venía a
+        # a media petición deja el batch tomado, que es lo que se venía a
         # evitar.
         for hilo in list(self._soltando):
             hilo.wait(5000)
 
     def _soltar_lotes(self, esperar: bool = False) -> None:
-        """Suelta en AirVault los lotes que hubieran quedado tomados.
+        """Suelta en AirVault los batches que hubieran quedado tomados.
 
-        Con el recorrido normal no queda ninguno: leer el lote lo suelta en
+        Con el recorrido normal no queda ninguno: leer el batch lo suelta en
         cuanto termina y escribirlo también. Esto es para lo que se corta
         por el medio —un cierre, una cancelación, un fallo de red—, porque
-        un lote tomado no da error: deja colgada la próxima vez que alguien
+        un batch tomado no da error: deja colgada la próxima vez que alguien
         lo abra.
 
         Va en un hilo aparte salvo al cerrar el programa. Soltar es una
-        petición por lote contra un servidor que puede tardar un minuto en
+        petición por batch contra un servidor que puede tardar un minuto en
         contestar, y hacerlo en el hilo de la ventana la dejaba congelada
         justo al cambiar de ejecución o al cancelar.
         """

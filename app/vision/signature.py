@@ -352,7 +352,7 @@ def detect_signature(
         page_number: Página a la que pertenece el recorte.
         dpi: Resolución a la que se renderizó el recorte. El recorte se lleva
             a la escala canónica antes de medirlo, de forma que el veredicto
-            no dependa del DPI elegido para la corrida.
+            no dependa del DPI elegido para la ejecución.
 
     Returns:
         FieldResult con valor "true", "false" o "unclear" y su confianza.

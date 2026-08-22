@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # el módulo de salidas se importa dentro del hilo
 class PipelineWorker(QThread):
     """Ejecuta el pipeline de validación en un hilo separado.
 
-    Puede procesar una sola bitácora o un lote. Con un lote, los
+    Puede procesar una sola bitácora o un batch. Con un batch, los
     correctores por libro (matrícula/fecha) se aplican sobre todos los
     reportes antes de emitir ``succeeded``. Al cancelar (requestInterruption)
     se emite ``succeeded`` con los reportes ya procesados (parciales), para
@@ -63,7 +63,7 @@ class PipelineWorker(QThread):
         self._prev_total = 0
         self._progress_file = 0
         self._current_file_index = 0
-        # Archivos que el rango deja dentro; se fija al arrancar la corrida.
+        # Archivos que el rango deja dentro; se fija al arrancar la ejecución.
         self._active_paths: List[Path] = list(self.pdf_paths)
         self.reports: List[ValidationReport] = []
         self.vlm_stats: List[dict] = []
@@ -144,7 +144,7 @@ class PipelineWorker(QThread):
                     logger.info(
                         "[Perfil C] activo | estrategia=secuencial | workers=1"
                     )
-                    # El rango es del lote completo: recorta qué archivos
+                    # El rango es del batch completo: recorta qué archivos
                     # entran y con qué páginas antes de abrir ninguno.
                     slices = slice_paths(self.pdf_paths, self.page_range)
                     self._active_paths = [item.path for item in slices]
@@ -208,7 +208,7 @@ class PipelineWorker(QThread):
 
         El total emitido solo cubre los archivos ya vistos: con el rango
         completo los tramos llegan sin recuento y esta ruta no abre los PDFs
-        para contarlos. La ventana usa el total del lote, que ya calculó antes
+        para contarlos. La ventana usa el total del batch, que ya calculó antes
         de arrancar, y este par sirve para el avance por archivo.
         """
         if self._current_file_index != self._progress_file:
@@ -344,7 +344,7 @@ class PreprocessWorker(QThread):
 
 
 class OutputsWorker(QThread):
-    """Genera las salidas de una corrida sin bloquear la interfaz."""
+    """Genera las salidas de una ejecución sin bloquear la interfaz."""
 
     succeeded = Signal(object)
     failed = Signal(str)

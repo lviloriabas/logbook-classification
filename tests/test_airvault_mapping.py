@@ -88,7 +88,7 @@ def test_registros_conservan_el_orden_del_csv():
 
 
 def test_paginas_en_blanco_no_entran():
-    # Si entraran, la correspondencia con las paginas del lote se correria.
+    # Si entraran, la correspondencia con las paginas del batch se correria.
     filas = [_fila(page="1"),
              _fila(page="2", log_number="", matricula="", date=""),
              _fila(page="3", log_number="2287327")]

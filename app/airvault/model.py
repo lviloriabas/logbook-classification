@@ -52,16 +52,16 @@ class Registro(BaseModel):
     """Una bitacora: de donde salio, que se le va a escribir y como quedo."""
 
     # Posicion dentro del artefacto que se sube. Es la que debe coincidir
-    # con la pagina del lote en AirVault cuando el lote se arma con el PDF
-    # ordenado de la corrida.
+    # con la pagina del batch en AirVault cuando el batch se arma con el PDF
+    # ordenado de la ejecución.
     seq: int
     archivo_origen: str = ""
     pagina_origen: int = 0
 
-    # Etiqueta del separador cuando esta posicion del lote no es una
+    # Etiqueta del separador cuando esta posicion del batch no es una
     # bitacora sino una pagina divisoria del PDF de entrega («REVISAR»,
     # «POSIBLES DISCREPANCIAS», la matricula de un grupo). Ocupa su lugar en
-    # el lote para que la correspondencia por posicion siga en pie, pero no
+    # el batch para que la correspondencia por posicion siga en pie, pero no
     # se le escribe nada: no es un documento que indexar.
     separador: str = ""
 
@@ -71,7 +71,7 @@ class Registro(BaseModel):
     # (``703``, ``CM137``) o un codigo de mantenimiento del vocabulario
     # (``TCK``, ``SPV``). Va al campo Description de AirVault.
     flight_number: str = ""
-    # Fecha en el formato del CSV de la corrida (YYYY/MM/dd). La conversion
+    # Fecha en el formato del CSV de la ejecución (YYYY/MM/dd). La conversion
     # al formato de AirVault (m/d/Y) se hace al construir los valores, no
     # aqui, para que el manifiesto se siga leyendo igual que el CSV.
     fecha: str = ""
@@ -112,15 +112,15 @@ class Manifiesto(BaseModel):
     repo_id: int = 3209
     batch_id: Optional[str] = None
     csv_origen: str = ""
-    # Archivo de entrega que forma este lote. Una corrida repartida en
-    # partes tiene un manifiesto por parte, cada uno con su PDF y su lote.
+    # Archivo de entrega que forma este batch. Una ejecución repartida en
+    # partes tiene un manifiesto por parte, cada uno con su PDF y su batch.
     pdf_origen: str = ""
     parte: int = 1
     partes: int = 1
     # Maximo elegido al preparar los archivos que van a Quick Upload.
     # Cero identifica manifiestos antiguos, anteriores a este reparto.
     paginas_por_batch: int = 0
-    # El lote se sube pero no se indexa: recoge las bitacoras con algun dato
+    # El batch se sube pero no se indexa: recoge las bitacoras con algun dato
     # dudoso o en conflicto, que nadie debe publicar sin mirarlas una por una.
     solo_subir: bool = False
     # Foto de la cola inmediatamente anterior a Quick Upload. AirVault suele

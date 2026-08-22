@@ -2,7 +2,7 @@
 
 Cubre el recorrido que comparte la ventana con la linea de comandos: que
 un trabajo a medias se retome sin repetir escrituras, que la subida no se
-haga dos veces y que un CSV de otra corrida no se cuele en el lote de la
+haga dos veces y que un CSV de otra ejecución no se cuele en el batch de la
 anterior. Todo contra el cliente falso; ninguna prueba toca la red.
 """
 
@@ -42,7 +42,7 @@ CSV = (
 
 def corrida(tmp_path, nombre: str = "BITS 18 AUG 2026 05 42",
             pdfs: tuple[str, ...] = (), con_indice: bool = True):
-    """Arma en el temporal la carpeta que deja una corrida terminada.
+    """Arma en el temporal la carpeta que deja una ejecución terminada.
 
     Sin ``pdfs`` deja la entrega en un solo archivo, como la exportacion sin
     repartir; con varios, cada uno lleva una de las dos bitacoras del CSV.
@@ -85,7 +85,7 @@ def cliente_con_lote(batch_id: str = "003SRO", paginas: int = 2,
     )
 
 
-# ── ubicacion de los archivos de la corrida ────────────────────────
+# ── ubicacion de los archivos de la ejecución ────────────────────────
 
 def test_la_carpeta_de_la_corrida_sale_del_csv(tmp_path):
     csv = corrida(tmp_path)
@@ -100,19 +100,19 @@ def test_encuentra_el_pdf_de_entrega(tmp_path):
 
 
 def test_cada_parte_es_un_archivo(tmp_path):
-    csv = corrida(tmp_path, pdfs=("corrida (1 de 2).pdf",
-                                  "corrida (2 de 2).pdf"))
+    csv = corrida(tmp_path, pdfs=("ejecución (1 de 2).pdf",
+                                  "ejecución (2 de 2).pdf"))
     partes = comprobar_entrega(csv)
     assert [p.indice for p in partes] == [1, 2]
     assert all(p.total == 2 for p in partes)
     assert [p.pdf.name for p in partes] == [
-        "corrida (1 de 2).pdf", "corrida (2 de 2).pdf"
+        "ejecución (1 de 2).pdf", "ejecución (2 de 2).pdf"
     ]
     assert len(pdfs_de_corrida(csv)) == 2
 
 
 def test_cada_parte_lleva_su_numero_en_el_nombre_del_lote(tmp_path):
-    """Los lotes se localizan por nombre; dos iguales no se distinguirian."""
+    """Los batches se localizan por nombre; dos iguales no se distinguirian."""
     csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
     partes = comprobar_entrega(csv)
     assert partes[0].nombre_lote("DP | BITS") == "DP | BITS -1"
@@ -236,7 +236,7 @@ def test_volver_a_revisar_retoma_el_mismo_trabajo(tmp_path):
 
 
 def test_otra_corrida_en_la_misma_carpeta_rehace_el_trabajo(tmp_path):
-    """Seguir el trabajo anterior escribiria una corrida en el lote de otra."""
+    """Seguir el trabajo anterior escribiria una ejecución en el batch de otra."""
     primera = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
     trabajo = Trabajo.abrir_o_preparar(AirVaultConfig(), tmp_path / "job",
                                        primera)
@@ -271,7 +271,7 @@ class SubidorFalso:
 
 
 def test_el_lote_no_se_sube_dos_veces(tmp_path, monkeypatch):
-    """Subirlo otra vez crearia un lote gemelo y no se sabria en cual escribir."""
+    """Subirlo otra vez crearia un batch gemelo y no se sabria en cual escribir."""
     from app.airvault import uploader
 
     csv = corrida(tmp_path)
@@ -432,17 +432,17 @@ def test_el_avance_llega_pagina_a_pagina(tmp_path):
     assert avisos == [(1, 2), (2, 2)]
 
 
-# ── el lote se suelta ──────────────────────────────────────────────
+# ── el batch se suelta ──────────────────────────────────────────────
 
 def test_el_lote_se_suelta_al_terminar_cada_etapa(tmp_path):
     """AirVault admite un solo dueno: quedarselo cuelga la proxima apertura.
 
-    Sin soltarlo, la ejecucion siguiente —o la persona que abre el lote en
+    Sin soltarlo, la ejecucion siguiente —o la persona que abre el batch en
     el navegador— se encuentra con una peticion que nunca contesta, y el
     programa culpaba al navegador de un candado que habia dejado el.
 
     Planificar solo lee, asi que suelta en cuanto termina: entre revisar y
-    escribir puede pasar un rato largo, y antes el lote se quedaba tomado
+    escribir puede pasar un rato largo, y antes el batch se quedaba tomado
     todo ese tiempo. Escribir lo vuelve a tomar, que es lo unico que de
     verdad necesita ser el dueno, y lo suelta al acabar.
     """

@@ -30,7 +30,7 @@ COLUMNAS = (
     "accion", "avisos",
 )
 
-# Con la corrida repartida en varios lotes, saber en cual cae cada pagina
+# Con la ejecución repartida en varios batches, saber en cual cae cada pagina
 # es lo primero que hace falta para ir a mirarla.
 COLUMNAS_CON_LOTE = ("lote",) + COLUMNAS
 
@@ -91,8 +91,8 @@ def escribir_csv_de_partes(
 ) -> Path:
     """Vuelca a un solo CSV lo que se escribiria en todas las partes.
 
-    Una corrida repartida son varios lotes, pero se aprueba de una vez: el
-    reporte tiene que dejar ver la corrida entera y no obligar a abrir cinco
+    Una ejecución repartida son varios batches, pero se aprueba de una vez: el
+    reporte tiene que dejar ver la ejecución entera y no obligar a abrir cinco
     archivos para saber que se va a escribir.
     """
     ruta = Path(destino)
@@ -196,12 +196,12 @@ def resumen_texto(plan: Plan) -> str:
 
 
 def resumen_texto_de_partes(partes: Sequence[Tuple[str, Plan]]) -> str:
-    """Resumen corto de la corrida entera, parte por parte."""
+    """Resumen corto de la ejecución entera, parte por parte."""
     datos = _resumen_sumado(partes)
     cabeza = (
-        f"{len(partes)} lotes: {datos['total']} paginas"
+        f"{len(partes)} batches: {datos['total']} paginas"
         if len(partes) > 1
-        else f"Lote {_lotes(partes)}: {datos['total']} paginas"
+        else f"Batch {_lotes(partes)}: {datos['total']} paginas"
     )
     lineas = [
         cabeza,

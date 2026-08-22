@@ -20,7 +20,7 @@ from app.gui.responsive import fit_to_screen
 from app.validation.depuracion import ResumenDepuracion, contar_depuracion
 
 DEPURAR_TOOLTIP = (
-    "Quitar de la corrida las páginas repetidas o en blanco. Se reescriben "
+    "Quitar de la ejecución las páginas repetidas o en blanco. Se reescriben "
     "el CSV, el JSON y las estadísticas sin ellas; los PDF se rehacen al "
     "exportar."
 )
@@ -51,7 +51,7 @@ class DepurarPaginasDialog(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         intro = QLabel(
-            "Se quitan de la corrida las páginas que marque. Se reescriben "
+            "Se quitan de la ejecución las páginas que marque. Se reescriben "
             "el CSV, el JSON y las estadísticas sin ellas; los PDF ya "
             "exportados las conservan hasta que vuelva a exportar."
         )
@@ -110,11 +110,11 @@ class DepurarPaginasDialog(QDialog):
         resumen = self.resumen()
         if resumen.total:
             self.total_label.setText(
-                f"Se eliminarán {_texto_conteo(resumen.total)} de la corrida."
+                f"Se eliminarán {_texto_conteo(resumen.total)} de la ejecución."
             )
         elif not self._disponibles.total:
             self.total_label.setText(
-                "La corrida no tiene páginas repetidas ni en blanco."
+                "La ejecución no tiene páginas repetidas ni en blanco."
             )
         else:
             self.total_label.setText("Marque al menos un criterio.")

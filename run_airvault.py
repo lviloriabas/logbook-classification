@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Indexado automatico de lotes de bitacoras en AirVault.
+"""Indexado automatico de batches de bitacoras en AirVault.
 
 Cada etapa se corre por separado o todas de corrido. El estado vive en el
 manifiesto del trabajo, asi que se puede preparar hoy, subir manana e
@@ -84,7 +84,7 @@ def carpeta_job(job: str) -> Path:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="airvault",
-        description="Indexa en AirVault los lotes de bitacoras ya "
+        description="Indexa en AirVault los batches de bitacoras ya "
                     "procesados por Logbook Classification.",
     )
     parser.add_argument("--verbose", action="store_true",
@@ -96,13 +96,13 @@ def parse_args() -> argparse.Namespace:
                        help="Nombre del trabajo (carpeta en output/airvault)")
 
     p = sub.add_parser("preparar", parents=[comun],
-                       help="Arma el manifiesto a partir del CSV de la corrida")
-    p.add_argument("--csv", required=True, help="CSV de la corrida")
+                       help="Arma el manifiesto a partir del CSV de la ejecución")
+    p.add_argument("--csv", required=True, help="CSV de la ejecución")
     p.add_argument("--lote", default=None,
-                   help="Nombre del lote. Sin esta opcion se arma solo con "
-                        "el prefijo y la marca de tiempo de la corrida.")
+                   help="Nombre del batch. Sin esta opcion se arma solo con "
+                        "el prefijo y la marca de tiempo de la ejecución.")
     p.add_argument("--prefijo", default=PREFIJO_POR_DEFECTO,
-                   help=f"Prefijo del nombre del lote "
+                   help=f"Prefijo del nombre del batch "
                         f"(default: {PREFIJO_POR_DEFECTO})")
     p.add_argument("--doc-type", default=None,
                    help="Tipo de documento a escribir")
@@ -114,17 +114,17 @@ def parse_args() -> argparse.Namespace:
                    help="PDF de este trabajo que se va a subir")
 
     p = sub.add_parser("descubrir", parents=[comun],
-                       help="Ubica el lote en AirVault por su nombre")
+                       help="Ubica el batch en AirVault por su nombre")
     p.add_argument("--esperar", action="store_true",
-                   help="Sondear hasta que el lote aparezca")
+                   help="Sondear hasta que el batch aparezca")
     p.add_argument("--batch-id", default=None,
-                   help="Saltarse la busqueda y fijar el lote a mano")
+                   help="Saltarse la busqueda y fijar el batch a mano")
 
     p = sub.add_parser("plan", parents=[comun],
                        help="Dry run: calcula todo y no escribe nada")
 
     p = sub.add_parser("indexar", parents=[comun],
-                       help="Escribe los indices en el lote")
+                       help="Escribe los indices en el batch")
     grupo = p.add_mutually_exclusive_group()
     grupo.add_argument("--revisar", action="store_true",
                        help="Pedir aprobacion antes de escribir")
@@ -135,7 +135,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--continuar-con-errores", action="store_true",
                    help="No detenerse en la primera pagina que falle")
     p.add_argument("--completar", action="store_true",
-                   help="Al terminar, dar el lote por terminado en AirVault. Solo lo acepta con todas las paginas en verde.")
+                   help="Al terminar, dar el batch por terminado en AirVault. Solo lo acepta con todas las paginas en verde.")
     p.add_argument(
         "--permitir-log-distinto", action="store_true",
         help="Permitir reemplazar el Log Page Number que AirVault ya leyo. "
@@ -143,7 +143,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     p = sub.add_parser("verificar", parents=[comun],
-                       help="Relee el lote y confirma como quedo")
+                       help="Relee el batch y confirma como quedo")
 
     p = sub.add_parser("todo", parents=[comun],
                        help="Descubrir, planificar, indexar y verificar")
@@ -178,7 +178,7 @@ def abrir_sesion(config: AirVaultConfig, args) -> SesionAirVault:
 
     La comprobacion es una peticion de mas al principio que evita el peor
     final posible: descubrir que la cookie habia caducado a mitad de un
-    lote de cuatrocientas paginas.
+    batch de cuatrocientas paginas.
     """
     usuario = getattr(args, "usuario", "") or config.usuario
     credenciales = Credenciales.desde_entorno()
@@ -196,14 +196,14 @@ def abrir_sesion(config: AirVaultConfig, args) -> SesionAirVault:
         avisar=print,
     )
     lotes = comprobar_o_renovar(sesion, avisar=print)
-    print(f"Sesion de AirVault lista ({sesion.origen}); {lotes} lotes en la cola")
+    print(f"Sesion de AirVault lista ({sesion.origen}); {lotes} batches en la cola")
     return sesion
 
 
 # ── etapas ─────────────────────────────────────────────────────────
 
 def etapa_preparar(args, config: AirVaultConfig) -> int:
-    """Arma el manifiesto del trabajo a partir de la corrida.
+    """Arma el manifiesto del trabajo a partir de la ejecución.
 
     Pasa por el mismo camino que la ventana para que las dos lean igual el
     indice de paginas del PDF: si la linea de comandos contara solo las
@@ -236,9 +236,9 @@ def etapa_preparar(args, config: AirVaultConfig) -> int:
     print(f"  bitacoras: {len(bitacoras)}")
     if separadores:
         print(f"  separadores del PDF: {len(separadores)} "
-              f"(ocupan pagina en el lote y no se indexan)")
-    print(f"  lote:      {manifiesto.nombre_batch}")
-    print("  el lote debe subirse a AirVault con ese mismo nombre")
+              f"(ocupan pagina en el batch y no se indexan)")
+    print(f"  batch:      {manifiesto.nombre_batch}")
+    print("  el batch debe subirse a AirVault con ese mismo nombre")
     if inferidas:
         print(f"  flota inferida por regla en {inferidas} bitacoras "
               f"(revisar en el reporte)")
@@ -270,11 +270,11 @@ def etapa_descubrir(args, config: AirVaultConfig,
             EstadoEtapa.HECHA, f"fijado a mano: {args.batch_id}"
         )
         manifiestos.guardar(manifiesto, carpeta)
-        print(f"Lote fijado a mano: {args.batch_id}")
+        print(f"Batch fijado a mano: {args.batch_id}")
         return 0
     # Lo hace el mismo recorrido que usa la ventana: ahi viven el respaldo
     # por lo que aparecio despues de subir —el nombre no sirve, Quick
-    # Upload los deja a todos como «Empty-Batch»— y el renombrado del lote.
+    # Upload los deja a todos como «Empty-Batch»— y el renombrado del batch.
     trabajo = Trabajo(config, carpeta, manifiesto)
     try:
         trabajo.descubrir(cliente, esperar=getattr(args, "esperar", False))
@@ -285,11 +285,11 @@ def etapa_descubrir(args, config: AirVaultConfig,
         return 1
     lote = buscar_por_id(cliente.listar_lotes(), manifiesto.batch_id)
     paginas = lote.paginas if lote else esperadas
-    print(f"Lote encontrado: {manifiesto.batch_id} - "
+    print(f"Batch encontrado: {manifiesto.batch_id} - "
           f"{lote.nombre if lote else manifiesto.nombre_batch} "
           f"({paginas} paginas)")
     if paginas != esperadas:
-        print(f"AVISO: el lote tiene {paginas} paginas y el manifiesto "
+        print(f"AVISO: el batch tiene {paginas} paginas y el manifiesto "
               f"{esperadas}. El indexado no va a escribir hasta que "
               f"coincidan.")
     return 0
@@ -300,7 +300,7 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
     manifiesto = manifiestos.cargar(carpeta)
     if not manifiesto.batch_id:
         raise SystemExit(
-            "El trabajo todavia no tiene lote. Correr 'descubrir' primero."
+            "El trabajo todavia no tiene batch. Correr 'descubrir' primero."
         )
     sesion = abrir_sesion(config, args)
     cliente = ClienteHttp(sesion, config)
@@ -321,11 +321,11 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
     try:
         plan = indexador.planificar(paginas)
     except BaseException:
-        # Sin plan no se escribe nada, y un lote que queda tomado deja
+        # Sin plan no se escribe nada, y un batch que queda tomado deja
         # colgada la siguiente apertura sin decir por que.
         _soltar(cliente, manifiesto.batch_id)
         raise
-    # Lo aprendido del lote sirve para los siguientes: se guarda siempre,
+    # Lo aprendido del batch sirve para los siguientes: se guarda siempre,
     # tambien en dry run, porque no toca nada de AirVault.
     resolutor.guardar(_ROOT / FLOTA_CACHE_FILENAME)
     manifiestos.guardar(manifiesto, carpeta)
@@ -336,9 +336,9 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
 
 
 def _soltar(cliente, batch_id: str) -> None:
-    """Suelta el lote en AirVault; nunca levanta, es limpieza.
+    """Suelta el batch en AirVault; nunca levanta, es limpieza.
 
-    `LockAndGetBatchInfo` deja el lote tomado a nombre de quien lo abrio y
+    `LockAndGetBatchInfo` deja el batch tomado a nombre de quien lo abrio y
     AirVault solo admite un dueno: si no se suelta, la proxima apertura
     —la del programa o la de la persona que entra por el navegador— se
     queda esperando sin contestar.
@@ -349,7 +349,7 @@ def _soltar(cliente, batch_id: str) -> None:
         cliente.cerrar_lote(batch_id)
     except Exception as exc:  # noqa: BLE001 - cerrar nunca tumba nada
         logger.warning(
-            "No se pudo soltar el lote {}: {}. Si la siguiente apertura se "
+            "No se pudo soltar el batch {}: {}. Si la siguiente apertura se "
             "queda esperando, hay que cerrarlo en AirVault a mano.",
             batch_id, exc,
         )
@@ -359,7 +359,7 @@ def etapa_plan(args, config: AirVaultConfig) -> int:
     manifiesto, _indexador, plan, carpeta, cliente = _planificar(
         args, config
     )
-    # El plan solo lee, asi que el lote se suelta en cuanto termina:
+    # El plan solo lee, asi que el batch se suelta en cuanto termina:
     # dejarlo tomado cuelga la siguiente apertura, la del programa o la
     # de quien lo abra en el navegador.
     _soltar(cliente, manifiesto.batch_id)
@@ -396,7 +396,7 @@ def etapa_indexar(args, config: AirVaultConfig) -> int:
             detener_en_error=not getattr(args, "continuar_con_errores", False),
         )
     finally:
-        # Salga como salga —cancelado, a medias o completo— el lote se
+        # Salga como salga —cancelado, a medias o completo— el batch se
         # suelta: AirVault admite un solo dueno y el que queda tomado
         # cuelga la siguiente apertura sin decir por que.
         _soltar(cliente, manifiesto.batch_id)
@@ -420,21 +420,21 @@ def etapa_indexar(args, config: AirVaultConfig) -> int:
 
 def _completar(carpeta: Path, manifiesto: Manifiesto, cliente,
                config: AirVaultConfig) -> None:
-    """Da el lote por terminado, si AirVault lo va a aceptar.
+    """Da el batch por terminado, si AirVault lo va a aceptar.
 
-    Solo cierra un lote con todas las paginas en verde: basta una a
+    Solo cierra un batch con todas las paginas en verde: basta una a
     la que le falte un campo obligatorio —casi siempre la fecha—
     para que lo rechace. Asi que se mira antes y, si alguna bloquea,
-    se dice cual y el lote se queda en la cola, que es justo donde
+    se dice cual y el batch se queda en la cola, que es justo donde
     tiene que quedarse.
     """
     resultado = Trabajo(config, carpeta, manifiesto).completar(cliente)
     print()
     if resultado.completado:
-        print(f"Lote {manifiesto.batch_id} cerrado en AirVault "
+        print(f"Batch {manifiesto.batch_id} cerrado en AirVault "
               f"({resultado.detalle}).")
         return
-    print(f"El lote {manifiesto.batch_id} se queda en la cola: "
+    print(f"El batch {manifiesto.batch_id} se queda en la cola: "
           f"{resultado.detalle}")
 
 
@@ -442,7 +442,7 @@ def etapa_verificar(args, config: AirVaultConfig) -> int:
     carpeta = carpeta_job(args.job)
     manifiesto = manifiestos.cargar(carpeta)
     if not manifiesto.batch_id:
-        print("El trabajo no tiene lote asignado", file=sys.stderr)
+        print("El trabajo no tiene batch asignado", file=sys.stderr)
         return 1
     sesion = abrir_sesion(config, args)
     cliente = ClienteHttp(sesion, config)

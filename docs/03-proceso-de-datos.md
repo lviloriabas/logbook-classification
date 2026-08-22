@@ -1,6 +1,6 @@
 # 3. Proceso de datos
 
-## 3.1 Planificación del lote
+## 3.1 Planificación del batch
 
 El sistema ordena los PDF por nombre y convierte el rango global en tramos por archivo. Cada tramo conserva el número de página real del documento fuente. Los archivos se abren brevemente para contar sus páginas; uno fuera del rango no pasa al OCR.
 
@@ -149,7 +149,7 @@ La comparación pondera las confusiones habituales entre dígitos manuscritos y 
 
 ## 3.10 Duplicados y discrepancias
 
-El sistema marca `dup=true` cuando un `log_number` ya apareció antes en el lote.
+El sistema marca `dup=true` cuando un `log_number` ya apareció antes en el batch.
 
 La clasificación de firmas determina el tipo de entrada:
 

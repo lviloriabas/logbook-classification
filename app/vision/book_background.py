@@ -63,8 +63,8 @@ def _ink_channel(region: np.ndarray) -> np.ndarray:
 # DPI en el que están calibrados ``INK_DELTA`` y ``MIN_BAND_WIDTH``, el mismo
 # que usa el detector clásico. El fondo se construye siempre a esta escala y
 # cada recorte se ajusta a él al medirlo, así que el veredicto no depende del
-# DPI de la corrida. Sin esto, los umbrales medidos a 200 dpi se quedaban
-# cortos en la corrida real del CLI, que renderiza a 150: los trazos salen más
+# DPI de la ejecución. Sin esto, los umbrales medidos a 200 dpi se quedaban
+# cortos en la ejecución real del CLI, que renderiza a 150: los trazos salen más
 # finos, la apertura morfológica se come una parte y todas las densidades
 # bajan casi a la mitad.
 REFERENCE_DPI = 200
@@ -77,7 +77,7 @@ def _fit(gray: np.ndarray, shape: Sequence[int]) -> np.ndarray:
     el mismo campo sale con recortes que difieren en dos o tres píxeles. Se
     reescalan en lugar de recortarse: el contenido es el mismo y lo que importa
     es que se superpongan. Y como el fondo está a la escala canónica, este
-    ajuste es también el que normaliza el DPI de la corrida.
+    ajuste es también el que normaliza el DPI de la ejecución.
     """
     if gray.shape[:2] == tuple(shape):
         return gray
@@ -97,7 +97,7 @@ def build_background(
         crops: Recortes del *mismo* campo en páginas ya alineadas del libro.
         dpi: Resolución a la que se renderizaron. El fondo se construye a
             ``REFERENCE_DPI`` para que los umbrales signifiquen lo mismo en
-            cualquier corrida.
+            cualquier ejecución.
 
     Returns:
         Imagen en grises con el fondo, o None si no hay páginas suficientes.

@@ -2,7 +2,7 @@
 
 Flujo por página:
     render → blank → deskew → alineación → recorte por región
-    → OCR/firma/checkbox (OCR en lote por página) → postproceso
+    → OCR/firma/checkbox (OCR en batch por página) → postproceso
     → reglas de validación.
 
 El pipeline depende de interfaces (OcrEngine, Template), por lo que se
@@ -151,7 +151,7 @@ def _init_ocr_pool_worker(
     cpu_threads: Optional[int],
     date_engine_name: Optional[str],
 ) -> None:
-    """Carga los motores una sola vez para todo el lote de PDFs."""
+    """Carga los motores una sola vez para todo el batch de PDFs."""
     from app.ocr.engine import create_engine
 
     _WORKER_STATE.clear()
@@ -223,7 +223,7 @@ def _calibrate_page_worker(
 
 
 class OcrProcessPool:
-    """Pool de Paddle/Tesseract reutilizable durante un lote completo."""
+    """Pool de Paddle/Tesseract reutilizable durante un batch completo."""
 
     def __init__(
         self,
@@ -258,7 +258,7 @@ class OcrProcessPool:
         path.unlink(missing_ok=True)
 
     def temporary_path(self, name: str) -> Path:
-        """Ruta privada del pool para señales/estado efímero del lote."""
+        """Ruta privada del pool para señales/estado efímero del batch."""
         return Path(self._temporary.name) / name
 
     def close(self, cancel_futures: bool = False) -> None:
@@ -449,7 +449,7 @@ def process_page_image(
                 f"[Página {page_number}] Deskew: {deskew_angle:.2f}°"
             )
 
-    # 3) Alineación con la plantilla (ancla estabilizada por lote si existe)
+    # 3) Alineación con la plantilla (ancla estabilizada por batch si existe)
     alignment_transform: Optional[TransformResult] = None
     if config.align and reference is not None:
         if transform is not None:
@@ -594,7 +594,7 @@ def process_page_image(
         for effective in (ocr_overrides.get(field.id, field),)
     }
 
-    # 4-7) Campos: recorte → OCR (en lote)/firma/checkbox → postproceso
+    # 4-7) Campos: recorte → OCR (en batch)/firma/checkbox → postproceso
     ocr_fields = [
         field for field in template.fields
         if field.type not in (FieldType.SIGNATURE, FieldType.CHECKBOX)
@@ -1471,7 +1471,7 @@ class Pipeline:
             pdf_path: Ruta del PDF escaneado.
             page_range: Tramo de páginas *de este PDF* (1-based, inclusivo).
                 None procesa el archivo entero. El reparto de un rango
-                global del lote entre archivos lo hace
+                global del batch entre archivos lo hace
                 :func:`app.core.page_range.slice_batch`.
             should_cancel: Callable sin argumentos que devuelve True cuando
                 se pidió la cancelación; el pipeline verifica entre páginas
@@ -1600,7 +1600,7 @@ class Pipeline:
             page_number = first + index
             # ``index`` son las páginas ya terminadas de este tramo; el
             # contador que ve el usuario lo compone la pantalla con las
-            # cifras del lote (ver ``app.core.progress``).
+            # cifras del batch (ver ``app.core.progress``).
             self._notify(index, total, PAGES_STAGE)
             image = (
                 renderer.render_page(page_number, self.config.dpi)
@@ -1742,7 +1742,7 @@ class Pipeline:
             )
         return [page for _, page in pages]
 
-    # ── Alineación por lote ─────────────────────────────────────────────
+    # ── Alineación por batch ─────────────────────────────────────────────
 
     def _calibrate(
         self, pdf_path: Path, first: int, total: int, reference: np.ndarray,
@@ -2001,7 +2001,7 @@ class Pipeline:
 
         La mediana es robusta a páginas catastróficas (ORB degradado) y
         deja la posición de los campos consistente entre bitácoras de un
-        mismo lote. Si en la ventana no hay páginas fiables, toma la
+        mismo batch. Si en la ventana no hay páginas fiables, toma la
         ventana completa como respaldo.
         """
         return [
@@ -2013,7 +2013,7 @@ class Pipeline:
     def _anchor_at(
         transforms: List[TransformResult], index: int, half_window: int = 7
     ) -> TransformResult:
-        """Ancla de una sola página, con la misma regla que el lote entero.
+        """Ancla de una sola página, con la misma regla que el batch entero.
 
         Separarla permite decidir el ancla de una página en cuanto se ha
         calibrado la última de su ventana, sin esperar al libro completo: es
@@ -2034,7 +2034,7 @@ class Pipeline:
         )
 
     def _printed_mask_has_consumer(self) -> bool:
-        """¿Alguien va a leer la máscara de fondo impreso en esta corrida?
+        """¿Alguien va a leer la máscara de fondo impreso en esta ejecución?
 
         Sus dos consumidores son las casillas —que solo la aplican si la
         plantilla declara alguna— y el mapa de ranuras de fecha, que depende
@@ -2083,7 +2083,7 @@ class Pipeline:
         renderer: Optional[PdfPageRenderer] = None,
         first_page: int = 1,
     ) -> List[PageResult]:
-        """Arbitra con el VLM los campos incitos de la corrida.
+        """Arbitra con el VLM los campos incitos de la ejecución.
 
         Corre una sola vez por PDF, en el proceso principal (el servidor
         llama-server es un subproceso único). Recorta los campos de las
@@ -2267,7 +2267,7 @@ class Pipeline:
         muestra para el fondo, más las dudosas—, no el libro entero.
 
         Cualquier fallo aquí deja los resultados como estaban: es una segunda
-        opinión, no un eslabón del que dependa la corrida.
+        opinión, no un eslabón del que dependa la ejecución.
         """
         if not self.config.signature_book_background:
             return pages
@@ -2290,7 +2290,7 @@ class Pipeline:
                 pdf_path, pages, pending, fields, reference, anchors, own,
                 renderer, first_page,
             )
-        except Exception as exc:  # noqa: BLE001 - nunca debe tumbar la corrida
+        except Exception as exc:  # noqa: BLE001 - nunca debe tumbar la ejecución
             logger.warning(
                 f"[Pipeline] No se pudo contrastar las firmas inciertas con "
                 f"el libro: {exc}"
@@ -2339,7 +2339,7 @@ class Pipeline:
             # trazos flojos pierden profundidad y se resuelven menos dudas.
             # No es un error —sigue sin equivocarse—, pero conviene saberlo.
             logger.info(
-                f"[Pipeline] Firmas inciertas: la corrida va a "
+                f"[Pipeline] Firmas inciertas: la ejecución va a "
                 f"{self.config.dpi} DPI y la revisión está calibrada a "
                 f"{BACKGROUND_REFERENCE_DPI}; se resolverán menos dudas"
             )
@@ -2599,18 +2599,18 @@ def process_pdf_batch(
     on_progress: Optional[ProgressCallback] = None,
     on_file_progress: Optional[Callable[[int, int, int], None]] = None,
 ) -> Tuple[List[ValidationReport], List[dict]]:
-    """Procesa un lote con el perfil C siempre activo y cola acotada.
+    """Procesa un batch con el perfil C siempre activo y cola acotada.
 
     El planificador elige la granularidad sin cambiar el algoritmo OCR: reparte
     PDFs completos cuando hay suficientes archivos para ocupar el pool y, en
-    lotes menores, reparte las páginas para no dejar procesos ociosos. En ambos
+    batches menores, reparte las páginas para no dejar procesos ociosos. En ambos
     casos el pool OCR persiste y las colas permanecen acotadas.
 
     ``on_file_progress`` recibe ``(archivo 1-based, páginas hechas, páginas
     del archivo)`` en las dos estrategias, para que el panel de avance se lea
     igual reparta el planificador páginas o archivos completos.
 
-    ``page_range`` es un rango del lote numerado de corrido: se reparte entre
+    ``page_range`` es un rango del batch numerado de corrido: se reparte entre
     los archivos que lo contienen y los que quedan fuera ni se abren, así que
     los reportes devueltos cubren solo esos archivos.
     """
@@ -2626,7 +2626,7 @@ def process_pdf_batch(
     if not slices:
         logger.warning(
             f"[Perfil C] El rango {(page_range or PageRange()).label()} no "
-            f"cubre ninguna página de los {len(paths)} archivo(s) del lote"
+            f"cubre ninguna página de los {len(paths)} archivo(s) del batch"
         )
         return [], []
     paths = [item.path for item in slices]
@@ -2636,7 +2636,7 @@ def process_pdf_batch(
     done_pages = 0
     total_files = len(paths)
 
-    # Perfil C no es un modo reservado a lotes grandes. Para pocos archivos,
+    # Perfil C no es un modo reservado a batches grandes. Para pocos archivos,
     # paralelizar páginas utiliza mejor el mismo pool; para muchos, cada worker
     # recibe archivos completos y elimina las barreras entre PDFs.
     parallel_by_file = (
@@ -2697,7 +2697,7 @@ def process_pdf_batch(
                 if on_progress is not None:
                     # El nombre del archivo delante, igual que en la ruta
                     # secuencial: sin él la etapa de un solo PDF y el
-                    # contador del lote se leían como si hablaran de lo mismo.
+                    # contador del batch se leían como si hablaran de lo mismo.
                     on_progress(
                         _offset + done,
                         total_pages,

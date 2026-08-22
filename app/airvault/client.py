@@ -33,7 +33,7 @@ COLUMNAS_LOTE = (
 
 @dataclass(frozen=True)
 class ResumenLote:
-    """Una fila del listado de lotes de AirVault."""
+    """Una fila del listado de batches de AirVault."""
 
     batch_id: str
     nombre: str
@@ -82,11 +82,11 @@ class PaginaIndexada:
 
 @dataclass(frozen=True)
 class PaginaDelLote:
-    """Como ve AirVault una pagina del lote, sin traerse sus valores.
+    """Como ve AirVault una pagina del batch, sin traerse sus valores.
 
-    Es el mapa del lote entero en una sola peticion. Sirve para saber que
+    Es el mapa del batch entero en una sola peticion. Sirve para saber que
     paginas quedaron en verde sin releerlas una por una, que es lo que hay
-    que mirar antes de dar el lote por terminado.
+    que mirar antes de dar el batch por terminado.
     """
 
     pagina: int
@@ -135,7 +135,7 @@ class ClienteAirVault(Protocol):
     """Contrato minimo que necesita el indexador.
 
     Existe para que los tests inyecten un cliente falso y se pueda probar
-    todo el recorrido de un lote sin tocar produccion.
+    todo el recorrido de un batch sin tocar produccion.
     """
 
     def listar_lotes(self, filtro: str = "") -> List[ResumenLote]: ...
@@ -174,14 +174,14 @@ class ClienteHttp:
         self.sesion = sesion
         self.config = config
 
-    # ── lotes ──────────────────────────────────────────────────────
+    # ── batches ──────────────────────────────────────────────────────
 
     def listar_lotes(self, filtro: str = "") -> List[ResumenLote]:
-        """Lista los lotes de la cola, opcionalmente filtrados por nombre.
+        """Lista los batches de la cola, opcionalmente filtrados por nombre.
 
         El filtro lo aplica el servidor como subcadena sin distinguir
         mayusculas, asi que mandarlo evita traerse la cola entera cuando
-        solo interesan los lotes de un dia.
+        solo interesan los batches de un dia.
         """
         datos = self.sesion.get(
             "/index/Batch/GetBatches",
@@ -202,9 +202,9 @@ class ClienteHttp:
         return resultado
 
     def abrir_lote(self, batch_id: str) -> Mapping[str, Any]:
-        """Bloquea el lote y devuelve su informacion.
+        """Bloquea el batch y devuelve su informacion.
 
-        Si el mismo usuario tiene el lote abierto en un navegador, el
+        Si el mismo usuario tiene el batch abierto en un navegador, el
         servidor deja la peticion colgada. El tiempo limite de la sesion es
         lo que evita que el proceso se quede esperando indefinidamente.
         """
@@ -215,10 +215,10 @@ class ClienteHttp:
         )
 
     def cerrar_lote(self, batch_id: str) -> Mapping[str, Any]:
-        """Suelta el lote que abrio :meth:`abrir_lote`.
+        """Suelta el batch que abrio :meth:`abrir_lote`.
 
         Hay que llamarlo siempre, tambien cuando el indexado se corta a
-        medias: AirVault admite un solo dueno por lote, asi que un lote que
+        medias: AirVault admite un solo dueno por batch, asi que un batch que
         queda bloqueado deja colgada la siguiente apertura —la del propio
         programa o la de la persona que lo abre en el navegador— sin decir
         por que.
@@ -230,14 +230,14 @@ class ClienteHttp:
         )
 
     def renombrar_lote(self, batch_id: str, nombre: str) -> bool:
-        """Le pone al lote el nombre con el que se le va a reconocer.
+        """Le pone al batch el nombre con el que se le va a reconocer.
 
         Hace falta porque Quick Upload no admite ninguno: todo lo que sube
         el programa llega a la cola como «Empty-Batch», y asi nadie
-        distingue en la pantalla un lote de otro. Es la misma accion
+        distingue en la pantalla un batch de otro. Es la misma accion
         «Rename» que ofrece el Web Index.
 
-        Devuelve si el servidor lo acepto. No se levanta error: el lote ya
+        Devuelve si el servidor lo acepto. No se levanta error: el batch ya
         esta subido y encontrado, y quedarse sin nombre bonito no es razon
         para tirar el trabajo.
         """
@@ -251,24 +251,24 @@ class ClienteHttp:
                       "encodedBatchName": codificar_texto(limpio)},
             )
         except Exception as exc:  # noqa: BLE001 - el trabajo sigue igual
-            logger.info("No se pudo renombrar el lote {}: {}", batch_id, exc)
+            logger.info("No se pudo renombrar el batch {}: {}", batch_id, exc)
             return False
-        logger.info("El lote {} quedo como {!r}", batch_id, limpio)
+        logger.info("El batch {} quedo como {!r}", batch_id, limpio)
         return True
 
     def borrar_pagina(self, batch_id: str, pagina: int,
                       borrada: bool = True) -> bool:
-        """Quita una pagina del lote, o la devuelve.
+        """Quita una pagina del batch, o la devuelve.
 
         Es la papelera de la tira de paginas del Web Index. No borra el
         archivo: marca la pagina, que deja de contar como documento y deja
-        de estorbar para dar el lote por terminado. Se puede deshacer
-        mientras el lote siga en la cola, con ``borrada=False``.
+        de estorbar para dar el batch por terminado. Se puede deshacer
+        mientras el batch siga en la cola, con ``borrada=False``.
 
         Devuelve si AirVault lo acepto. Quitar paginas pide un permiso
         aparte —«Delete Batch Image»— que no toda cuenta tiene, y quedarse
         sin el no es motivo para tirar el trabajo: lo que sigue es mirar
-        las paginas otra vez y decir que el lote no se puede cerrar.
+        las paginas otra vez y decir que el batch no se puede cerrar.
         """
         try:
             self.sesion.post(
@@ -277,19 +277,19 @@ class ClienteHttp:
                       "page": int(pagina),
                       "markDeleted": "true" if borrada else "false"},
             )
-        except Exception as exc:  # noqa: BLE001 - el lote sigue entero
+        except Exception as exc:  # noqa: BLE001 - el batch sigue entero
             logger.info(
-                "No se pudo {} la pagina {} del lote {}: {}",
+                "No se pudo {} la pagina {} del batch {}: {}",
                 "quitar" if borrada else "devolver", pagina, batch_id, exc,
             )
             return False
         return True
 
     def paginas_del_lote(self, batch_id: str) -> List[PaginaDelLote]:
-        """El mapa del lote entero en una sola peticion.
+        """El mapa del batch entero en una sola peticion.
 
         Es lo que dibuja la tira de paginas del Web Index, y trae el estado
-        de cada una sin sus valores. Se usa para saber si el lote esta
+        de cada una sin sus valores. Se usa para saber si el batch esta
         entero en verde, que es la condicion para darlo por terminado: con
         una peticion por pagina eso serian cuatrocientas.
         """
@@ -304,7 +304,7 @@ class ClienteHttp:
         )
         if not isinstance(filas, (list, tuple)):
             raise RespuestaInesperada(
-                f"AirVault no devolvio las paginas del lote {batch_id}, sino "
+                f"AirVault no devolvio las paginas del batch {batch_id}, sino "
                 f"{_describir(datos)}."
             )
         paginas: List[PaginaDelLote] = []
@@ -327,10 +327,10 @@ class ClienteHttp:
         return paginas
 
     def completar_lote(self, batch_id: str) -> Mapping[str, Any]:
-        """Da el lote por terminado y lo saca de la cola del Web Index.
+        """Da el batch por terminado y lo saca de la cola del Web Index.
 
         Es el boton «Complete» de la pantalla. AirVault solo lo acepta con
-        el lote entero en verde; por eso quien lo llama mira antes las
+        el batch entero en verde; por eso quien lo llama mira antes las
         paginas y no lo intenta a ciegas.
         """
         respuesta = self.sesion.get(
@@ -410,8 +410,8 @@ class ClienteHttp:
         if not isinstance(datos, Mapping):
             raise RespuestaInesperada(
                 f"AirVault no devolvio los campos de la pagina {pagina} del "
-                f"lote {batch_id}, sino {_describir(datos)}. Suele ser que "
-                f"el lote ya no tenga esa pagina."
+                f"batch {batch_id}, sino {_describir(datos)}. Suele ser que "
+                f"el batch ya no tenga esa pagina."
             )
         valores: Dict[int, str] = {}
         columnas: Dict[str, str] = {}
@@ -441,7 +441,7 @@ class ClienteHttp:
 
         Va por POST, que es como lo manda el Web Index. Por GET la ruta ni
         siquiera existe: ASP.NET contesta «The resource cannot be found»
-        con un 404, que se leia como «esa pagina ya no esta en el lote».
+        con un 404, que se leia como «esa pagina ya no esta en el batch».
         """
         return self.sesion.post_json(
             "/index/FormsProcessing/SaveAndGetIndexFields",

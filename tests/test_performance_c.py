@@ -165,7 +165,7 @@ def test_file_parallelism_runs_in_the_real_persistent_process_pool(tmp_path):
 
 
 def test_the_csv_time_column_adds_up_to_the_clock_of_a_real_run(tmp_path):
-    """La suma de ``time_ms`` es lo que tardó la corrida, no varias veces eso.
+    """La suma de ``time_ms`` es lo que tardó la ejecución, no varias veces eso.
 
     Con un proceso por archivo cada bitácora mide su propio reloj mientras
     comparte la CPU con las demás: sumarlos contaba el mismo minuto una vez
@@ -203,10 +203,10 @@ def test_the_csv_time_column_adds_up_to_the_clock_of_a_real_run(tmp_path):
         times = [float(row["time_ms"]) for row in csv.DictReader(fh)]
 
     assert len(times) == len(reports)
-    # Nunca puede sumar más que el reloj de la corrida (el error original:
+    # Nunca puede sumar más que el reloj de la ejecución (el error original:
     # cuatro archivos en dos procesos sumaban del orden del doble).
     assert sum(times) <= elapsed_ms
-    # Y cubre la corrida salvo el arranque y el cierre del pool, que no son
+    # Y cubre la ejecución salvo el arranque y el cierre del pool, que no son
     # tiempo imputable a ninguna página.
     assert sum(times) >= elapsed_ms * 0.5
     assert sum(times) == pytest.approx(CsvReporter.run_wall_ms(reports), rel=0.01)

@@ -1,7 +1,7 @@
-"""Recorrido de punta a punta: CSV de la corrida hasta lote indexado.
+"""Recorrido de punta a punta: CSV de la ejecución hasta batch indexado.
 
 Es el test que amarra las piezas. Usa el CSV tal como lo escribe la
-corrida y un lote falso, de modo que cubre el camino completo sin red.
+ejecución y un batch falso, de modo que cubre el camino completo sin red.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def test_flujo_completo(tmp_path):
     manifiesto.etapa("descubrir").marcar(EstadoEtapa.HECHA)
     manifiestos.guardar(manifiesto, carpeta)
 
-    # planificar sobre un lote que ya trae los log numbers del preindexado
+    # planificar sobre un batch que ya trae los log numbers del preindexado
     cliente = ClienteFalso(
         paginas={
             1: pagina(1, valores={CAMPO_LOG_NUMBER: "2312238"}),
@@ -108,7 +108,7 @@ def test_flujo_completo(tmp_path):
 
 
 def test_csv_de_otro_lote_no_escribe_nada(tmp_path):
-    """El caso que de verdad importa: CSV y lote que no corresponden."""
+    """El caso que de verdad importa: CSV y batch que no corresponden."""
     manifiesto = _preparar(tmp_path)
     manifiesto.batch_id = "003BBB"
     cliente = ClienteFalso(

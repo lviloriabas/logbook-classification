@@ -41,15 +41,15 @@ class JsonReporter:
         path: Path,
         corrida: Optional[str] = None,
     ) -> Path:
-        """Guarda todos los reportes de la corrida en un único JSON.
+        """Guarda todos los reportes de la ejecución en un único JSON.
 
         El archivo lleva el mismo nombre que el CSV consolidado de la
-        corrida y contiene la lista de reportes (uno por bitácora).
+        ejecución y contiene la lista de reportes (uno por bitácora).
 
         Args:
-            reports: Reportes de validación de la corrida.
+            reports: Reportes de validación de la ejecución.
             path: Ruta de salida (``datos/<nombre del CSV>.json``).
-            corrida: Nombre de la corrida (stem del CSV).
+            ejecución: Nombre de la ejecución (stem del CSV).
 
         Returns:
             La ruta del archivo generado.

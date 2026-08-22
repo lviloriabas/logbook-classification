@@ -102,9 +102,9 @@ class ValidationReport(BaseModel):
     processing_ms: float = 0.0
     calibration_ms: float = 0.0
     # Instante de arranque (epoch, ``time.time()``) para poder medir el reloj
-    # real de un lote: con un proceso por archivo las bitácoras se solapan y
+    # real de un batch: con un proceso por archivo las bitácoras se solapan y
     # sumar ``processing_ms`` cuenta el mismo minuto una vez por archivo. No
-    # viaja al JSON: es metadato de la corrida, no del reporte.
+    # viaja al JSON: es metadato de la ejecución, no del reporte.
     started_at: float = Field(default=0.0, exclude=True, repr=False)
     cancelled: bool = False
     summary: Dict[str, int] = Field(default_factory=dict)

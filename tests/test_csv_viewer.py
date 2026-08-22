@@ -151,7 +151,7 @@ def test_minimal_csv_recovers_field_color_from_companion_json(tmp_path: Path):
     ``find_csv_files`` abre por defecto el CSV mínimo (ordena antes que
     ``_completo``), y ese CSV se recorta al exportar sin esas columnas. Sin
     este respaldo, el historial se abría sin ningún campo coloreado aunque
-    la corrida sí tuviera estados de WARNING/ERROR.
+    la ejecución sí tuviera estados de WARNING/ERROR.
     """
     import json
 
@@ -797,7 +797,7 @@ def test_page_is_scaled_to_fill_the_available_panel(tmp_path: Path, monkeypatch)
 
 
 def _run_with_companion_json(tmp_path: Path, pdf_path: Path) -> tuple[Path, Path]:
-    """Corrida mínima en disco: CSV, CSV completo y su JSON consolidado."""
+    """Ejecución mínima en disco: CSV, CSV completo y su JSON consolidado."""
     import json
 
     from app.models.schemas import FieldResult, PageResult, ValidationReport
@@ -846,10 +846,10 @@ def test_run_folder_is_recovered_from_the_csv_location(tmp_path: Path):
     run = tmp_path / "BITS TEST"
     assert run_dir_for_csv(run / "datos" / "BITS TEST.CSV") == run
     assert run_dir_for_csv(run / "datos" / "BITS TEST_completo.CSV") == run
-    # Las corridas históricas dejaban el reporte en la raíz de la corrida.
+    # Las ejecuciones históricas dejaban el reporte en la raíz de la ejecución.
     assert run_dir_for_csv(run / "BITS TEST.CSV") == run
     # Una copia suelta no identifica ninguna carpeta: volver a exportar sobre
-    # ella borraría los archivos que la corrida regenera, que ahí son ajenos.
+    # ella borraría los archivos que la ejecución regenera, que ahí son ajenos.
     assert run_dir_for_csv(tmp_path / "Documentos" / "BITS TEST.CSV") is None
     assert run_dir_for_csv(run / "datos" / "copia.CSV") is None
 
@@ -862,7 +862,7 @@ def test_reports_are_rebuilt_from_the_companion_json(tmp_path: Path):
 
     assert missing == []
     assert [Path(report.pdf_path) for report in reports] == [pdf_path]
-    # El JSON guarda los reportes enteros: la corrida se re-exporta sin OCR.
+    # El JSON guarda los reportes enteros: la ejecución se re-exporta sin OCR.
     assert [page.page_number for page in reports[0].pages] == [1, 2]
     assert reports[0].pages[0].fields[0].value == "2147337"
 
@@ -894,14 +894,14 @@ def test_export_is_offered_only_when_the_run_can_be_rebuilt(tmp_path: Path):
         assert viewer.load_csv_file(csv_path) is True
         assert viewer.btn_export.isEnabled()
 
-        # Un CSV suelto no trae el JSON de su corrida y no se puede rehacer.
+        # Un CSV suelto no trae el JSON de su ejecución y no se puede rehacer.
         loose = tmp_path / "suelto.csv"
         loose.write_text("file,page\na.pdf,1\n", encoding="utf-8")
         assert viewer.load_csv_file(loose) is True
         assert not viewer.btn_export.isEnabled()
         assert "JSON" in viewer.btn_export.toolTip()
 
-        # Al volver a la corrida el botón recupera su explicación de siempre.
+        # Al volver a la ejecución el botón recupera su explicación de siempre.
         assert viewer.load_csv_file(csv_path) is True
         assert viewer.btn_export.isEnabled()
         assert "Volver a generar" in viewer.btn_export.toolTip()
@@ -930,7 +930,7 @@ def test_exporting_rewrites_the_run_without_reprocessing(tmp_path: Path):
         app.processEvents()
 
         # Las mismas salidas que produce «Exportar» en la ventana principal,
-        # escritas sobre la carpeta de la corrida abierta.
+        # escritas sobre la carpeta de la ejecución abierta.
         assert (run / "HP-1534CMP.pdf").is_file()
         assert (run / "HP-1538CMP.pdf").is_file()
         assert (run / "stats.json").is_file()

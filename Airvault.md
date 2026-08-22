@@ -1,6 +1,6 @@
 # AirVault: indexado automatico de bitacoras
 
-Instrucciones para implementar el indexado automatico de lotes de bitacoras
+Instrucciones para implementar el indexado automatico de batches de bitacoras
 en AirVault desde el proyecto BITS.
 
 Todo lo que hay aqui esta verificado contra el sistema real el 18 de agosto
@@ -24,7 +24,7 @@ Requisitos fijados por el usuario:
    proceso, subida, indexado.
 3. Reanudable y por partes: si ya esta subido, solo indexar; si ya esta
    procesado, subir e indexar.
-4. El lote se detecta **por nombre**.
+4. El batch se detecta **por nombre**.
 5. La matricula del avion es obligatoria y los campos automaticos se
    asignan solos.
 6. Tres modos: revisar sin escribir, revisar y aprobar, o todo automatico.
@@ -133,7 +133,7 @@ alguno queda vacio, la pagina se guarda en amarillo.
 | Aircraft | 162 valores: HK-4453, HK-4454, HK-4456, HK-4505, HK-4599, HP-1369CMP a HP-1857CMP, HP-1990WWP, HP-9801CMP a HP-9821CMP, HP-9901CMP a HP-9932CMP, N/A, Purge |
 
 **Aviso sobre Doc Type.** El picklist 19589 contiene `Log Page`. **No
-contiene `LOG PAGE` en mayusculas.** Sin embargo, los lotes cargados hasta
+contiene `LOG PAGE` en mayusculas.** Sin embargo, los batches cargados hasta
 hoy llevan `LOG PAGE`, que la interfaz solo conserva porque agrega al combo
 cualquier valor que no reconoce. Hay que decidir con el administrador de
 AirVault cual se escribe, y dejarlo configurable mientras tanto.
@@ -189,7 +189,7 @@ Las credenciales no se guardan en disco ni se escriben en el log, nunca.
 
 Si la sesion caduca, el servidor responde con una redireccion a `/signin2/`
 o con el texto `dosignin` / `wsignin1.0` en el cuerpo. Hay que detectarlo y
-decirlo, no fallar en silencio a mitad del lote.
+decirlo, no fallar en silencio a mitad del batch.
 
 ---
 
@@ -197,7 +197,7 @@ decirlo, no fallar en silencio a mitad del lote.
 
 Todos cuelgan de `https://airvault.criticaltech.com`.
 
-### Lotes
+### Batches
 
 ```
 GET /index/Batch/GetBatches
@@ -239,7 +239,7 @@ GET /index/Batch/ValidateQuery
 GET /index/Batch/UpdateBatchValidationQuery
 ```
 
-`LockAndGetBatchInfo` abre y **bloquea** el lote. Devuelve:
+`LockAndGetBatchInfo` abre y **bloquea** el batch. Devuelve:
 
 ```json
 {"repoId":3209,"batchId":"003SRO","pageNum":1,"pageCount":393,
@@ -286,7 +286,7 @@ GET /index/FormsProcessing/GetPage/?encodedBatchId=&repoId=&page=&showOrig=0&dat
 ```
 
 `UpdateForwardIndexFields` es el "Stickies forward": aplica los campos
-marcados como sticky a **todas** las paginas siguientes del lote, de una
+marcados como sticky a **todas** las paginas siguientes del batch, de una
 sola llamada. No admite rango.
 
 ### Catalogos
@@ -323,7 +323,7 @@ cada archivo puede llevar sus propios valores de indice, aunque la pantalla
 use un solo formulario para todos.
 
 **Limitacion de Quick Upload:** solo expone diez campos y entre ellos **no
-estan Log Page Number, Fleet ni End Date**. Deja el lote clasificado pero
+estan Log Page Number, Fleet ni End Date**. Deja el batch clasificado pero
 no indexado. El indexado real siempre lo tiene que hacer el Web Index.
 
 ### Codificacion de valores
@@ -358,10 +358,10 @@ queda en 3. Si todos son validos, en 0.
 
 ## 6. Reglas del dominio
 
-### Nombre del lote
+### Nombre del batch
 
 El nombre es lo unico que el sistema y AirVault comparten para reconocer un
-lote. Formato acordado:
+batch. Formato acordado:
 
 ```
 DP | BIT <DD MON YYYY> <HH MM>
@@ -370,13 +370,13 @@ DP | BIT 18 AUG 2026 05 42
 ```
 
 Es el mismo formato de marca de tiempo que ya usa el nombre del CSV de
-corrida (`BITS 18 AUG 2026 05 42`), de modo que el lote y la carpeta de la
-corrida se cruzan de un vistazo. Debe deducirse de la ruta del CSV, con
+ejecución (`BITS 18 AUG 2026 05 42`), de modo que el batch y la carpeta de la
+ejecución se cruzan de un vistazo. Debe deducirse de la ruta del CSV, con
 opcion a fijar prefijo y nombre completo a mano.
 
 **La marca de tiempo no es decoracion.** La caja "Filter by" de AirVault
 manda el texto al servidor y hace **coincidencia de subcadena sin
-distinguir mayusculas**. Escribir `DP | BIT` devuelve hoy 22 lotes, porque
+distinguir mayusculas**. Escribir `DP | BIT` devuelve hoy 22 batches, porque
 atrapa tres familias a la vez:
 
 ```
@@ -394,9 +394,9 @@ DP | Bits varias 1 | Martes 18 de Ago
 Con nombres repetidos no hay forma de saber en cual escribir. La marca de
 tiempo los separa.
 
-### Correspondencia entre el CSV y las paginas del lote
+### Correspondencia entre el CSV y las paginas del batch
 
-El CSV minimo de una corrida tiene estas columnas:
+El CSV minimo de una ejecución tiene estas columnas:
 
 ```
 file, page, log_number, dup, disc, matricula, flight_number,
@@ -410,8 +410,8 @@ technician_signature, date, time_ms
   `YYYY/MM/dd` y AirVault espera `MM/DD/YYYY`.
 - Las paginas en blanco (sin log number, sin matricula y sin fecha) **no
   entran**: no llegan al PDF que se sube y si se contaran descuadrarian la
-  correspondencia con las paginas del lote.
-- El orden de las paginas del lote es el del PDF que se subio. Cuando el
+  correspondencia con las paginas del batch.
+- El orden de las paginas del batch es el del PDF que se subio. Cuando el
   PDF sale de `--separar-por`, el orden lo fija
   `app/reports/organize.py`: agrupa por matricula y mes, y dentro de cada
   grupo ordena por `log_number` y despues por posicion original.
@@ -444,7 +444,7 @@ D:\BITS\
   app\core\pipeline.py             procesamiento (no tocar)
   app\reports\csv_reporter.py      formato del CSV (no tocar sin preguntar)
   app\reports\organize.py          orden de las paginas en los PDFs
-  app\reports\outputs.py           nombre de la corrida, run_csv_name()
+  app\reports\outputs.py           nombre de la ejecución, run_csv_name()
   app\utils\fleet.py               normalise_matricula, load_fleet
   app\utils\portable.py            ensure_portable_env()
 
@@ -482,7 +482,7 @@ Ya trae `requests 2.34.2`, `pydantic`, `loguru`, `pytest`, `pymupdf`,
 ### Etapas
 
 ```
-input/  ->  [procesar]  ->  CSV de la corrida
+input/  ->  [procesar]  ->  CSV de la ejecución
                               |
                               v
                          [preparar]   manifiesto del trabajo
@@ -491,7 +491,7 @@ input/  ->  [procesar]  ->  CSV de la corrida
                           [subir]     Quick Upload, o el usuario lo sube
                               |
                               v
-                        [descubrir]   ubicar el lote por nombre
+                        [descubrir]   ubicar el batch por nombre
                               |
                               v
                           [plan]      dry run + reporte de revision
@@ -511,15 +511,15 @@ De ahi salen la reanudacion y la ejecucion por partes:
 - Cada etapa lee el manifiesto, hace lo suyo y lo vuelve a escribir.
 - Cada bitacora lleva su propio estado, asi que un indexado cortado en la
   pagina 250 se retoma en la 251 sin repetir escrituras.
-- Si el usuario subio el lote a mano, se marca `subir` como omitida y se
+- Si el usuario subio el batch a mano, se marca `subir` como omitida y se
   arranca en `descubrir`.
 - La escritura del archivo debe ser **atomica** (temporal y `os.replace`),
   porque se guarda despues de cada pagina y un JSON truncado dejaria el
   trabajo irrecuperable.
 
-Contenido minimo por bitacora: posicion en el lote, archivo y pagina de
+Contenido minimo por bitacora: posicion en el batch, archivo y pagina de
 origen, matricula, log number, fecha, flota, si la flota fue inferida,
-pagina asignada en el lote, estado y avisos.
+pagina asignada en el batch, estado y avisos.
 
 ### Las guardas
 
@@ -528,7 +528,7 @@ publicada con la matricula de otro avion. Todas las comprobaciones deben
 estar juntas, ser puras y ejecutarse **igual en dry run que en
 automatico**:
 
-1. **Cantidad.** El lote y el manifiesto tienen que tener la misma cantidad
+1. **Cantidad.** El batch y el manifiesto tienen que tener la misma cantidad
    de paginas. Si no, se corta el trabajo entero: la correspondencia por
    posicion esta rota.
 2. **Matricula.** Toda matricula debe existir en el picklist de AirVault.
@@ -539,7 +539,7 @@ automatico**:
 5. **Obligatorios.** Ninguno de los seis puede quedar vacio.
 
 Una pagina que falle cualquiera de las guardas 2 a 5 queda marcada como
-bloqueada y no se escribe; el resto del lote sigue.
+bloqueada y no se escribe; el resto del batch sigue.
 
 ### Los modos
 
@@ -558,7 +558,7 @@ Como el lookup de AirVault lo dispara la interfaz y no el servidor, hay que
 resolverla por cuenta propia, en tres niveles:
 
 1. Cache local `airvault_flota.json`.
-2. Lo que AirVault ya tiene indexado: al leer las paginas del lote se
+2. Lo que AirVault ya tiene indexado: al leer las paginas del batch se
    aprenden los pares matricula/flota/arrendador y se guardan en el cache.
    Es la fuente autoritativa y se alimenta sola.
 3. Regla de prefijos como ultimo recurso, marcando la bitacora como
@@ -647,15 +647,15 @@ Cada paso deja algo que se puede probar solo.
 3. **Mapeo.** CSV a valores: formato de fecha, matricula, log number, y el
    resolutor de flota. Test de que las paginas en blanco no entran y de que
    solo viajan los campos que el sistema controla.
-4. **Nombre del lote.** `DP | BIT` mas la marca de tiempo, deducida de la
-   ruta del CSV. Test de que la marca sale igual a la del CSV de corrida.
+4. **Nombre del batch.** `DP | BIT` mas la marca de tiempo, deducida de la
+   ruta del CSV. Test de que la marca sale igual a la del CSV de ejecución.
 5. **Guardas.** Las cinco, puras y con un test por caso de fallo.
 6. **Cliente HTTP.** Cuidado con `cell` como arreglo y con las entidades
    HTML de los nombres.
 7. **Sesion.** Cookie primero, formulario como respaldo. Detectar caducidad.
 8. **Descubrimiento.** Filtro server-side y desempate por cantidad de
    paginas; si sigue habiendo empate, parar y pedir el batch id.
-9. **Indexador.** Leer todo el lote, aprender la flota, planificar,
+9. **Indexador.** Leer todo el batch, aprender la flota, planificar,
    escribir guardando el manifiesto tras cada pagina.
 10. **Reporte.** CSV y HTML autocontenido, sin recursos externos.
 11. **Subida.** Quick Upload por trozos, desacoplada para poder saltarla.
@@ -671,7 +671,7 @@ paginas se tocaron, con que valores y en que orden.
 Los tests que no pueden faltar:
 
 - El dry run **no hace ninguna llamada de escritura**.
-- Un CSV que no corresponde al lote **no escribe nada**.
+- Un CSV que no corresponde al batch **no escribe nada**.
 - Un corte a media escritura deja constancia y al reanudar no repite.
 - Una pagina ya en Valid no se pisa.
 - Cada pagina se lee una sola vez.
@@ -686,19 +686,19 @@ Los tests que no pueden faltar:
 4. `indexar --revisar` y aprobar.
 5. `verificar`.
 
-Recien despues de que eso funcione, correr un lote completo.
+Recien despues de que eso funcione, correr un batch completo.
 
 ---
 
 ## 11. Trampas conocidas
 
-- **Un lote a la vez por usuario.** Si el lote esta abierto en otra
+- **Un batch a la vez por usuario.** Si el batch esta abierto en otra
   pestana, `LockAndGetBatchInfo` se queda colgado indefinidamente, sin
-  error. Hay que cerrar el lote antes de abrirlo desde otro lado, y poner
+  error. Hay que cerrar el batch antes de abrirlo desde otro lado, y poner
   tiempo limite a todas las peticiones.
 - **`cell` es un arreglo**, no un diccionario, y los nombres vienen
-  escapados en HTML. Leerlo mal hace que nunca se encuentre ningun lote.
-- **El filtro es subcadena.** `DP | BIT` trae 22 lotes de tres familias
+  escapados en HTML. Leerlo mal hace que nunca se encuentre ningun batch.
+- **El filtro es subcadena.** `DP | BIT` trae 22 batches de tres familias
   distintas, con nombres repetidos entre ellos.
 - **El lookup de flota es del cliente.** Escribir por API solo la matricula
   deja Fleet y Lessor vacios y la pagina en amarillo.
@@ -715,7 +715,7 @@ Recien despues de que eso funcione, correr un lote completo.
 ## 12. Decisiones abiertas
 
 1. **Doc Type.** Se escribe `Log Page` (el valor del picklist) o
-   `LOG PAGE` (lo que tienen los lotes viejos). Preguntar al administrador
+   `LOG PAGE` (lo que tienen los batches viejos). Preguntar al administrador
    de AirVault.
 2. **Cookie de Entra ID.** Se pega a mano cada vez, o el modulo la lee del
    perfil de Edge.

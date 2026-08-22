@@ -196,7 +196,7 @@ class TestMatricula(unittest.TestCase):
             self.assertEqual(note, AMBIGUOUS_MATRICULA_NOTE, value)
 
     def test_window_is_not_shifted_by_noise(self):
-        # Un dígito suelto detrás delata una ventana corrida: el número es
+        # Un dígito suelto detrás delata una ventana ejecución: el número es
         # el que queda entre el prefijo y el sufijo, no el primero que cabe.
         for value, expected in (
             ("40171900", "HP-1719CMP"),

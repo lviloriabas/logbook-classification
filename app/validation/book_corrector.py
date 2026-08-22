@@ -175,8 +175,8 @@ def _book_winner(
         suffixes[suffix] += weight
         for position, digit in enumerate(number):
             votes[position][digit] += weight
-    # El desempate se ordena por el propio dígito para que dos corridas del
-    # mismo lote den siempre el mismo resultado: con pesos idénticos no hay
+    # El desempate se ordena por el propio dígito para que dos ejecuciones del
+    # mismo batch den siempre el mismo resultado: con pesos idénticos no hay
     # evidencia que distinga, pero la salida no puede depender del orden en
     # que llegaron las páginas.
     number = "".join(

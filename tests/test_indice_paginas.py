@@ -98,7 +98,7 @@ def test_una_matricula_en_conflicto_no_queda_bajo_su_separador():
 
 
 def test_revisar_puede_quedar_fuera_de_la_secuencia_principal():
-    """Va a su propio archivo, que en AirVault sera su propio lote."""
+    """Va a su propio archivo, que en AirVault sera su propio batch."""
     reporte = _reporte(
         _page(1, "2147337", "HP-1534CMP"),
         _page(2, "2147338", None),
@@ -126,7 +126,7 @@ def test_las_discrepancias_van_al_final_con_su_separador():
 
 
 def test_la_pagina_en_blanco_no_entra():
-    """No llega al PDF, asi que tampoco puede ocupar una pagina del lote."""
+    """No llega al PDF, asi que tampoco puede ocupar una pagina del batch."""
     en_blanco = PageResult(page_number=2, blank=True)
     reporte = _reporte(_page(1, "2147337", "HP-1534CMP"), en_blanco)
     assert etiquetas(secuencia_pdf_unico([reporte])) == [1]
@@ -157,14 +157,14 @@ def test_el_indice_describe_separadores_y_bitacoras(tmp_path):
         _page(2, "2147338", None),
     )
     destino = escribir_indice_paginas(
-        [ArchivoDeEntrega(Path("corrida.pdf"), secuencia_pdf_unico([reporte]))],
+        [ArchivoDeEntrega(Path("ejecución.pdf"), secuencia_pdf_unico([reporte]))],
         tmp_path / "corrida_paginas.json",
     )
     datos = json.loads(Path(destino).read_text(encoding="utf-8"))
 
     assert datos["version"] == 2
     assert len(datos["partes"]) == 1
-    assert datos["partes"][0]["pdf"] == "corrida.pdf"
+    assert datos["partes"][0]["pdf"] == "ejecución.pdf"
     assert datos["partes"][0]["paginas"] == [
         {"archivo": "fixture.pdf", "pagina": 1},
         {"separador": ETIQUETA_REVISAR},
@@ -173,21 +173,21 @@ def test_el_indice_describe_separadores_y_bitacoras(tmp_path):
 
 
 def test_el_indice_nombra_cada_parte_con_su_archivo(tmp_path):
-    """Cada archivo es un lote distinto: hay que saber que lleva cada uno."""
+    """Cada archivo es un batch distinto: hay que saber que lleva cada uno."""
     reporte = _reporte(
         _page(1, "2147337", "HP-1534CMP"),
         _page(2, "2147338", "HP-1534CMP"),
     )
     secuencia = secuencia_pdf_unico([reporte])
     destino = escribir_indice_paginas(
-        [ArchivoDeEntrega(Path("corrida -1.pdf"), secuencia[:1]),
-         ArchivoDeEntrega(Path("corrida -2.pdf"), secuencia[1:])],
+        [ArchivoDeEntrega(Path("ejecución -1.pdf"), secuencia[:1]),
+         ArchivoDeEntrega(Path("ejecución -2.pdf"), secuencia[1:])],
         tmp_path / "corrida_paginas.json",
     )
     datos = json.loads(Path(destino).read_text(encoding="utf-8"))
 
     assert [p["pdf"] for p in datos["partes"]] == [
-        "corrida -1.pdf", "corrida -2.pdf"
+        "ejecución -1.pdf", "ejecución -2.pdf"
     ]
     assert [len(p["paginas"]) for p in datos["partes"]] == [1, 1]
 
@@ -198,8 +198,8 @@ def test_el_indice_marca_cual_es_el_lote_de_revisar(tmp_path):
     principal = secuencia_pdf_unico([reporte], incluir_revisar=False)
     revisar = secuencia_de_revisar([reporte])
     destino = escribir_indice_paginas(
-        [ArchivoDeEntrega(Path("corrida.pdf"), principal),
-         ArchivoDeEntrega(Path("corrida REVISAR.pdf"), revisar, revisar=True)],
+        [ArchivoDeEntrega(Path("ejecución.pdf"), principal),
+         ArchivoDeEntrega(Path("ejecución REVISAR.pdf"), revisar, revisar=True)],
         tmp_path / "corrida_paginas.json",
     )
     datos = json.loads(Path(destino).read_text(encoding="utf-8"))

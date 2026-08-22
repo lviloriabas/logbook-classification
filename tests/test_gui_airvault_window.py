@@ -3,7 +3,7 @@
 Comprueba lo que la ventana promete: que el historial enseñe las
 ejecuciones y diga cuáles se pueden subir, que subir y indexar sean dos
 tiempos separados por la espera de AirVault, que esa espera se pregunte
-sola sin congelar nada, y que cerrar el programa espere al lote a medio
+sola sin congelar nada, y que cerrar el programa espere al batch a medio
 escribir.
 
 Nada de esto toca la red: la ventana solo prepara el trabajo y arranca el
@@ -49,7 +49,7 @@ def ventana(app):
 def corrida(
     raiz, nombre="BITS 18 AUG 2026 05 42", exportada=True, paginas=19,
 ):
-    """Deja en ``raiz/output`` una corrida como la que escribe la exportación.
+    """Deja en ``raiz/output`` una ejecución como la que escribe la exportación.
 
     Sin ``exportada`` queda solo lo que produce el procesamiento: los datos,
     sin PDF de entrega ni índice de páginas, que es lo que hace falta para
@@ -113,7 +113,7 @@ def test_sin_corrida_elegida_no_hay_nada_que_subir(ventana):
 
 
 def test_sin_nada_subido_no_hay_nada_que_comprobar(ventana):
-    """Comprobar es preguntar por lotes; sin subir no hay ninguno."""
+    """Comprobar es preguntar por batches; sin subir no hay ninguno."""
     assert not ventana.boton_comprobar.isEnabled()
 
 
@@ -122,7 +122,7 @@ def test_sin_registro_no_hay_nada_que_eliminar(ventana):
 
 
 def test_completar_el_batch_no_viene_marcado(ventana):
-    """Cerrar el lote lo saca de la cola: eso se pide a propósito."""
+    """Cerrar el batch lo saca de la cola: eso se pide a propósito."""
     assert not ventana.completar_check.isChecked()
 
 
@@ -221,7 +221,7 @@ def test_sin_elegir_nada_se_propone_la_mas_reciente(app, tmp_path):
 
 
 def test_se_propone_la_exportada_aunque_no_sea_la_ultima(app, tmp_path):
-    """Procesar sin exportar es normal; abrir señalando esa corrida, no."""
+    """Procesar sin exportar es normal; abrir señalando esa ejecución, no."""
     csv = corrida(tmp_path, "BITS 17 AUG 2026 05 50")
     corrida(tmp_path, "BITS 18 AUG 2026 05 42", exportada=False)
     ventana = AirVaultWindow(tmp_path)
@@ -263,7 +263,7 @@ def test_el_csv_que_se_sube_es_el_minimo_no_el_completo(tmp_path):
     assert csv_de_corrida(csv.parent.parent) == csv
 
 
-# ── la corrida elegida ─────────────────────────────────────────────
+# ── la ejecución elegida ─────────────────────────────────────────────
 
 def test_apunta_a_la_corrida_y_propone_el_nombre_del_lote(ventana, tmp_path):
     csv = corrida(tmp_path)
@@ -279,7 +279,7 @@ def test_el_campo_de_la_corrida_no_se_teclea(ventana):
 
 def test_cambiar_de_corrida_tira_lo_que_se_sabia_de_la_anterior(ventana,
                                                                 tmp_path):
-    """Los lotes de una ejecución no dicen nada de los de otra."""
+    """Los batches de una ejecución no dicen nada de los de otra."""
     ventana._estado = {"planes": {"x": 1}}
     ventana.boton_indexar.setEnabled(True)
     ventana.fijar_corrida(corrida(tmp_path))
@@ -397,7 +397,7 @@ class TrabajoFalso:
 
 
 def parte(estado, nombre="DP | BITS", detalle="", carpeta="job"):
-    """Una fila de la lista de lotes, como la devuelve el módulo."""
+    """Una fila de la lista de batches, como la devuelve el módulo."""
     from app.airvault.flujo import EstadoParte
 
     return EstadoParte(TrabajoFalso(nombre, carpeta=carpeta), estado, detalle)
@@ -581,7 +581,7 @@ def test_un_indexado_cortado_dice_que_lo_que_falta_se_retoma(ventana):
 # ── la espera de AirVault ──────────────────────────────────────────
 
 def test_mientras_falte_un_lote_se_sigue_preguntando_solo(ventana):
-    """Un lote tarda en salir de la cola; nadie va a estar pulsando."""
+    """Un batch tarda en salir de la cola; nadie va a estar pulsando."""
     from app.airvault.flujo import PROCESANDO
 
     ventana._al_comprobar({
@@ -625,7 +625,7 @@ def test_cerrar_la_ventana_no_apaga_la_comprobacion_automatica(ventana):
 
 
 def test_el_reloj_no_pregunta_con_algo_en_vuelo(ventana):
-    """Dos trabajos a la vez contra el mismo lote se estorban."""
+    """Dos trabajos a la vez contra el mismo batch se estorban."""
     ventana._worker = HiloFalso()
     try:
         ventana._comprobar_solo()
@@ -680,7 +680,7 @@ def test_si_airvault_no_deja_cerrarlo_se_dice_por_que(ventana):
 
 
 def test_si_hubo_que_quitar_separadores_se_dice(ventana):
-    """Es un cambio en el lote: esas páginas ya no están en AirVault."""
+    """Es un cambio en el batch: esas páginas ya no están en AirVault."""
     ventana._al_indexar({
         "resultado": ResultadoFalso(), "validas": 2, "total": 2, "lotes": 1,
         "cierres": [(TrabajoFalso(), Cierre(True, quitadas=[1, 4, 6]))],
@@ -724,7 +724,7 @@ def test_con_un_lote_a_medias_no_se_cambia_de_ejecucion(ventana):
 def test_mientras_trabaja_siempre_hay_algo_que_pulsar(ventana):
     """Una espera larga no puede dejar la ventana sin salida.
 
-    Entrar a AirVault espera hasta cinco minutos y un lote puede tardar
+    Entrar a AirVault espera hasta cinco minutos y un batch puede tardar
     quince en salir de la cola del servidor. Con todo apagado, eso era una
     ventana congelada sin nada que hacer más que matar el programa.
     """
@@ -754,7 +754,7 @@ def test_cerrar_con_trabajo_en_vuelo_lo_cancela_en_vez_de_negarse(ventana):
 
     La ventana se quedaba sin salida: ni cerraba, ni avanzaba, ni había
     nada que pulsar. Ahora se pide la cancelación y se cierra en cuanto el
-    hilo suelta los lotes que tuviera tomados, que es lo único que no se
+    hilo suelta los batches que tuviera tomados, que es lo único que no se
     puede dejar a medias.
     """
     hilo = HiloFalso()
@@ -793,10 +793,10 @@ def test_la_bitacora_cuenta_los_pasos_y_no_repite_el_mismo(ventana):
     """Los avisos de una subida llegan por trozo; la bitácora cuenta etapas."""
     ventana._mostrar_paso("Subiendo entrega.pdf", 1, 40)
     ventana._mostrar_paso("Subiendo entrega.pdf", 2, 40)
-    ventana._mostrar_paso("Buscando el lote", 0, 0)
+    ventana._mostrar_paso("Buscando el batch", 0, 0)
     assert ventana.bitacora.count() == 2
     assert "Subiendo entrega.pdf" in ventana.bitacora.item(0).text()
-    assert "Buscando el lote" in ventana.bitacora.item(1).text()
+    assert "Buscando el batch" in ventana.bitacora.item(1).text()
 
 
 def test_cancelado_se_cuenta_y_no_deja_la_barra_girando(ventana):
@@ -824,7 +824,7 @@ def test_el_boton_va_en_la_fila_de_opciones_avanzadas(app):
 
 
 def test_el_cierre_espera_al_lote_a_medio_escribir(app):
-    """Destruir el hilo con un lote a medias mata el programa."""
+    """Destruir el hilo con un batch a medias mata el programa."""
     from app.gui.main_window import MainWindow
 
     class HiloFalso:

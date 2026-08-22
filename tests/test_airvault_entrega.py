@@ -73,7 +73,7 @@ def reportes(pdf):
 
 
 def corrida(tmp_path, paginas_por_parte=0, separar=("avion",)):
-    """Exporta una corrida completa y devuelve la ruta de su CSV."""
+    """Exporta una ejecución completa y devuelve la ruta de su CSV."""
     run_dir = tmp_path / "BITS 19 AUG 2026 10 00"
     datos = run_dir / "datos"
     datos.mkdir(parents=True)
@@ -117,7 +117,7 @@ def paginas_del_pdf(ruta) -> int:
 # ── una sola entrega ───────────────────────────────────────────────
 
 def test_el_manifiesto_tiene_una_entrada_por_pagina_del_pdf(tmp_path):
-    """La guarda de cantidad compara justo esto contra el lote de AirVault."""
+    """La guarda de cantidad compara justo esto contra el batch de AirVault."""
     csv_path, partes = corrida(tmp_path)
     trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv_path)
 
@@ -173,7 +173,7 @@ def test_cada_parte_declara_lo_que_lleva(tmp_path):
 
 
 def test_el_manifiesto_de_cada_parte_cuadra_con_su_archivo(tmp_path):
-    """Es lo que deja escribir en el lote correcto: cada lote, su archivo."""
+    """Es lo que deja escribir en el batch correcto: cada batch, su archivo."""
     csv_path, partes = corrida(tmp_path, paginas_por_parte=6)
     trabajos = preparar_partes(AirVaultConfig(), tmp_path / "job", csv_path)
 
@@ -221,7 +221,7 @@ def test_el_reparto_no_parte_un_avion_si_cabe_entero(tmp_path):
                 matricula in {b.matricula for b in otro.manifiesto.bitacoras()}
                 for otro in trabajos if otro is not trabajo
             )
-            assert not en_otras, f"{matricula} quedo en dos lotes"
+            assert not en_otras, f"{matricula} quedo en dos batches"
 
 
 def test_una_seccion_que_no_cabe_repite_su_separador(tmp_path):
@@ -335,7 +335,7 @@ def test_una_corrida_sin_exportar_no_se_indexa(tmp_path):
         comprobar_entrega(csv_path)
 
 
-# ── el lote de las que nadie pudo asignar ──────────────────────────
+# ── el batch de las que nadie pudo asignar ──────────────────────────
 
 SIN_AVION = [
     ("HP-1848CMP", "2271620", "2026/08/11"),
@@ -346,7 +346,7 @@ SIN_AVION = [
 
 
 def corrida_con_revisar(tmp_path):
-    """Corrida donde dos bitacoras se quedaron sin matricula confirmada."""
+    """Ejecución donde dos bitacoras se quedaron sin matricula confirmada."""
     global BITACORAS
     originales = BITACORAS
     BITACORAS = SIN_AVION
@@ -357,7 +357,7 @@ def corrida_con_revisar(tmp_path):
 
 
 def test_las_que_no_tienen_avion_salen_en_su_propio_archivo(tmp_path):
-    """En AirVault cada archivo es un lote: asi quedan en uno aparte."""
+    """En AirVault cada archivo es un batch: asi quedan en uno aparte."""
     _csv_path, partes = corrida_con_revisar(tmp_path)
 
     assert len(principales(partes)) == 1
@@ -367,7 +367,7 @@ def test_las_que_no_tienen_avion_salen_en_su_propio_archivo(tmp_path):
 
 
 def test_el_archivo_principal_no_las_lleva(tmp_path):
-    """Sueltas dentro del lote grande quedaban bloqueadas donde nadie mira."""
+    """Sueltas dentro del batch grande quedaban bloqueadas donde nadie mira."""
     _csv_path, partes = corrida_con_revisar(tmp_path)
     principal = principales(partes)[0]
     logs = {

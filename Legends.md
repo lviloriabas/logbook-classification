@@ -2,9 +2,9 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
-## 2026-08-20 — La bitácora sin fecha legible ya no bloquea el lote de AirVault
+## 2026-08-20 — La bitácora sin fecha legible ya no bloquea el batch de AirVault
 
-`End Date` es obligatorio en AirVault. Una bitácora cuya fecha no se dejó leer llegaba al indexado con ese campo vacío, la guarda de obligatorios bloqueaba su página y el lote se quedaba sin poder cerrarse: alguien tenía que abrirlo en el Web Index y teclear esa fecha a mano, en medio de cuatrocientas páginas que sí se habían escrito solas. Y bastaba una.
+`End Date` es obligatorio en AirVault. Una bitácora cuya fecha no se dejó leer llegaba al indexado con ese campo vacío, la guarda de obligatorios bloqueaba su página y el batch se quedaba sin poder cerrarse: alguien tenía que abrirlo en el Web Index y teclear esa fecha a mano, en medio de cuatrocientas páginas que sí se habían escrito solas. Y bastaba una.
 
 Ahora, cuando la fecha no se leyó pero el número de bitácora sí, la fecha se deduce. El número es el que ordena el libro, y dentro de un libro la fecha no retrocede al aumentar: una página sin fecha está entre la de la anterior y la de la siguiente, así que se le pone la de la bitácora fechada más cercana del mismo libro —en un empate, la posterior—, que cae dentro de ese intervalo por construcción. Pasada la última fechada ya no hay techo que respetar y va el último día de ese mes, la misma convención con la que el CSV completa un día ilegible. Si el libro entero llegó sin fechas se baja al mes dominante del avión y, en último término, al de la ejecución.
 
@@ -20,21 +20,21 @@ Ahora es una ventana aparte, que abre el botón **Indexar en AirVault…** desde
 
 El historial dice antes de intentarlo cuáles todavía no se pueden subir: **Sin exportar** las que no tienen PDF de entrega y **Falta reexportar** las exportadas antes de que existiera el índice de páginas. Salen en la lista igualmente, en gris —quien las busca tiene que verlas, y ver qué les falta—, pero no dejan arrancar el trabajo. Al abrirse viene señalada la ejecución exportada más reciente, no la última a secas: procesar sin exportar es normal, y abrir apuntando a una ejecución que no se puede subir no lo es.
 
-El avance sale por la barra y la etiqueta de la propia ventana, no por las de la principal, que queda libre para seguir procesando mientras un lote se escribe. La ventana no se cierra con un lote a medias. Cerrada entre la revisión y el indexado, la revisión se conserva: al volver a abrirla se puede **Indexar** sin revisar de nuevo.
+El avance sale por la barra y la etiqueta de la propia ventana, no por las de la principal, que queda libre para seguir procesando mientras un batch se escribe. La ventana no se cierra con un batch a medias. Cerrada entre la revisión y el indexado, la revisión se conserva: al volver a abrirla se puede **Indexar** sin revisar de nuevo.
 
-De paso, los lotes que una revisión sin indexar dejaba tomados se sueltan de verdad al cerrar el programa. El cierre tenía que pedirlo y nunca lo hacía, así que el lote quedaba bloqueado en AirVault —sin error, colgando a quien lo abriera después— hasta que alguien lo reclamaba.
+De paso, los batches que una revisión sin indexar dejaba tomados se sueltan de verdad al cerrar el programa. El cierre tenía que pedirlo y nunca lo hacía, así que el batch quedaba bloqueado en AirVault —sin error, colgando a quien lo abriera después— hasta que alguien lo reclamaba.
 
-## 2026-08-19 — El lote de AirVault se suelta al terminar y la sesión se renueva sola
+## 2026-08-19 — El batch de AirVault se suelta al terminar y la sesión se renueva sola
 
-Indexar dejaba el lote tomado. Abrirlo lo bloquea a nombre de quien lo abre, y el programa nunca lo soltaba: AirVault admite un solo dueño por lote, así que a partir de la primera ejecución cualquier apertura posterior —la del programa la vez siguiente, o la de la persona que entra por el navegador— se quedaba esperando sin respuesta, porque el servidor no contesta ni da error cuando el lote está tomado. Después de tres minutos aparecía un tiempo agotado que además culpaba al navegador de un candado que había dejado el propio programa. El lote de «Revisar» era el peor caso: es el que alguien tiene que indexar a mano, y quedaba bloqueado sin que nadie escribiera en él.
+Indexar dejaba el batch tomado. Abrirlo lo bloquea a nombre de quien lo abre, y el programa nunca lo soltaba: AirVault admite un solo dueño por batch, así que a partir de la primera ejecución cualquier apertura posterior —la del programa la vez siguiente, o la de la persona que entra por el navegador— se quedaba esperando sin respuesta, porque el servidor no contesta ni da error cuando el batch está tomado. Después de tres minutos aparecía un tiempo agotado que además culpaba al navegador de un candado que había dejado el propio programa. El batch de «Revisar» era el peor caso: es el que alguien tiene que indexar a mano, y quedaba bloqueado sin que nadie escribiera en él.
 
-Ahora el lote se suelta siempre: al terminar, al cancelar, cuando algo se corta a medias y también cuando la ventana se cierra sin llegar a indexar. El de «Revisar» se suelta en cuanto se planifica. Y cuando una apertura se queda esperando de todos modos, el programa pregunta al listado quién lo tiene tomado y lo dice con nombre, en vez de dejar una espera sin explicación.
+Ahora el batch se suelta siempre: al terminar, al cancelar, cuando algo se corta a medias y también cuando la ventana se cierra sin llegar a indexar. El de «Revisar» se suelta en cuanto se planifica. Y cuando una apertura se queda esperando de todos modos, el programa pregunta al listado quién lo tiene tomado y lo dice con nombre, en vez de dejar una espera sin explicación.
 
 La sesión guardada en el perfil de Edge tampoco tenía salida cuando dejaba de valer. La cookie seguía ahí y con la forma correcta, así que se daba por buena, la primera petición moría y el mensaje mandaba a copiar una cookie con F12: el camino largo, y encima el que el perfil venía a evitar. Ahora el programa vuelve a abrir la ventana para entrar, que es lo que haría una persona.
 
 Sigue siendo un perfil propio dentro de `portable/` y no el Edge de siempre, aunque ahí la sesión ya esté abierta. No es una preferencia: el navegador ignora a propósito el puerto de depuración cuando el perfil es el de por defecto, y si Edge ya está abierto el arranque nuevo le pasa la orden al que corre y se va, sin dejar puerto al que conectarse. Un WebDriver termina en el mismo sitio, porque también maneja un navegador que arranca él. Lo que sí se arregló es que entrar sea una sola vez de verdad: la cookie de federación es de sesión, y Chromium solo la guarda en disco cuando el perfil arranca restaurando la sesión anterior.
 
-Los motivos que se muestran cambian de tono. Un campo obligatorio vacío se nombra como se llama en la pantalla de AirVault —Aircraft, Fleet, Log Page Number— y no por su número interno. Si el lote y la ejecución no tienen las mismas páginas, el aviso dice cuántas faltan o sobran y cuál es la causa habitual. Un rechazo del servidor dice qué se pedía y qué contestó, y ya no arrastra el lote entero: un 404 de una página frena esa página, no las cuatrocientas. Y si Edge no arranca, el mensaje incluye lo que dijo Edge, que antes se tiraba.
+Los motivos que se muestran cambian de tono. Un campo obligatorio vacío se nombra como se llama en la pantalla de AirVault —Aircraft, Fleet, Log Page Number— y no por su número interno. Si el batch y la ejecución no tienen las mismas páginas, el aviso dice cuántas faltan o sobran y cuál es la causa habitual. Un rechazo del servidor dice qué se pedía y qué contestó, y ya no arrastra el batch entero: un 404 de una página frena esa página, no las cuatrocientas. Y si Edge no arranca, el mensaje incluye lo que dijo Edge, que antes se tiraba.
 
 ## 2026-08-19 — La sesión de AirVault se resuelve sola
 
@@ -46,7 +46,7 @@ El segundo factor lo sigue haciendo una persona: existe justamente para eso. Lo 
 
 Las cookies se le piden al navegador por su protocolo de depuración, no leyendo su archivo. El navegador sí sabe descifrar las suyas y por ese camino las entrega en claro, así que no hay ningún cifrado que rodear. No se instala ni se descarga nada: Edge ya viene con Windows y el perfil es una carpeta más de `portable/`, que viaja con el programa.
 
-Se entra por el enlace federado y no por la raíz del sitio, que es el que dispara la redirección a Microsoft. Por la raíz la sesión queda a medias, con `ASP.NET_SessionId` pero sin la cookie que autentica; esa cookie sola dejó de contar como sesión abierta, porque la pone el servidor al primer contacto, antes de saber quién eres, y darla por buena arrancaba un lote que moría en la primera página.
+Se entra por el enlace federado y no por la raíz del sitio, que es el que dispara la redirección a Microsoft. Por la raíz la sesión queda a medias, con `ASP.NET_SessionId` pero sin la cookie que autentica; esa cookie sola dejó de contar como sesión abierta, porque la pone el servidor al primer contacto, antes de saber quién eres, y darla por buena arrancaba un batch que moría en la primera página.
 
 ## 2026-08-19 — Depurar duplicados y páginas en blanco desde donde se ve la ejecución
 
@@ -64,9 +64,9 @@ Los PDF no se rehacen al depurar. Son la entrega y se componen al exportar, cuan
 
 ### Sección «Indexar en AirVault»
 
-Escribir los índices de un lote era teclear en el Web Index de AirVault entre 300 y 500 páginas a mano, comprobando matrícula, número de bitácora y fecha una por una, con todos los datos ya leídos y guardados en el CSV de la ejecución.
+Escribir los índices de un batch era teclear en el Web Index de AirVault entre 300 y 500 páginas a mano, comprobando matrícula, número de bitácora y fecha una por una, con todos los datos ya leídos y guardados en el CSV de la ejecución.
 
-La ventana principal gana una sección desplegable, junto a «Opciones avanzadas», que hace ese recorrido: sube el PDF de la ejecución, espera a que el lote aparezca en AirVault, calcula qué escribiría en cada página y —solo después de que alguien mire el reporte— lo escribe. El avance sale por la barra y la etiqueta de estado que ya existían; no se añadieron indicadores.
+La ventana principal gana una sección desplegable, junto a «Opciones avanzadas», que hace ese recorrido: sube el PDF de la ejecución, espera a que el batch aparezca en AirVault, calcula qué escribiría en cada página y —solo después de que alguien mire el reporte— lo escribe. El avance sale por la barra y la etiqueta de estado que ya existían; no se añadieron indicadores.
 
 Su flecha comparte fila con la de «Opciones avanzadas». Apilada debajo le costaba 15 px de alto a la ventana, que en una pantalla de 1024x768 se abría fuera del escritorio.
 
@@ -74,7 +74,7 @@ La misma función existe en `run_airvault.py` para la línea de comandos.
 
 ### Los separadores del PDF ya no cuentan como bitácoras
 
-El indexado emparejaba el CSV con el lote por posición, dando por hecho que la página *n* del lote era la bitácora *n* del CSV. El PDF de entrega no cumple eso: entre las secciones lleva páginas divisorias —la matrícula o el mes de cada grupo, **POSIBLES DISCREPANCIAS**, **REVISAR**— que el CSV no tiene y que en AirVault ocupan una página igual que cualquier otra. Con un solo separador delante, todo lo que iba detrás se habría escrito una página corrido: la bitácora de la página 40 indexada con los datos de la 39.
+El indexado emparejaba el CSV con el batch por posición, dando por hecho que la página *n* del batch era la bitácora *n* del CSV. El PDF de entrega no cumple eso: entre las secciones lleva páginas divisorias —la matrícula o el mes de cada grupo, **POSIBLES DISCREPANCIAS**, **REVISAR**— que el CSV no tiene y que en AirVault ocupan una página igual que cualquier otra. Con un solo separador delante, todo lo que iba detrás se habría escrito una página corrido: la bitácora de la página 40 indexada con los datos de la 39.
 
 La exportación pasa a escribir junto al CSV un índice, `<ejecución>_paginas.json`, que declara qué hay en cada página del PDF. Ese archivo, y no el CSV, fija el orden del manifiesto. Los separadores entran como registros propios —así la correspondencia por posición se sostiene— y no se les escribe nada: ni se leen del servidor, ni cuentan como omitidos, ni se espera que queden en `Valid` al verificar.
 
@@ -84,7 +84,7 @@ Una ejecución exportada antes de que existiera el índice sigue el orden del CS
 
 El acceso está federado con Microsoft Entra ID y pide segundo factor, que no se completa desde un script, así que el formulario de usuario y contraseña no servía para la cuenta con la que se trabaja.
 
-La sesión se reutiliza del navegador: la cookie que se pega, o la del perfil de Edge cuando se deja leer. La cookie va al tarro de peticiones y no a una cabecera fija, porque el primer `Set-Cookie` del servidor se habría comido la puesta a mano y el lote habría muerto a media escritura. Antes de empezar se comprueba la sesión con una petición, para no descubrir en la página 250 de 400 que había caducado.
+La sesión se reutiliza del navegador: la cookie que se pega, o la del perfil de Edge cuando se deja leer. La cookie va al tarro de peticiones y no a una cabecera fija, porque el primer `Set-Cookie` del servidor se habría comido la puesta a mano y el batch habría muerto a media escritura. Antes de empezar se comprueba la sesión con una petición, para no descubrir en la página 250 de 400 que había caducado.
 
 El atajo de Edge sirve poco en la práctica: hay que cerrar Edge para que suelte su base de cookies, y un Edge moderno las cifra con la identidad del navegador (`v20`), que no se deshace desde fuera. Cuando no se puede, se dice por qué y se sigue con la cookie pegada.
 
@@ -94,49 +94,49 @@ Terminado el OCR, el programa generaba siempre los PDF de entrega. Componerlos v
 
 **Procesar** guarda ahora los datos —CSV, JSON y estadísticas— y nada más. La entrega se arma al pulsar **Exportar**, con la separación marcada en ese momento. Los archivos de entrada se siguen apartando a `input/processed/` al terminar, y la ventana reapunta sus resultados allí, así que exportar después encuentra las páginas originales.
 
-## 2026-08-19 — Nombre de lote definitivo y las bitácoras sin avión en su propio lote
+## 2026-08-19 — Nombre de batch definitivo y las bitácoras sin avión en su propio batch
 
 ### El nombre
 
-Los lotes se llamaban `DP | BIT 18 AUG 2026 05 42`, y al repartir la entrega las partes salían como `(1 de 5)`. Pasan a llamarse **`DP | BITS 18 AUG 2026 05 42`**, con S, enteros en mayúsculas, y las partes con sufijo `-1`, `-2`. El sufijo del lote es el mismo que lleva su archivo, y una prueba comprueba que no se separen: si lo hicieran, el lote dejaría de poder emparejarse con el PDF que lo formó.
+Los batches se llamaban `DP | BIT 18 AUG 2026 05 42`, y al repartir la entrega las partes salían como `(1 de 5)`. Pasan a llamarse **`DP | BITS 18 AUG 2026 05 42`**, con S, enteros en mayúsculas, y las partes con sufijo `-1`, `-2`. El sufijo del batch es el mismo que lleva su archivo, y una prueba comprueba que no se separen: si lo hicieran, el batch dejaría de poder emparejarse con el PDF que lo formó.
 
 La marca de tiempo es la del **procesamiento**. Ya salía del nombre de la carpeta de la ejecución, pero cuando esa carpeta no lo llevaba se caía a la hora actual, que es la de la subida y no dice nada de la bitácora. Ahora se toma la hora del propio archivo, que sigue siendo la del procesamiento; la hora actual solo aparece si no hay ni archivo que mirar.
 
-### Las bitácoras sin avión confirmado, en su propio lote
+### Las bitácoras sin avión confirmado, en su propio batch
 
-Las páginas cuya matrícula nadie pudo confirmar cerraban el PDF de entrega bajo el separador **REVISAR**, así que caían dentro del lote grande. Allí el indexado las bloqueaba —sin avión no hay dónde archivarlas— y se quedaban en medio de cuatrocientas páginas, donde nadie las encontraba.
+Las páginas cuya matrícula nadie pudo confirmar cerraban el PDF de entrega bajo el separador **REVISAR**, así que caían dentro del batch grande. Allí el indexado las bloqueaba —sin avión no hay dónde archivarlas— y se quedaban en medio de cuatrocientas páginas, donde nadie las encontraba.
 
-Salen ahora en su propio archivo y, por tanto, en su propio lote: `DP | BITS 18 AUG 2026 05 42 REVISAR`. Ese lote **se sube y no se toca**: el indexado no le lee ni le escribe ninguna página, y queda marcado en la cola del Web Index para resolverlo a mano. No se numera como una parte más —no es «una de cinco», es el que queda aparte— y su manifiesto vive en `output/airvault/<ejecución>/revisar/`.
+Salen ahora en su propio archivo y, por tanto, en su propio batch: `DP | BITS 18 AUG 2026 05 42 REVISAR`. Ese batch **se sube y no se toca**: el indexado no le lee ni le escribe ninguna página, y queda marcado en la cola del Web Index para resolverlo a mano. No se numera como una parte más —no es «una de cinco», es el que queda aparte— y su manifiesto vive en `output/airvault/<ejecución>/revisar/`.
 
 En la ejecución de referencia son 17 páginas de 884.
 
-## 2026-08-19 — La entrega se reparte en lotes, y el indexado aguanta que la red falle
+## 2026-08-19 — La entrega se reparte en batches, y el indexado aguanta que la red falle
 
-### Repartir la ejecución en varios lotes
+### Repartir la ejecución en varios batches
 
-Una ejecución completa —unas 900 páginas y casi dos gigas— formaba un solo lote en AirVault: incómodo de revisar, y una subida de ~1850 peticiones que si se cortaba había que rehacer entera.
+Una ejecución completa —unas 900 páginas y casi dos gigas— formaba un solo batch en AirVault: incómodo de revisar, y una subida de ~1850 peticiones que si se cortaba había que rehacer entera.
 
-La casilla **Repartir en** del cuadro «Salidas», o `--paginas-por-parte N` en la línea de comandos, escribe la entrega en varios PDF de a lo sumo esas páginas. Cada archivo es un lote propio en AirVault, con su nombre —`DP | BIT 18 AUG 2026 05 42 (2 de 5)`—, su manifiesto y sus guardas; una parte que se corte no arrastra a las demás y al volver a revisar se retoma solo lo que falta. El reporte de revisión sigue siendo uno solo para toda la ejecución.
+La casilla **Repartir en** del cuadro «Salidas», o `--paginas-por-parte N` en la línea de comandos, escribe la entrega en varios PDF de a lo sumo esas páginas. Cada archivo es un batch propio en AirVault, con su nombre —`DP | BIT 18 AUG 2026 05 42 (2 de 5)`—, su manifiesto y sus guardas; una parte que se corte no arrastra a las demás y al volver a revisar se retoma solo lo que falta. El reporte de revisión sigue siendo uno solo para toda la ejecución.
 
-El corte se hace entre secciones, así que las bitácoras de un mismo avión no quedan repartidas entre dos lotes. Cuando un avión solo tiene más páginas que el tope, se parte y la continuación repite su separador, para que ninguna parte empiece con bitácoras sueltas.
+El corte se hace entre secciones, así que las bitácoras de un mismo avión no quedan repartidas entre dos batches. Cuando un avión solo tiene más páginas que el tope, se parte y la continuación repite su separador, para que ninguna parte empiece con bitácoras sueltas.
 
-El nombre lleva el número de parte porque los lotes se localizan por nombre: dos iguales no habría forma de distinguirlos, que es justo lo que ya pasa en la cola de AirVault con los lotes cargados a mano.
+El nombre lleva el número de parte porque los batches se localizan por nombre: dos iguales no habría forma de distinguirlos, que es justo lo que ya pasa en la cola de AirVault con los batches cargados a mano.
 
 El control se puso en la fila del formato de salida y no debajo: apilado, el cuadro crecía y la ventana dejaba de caber en 1280x720; con el texto largo, además, empujaba el reparto en dos columnas fuera de alcance y la ventana volvía a estirarse a lo alto.
 
 ### Que la red falle deja de tirar el trabajo
 
-Un lote son cientos de peticiones y una subida completa casi dos mil. A esa escala un corte momentáneo dejó de ser raro, y hasta ahora cualquiera de ellos tiraba el trabajo entero: la subida no reintentaba nada, y una página que no cargaba cortaba la planificación del lote completo.
+Un batch son cientos de peticiones y una subida completa casi dos mil. A esa escala un corte momentáneo dejó de ser raro, y hasta ahora cualquiera de ellos tiraba el trabajo entero: la subida no reintentaba nada, y una página que no cargaba cortaba la planificación del batch completo.
 
 - **Se reintenta lo que puede arreglarse solo**: un tiempo agotado, una conexión cortada, un servidor que responde que está ocupado (408, 429, 5xx). Tres intentos, esperando más en cada uno. Un 404 no se reintenta, porque insistir devuelve lo mismo.
 - **Cada trozo de la subida se reintenta por separado.** Reenviar un trozo con el mismo índice es inocuo: el servidor arma el archivo por posición.
-- **Una página que no carga bloquea solo a esa página.** Sin poder leerla no se puede comprobar que el lote y el manifiesto hablan de la misma bitácora, así que no se escribe; el resto del lote sigue.
-- **Si la cookie caduca a media escritura, se corta el lote entero.** Lo que no se llegó a intentar queda pendiente, no fallido: seguir habría marcado como fallidas cientos de páginas que nadie tocó, y al retomar no se sabría cuáles reintentar. La sesión se comprueba además antes de empezar.
-- **El lote abierto en el navegador** hace que AirVault no conteste y tampoco dé error. Todas las peticiones llevan tiempo límite y el mensaje dice qué cerrar.
+- **Una página que no carga bloquea solo a esa página.** Sin poder leerla no se puede comprobar que el batch y el manifiesto hablan de la misma bitácora, así que no se escribe; el resto del batch sigue.
+- **Si la cookie caduca a media escritura, se corta el batch entero.** Lo que no se llegó a intentar queda pendiente, no fallido: seguir habría marcado como fallidas cientos de páginas que nadie tocó, y al retomar no se sabría cuáles reintentar. La sesión se comprueba además antes de empezar.
+- **El batch abierto en el navegador** hace que AirVault no conteste y tampoco dé error. Todas las peticiones llevan tiempo límite y el mensaje dice qué cerrar.
 
-### Muestra para probar antes de un lote real
+### Muestra para probar antes de un batch real
 
-`tools/muestra_bitacoras.py` arma un PDF de prueba con veinte páginas al azar de las que haya en `input/`. Es una entrada de verdad, así que se procesa, se exporta y se indexa como cualquier otra y la prueba recorre lo mismo que un lote real: 40 MB y veinte páginas en vez de 1.9 GB y 884.
+`tools/muestra_bitacoras.py` arma un PDF de prueba con veinte páginas al azar de las que haya en `input/`. Es una entrada de verdad, así que se procesa, se exporta y se indexa como cualquier otra y la prueba recorre lo mismo que un batch real: 40 MB y veinte páginas en vez de 1.9 GB y 884.
 
 ## 2026-08-18 — Indexación automática: vuelo, fechas, matrículas sin confirmar y sección «Revisar»
 

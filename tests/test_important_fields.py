@@ -81,7 +81,7 @@ def test_marked_columns_resolve_to_the_fields_that_produce_them():
     assert template_field_ids_for_columns({"date"}, field_ids, _columns()) == {
         "day"
     }
-    # Las columnas de corrida no son campos de la plantilla.
+    # Las columnas de ejecución no son campos de la plantilla.
     assert template_field_ids_for_columns(
         {"file", "page", "time_ms"}, field_ids, _columns()
     ) == set()

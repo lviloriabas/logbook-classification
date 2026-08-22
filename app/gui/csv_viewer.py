@@ -115,7 +115,7 @@ _RESIZE_PRECISION = 64
 # previa y la tabla de la ventana principal.
 _PDF_PANE_SHARE = 2
 _TABLE_SHARE = 3
-# Corridas que lista el historial. Es la ventana de trabajo de un turno: lo
+# Ejecuciones que lista el historial. Es la ventana de trabajo de un turno: lo
 # de más atrás sigue estando en output/ y se abre con «Seleccionar carpeta».
 _HISTORY_LIMIT = 25
 # El mismo texto que en la ventana principal; el botón lo recupera cuando
@@ -123,7 +123,7 @@ _HISTORY_LIMIT = 25
 # Lo que dice el indicador de búsqueda mientras no hay nada que buscar.
 _SEARCH_HINT = "Escriba lo que busca del CSV: bitácora, matrícula, archivo…"
 _EXPORT_TOOLTIP = (
-    "Volver a generar CSV, JSON y PDFs de esta corrida con las opciones "
+    "Volver a generar CSV, JSON y PDFs de esta ejecución con las opciones "
     "actuales, sin reprocesar los archivos. Los PDFs ya exportados se "
     "conservan: los nuevos se numeran (-2, -3…) si el nombre se repite"
 )
@@ -270,10 +270,10 @@ def _documents_from_rows(rows: Iterable[dict[str, str]]) -> list[Path]:
 
 
 def _source_search_folders(csv_path: Path) -> list[Path]:
-    """Carpetas donde puede estar el PDF de origen de una corrida.
+    """Carpetas donde puede estar el PDF de origen de una ejecución.
 
-    La de la corrida y la entrada del programa, y también la de los archivos
-    ya procesados: al terminar una corrida sus PDF salen de ``input/`` para
+    La de la ejecución y la entrada del programa, y también la de los archivos
+    ya procesados: al terminar una ejecución sus PDF salen de ``input/`` para
     no confundirse con lo que falta, y ahí es donde están desde entonces.
     """
     csv_path = Path(csv_path)
@@ -294,7 +294,7 @@ def _locate_document(
     ``folders`` se revisa solo por nombre exacto; el recorrido recursivo queda
     reservado a ``deep_folders``, las carpetas que el usuario indicó a mano.
     """
-    # Un nombre suelto solo vale relativo a las carpetas de la corrida: no se
+    # Un nombre suelto solo vale relativo a las carpetas de la ejecución: no se
     # resuelve contra el directorio de trabajo, que es arbitrario.
     if recorded.is_absolute() and recorded.is_file():
         return recorded
@@ -367,20 +367,20 @@ def resolve_source_documents(
 
 
 def run_dir_for_csv(csv_path: Path) -> Path | None:
-    """Carpeta de la corrida a la que pertenece el CSV, si se reconoce.
+    """Carpeta de la ejecución a la que pertenece el CSV, si se reconoce.
 
-    Las corridas guardan el reporte en ``<corrida>/datos/``; las históricas
-    lo dejaban en la raíz de la corrida. Devuelve ``None`` cuando el CSV no
-    está en la carpeta de su corrida, que es el único sitio sobre el que se
+    Las ejecuciones guardan el reporte en ``<corrida>/datos/``; las históricas
+    lo dejaban en la raíz de la ejecución. Devuelve ``None`` cuando el CSV no
+    está en la carpeta de su ejecución, que es el único sitio sobre el que se
     puede volver a exportar.
     """
     csv_path = Path(csv_path)
     parent = csv_path.parent
     run_dir = parent.parent if parent.name.casefold() == "datos" else parent
-    # La carpeta tiene que ser la de esta corrida y no una cualquiera donde
+    # La carpeta tiene que ser la de esta ejecución y no una cualquiera donde
     # alguien haya dejado copias: volver a exportar limpia de ahí lo que la
-    # corrida regenera, y sobre una carpeta ajena eso borraría archivos que
-    # no son suyos. Una corrida siempre nombra igual su carpeta y su CSV.
+    # ejecución regenera, y sobre una carpeta ajena eso borraría archivos que
+    # no son suyos. Una ejecución siempre nombra igual su carpeta y su CSV.
     stem = csv_path.stem
     if stem.casefold().endswith("_completo"):
         stem = stem[: -len("_completo")]
@@ -388,12 +388,12 @@ def run_dir_for_csv(csv_path: Path) -> Path | None:
 
 
 def reports_from_companion(csv_path: Path) -> list:
-    """Reportes tal como los guardó la corrida, sin buscar sus PDF.
+    """Reportes tal como los guardó la ejecución, sin buscar sus PDF.
 
-    Es lo que hace falta para reescribir los datos de la corrida —CSV, JSON
+    Es lo que hace falta para reescribir los datos de la ejecución —CSV, JSON
     y estadísticas—, que salen del propio reporte y no de las páginas. Buscar
     los PDF aquí sería peor que inútil: descartar el reporte cuyo archivo ya
-    no está borraría de la corrida todo lo que se procesó desde él.
+    no está borraría de la ejecución todo lo que se procesó desde él.
     """
     from app.models.schemas import ValidationReport
 
@@ -406,9 +406,9 @@ def reports_from_companion(csv_path: Path) -> list:
 def reports_for_csv(
     csv_path: Path, extra_folders: Iterable[Path] = ()
 ) -> tuple[list, list[str]]:
-    """Reconstruye los reportes de la corrida desde el JSON compañero.
+    """Reconstruye los reportes de la ejecución desde el JSON compañero.
 
-    El JSON consolidado guarda los reportes completos, así que la corrida se
+    El JSON consolidado guarda los reportes completos, así que la ejecución se
     puede volver a exportar sin repetir el OCR. Cada reporte apunta al PDF
     que lo originó: si el archivo se movió, se busca igual que lo hace el
     visor y el reporte queda apuntando a donde está ahora. Devuelve también
@@ -1007,7 +1007,7 @@ class EmbeddedPdfViewer(QFrame):
 
 
 class CsvViewerWindow(QMainWindow):
-    """Ventana independiente que visualiza CSV de corridas procesadas."""
+    """Ventana independiente que visualiza CSV de ejecuciones procesadas."""
 
     def __init__(self, start_folder: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1037,7 +1037,7 @@ class CsvViewerWindow(QMainWindow):
 
         self._splitter_adjusted = False
         self._outputs_worker = None
-        # Qué escribió la última corrida del hilo de salidas: exportar o
+        # Qué escribió la última ejecución del hilo de salidas: exportar o
         # eliminar páginas. El aviso final de cada una no es el mismo.
         self._outputs_context = "export"
         # El indicador de abajo lleva dos cosas: el resumen de la tabla, que
@@ -1074,13 +1074,13 @@ class CsvViewerWindow(QMainWindow):
         history_row.addWidget(QLabel("Historial:"))
         self.history_combo = QComboBox()
         self.history_combo.setToolTip(
-            "Corridas ya procesadas, de la más reciente a la más antigua. "
+            "Ejecuciones ya procesadas, de la más reciente a la más antigua. "
             "Al elegir una se cargan sus CSV; las anteriores siguen "
             "disponibles con «Seleccionar carpeta…»"
         )
-        self.history_combo.setAccessibleName("Corridas procesadas recientes")
+        self.history_combo.setAccessibleName("Ejecuciones procesadas recientes")
         # «activated» solo lo emite quien elige con el ratón o el teclado, así
-        # que volver a elegir la corrida que ya está abierta la recarga y
+        # que volver a elegir la ejecución que ya está abierta la recarga y
         # sincronizar la lista desde el código no dispara una carga.
         self.history_combo.activated.connect(self._on_history_activated)
         history_row.addWidget(self.history_combo, 1)
@@ -1177,8 +1177,8 @@ class CsvViewerWindow(QMainWindow):
             QTableWidget.SelectionMode.ExtendedSelection
         )
         self.table.setToolTip(
-            "Cada fila es una página de la corrida. Al seleccionarla se abre "
-            "su página en el visor, y Supr quita de la corrida las páginas "
+            "Cada fila es una página de la ejecución. Al seleccionarla se abre "
+            "su página en el visor, y Supr quita de la ejecución las páginas "
             "seleccionadas."
         )
         # Supr solo mientras la tabla tiene el foco: es la que sabe qué
@@ -1280,10 +1280,10 @@ class CsvViewerWindow(QMainWindow):
         super().closeEvent(event)
 
     def _refresh_history(self) -> None:
-        """Rellena el historial con las últimas corridas de la carpeta base.
+        """Rellena el historial con las últimas ejecuciones de la carpeta base.
 
         Se rehace cada vez que la ventana se muestra: el visor vive abierto
-        mientras se procesa, y una corrida recién terminada tiene que estar
+        mientras se procesa, y una ejecución recién terminada tiene que estar
         en la lista sin cerrar nada.
         """
         runs = find_run_dirs(self._start_folder, _HISTORY_LIMIT)
@@ -1293,12 +1293,12 @@ class CsvViewerWindow(QMainWindow):
         if not runs:
             # Un desplegable vacío no dice nada; así se lee que todavía no
             # hay nada procesado, no que la lista falló.
-            self.history_combo.addItem("No hay corridas procesadas todavía")
+            self.history_combo.addItem("No hay ejecuciones procesadas todavía")
         self.history_combo.setEnabled(bool(runs))
         self._sync_history_selection()
 
     def _sync_history_selection(self) -> None:
-        """Deja marcada en el historial la corrida que se está viendo."""
+        """Deja marcada en el historial la ejecución que se está viendo."""
         csv_path = self._current_csv_path()
         current = run_dir_for_csv(csv_path) if csv_path is not None else None
         current = current or self._folder
@@ -1312,7 +1312,7 @@ class CsvViewerWindow(QMainWindow):
                 return
 
     def _on_history_activated(self, index: int) -> None:
-        """Abre la corrida elegida en el historial."""
+        """Abre la ejecución elegida en el historial."""
         run = self.history_combo.itemData(index)
         if run:
             self.load_folder(Path(run))
@@ -1415,7 +1415,7 @@ class CsvViewerWindow(QMainWindow):
         self._rows = rows
         self._field_statuses = self._load_field_statuses(path)
         # Se limpia antes de poblar: la tabla emite selección mientras se
-        # llena y las rutas de la corrida anterior ya no corresponden.
+        # llena y las rutas de la ejecución anterior ya no corresponden.
         self._row_pdf_paths = []
         self._important_field_ids = important_field_ids_for_csv(path, columns)
         # La selección guardada manda sobre la inferida: es la lista que el
@@ -1469,7 +1469,7 @@ class CsvViewerWindow(QMainWindow):
         """Llena la tabla por tramos para no bloquear la ventana.
 
         El primer tramo se escribe en el acto, así que un CSV corto queda
-        completo al volver de aquí; solo las corridas grandes reparten el
+        completo al volver de aquí; solo las ejecuciones grandes reparten el
         resto entre eventos de la interfaz.
         """
         self.table_sort.suspend()
@@ -1555,16 +1555,16 @@ class CsvViewerWindow(QMainWindow):
     # ── Exportación ─────────────────────────────────────────────────────
 
     def _sync_export_button(self) -> None:
-        """Solo se exporta la corrida que el CSV abierto permite rehacer."""
+        """Solo se exporta la ejecución que el CSV abierto permite rehacer."""
         csv_path = self._current_csv_path()
         if csv_path is None or not _companion_payload(csv_path).get("reportes"):
             reason = (
-                "Este CSV no viene acompañado del JSON de su corrida, así que "
+                "Este CSV no viene acompañado del JSON de su ejecución, así que "
                 "no se pueden volver a generar las salidas."
             )
         elif run_dir_for_csv(csv_path) is None:
             reason = (
-                "Este CSV no está en la carpeta de su corrida, y las salidas "
+                "Este CSV no está en la carpeta de su ejecución, y las salidas "
                 "solo se pueden volver a generar sobre ella."
             )
         else:
@@ -1575,7 +1575,7 @@ class CsvViewerWindow(QMainWindow):
             or not self._outputs_worker.isRunning()
         )
         self.btn_export.setEnabled(not reason and libre)
-        # Depurar reescribe la misma corrida que exportar, así que depende de
+        # Depurar reescribe la misma ejecución que exportar, así que depende de
         # lo mismo: sin el JSON al lado no hay páginas que quitar.
         self.btn_depurar.setToolTip(reason or DEPURAR_TOOLTIP)
         self.btn_depurar.setEnabled(not reason and libre)
@@ -1655,12 +1655,12 @@ class CsvViewerWindow(QMainWindow):
         return by_name and (pdf_path.name.casefold(), page_number) in keys
 
     def _corrida_para_eliminar(self):
-        """Corrida abierta lista para reescribirse sin algunas páginas.
+        """Ejecución abierta lista para reescribirse sin algunas páginas.
 
         Devuelve el CSV, su carpeta, la plantilla con la que se procesó y sus
         reportes, o ``None`` tras avisar por qué no se puede. Lo comparten el
         borrado por selección y la depuración: las dos quitan páginas de la
-        misma corrida y necesitan exactamente lo mismo para hacerlo.
+        misma ejecución y necesitan exactamente lo mismo para hacerlo.
         """
         csv_path = self._current_csv_path()
         run_dir = run_dir_for_csv(csv_path) if csv_path is not None else None
@@ -1668,7 +1668,7 @@ class CsvViewerWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Eliminar páginas",
-                "Solo se pueden eliminar páginas de una corrida completa, la "
+                "Solo se pueden eliminar páginas de una ejecución completa, la "
                 "que guarda su CSV y su JSON en la misma carpeta. Este CSV "
                 "está suelto y no tiene de dónde quitarlas.",
             )
@@ -1679,31 +1679,31 @@ class CsvViewerWindow(QMainWindow):
                 self,
                 "Plantilla no disponible",
                 "No se encontró la plantilla con la que se procesó esta "
-                "corrida, y sin ella no se pueden volver a escribir sus datos.",
+                "ejecución, y sin ella no se pueden volver a escribir sus datos.",
             )
             return None
         try:
             reports = reports_from_companion(csv_path)
         except Exception as exc:  # noqa: BLE001 - se muestra en la GUI
-            logger.error(f"No se pudo leer el JSON de la corrida: {exc}")
+            logger.error(f"No se pudo leer el JSON de la ejecución: {exc}")
             QMessageBox.critical(
                 self,
                 "No se pudieron eliminar las páginas",
-                f"El JSON de la corrida no se pudo leer:\n\n{exc}",
+                f"El JSON de la ejecución no se pudo leer:\n\n{exc}",
             )
             return None
         if not reports:
             QMessageBox.warning(
                 self,
-                "Sin datos de la corrida",
-                "Esta corrida no trae el JSON con sus páginas, así que no se "
+                "Sin datos de la ejecución",
+                "Esta ejecución no trae el JSON con sus páginas, así que no se "
                 "puede reescribir sin él.",
             )
             return None
         return csv_path, run_dir, template, reports
 
     def _depurar_paginas(self) -> None:
-        """Quita de la corrida las páginas repetidas o en blanco.
+        """Quita de la ejecución las páginas repetidas o en blanco.
 
         Escribe lo mismo que el borrado por selección —CSV, JSON y
         estadísticas— y por lo mismo no rehace los PDF: la entrega se compone
@@ -1732,13 +1732,13 @@ class CsvViewerWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Depurar páginas",
-                "Quedaría una corrida sin ninguna página. Para deshacerse de "
-                "la corrida entera, elimine su carpeta desde output/.",
+                "Quedaría una ejecución sin ninguna página. Para deshacerse de "
+                "la ejecución entera, elimine su carpeta desde output/.",
             )
             return
 
         logger.info(
-            f"Depurando {resumen.total} página(s) de la corrida {run_dir.name}"
+            f"Depurando {resumen.total} página(s) de la ejecución {run_dir.name}"
         )
         self._start_outputs(
             remaining,
@@ -1748,13 +1748,13 @@ class CsvViewerWindow(QMainWindow):
         )
 
     def _delete_selected_pages(self) -> None:
-        """Quita de la corrida las páginas seleccionadas en la tabla.
+        """Quita de la ejecución las páginas seleccionadas en la tabla.
 
-        Se reescriben los datos de la corrida —CSV mínimo, CSV completo, JSON
+        Se reescriben los datos de la ejecución —CSV mínimo, CSV completo, JSON
         y estadísticas— sin esas páginas, que es lo que consulta el visor y
         de donde sale cualquier exportación posterior. Los PDF ya entregados
         no se tocan: rehacerlos aquí dejaría dos entregas distintas de la
-        misma corrida en la carpeta, así que se rehacen al exportar.
+        misma ejecución en la carpeta, así que se rehacen al exportar.
         """
         if self._outputs_worker is not None and self._outputs_worker.isRunning():
             self._export_note = "hay una escritura en curso; espere a que termine"
@@ -1807,8 +1807,8 @@ class CsvViewerWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Eliminar páginas",
-                "Quedaría una corrida sin ninguna página. Para deshacerse de "
-                "la corrida entera, elimine su carpeta desde output/.",
+                "Quedaría una ejecución sin ninguna página. Para deshacerse de "
+                "la ejecución entera, elimine su carpeta desde output/.",
             )
             return
 
@@ -1816,7 +1816,7 @@ class CsvViewerWindow(QMainWindow):
             self,
             "Confirmar eliminación",
             f"Se eliminarán {removed} página(s) de «{run_dir.name}».\n\n"
-            "Se reescriben el CSV, el JSON y las estadísticas de la corrida "
+            "Se reescriben el CSV, el JSON y las estadísticas de la ejecución "
             "sin ellas. Los PDF ya exportados las conservan hasta que vuelva "
             "a exportar.\n\n¿Desea continuar?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -1826,7 +1826,7 @@ class CsvViewerWindow(QMainWindow):
             return
 
         logger.info(
-            f"Eliminando {removed} página(s) de la corrida {run_dir.name}"
+            f"Eliminando {removed} página(s) de la ejecución {run_dir.name}"
         )
         self._start_outputs(
             remaining,
@@ -1838,7 +1838,7 @@ class CsvViewerWindow(QMainWindow):
         )
 
     def _exportar(self) -> None:
-        """Regenera CSV, JSON y PDFs de la corrida abierta, sin repetir OCR."""
+        """Regenera CSV, JSON y PDFs de la ejecución abierta, sin repetir OCR."""
         if self._outputs_worker is not None and self._outputs_worker.isRunning():
             return
         csv_path = self._current_csv_path()
@@ -1851,25 +1851,25 @@ class CsvViewerWindow(QMainWindow):
                 self,
                 "Plantilla no disponible",
                 "No se encontró la plantilla con la que se procesó esta "
-                "corrida, y sin ella no se pueden volver a generar las "
+                "ejecución, y sin ella no se pueden volver a generar las "
                 "salidas.",
             )
             return
         try:
             reports, missing = reports_for_csv(csv_path, self._pdf_search_folders)
         except Exception as exc:  # noqa: BLE001 - se muestra en la GUI
-            logger.error(f"No se pudo leer el JSON de la corrida: {exc}")
+            logger.error(f"No se pudo leer el JSON de la ejecución: {exc}")
             QMessageBox.critical(
                 self,
                 "No se pudo exportar",
-                f"El JSON de la corrida no se pudo leer:\n\n{exc}",
+                f"El JSON de la ejecución no se pudo leer:\n\n{exc}",
             )
             return
         if missing or not reports:
             QMessageBox.warning(
                 self,
                 "Faltan los PDF de origen",
-                "No se encontraron los PDF de los que proviene esta corrida "
+                "No se encontraron los PDF de los que proviene esta ejecución "
                 f"({_join_names(missing) or 'ninguno disponible'}). Las "
                 "páginas se rehacen desde ellos, así que indique dónde están "
                 "con «Ubicar PDF…» antes de exportar.",
@@ -1888,7 +1888,7 @@ class CsvViewerWindow(QMainWindow):
     ) -> None:
         """Escribe las salidas en su propio hilo, venga de donde venga.
 
-        Exportar y eliminar páginas escriben la misma corrida con la misma
+        Exportar y eliminar páginas escriben la misma ejecución con la misma
         función; solo cambian las opciones —la eliminación no rehace PDFs— y
         el aviso que queda en la franja de estado.
         """
@@ -1910,7 +1910,7 @@ class CsvViewerWindow(QMainWindow):
     def _export_options(
         self, csv_path: Path, template, reports: list, skip_pdfs: bool = False
     ):
-        """Opciones de salida de la corrida abierta, escritas sobre su carpeta."""
+        """Opciones de salida de la ejecución abierta, escritas sobre su carpeta."""
         from app.core.config import AppConfig, config_for_pdf
         from app.reports.outputs import OutputOptions
 
@@ -1955,7 +1955,7 @@ class CsvViewerWindow(QMainWindow):
         if csv_path is not None and csv_path.is_file():
             self._load_csv(csv_path)
         self._export_note = (
-            "páginas eliminadas de la corrida; vuelva a exportar para "
+            "páginas eliminadas de la ejecución; vuelva a exportar para "
             "rehacer los PDF sin ellas"
             if eliminando
             else f"exportación terminada: {Path(output_dir).name}"

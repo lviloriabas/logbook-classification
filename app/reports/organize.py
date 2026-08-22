@@ -19,10 +19,10 @@
 - **Recortes de firmas**: volcado de las regiones de firma para auditar
   visualmente los bounding boxes.
 
-Convenciones de nombres (rutas relativas a la carpeta de la corrida):
+Convenciones de nombres (rutas relativas a la carpeta de la ejecución):
 
 - ``<carpeta>.pdf``                  un único PDF: usa el mismo nombre que la
-                                     carpeta de la corrida, sin separadores si
+                                     carpeta de la ejecución, sin separadores si
                                      no se eligen condiciones, o con páginas
                                      en blanco de matrícula/mes en grande como
                                       separadores independientes entre grupos
@@ -102,7 +102,7 @@ class PaginaRef:
 
 
 def iterar_paginas(reports: Sequence[ValidationReport]) -> Iterable[PaginaRef]:
-    """Itera las páginas de todos los reportes en el orden del lote."""
+    """Itera las páginas de todos los reportes en el orden del batch."""
     orden = 0
     for report in reports:
         for page in report.pages:
@@ -127,7 +127,7 @@ def por_revisar(page: PageResult) -> bool:
     cuando tiene dos o más lecturas independientes y pasa las reglas. Lo que
     nunca abre un separador automático es una matrícula ausente, una lectura
     canónica que contradijo al libro o una confianza baja en la matrícula.
-    Esos casos van al lote «Revisar» para que la página visible, y no una
+    Esos casos van al batch «Revisar» para que la página visible, y no una
     suposición, decida su avión. Las advertencias de fecha no deciden el grupo.
     """
     return (
@@ -253,9 +253,9 @@ def ruta_pdf(
     separar_por: Sequence[str],
     run_dir: Optional[Path] = None,
 ) -> Path:
-    """Ruta relativa del PDF de un grupo dentro de la carpeta de la corrida.
+    """Ruta relativa del PDF de un grupo dentro de la carpeta de la ejecución.
 
-    Cada PDF queda suelto en la carpeta de la corrida y su nombre incluye
+    Cada PDF queda suelto en la carpeta de la ejecución y su nombre incluye
     exactamente los criterios que lo identifican.
     """
     if not separar_por:
@@ -533,7 +533,7 @@ class ArchivoDeEntrega:
     """Un archivo de la entrega con lo que lleva dentro.
 
     ``revisar`` marca el que recoge las bitácoras que requieren revisión. Va
-    aparte porque en AirVault cada archivo es un lote, y ese no se indexa:
+    aparte porque en AirVault cada archivo es un batch, y ese no se indexa:
     se sube para que alguien lo resuelva a mano.
     """
 
@@ -678,10 +678,10 @@ def partir_secuencia(
 def nombre_de_parte(base: str, indice: int, total: int) -> str:
     """Nombre del archivo de una parte: ``<base> -2``, o ``<base>`` si va sola.
 
-    El sufijo no es decoración. Cada archivo es un lote distinto en AirVault
-    y los lotes se localizan por nombre; dos con el mismo no habría forma de
+    El sufijo no es decoración. Cada archivo es un batch distinto en AirVault
+    y los batches se localizan por nombre; dos con el mismo no habría forma de
     distinguirlos. Tiene que coincidir con el sufijo que
-    ``app.airvault.naming`` le pone al nombre del lote, y hay una prueba que
+    ``app.airvault.naming`` le pone al nombre del batch, y hay una prueba que
     lo comprueba.
     """
     if total <= 1:
@@ -777,13 +777,13 @@ def escribir_entrega(
 
     Con ``paginas_por_parte`` en cero sale un solo PDF, como siempre. Con un
     tope, la entrega se reparte en partes de a lo sumo esas páginas, cada
-    una en su archivo: una corrida entera son casi dos gigas y ochocientas
-    páginas, que en AirVault forman un lote incómodo de subir y de revisar.
+    una en su archivo: una ejecución entera son casi dos gigas y ochocientas
+    páginas, que en AirVault forman un batch incómodo de subir y de revisar.
 
     Con ``revisar_aparte`` las bitácoras que requieren revisión cierran en su
     propio archivo en vez de al final del último. En AirVault cada archivo
-    es un lote, y esas páginas no se pueden indexar: sueltas dentro de un
-    lote de cuatrocientas quedan bloqueadas donde nadie las encuentra.
+    es un batch, y esas páginas no se pueden indexar: sueltas dentro de un
+    batch de cuatrocientas quedan bloqueadas donde nadie las encuentra.
 
     Devuelve el nombre definitivo de cada archivo porque solo se conoce
     después de escribir —uno que ya existía obliga a añadir sufijo— y el

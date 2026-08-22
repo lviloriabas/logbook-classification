@@ -23,7 +23,7 @@ log: de una cookie de sesion solo se registra el nombre y cuanto mide.
 
 Si la sesion caduca, el servidor no responde con un error sino con la
 pagina de acceso. Se detecta y se dice; nunca se falla en silencio a mitad
-de un lote.
+de un batch.
 """
 
 from __future__ import annotations
@@ -82,15 +82,15 @@ class ErrorDeAirVault(RuntimeError):
     """AirVault contesto, y lo que contesto es un rechazo.
 
     Es distinto de :class:`ErrorDeConexion` a proposito: un 404 o un 403
-    hablan de *esa* peticion —una pagina que ya no esta, un lote sin
-    permiso— y no del camino, asi que frenan la pagina y no el lote entero.
+    hablan de *esa* peticion —una pagina que ya no esta, un batch sin
+    permiso— y no del camino, asi que frenan la pagina y no el batch entero.
     """
 
 
 # Respuestas que no significan que algo este mal, sino que el servidor
 # estaba ocupado: reintentar tiene sentido. Un 404 o un 403, no.
 # La peticion mas barata que distingue una sesion viva de una caducada:
-# pide un solo lote de cualquier repositorio. La usa tanto la comprobacion
+# pide un solo batch de cualquier repositorio. La usa tanto la comprobacion
 # de arranque como la que decide si las cookies del perfil sirven.
 RUTA_DE_PRUEBA = "/index/Batch/GetBatches"
 CONSULTA_DE_PRUEBA = {
@@ -108,14 +108,14 @@ ESTADOS_TRANSITORIOS = frozenset({408, 429, 500, 502, 503, 504})
 ESTADOS_DE_SESION = frozenset({401, 419, 440})
 
 _AYUDA_LOTE_ABIERTO = (
-    " AirVault admite un solo dueno por lote y no contesta «ocupado»: deja "
-    "la peticion esperando. Si el lote esta abierto —en el navegador o "
+    " AirVault admite un solo dueno por batch y no contesta «ocupado»: deja "
+    "la peticion esperando. Si el batch esta abierto —en el navegador o "
     "porque un intento anterior no llego a desbloquearlo— hay que "
     "cerrarlo en AirVault antes de indexarlo desde aqui."
 )
 
 # Rutas que se cuelgan por un motivo concreto y no por la red. Decirlo solo
-# donde corresponde evita mandar a cerrar un lote a quien lo que tiene es
+# donde corresponde evita mandar a cerrar un batch a quien lo que tiene es
 # el wifi caido.
 _PISTAS_POR_RUTA = {
     "/index/Batch/LockAndGetBatchInfo": _AYUDA_LOTE_ABIERTO,
@@ -447,7 +447,7 @@ class SesionAirVault:
     # ── comprobacion ───────────────────────────────────────────────
 
     def comprobar(self) -> int:
-        """Confirma que la sesion sirve y devuelve cuantos lotes ve.
+        """Confirma que la sesion sirve y devuelve cuantos batches ve.
 
         Se llama antes de empezar, no despues: descubrir que la cookie
         caduco en la pagina 250 de 400 cuesta mucho mas que descubrirlo
@@ -474,7 +474,7 @@ class SesionAirVault:
         """Token con el que el sitio acepta un POST, leido de su portada.
 
         Se guarda por aplicacion y se pide una sola vez: son cientos de
-        peticiones por lote y la portada no cambia entre ellas. Si el
+        peticiones por batch y la portada no cambia entre ellas. Si el
         servidor lo rechaza mas tarde, ``_pedir`` tira el guardado y aqui
         se vuelve a leer.
         """
@@ -504,7 +504,7 @@ class SesionAirVault:
     def _pedir(self, metodo: str, ruta: str, **extra) -> requests.Response:
         """Hace la peticion, reintentando lo que se puede reintentar.
 
-        Un lote son cientos de peticiones y una subida completa casi dos
+        Un batch son cientos de peticiones y una subida completa casi dos
         mil: a esa escala un corte de red momentaneo o un servidor ocupado
         dejan de ser raros, y sin reintentos cualquiera de los dos tira el
         trabajo entero. Se reintenta lo que puede arreglarse solo —un
@@ -547,7 +547,7 @@ class SesionAirVault:
                     # La sesion se cayo a mitad del trabajo. El perfil de
                     # Edge la renueva sin ventana —vuelve a pasar por el
                     # enlace federado y Microsoft la reconoce—, asi que se
-                    # rehace y se repite la peticion en vez de tirar un lote
+                    # rehace y se repite la peticion en vez de tirar un batch
                     # de cuatrocientas paginas por una espera larga.
                     renovada = True
                     continue
@@ -616,7 +616,7 @@ class SesionAirVault:
         """Traduce lo que contesto el servidor a un motivo que se entienda.
 
         ``raise_for_status`` levanta un texto en ingles con la URL entera y
-        sin decir que hacer; a mitad de un lote eso llega al reporte como
+        sin decir que hacer; a mitad de un batch eso llega al reporte como
         «500 Server Error for url ...», que no dice ni que pagina fallo ni
         si conviene reintentar.
         """
@@ -628,12 +628,12 @@ class SesionAirVault:
         if codigo == 403:
             detalle = (
                 "la cuenta entro pero no tiene permiso sobre este "
-                "repositorio o este lote"
+                "repositorio o este batch"
             )
         elif codigo == 404:
             detalle = (
-                "AirVault dice que eso no existe; suele ser un lote borrado "
-                "o una pagina que ya no esta en el lote"
+                "AirVault dice que eso no existe; suele ser un batch borrado "
+                "o una pagina que ya no esta en el batch"
             )
         else:
             detalle = f"el servidor respondio {codigo}"
@@ -647,7 +647,7 @@ class SesionAirVault:
 
         Solo una vez por peticion: si al renovar el servidor sigue diciendo
         que hay que entrar, insistir seria abrir Edge en cada pagina de un
-        lote. Devuelve si merece la pena repetir la peticion.
+        batch. Devuelve si merece la pena repetir la peticion.
         """
         if self._origen != ORIGEN_EDGE or self._renovando:
             return False

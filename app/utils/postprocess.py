@@ -360,7 +360,7 @@ def _matricula_token(raw: str) -> Optional[Tuple[str, int]]:
         elif not suffix:
             suffix_score = 1
         elif suffix[0].isdigit():
-            # Un dígito suelto detrás delata una ventana corrida.
+            # Un dígito suelto detrás delata una ventana ejecución.
             suffix_score = -3
         else:
             suffix_score = -1

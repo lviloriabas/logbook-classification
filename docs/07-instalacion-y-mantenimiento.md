@@ -86,7 +86,7 @@ Las variables se fijan con `setdefault`. Un valor ya definido en Windows tiene p
 
 PaddleOCR v3 y el reconocedor PaddleX se crean con `device="cpu"`. La compatibilidad con PaddleOCR v2 usa `use_gpu=False`. oneDNN/MKL-DNN permanece desactivado por estabilidad en Windows.
 
-No debe existir una descarga de modelos durante una corrida. Si Paddle intenta acceder a la red, detenga la entrega y compruebe la caché portable.
+No debe existir una descarga de modelos durante una ejecución. Si Paddle intenta acceder a la red, detenga la entrega y compruebe la caché portable.
 
 ## 7.6 Dependencias de ejecución
 
@@ -149,7 +149,7 @@ Antes de distribuir:
 1. ejecute la suite completa;
 2. ejecute `setup.ps1 -Check`;
 3. desconecte la red o bloquee el acceso externo;
-4. procese un lote de aceptación en CPU;
+4. procese un batch de aceptación en CPU;
 5. compruebe CSV, JSON, `stats.json`, PDF y registros;
 6. confirme que `paginas_fuera` sea cero cuando exista el bloque de separación;
 7. copie la carpeta completa a otra ruta escribible de Windows y abra allí `LogbookClassification.exe`;

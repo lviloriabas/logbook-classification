@@ -9,7 +9,7 @@ El recorte se guarda con un margen generoso (``EXTRACT_PAD_*``) y con el
 rectángulo exacto del campo dentro de la imagen. Con esas dos cosas el
 calibrador puede simular cualquier margen menor o igual recortando el PNG, que
 es lo que permite tratar el margen como un parámetro más de la búsqueda en
-lugar de tener que volver a extraer el lote entero por cada valor.
+lugar de tener que volver a extraer el batch entero por cada valor.
 """
 
 from __future__ import annotations

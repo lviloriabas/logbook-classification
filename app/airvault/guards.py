@@ -35,20 +35,20 @@ class Aviso:
 
 
 class ErrorDeGuarda(RuntimeError):
-    """El lote no cumple una condicion que impide escribir nada."""
+    """El batch no cumple una condicion que impide escribir nada."""
 
 
 def verificar_cantidad(
     registros: Sequence[Registro], paginas_lote: int,
     separadores_borrados: int = 0,
 ) -> None:
-    """El manifiesto y el lote tienen que tener las mismas paginas.
+    """El manifiesto y el batch tienen que tener las mismas paginas.
 
     Es la guarda mas importante: si sobran o faltan paginas, la
     correspondencia por posicion esta rota y cualquier escritura cae en la
     bitacora de al lado.
 
-    Los separadores cuentan: en el lote ocupan una pagina cada uno, igual
+    Los separadores cuentan: en el batch ocupan una pagina cada uno, igual
     que en el PDF que se subio.
     """
     cantidades_validas = {len(registros)}
@@ -60,24 +60,24 @@ def verificar_cantidad(
     detalle = f", {separadores} de ellos separadores" if separadores else ""
     if paginas_lote <= 0:
         raise ErrorDeGuarda(
-            f"AirVault no dijo cuantas paginas tiene el lote, y el manifiesto "
-            f"espera {len(registros)}{detalle}. Suele pasar cuando el lote "
-            f"todavia se esta procesando en el servidor o cuando el lote "
+            f"AirVault no dijo cuantas paginas tiene el batch, y el manifiesto "
+            f"espera {len(registros)}{detalle}. Suele pasar cuando el batch "
+            f"todavia se esta procesando en el servidor o cuando el batch "
             f"anotado ya no existe: conviene mirarlo en AirVault antes de "
             f"volver a intentar. No se escribe nada."
         )
     faltan = len(registros) - paginas_lote
     causa = (
-        f"al lote le faltan {faltan} paginas de las que trae el PDF"
+        f"al batch le faltan {faltan} paginas de las que trae el PDF"
         if faltan > 0 else
-        f"el lote tiene {-faltan} paginas de mas que el PDF de la corrida"
+        f"el batch tiene {-faltan} paginas de mas que el PDF de la ejecución"
     )
     raise ErrorDeGuarda(
-        f"El lote tiene {paginas_lote} paginas y el manifiesto "
+        f"El batch tiene {paginas_lote} paginas y el manifiesto "
         f"{len(registros)}{detalle}: {causa}. Escribir asi correria cada "
         f"dato a la bitacora de al lado, asi que no se escribe nada. Casi "
         f"siempre es que se subio un PDF distinto al que se preparo, o que "
-        f"el lote quedo a medio subir."
+        f"el batch quedo a medio subir."
     )
 
 
@@ -127,11 +127,11 @@ def verificar_alineacion(
     registro: Registro, valores_en_airvault: Mapping[int, str],
     permitir_log_distinto: bool = False,
 ) -> List[Aviso]:
-    """Contrasta la pagina del lote con lo que dice el manifiesto.
+    """Contrasta la pagina del batch con lo que dice el manifiesto.
 
     Cuando AirVault ya trae un log number para esa pagina, es el mejor
     ancla que existe: si no coincide con el nuestro, o el PDF se subio en
-    otro orden o el CSV no corresponde a este lote. En los dos casos hay que
+    otro orden o el CSV no corresponde a este batch. En los dos casos hay que
     parar.
 
     Si AirVault no trae nada, no se puede contrastar y se sigue por

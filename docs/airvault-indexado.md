@@ -1,7 +1,7 @@
 # Indexado automatico en AirVault
 
-Toma el CSV que ya produce una corrida de clasificacion y escribe esos
-valores en las paginas del lote correspondiente del Web Index de AirVault,
+Toma el CSV que ya produce una ejecución de clasificacion y escribe esos
+valores en las paginas del batch correspondiente del Web Index de AirVault,
 sin que nadie tenga que teclear pagina por pagina.
 
 Se opera desde la ventana principal o desde la linea de comandos. Las dos
@@ -20,36 +20,36 @@ delante.
 | Historial | Ultimas 25 ejecuciones procesadas, de la mas reciente a la mas antigua, con sus paginas y lo que tienen para subir. Viene señalada la exportada mas reciente. |
 | `Ejecucion:` | CSV de la ejecucion elegida arriba. No se teclea. |
 | `Otra ejecucion…` | Elige el CSV de una ejecucion que no este en la lista. |
-| `Lote:` | Nombre con el que el lote queda en AirVault. Viene propuesto con la fecha y la hora de la ejecucion. |
+| `Batch:` | Nombre con el que el batch queda en AirVault. Viene propuesto con la fecha y la hora de la ejecucion. |
 | `Sesion:` | Respaldo, normalmente vacio: la sesion la resuelve el navegador. Lo que se pegue aqui no se guarda en el disco. |
-| **Lotes en AirVault** | Una fila por lote de esta ejecucion, con sus paginas y en que va. Es donde se ve cual ya se puede indexar. |
+| **Batches en AirVault** | Una fila por batch de esta ejecucion, con sus paginas y en que va. Es donde se ve cual ya se puede indexar. |
 | `Comprobar cada N min` | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 5 minutos, y deja de preguntar cuando no queda nada por esperar. |
 | `Comprobar ahora` | La misma pregunta, en el momento. |
 | `Subir a AirVault` | Manda los PDF de la entrega. Termina cuando termina la subida. |
-| `Completar batch` | Al terminar de escribir, da el lote por terminado en AirVault (ver mas abajo). Sin marcar, el lote se queda en la cola para revisarlo. |
-| `Indexar` | Escribe en los lotes que ya estan listos. |
+| `Completar batch` | Al terminar de escribir, da el batch por terminado en AirVault (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo. |
+| `Indexar` | Escribe en los batches que ya estan listos. |
 | `Ver reporte…` | Abre el detalle pagina por pagina de lo que se escribiria. |
-| `Cancelar` | Detiene lo que este en marcha y suelta los lotes tomados. |
+| `Cancelar` | Detiene lo que este en marcha y suelta los batches tomados. |
 
 ### Los tres tiempos
 
 1. **Subir.** Manda los archivos y ya. Entre una parte y la siguiente se
    espera a que la anterior aparezca en la cola —AirVault junta en un mismo
-   lote los archivos que le llegan seguidos—, pero detras de la ultima no
+   batch los archivos que le llegan seguidos—, pero detras de la ultima no
    se espera a nada.
-2. **Esperar a AirVault.** El lote entra en la cola del servidor y tarda en
+2. **Esperar a AirVault.** El batch entra en la cola del servidor y tarda en
    quedar indexable: aparece antes de tener todas sus paginas. Mientras le
    falte alguna no esta listo, porque escribir con las paginas corridas
    dejaria cada dato en la bitacora de al lado. La ventana pregunta cada
    cinco minutos —o cuando se pulse **Comprobar ahora**— y va pasando los
-   lotes a **Listo para indexar** segun quedan. Cuando ya no queda nada que
+   batches a **Listo para indexar** segun quedan. Cuando ya no queda nada que
    esperar deja de preguntar sola.
-3. **Indexar.** Escribe los que estan listos. En cuanto un lote queda listo
+3. **Indexar.** Escribe los que estan listos. En cuanto un batch queda listo
    se lee y se calcula que se le escribiria, asi que la lista y el reporte
    dicen cuantas paginas se escribirian y cuantas quedan bloqueadas **antes**
    de tocar nada.
 
-Estados que puede tener un lote en la lista:
+Estados que puede tener un batch en la lista:
 
 | Estado | Que significa |
 |---|---|
@@ -58,22 +58,22 @@ Estados que puede tener un lote en la lista:
 | Procesandose en AirVault | Ya esta en la cola, con menos paginas de las que lleva el PDF |
 | Listo para indexar | Entero y libre: se puede escribir |
 | Abierto por otra persona | Alguien lo tiene tomado; AirVault no lo entrega a nadie mas |
-| Para revisar a mano | Es el lote REVISAR, que no se indexa |
+| Para revisar a mano | Es el batch REVISAR, que no se indexa |
 | Indexado / Terminado | Ya escrito, y cerrado si se pidio |
 
 El avance sale por la barra y la etiqueta de estado de esta ventana, no por
-las de la principal: mientras un lote se escribe se sigue procesando.
+las de la principal: mientras un batch se escribe se sigue procesando.
 
 Va aparte y no empotrada en la ventana principal. Colgando de ella, el
 indexado le quitaba alto a la vista previa y al desplegarse cambiaba el
 minimo de la ventana, que en pantallas bajas la sacaba del escritorio;
-ademas daba a entender que solo se sube la corrida recien exportada, cuando
+ademas daba a entender que solo se sube la ejecución recien exportada, cuando
 lo normal es elegir cual del historial.
 
-La corrida tiene que estar exportada. La lista lo dice antes de intentarlo:
+La ejecución tiene que estar exportada. La lista lo dice antes de intentarlo:
 **Sin exportar** cuando no hay PDF de entrega y **Falta reexportar** cuando
 se exporto antes de que existiera el indice de paginas. Ese archivo puede
-venir repartido en partes (ver más abajo): cada parte es un lote distinto y
+venir repartido en partes (ver más abajo): cada parte es un batch distinto y
 la ventana los recorre todos.
 
 ## Etapas
@@ -86,11 +86,11 @@ se puede procesar hoy, subir manana e indexar despues sin repetir nada.
 |---|---|
 | `preparar` | Arma el manifiesto a partir del CSV y del indice de paginas (uno por parte, y otro para REVISAR) |
 | `subir` | Sube los PDFs por Quick Upload (opcional: se puede subir a mano) |
-| `descubrir` | Ubica el lote en AirVault por su nombre |
+| `descubrir` | Ubica el batch en AirVault por su nombre |
 | `plan` | Dry run: calcula todo, escribe el reporte y no toca nada |
 | `indexar` | Escribe los indices |
-| `verificar` | Relee el lote y confirma como quedo |
-| `completar` | Da el lote por terminado en AirVault, si lo acepta (`indexar --completar`) |
+| `verificar` | Relee el batch y confirma como quedo |
+| `completar` | Da el batch por terminado en AirVault, si lo acepta (`indexar --completar`) |
 | `todo` | Descubrir, indexar y verificar de corrido |
 
 ```batch
@@ -107,17 +107,17 @@ portable\python312\tools\python.exe run_airvault.py verificar --job varias24
   `revision.csv` y `revision.html` en la carpeta del trabajo y no manda
   nada al servidor.
 - **`--revisar`**: lo mismo, y despues pide confirmacion escrita antes de
-  tocar el lote.
+  tocar el batch.
 - **`--auto`**: escribe sin detenerse.
 
 El reporte es el mismo artefacto en los tres modos. Conserva el vuelo leido
 tal como aparece en el CSV; la marca `AUTO INDEX` se agrega solo al enviar
 la pagina a AirVault.
 
-## Repartir en varios lotes
+## Repartir en varios batches
 
-Una corrida completa son unas 900 páginas y casi dos gigas. Eso en AirVault
-es un solo lote: incómodo de revisar, y una subida que si se corta hay que
+Una ejecución completa son unas 900 páginas y casi dos gigas. Eso en AirVault
+es un solo batch: incómodo de revisar, y una subida que si se corta hay que
 rehacer entera.
 
 Marcando **Repartir en** en el cuadro «Salidas» —o `--paginas-por-parte N`
@@ -130,32 +130,32 @@ BITS 18 AUG 2026 05 42 (2 de 5).pdf
 ...
 ```
 
-Cada archivo es un lote propio en AirVault, con su nombre —`DP | BIT 18 AUG
+Cada archivo es un batch propio en AirVault, con su nombre —`DP | BIT 18 AUG
 2026 05 42 (2 de 5)`—, su manifiesto en `output/airvault/<corrida>/parte-02/`
 y sus guardas. Una parte que falle o se corte no arrastra a las demás, y al
 volver a revisar se retoma solo lo que falta.
 
 El corte se hace **entre secciones** siempre que se pueda, para no separar
-en dos lotes las bitácoras de un mismo avión. Cuando un avión tiene por sí
+en dos batches las bitácoras de un mismo avión. Cuando un avión tiene por sí
 solo más páginas que el tope, se parte y la continuación vuelve a abrir con
 su separador, de modo que ninguna parte empieza con bitácoras sueltas.
 
-El reporte de revisión sigue siendo uno solo para toda la corrida: se
-aprueba de una vez y no lote por lote.
+El reporte de revisión sigue siendo uno solo para toda la ejecución: se
+aprueba de una vez y no batch por batch.
 
 La ventana **Indexar en AirVault** aplica además un máximo propio justo
 antes de Quick Upload. Abre en **300 páginas por batch** y el usuario puede
 cambiarlo antes de subir. Si un PDF exportado supera ese valor, se copia en
 tramos consecutivos dentro de `output/airvault/<corrida>/cargas/`; el PDF de
 la entrega, su índice y el CSV no se modifican. El mismo límite protege al
-lote `REVISAR`; si hace falta más de uno, se nombran `REVISAR -1`,
+batch `REVISAR`; si hace falta más de uno, se nombran `REVISAR -1`,
 `REVISAR -2`, etc.
 
-Los lotes automáticos se numeran `-1`, `-2`, etc. La correspondencia con el
+Los batches automáticos se numeran `-1`, `-2`, etc. La correspondencia con el
 tramo que se subió queda en cada manifiesto y en el índice de páginas; no
 depende del nombre interno del PDF de carga.
 
-## El lote REVISAR
+## El batch REVISAR
 
 Las bitácoras cuya matrícula no permite asignarlas con seguridad no se
 indexan automáticamente: una matrícula ausente o marcada, una lectura
@@ -165,13 +165,13 @@ para ayudar a quien revise, pero la página no se coloca bajo ese separador.
 Una inferencia coherente y bien respaldada sí continúa por el flujo normal;
 `REVISAR` no es un destino general para toda lectura inferida.
 
-Ahora salen en su **propio archivo**, y por tanto en su propio lote:
+Ahora salen en su **propio archivo**, y por tanto en su propio batch:
 
 ```
 DP | BITS 18 AUG 2026 05 42 REVISAR
 ```
 
-Ese lote **se sube y no se toca**. El indexado no le lee ni le escribe
+Ese batch **se sube y no se toca**. El indexado no le lee ni le escribe
 ninguna página; queda en la cola del Web Index, marcado y a la vista, para
 que alguien lo resuelva a mano. En el reporte sus páginas aparecen con el
 aviso `revisar_a_mano`.
@@ -181,14 +181,14 @@ caso normal su manifiesto vive en `output/airvault/<corrida>/revisar/`; si
 también supera el máximo de Quick Upload, usa `revisar-01/`, `revisar-02/`,
 etc.
 
-En la corrida de referencia son 17 páginas de 884.
+En la ejecución de referencia son 17 páginas de 884.
 
 ## Separadores del PDF
 
 El PDF de entrega no es solo bitacoras: entre las secciones lleva paginas
 divisorias —la matricula o el mes de cada grupo, `POSIBLES DISCREPANCIAS`,
 `REVISAR`— que el CSV no tiene. En AirVault cada una ocupa una pagina del
-lote igual que cualquier otra.
+batch igual que cualquier otra.
 
 Contarlas mal no deja un hueco: desplaza todo lo que va detras, y la
 bitacora de la pagina 40 terminaria indexada con los datos de la 39.
@@ -210,7 +210,7 @@ posicion siga en pie, quedan marcados, y **nunca se les escribe nada**: ni
 se leen del servidor, ni cuentan como omitidos, ni se espera que queden en
 `Valid` al verificar. En AirVault se quedan como estan.
 
-Una corrida exportada antes de que existiera el indice no lo tiene. En ese
+Una ejecución exportada antes de que existiera el indice no lo tiene. En ese
 caso se sigue el orden del CSV y se avisa; si aquel PDF llevaba
 separadores, la guarda de cantidad detiene el trabajo antes de escribir
 nada.
@@ -220,7 +220,7 @@ nada.
 El indexado se niega a escribir si algo no cuadra. Estan todas juntas en
 `app/airvault/guards.py` y se ejecutan igual en dry run que en automatico:
 
-1. El lote y el manifiesto tienen que tener la misma cantidad de paginas,
+1. El batch y el manifiesto tienen que tener la misma cantidad de paginas,
    contando los separadores.
 2. Toda matricula debe existir en el picklist de AirVault.
 3. Si AirVault ya trae un log number en esa pagina, tiene que coincidir con
@@ -230,7 +230,7 @@ El indexado se niega a escribir si algo no cuadra. Estan todas juntas en
    mas veces faltaba, se deduce antes de llegar aqui (ver «Campos»).
 
 Una pagina que falle cualquiera de estas queda marcada como bloqueada en el
-reporte y no se escribe; el resto del lote sigue. La primera guarda es la
+reporte y no se escribe; el resto del batch sigue. La primera guarda es la
 unica que corta el trabajo entero, porque si sobran o faltan paginas la
 correspondencia por posicion esta rota y cualquier escritura caeria en la
 bitacora de al lado.
@@ -258,11 +258,11 @@ pagina: un vuelo numerado (`703`, `CM137`) o un codigo de mantenimiento
 el vuelo, `Description` lleva solamente `AUTO INDEX`. La marca se agrega
 solo al payload que se guarda en AirVault: el CSV y el reporte de revision
 conservan el vuelo tal como lo dejo la lectura. Es un campo por pagina, no
-del lote: el lote no lo lleva —Quick Upload ni siquiera expone
+del batch: el batch no lo lleva —Quick Upload ni siquiera expone
 `Description`—.
 
 **La fecha.** `End Date` es obligatorio: una bitacora sin fecha deja su
-pagina bloqueada, y basta una para que el lote no se pueda cerrar. Cuando la
+pagina bloqueada, y basta una para que el batch no se pueda cerrar. Cuando la
 lectura no dejo fecha pero si el log number —que es el que ordena el libro—
 se deduce con las mismas reglas que el corrector de fechas del
 procesamiento, de la que mas evidencia tiene a la que menos:
@@ -296,7 +296,7 @@ de la matricula, pero ese lookup lo dispara la interfaz al escribir el
 campo, no el servidor al guardar. Por eso el modulo la resuelve por su
 cuenta con tres niveles: primero el cache local
 (`airvault_flota.json`), que se alimenta solo de lo que AirVault ya tiene
-indexado en el propio lote; si no hay dato, una regla de prefijos de
+indexado en el propio batch; si no hay dato, una regla de prefijos de
 respaldo, y en ese caso la bitacora queda marcada como `fleet_inferido` en
 el reporte para que alguien la confirme.
 
@@ -344,7 +344,7 @@ programa y esa sesion se queda. Lo que lo sostiene es
 `--restore-last-session`, que no esta para reabrir pestanas: Chromium solo
 guarda en disco las cookies **de sesion** —y la de federacion lo es— cuando
 el perfil arranca restaurando la sesion anterior. Sin esa bandera habria
-que entrar con segundo factor en cada corrida.
+que entrar con segundo factor en cada ejecución.
 
 Cuando la sesion guardada deja de valer, el programa **vuelve a abrir la
 ventana para entrar**, en vez de quedarse pidiendo que alguien copie una
@@ -362,11 +362,11 @@ Se entra por el enlace federado y no por la raiz del sitio: es el que
 dispara la redireccion a Microsoft. Por la raiz la sesion queda a medias,
 con `ASP.NET_SessionId` pero sin la cookie que autentica. Por eso esa
 cookie sola no se da por buena: la pone el servidor al primer contacto,
-antes de saber quien eres, y darla por buena hacia arrancar un lote que
+antes de saber quien eres, y darla por buena hacia arrancar un batch que
 moria en la primera pagina.
 
 **La cookie que autentica en esta instalacion se llama `Critical`.** Se
-midio pidiendo el listado de lotes con cada cookie por separado: `Critical`
+midio pidiendo el listado de batches con cada cookie por separado: `Critical`
 sola abre la sesion y ninguna de las otras seis —`ProdSSO`, `ProdSSO1`,
 `AirVaultContext`, `SessionInfo_AV`, `Production-AirVaultAntiForgery`,
 `ASP.NET_SessionId`— lo hace. Antes solo se reconocian los nombres
@@ -422,7 +422,7 @@ Edge, tambien se dice y se sigue a mano.
 
 La cookie va al tarro de peticiones y no a una cabecera fija: en cuanto el
 servidor devuelve su primera cookie, `requests` reconstruye la cabecera
-desde el tarro y se comeria cualquier valor puesto a mano, dejando el lote
+desde el tarro y se comeria cualquier valor puesto a mano, dejando el batch
 a medio escribir.
 
 Ni las cookies ni las contrasenas se guardan en disco ni se escriben en el
@@ -437,14 +437,14 @@ en vez de fallar en silencio.
 
 ## Subida
 
-`subir` usa Quick Upload, que crea el lote y lo deja en la cola de Web
+`subir` usa Quick Upload, que crea el batch y lo deja en la cola de Web
 Index. Hay una limitacion del lado de AirVault: ese modulo solo expone diez
 campos y entre ellos **no** estan Log Page Number, Fleet ni End Date. Por
-eso la subida deja el lote clasificado pero no indexado, y el indexado real
+eso la subida deja el batch clasificado pero no indexado, y el indexado real
 lo hace `indexar` despues. Si el administrador habilita esos campos para
 Quick Upload, la subida podria cerrarlo todo de una vez.
 
-La etapa esta desacoplada a proposito: si el lote se sube a mano, se salta
+La etapa esta desacoplada a proposito: si el batch se sube a mano, se salta
 `subir` y se arranca en `descubrir`.
 
 Los valores que se mandan salen de la **primera bitacora**, no de la
@@ -453,10 +453,10 @@ es obligatorio en Quick Upload. Son solo la clasificacion inicial del
 archivo; lo de cada pagina lo escribe `indexar` despues.
 
 **Entre una parte y la siguiente se espera a que la anterior aparezca en
-la cola.** AirVault junta en un mismo lote los archivos que le llegan
+la cola.** AirVault junta en un mismo batch los archivos que le llegan
 seguidos: subiendo la entrega y la parte de Revisar una detras de otra
-quedaron las dos en un solo lote de 33 paginas, y dos partes en el mismo
-lote no se pueden indexar por separado, que es justo para lo que se
+quedaron las dos en un solo batch de 33 paginas, y dos partes en el mismo
+batch no se pueden indexar por separado, que es justo para lo que se
 reparten.
 
 Detras de la **ultima** no se espera a nada. Ahi la subida termina; que el
@@ -467,11 +467,11 @@ esperando delante.
 Toda escritura lleva la cabecera `AntiForgery`; sin ella `FinishUpload`
 contesta 500 despues de haber recibido el archivo entero.
 
-## Nombre del lote
+## Nombre del batch
 
 El nombre es lo unico que el sistema y AirVault comparten para reconocer un
-lote, asi que se arma solo, con el prefijo mas la marca de tiempo de la
-corrida, en el mismo formato que ya usa el nombre del CSV, y **entero en
+batch, asi que se arma solo, con el prefijo mas la marca de tiempo de la
+ejecución, en el mismo formato que ya usa el nombre del CSV, y **entero en
 mayusculas**:
 
 ```
@@ -482,55 +482,55 @@ DP | BITS 18 AUG 2026 05 42 REVISAR    bitacoras sin avion confirmado
 ```
 
 **La marca es la del procesamiento, no la de la subida.** Sale del nombre de
-la carpeta de la corrida; si esa carpeta no lo lleva, se toma la hora del
+la carpeta de la ejecución; si esa carpeta no lo lleva, se toma la hora del
 propio archivo, que sigue siendo la del procesamiento. La hora actual es el
-ultimo recurso y solo aparece cuando no hay ni archivo que mirar: el lote
+ultimo recurso y solo aparece cuando no hay ni archivo que mirar: el batch
 tiene que decir cuando se leyo la bitacora, no cuando alguien se acordo de
 subirla.
 
 Con `--prefijo` se cambia el prefijo y con `--lote` se fija el nombre
 completo a mano; los dos se pasan a mayusculas igual.
 
-**Quick Upload no admite nombre de lote.** Todo lo que sube el programa
+**Quick Upload no admite nombre de batch.** Todo lo que sube el programa
 llega a la cola como `Empty-Batch`, igual para todos; el valor del campo
-`Batch Name` viaja en las paginas pero no nombra el lote. Asi que el nombre
+`Batch Name` viaja en las paginas pero no nombra el batch. Asi que el nombre
 se le pone **despues de encontrarlo**, con la misma accion «Rename» del Web
 Index (`Batch/UpdateBatchName`). Si el renombrado falla no se corta nada: el
-lote ya esta subido y encontrado, y quedarse sin nombre no vale un trabajo.
+batch ya esta subido y encontrado, y quedarse sin nombre no vale un trabajo.
 
 La marca de tiempo no es decoracion. El filtro "Filter by" de AirVault es
 una coincidencia de subcadena sin distinguir mayusculas, asi que escribir
-`DP | BIT` devuelve hoy 22 lotes: los `DP | BITS VARIAS`, los
+`DP | BIT` devuelve hoy 22 batches: los `DP | BITS VARIAS`, los
 `DP | Bitacoras varias` y los `DP | BIT Mix`. Y entre ellos hay nombres
 repetidos, dos `DP | BIT Mix | Viernes 14 AUG` y dos
 `DP | BIT Mix 5 | Viernes 14 AUG`, con los que no habria forma de saber en
 cual escribir. La marca de tiempo los separa.
 
-## Deteccion del lote
+## Deteccion del batch
 
 Hay dos caminos, en este orden:
 
-1. **Por nombre**, para un lote que alguien subio a mano poniendoselo.
+1. **Por nombre**, para un batch que alguien subio a mano poniendoselo.
    `descubrir` manda `DP | BIT ...` como filtro al servidor, el mismo que
    aplica la caja "Filter by" de la pantalla, y despues compara el nombre
    completo sin distinguir mayusculas ni separadores. Contempla el sufijo
-   `<lote> - usuario@dominio` que dejan algunas subidas.
+   `<batch> - usuario@dominio` que dejan algunas subidas.
 
 2. **Por lo que aparecio despues de subir**, que es el caso normal cuando
-   sube el programa. Justo antes de subir se anota que lotes habia en la
+   sube el programa. Justo antes de subir se anota que batches habia en la
    cola; el que no estaba es el propio. Es exacto y no depende del nombre,
    que aqui no distingue nada.
 
 En los dos, si hay mas de un candidato desempata por cantidad de paginas, y
 si aun asi queda mas de uno se detiene y pide el batch id a mano: escribir
-en el lote equivocado es peor que preguntar.
+en el batch equivocado es peor que preguntar.
 
-Con `--esperar` sondea hasta que el lote aparezca, porque un lote recien
+Con `--esperar` sondea hasta que el batch aparezca, porque un batch recien
 subido tarda en pasar por el procesamiento del servidor.
 
 ## Cuando algo falla
 
-Un lote son cientos de peticiones y una subida completa casi dos mil. A esa
+Un batch son cientos de peticiones y una subida completa casi dos mil. A esa
 escala los tropiezos dejan de ser raros, así que cada uno tiene una
 respuesta decidida de antemano.
 
@@ -539,25 +539,25 @@ respuesta decidida de antemano.
 | Se corta la red, vence el tiempo o el servidor responde que está ocupado (408, 429, 5xx) | Reintenta, esperando más en cada intento. Por defecto tres intentos con 5 s, 10 s. |
 | Se agotan los reintentos | Corta y dice qué pasó. Lo escrito queda anotado. |
 | El servidor responde 404 o 403 | No reintenta: insistir devuelve lo mismo. |
-| Una página del lote no carga | Bloquea **esa** página y sigue con el resto. Sin poder leerla no se puede comprobar que el lote y el manifiesto hablan de la misma bitácora, así que no se escribe. |
-| Caduca la cookie a media escritura | Corta el lote entero. Lo que no se llegó a intentar queda **pendiente**, no fallido: al volver a revisar se retoma sin repetir lo escrito. |
-| Falla el guardado de una página concreta | Se marca esa página con el motivo. Con `--continuar-con-errores` el resto del lote sigue. |
+| Una página del batch no carga | Bloquea **esa** página y sigue con el resto. Sin poder leerla no se puede comprobar que el batch y el manifiesto hablan de la misma bitácora, así que no se escribe. |
+| Caduca la cookie a media escritura | Corta el batch entero. Lo que no se llegó a intentar queda **pendiente**, no fallido: al volver a revisar se retoma sin repetir lo escrito. |
+| Falla el guardado de una página concreta | Se marca esa página con el motivo. Con `--continuar-con-errores` el resto del batch sigue. |
 | Un trozo de la subida se pierde | Se reenvía ese trozo. Reenviar el mismo índice es inocuo: el servidor arma el archivo por posición. |
 
-### El lote se abre y se cierra
+### El batch se abre y se cierra
 
-AirVault admite **un solo dueño por lote**. Abrirlo lo bloquea a nombre de
+AirVault admite **un solo dueño por batch**. Abrirlo lo bloquea a nombre de
 quien lo abre, y mientras siga bloqueado cualquier otra apertura —la del
 programa la próxima vez, o la de la persona que lo abre en el navegador—
 se queda esperando: el servidor **no contesta y no da error**. Por eso
 todas las peticiones llevan tiempo límite.
 
-De ahí que el lote se tome **lo menos posible**. Leerlo para calcular el
+De ahí que el batch se tome **lo menos posible**. Leerlo para calcular el
 plan lo suelta en cuanto acaba, y escribirlo lo vuelve a tomar y lo suelta
 al terminar. Antes se quedaba tomado entre revisar y escribir, y entre una
 cosa y otra puede pasar un rato largo —o no pulsarse nunca **Indexar**—:
 todo ese tiempo nadie más podía abrirlo, ni la persona que iba a revisarlo
-ni el propio programa al volver. Un lote sin nada que escribir ni se toma,
+ni el propio programa al volver. Un batch sin nada que escribir ni se toma,
 que es el caso del de «Revisar».
 
 Se suelta siempre: salga bien, se cancele o se corte a medias, y también
@@ -571,41 +571,41 @@ La comprobación de sesión se hace antes de empezar, no a mitad: descubrir
 en la página 250 de 400 que la cookie había caducado cuesta mucho más que
 descubrirlo al principio.
 
-## Cerrar el lote: «Completar batch»
+## Cerrar el batch: «Completar batch»
 
-Indexar deja el lote escrito, pero **en la cola** del Web Index. Darlo por
+Indexar deja el batch escrito, pero **en la cola** del Web Index. Darlo por
 terminado —el boton «Complete» de la pantalla— lo saca de ahi y lo manda al
 repositorio. Eso es lo que hace la casilla **Completar batch**, o
 `indexar --completar` en la linea de comandos.
 
-**AirVault solo cierra un lote con todas sus paginas en verde.** Basta una
+**AirVault solo cierra un batch con todas sus paginas en verde.** Basta una
 a la que le falte un campo obligatorio para que no lo deje. Por eso el
-programa mira antes el mapa del lote (`FormsProcessing/GetBatchPages`, una
+programa mira antes el mapa del batch (`FormsProcessing/GetBatchPages`, una
 sola peticion para todas las paginas) y aplica la misma regla que la
 pantalla: cuenta la pagina que encabeza cada documento, salvo las borradas.
-Si alguna no esta en verde **no se intenta**: se dice cuales son y el lote
+Si alguna no esta en verde **no se intenta**: se dice cuales son y el batch
 se queda donde estaba.
 
 Los cuatro estados de una pagina son los de AirVault:
 
-| Estado | Nombre en AirVault | Cierra el lote |
+| Estado | Nombre en AirVault | Cierra el batch |
 |---|---|---|
 | 0 | Valid | si |
 | 1 | No Template Match | no |
 | 2 | Separator | no |
 | 3 | Need Correction | no |
 
-**Las divisorias del PDF cuentan.** Medido en el lote `003SUS`: sus trece
+**Las divisorias del PDF cuentan.** Medido en el batch `003SUS`: sus trece
 paginas separadoras quedaron en estado 1, «No Template Match», y para
-AirVault eso pesa igual que una bitacora incompleta. Al indexar un lote
+AirVault eso pesa igual que una bitacora incompleta. Al indexar un batch
 automatico, BITS las marca como borradas mediante la misma operacion de
 AirVault que se ejecuta con `Ctrl+Supr`; no depende de completar el batch.
-El lote `REVISAR` no se indexa automaticamente y conserva todas sus
+El batch `REVISAR` no se indexa automaticamente y conserva todas sus
 paginas para que una persona lo resuelva.
 
 Lo otro que bloquea son las bitacoras que quedaron en amarillo. Antes de
 escribir, BITS exige todos los campos obligatorios; la fecha puede venir de
-las reglas del libro, incluido el ultimo dia del mes. Despues relee el lote:
+las reglas del libro, incluido el ultimo dia del mes. Despues relee el batch:
 si AirVault aun deja una pagina en «Need Correction», no intenta completar
 el batch y dice cual fue.
 
@@ -617,7 +617,7 @@ desde donde quedo. Las que fallaron quedan con el motivo anotado.
 
 ## Prueba de punta a punta
 
-Antes de soltar el indexado sobre un lote real conviene probarlo con una
+Antes de soltar el indexado sobre un batch real conviene probarlo con una
 muestra. `tools/muestra_bitacoras.py` arma un PDF de prueba con unas pocas
 páginas al azar de las que haya en `input/`:
 
@@ -627,9 +627,9 @@ portable\python312\tools\python.exe tools\muestra_bitacoras.py
 
 Deja `input\MUESTRA.pdf` con veinte páginas —unos 40 MB, frente a los
 setecientos de un escaneo entero— y dice de dónde salió cada una. Es una
-entrada de verdad, no una corrida reconstruida: se procesa desde la ventana
+entrada de verdad, no una ejecución reconstruida: se procesa desde la ventana
 como cualquier otro PDF, así que la prueba pasa por el mismo OCR, la misma
-exportación y el mismo indexado que un lote de verdad.
+exportación y el mismo indexado que un batch de verdad.
 
 Las páginas salen al azar a propósito. Entre ellas caen bitácoras buenas,
 alguna en blanco y alguna que el OCR no va a poder leer, que es justo lo
@@ -643,7 +643,7 @@ Después:
 
 1. Procesar `MUESTRA.pdf` y exportar con la salida en **un solo PDF**.
 2. Abrir **Indexar en AirVault…** y pulsar **Subir a AirVault**.
-3. Esperar a que el lote pase a **Listo para indexar** —se comprueba solo
+3. Esperar a que el batch pase a **Listo para indexar** —se comprueba solo
    cada cinco minutos— y mirar `revision.html`.
 4. **Indexar**, y comprobar en el Web Index que las páginas separadoras
    quedaron sin tocar y las bitácoras con sus datos.

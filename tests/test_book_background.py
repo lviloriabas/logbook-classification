@@ -264,7 +264,7 @@ def _pagina(numero: int, valor: str, alineacion: str = "ok") -> PageResult:
 
 
 class TestRevisionEnElPipeline(unittest.TestCase):
-    """La revisión es una segunda opinión: nunca puede tumbar la corrida."""
+    """La revisión es una segunda opinión: nunca puede tumbar la ejecución."""
 
     def setUp(self):
         self.pipeline = Pipeline(

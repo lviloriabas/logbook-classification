@@ -3,7 +3,7 @@
 Dos cosas iban mal en el texto que acompaña a la barra, y las dos nacen de
 quién pone las cifras.
 
-El total era el del documento abierto, no el del lote: en una corrida de tres
+El total era el del documento abierto, no el del batch: en una ejecución de tres
 bitácoras de 100 páginas, la página 52 de la segunda se anunciaba como "52 de
 100" cuando el usuario está mirando la 152 de 300. El Pipeline no puede
 arreglarlo por su cuenta —solo ve el PDF que tiene abierto—, así que la etapa
@@ -25,7 +25,7 @@ PAGES_STAGE = "Procesando páginas"
 
 
 def with_page_counter(done: int, total: int, message: str) -> str:
-    """Cierra la etapa de páginas con el ``hechas/total`` del lote.
+    """Cierra la etapa de páginas con el ``hechas/total`` del batch.
 
     Los demás mensajes (calibración, generación del reporte, revisión de
     firmas) hablan de un archivo concreto y pasan intactos.

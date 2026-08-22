@@ -1,7 +1,7 @@
 """Fecha deducida para las bitacoras que no la traen leida.
 
 End Date es obligatorio en AirVault. Una bitacora sin fecha queda bloqueada
-por la guarda de obligatorios, y basta con que quede una para que el lote no
+por la guarda de obligatorios, y basta con que quede una para que el batch no
 se pueda cerrar: alguien tiene que abrirlo en el Web Index y teclearla a
 mano, que es justo lo que este modulo existe para evitar.
 
@@ -147,7 +147,7 @@ def fechas_inferidas(
         filas: filas del CSV de la ejecucion completa. Cuantas mas, mejor:
             las que si traen fecha son las que fechan a las demas, y una
             ejecucion repartida en partes se deduce con el CSV entero aunque
-            cada parte sea un lote distinto.
+            cada parte sea un batch distinto.
 
     Returns:
         ``{(archivo, pagina): (fecha, metodo)}`` en el formato del CSV

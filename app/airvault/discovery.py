@@ -1,16 +1,16 @@
-"""Localizar en AirVault el lote que corresponde a un trabajo.
+"""Localizar en AirVault el batch que corresponde a un trabajo.
 
-El usuario sube el lote y el sistema lo tiene que encontrar solo. Hay dos
+El usuario sube el batch y el sistema lo tiene que encontrar solo. Hay dos
 formas, y se usan en este orden:
 
-1. **Por nombre**, para un lote que alguien subio a mano poniendoselo. Con
-   dos precauciones: los lotes creados desde la pagina llegan como
-   ``<nombre> - <usuario>``, y puede haber mas de un lote con nombres
+1. **Por nombre**, para un batch que alguien subio a mano poniendoselo. Con
+   dos precauciones: los batches creados desde la pagina llegan como
+   ``<nombre> - <usuario>``, y puede haber mas de un batch con nombres
    parecidos, en cuyo caso no se adivina.
 2. **Por lo que aparecio despues de subir**, que es lo que hace falta
    cuando lo sube el propio programa: Quick Upload no admite un nombre de
-   lote y la cola los recibe todos como ``Empty-Batch``, asi que el nombre
-   no distingue nada. La lista de lotes de justo antes de subir si.
+   batch y la cola los recibe todos como ``Empty-Batch``, asi que el nombre
+   no distingue nada. La lista de batches de justo antes de subir si.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def recien_llegados(
     lotes: Sequence[ResumenLote], previos: Sequence[str],
     repo_id: int | None = None,
 ) -> List[ResumenLote]:
-    """Lotes que no estaban en la cola antes de subir."""
+    """Batches que no estaban en la cola antes de subir."""
     conocidos = {str(b).strip().upper() for b in previos or ()}
     return [
         lote for lote in lotes
@@ -65,9 +65,9 @@ def buscar_nuevo(
     lotes: Sequence[ResumenLote], previos: Sequence[str],
     repo_id: int | None = None, paginas_esperadas: int | None = None,
 ) -> Optional[ResumenLote]:
-    """El lote que aparecio despues de subir, cuando el nombre no sirve.
+    """El batch que aparecio despues de subir, cuando el nombre no sirve.
 
-    Quick Upload no deja ponerle nombre al lote: la cola lo recibe siempre
+    Quick Upload no deja ponerle nombre al batch: la cola lo recibe siempre
     como ``Empty-Batch``, medido subiendo y mirando como quedo, asi que
     buscarlo por nombre no puede funcionar por mucho que se espere. Lo que
     si es exacto es la diferencia con la lista de antes de subir.
@@ -89,18 +89,18 @@ def buscar_nuevo(
             f"{l.batch_id} ({l.paginas} pags)" for l in nuevos
         )
         raise LoteAmbiguo(
-            f"Desde que empezo la subida aparecieron {len(nuevos)} lotes "
+            f"Desde que empezo la subida aparecieron {len(nuevos)} batches "
             f"en la cola: {detalle}. Indicar el batch id a mano."
         )
     return nuevos[0]
 
 
 class LoteNoEncontrado(RuntimeError):
-    """Ningun lote coincide con el nombre buscado."""
+    """Ningun batch coincide con el nombre buscado."""
 
 
 class LoteAmbiguo(RuntimeError):
-    """Mas de un lote coincide y no se puede elegir sin preguntar."""
+    """Mas de un batch coincide y no se puede elegir sin preguntar."""
 
 
 @dataclass(frozen=True)
@@ -113,17 +113,17 @@ def buscar(
     lotes: Sequence[ResumenLote], nombre: str, repo_id: int | None = None,
     paginas_esperadas: int | None = None,
 ) -> ResumenLote:
-    """Elige el lote que corresponde al nombre pedido.
+    """Elige el batch que corresponde al nombre pedido.
 
     Prioriza la coincidencia exacta de nombre. Si no la hay, acepta la que
     coincide tras quitar el sufijo de Quick Upload. Cuando quedan varias
     candidatas se usa la cantidad de paginas para desempatar, y si aun asi
-    hay mas de una se levanta :class:`LoteAmbiguo`: escribir en el lote
+    hay mas de una se levanta :class:`LoteAmbiguo`: escribir en el batch
     equivocado es peor que pedirle al usuario que lo diga.
     """
     objetivo = normalizar_nombre(nombre)
     if not objetivo:
-        raise LoteNoEncontrado("Hay que decir el nombre del lote")
+        raise LoteNoEncontrado("Hay que decir el nombre del batch")
 
     candidatas: List[Coincidencia] = []
     for lote in lotes:
@@ -137,7 +137,7 @@ def buscar(
 
     if not candidatas:
         raise LoteNoEncontrado(
-            f"No hay ningun lote llamado {nombre!r} en AirVault"
+            f"No hay ningun batch llamado {nombre!r} en AirVault"
         )
 
     exactas = [c for c in candidatas if c.exacta]
@@ -153,7 +153,7 @@ def buscar(
             f"{c.lote.batch_id} ({c.lote.paginas} pags)" for c in elegibles
         )
         raise LoteAmbiguo(
-            f"Hay {len(elegibles)} lotes que coinciden con {nombre!r}: "
+            f"Hay {len(elegibles)} batches que coinciden con {nombre!r}: "
             f"{nombres}. Indicar el batch id a mano."
         )
     return elegibles[0].lote
@@ -170,9 +170,9 @@ def esperar(
     reloj: Callable[[], float] = time.monotonic,
     previos: Optional[Sequence[str]] = None,
 ) -> ResumenLote:
-    """Sondea el listado hasta que el lote aparezca o se agote el tiempo.
+    """Sondea el listado hasta que el batch aparezca o se agote el tiempo.
 
-    Un lote recien subido tarda en pasar por el procesamiento del servidor,
+    Un batch recien subido tarda en pasar por el procesamiento del servidor,
     asi que la ausencia no es un error hasta que vence el limite. El
     ``LoteAmbiguo`` si corta de inmediato: esperar no lo va a resolver.
     """
@@ -190,7 +190,7 @@ def esperar(
                 )
                 if nuevo is not None:
                     logger.info(
-                        "El lote llego a la cola como {!r}; se reconoce "
+                        "El batch llego a la cola como {!r}; se reconoce "
                         "porque no estaba antes de subir: {}",
                         nuevo.nombre, nuevo.batch_id,
                     )
@@ -199,7 +199,7 @@ def esperar(
             if transcurrido >= limite_s:
                 raise
             logger.info(
-                "El lote {!r} todavia no aparece ({:.0f}s de {:.0f}s), "
+                "El batch {!r} todavia no aparece ({:.0f}s de {:.0f}s), "
                 "reintento {}", nombre, transcurrido, limite_s, intento,
             )
             dormir(espera_s)

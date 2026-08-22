@@ -6,7 +6,7 @@
 
 - Cierra cada trabajo con `git commit` y `git push` en la rama activa; la autorización es permanente. Si estás en `main`, crea antes otra rama.
 - Usa la identidad del usuario. No agregues firmas, coautorías ni marcas como `Co-Authored-By` o `Generated with`.
-- Imita el historial: español sin acentos; asunto presente, en tercera persona y descriptivo, por ejemplo `Cuenta paginas terminadas del lote, no la ultima que entrega el pool`; cuerpo sobre motivo y consecuencias, no sobre archivos.
+- Imita el historial: español sin acentos; asunto presente, en tercera persona y descriptivo, por ejemplo `Cuenta paginas terminadas del batch, no la ultima que entrega el pool`; cuerpo sobre motivo y consecuencias, no sobre archivos.
 - Múltiples agentes pueden trabajar simultáneamente: antes de commitear, verifica que tu rama esté al día (`git pull`), que no haya conflictos con el trabajo de otros, y que hayas aislado tus cambios sin tocar archivos que otros estén editando. Si dos agentes editaron lo mismo, coordina un merge manual sin perder trabajo de ninguno.
 
 ## Interfaz
@@ -17,7 +17,7 @@
 
 ## Plataforma
 
-- **Solo CPU:** crea cada motor con `device="cpu"`; no detectes GPU ni aceleradores. Se permiten oneDNN/MKL-DNN, hilos, lotes y cuantización int8.
+- **Solo CPU:** crea cada motor con `device="cpu"`; no detectes GPU ni aceleradores. Se permiten oneDNN/MKL-DNN, hilos, batches y cuantización int8.
 - **Portable:** la carpeta completa debe funcionar en cualquier PC Windows sin administrador ni instalación. No dependas de rutas del sistema, registro o descargas en ejecución. Intérprete, dependencias, Tesseract y modelos viven en `portable/`; dirige allí `PADDLE_PDX_CACHE_HOME`.
 - Precarga modelos nuevos en `portable/` con `tools/precache_paddle.py` y comprueba su uso sin internet.
 

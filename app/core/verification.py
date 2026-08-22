@@ -1,4 +1,4 @@
-"""Verificación final de un lote de bitácoras.
+"""Verificación final de un batch de bitácoras.
 
 Un libro (PDF) pertenece a una sola aeronave, por lo que la matrícula debe
 ser la misma en todas sus páginas. Este paso, ejecutado al final del

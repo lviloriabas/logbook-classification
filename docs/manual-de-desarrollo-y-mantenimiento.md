@@ -151,7 +151,7 @@ powershell -ExecutionPolicy Bypass -File setup.ps1 -CleanCache
 
 ### 5.1 Entrada y rango
 
-La GUI y la CLI aceptan archivos PDF. `PageRange` numera el lote completo desde 1 y lo divide en tramos por archivo. Los PDF fuera del rango no se envían al pipeline.
+La GUI y la CLI aceptan archivos PDF. `PageRange` numera el batch completo desde 1 y lo divide en tramos por archivo. Los PDF fuera del rango no se envían al pipeline.
 
 `PdfPageRenderer` mantiene PyMuPDF abierto, detecta el DPI de origen y renderiza BGR. La GUI solicita 200 DPI base y la CLI 150. La fecha puede usar hasta 300 DPI, siempre limitada por el DPI del documento; el sistema no amplía por encima de la fuente detectada.
 
@@ -189,7 +189,7 @@ Las firmas no identifican personas. El detector elimina líneas largas y clasifi
 
 ### 5.4 Paralelismo
 
-El lote usa procesos persistentes, no hilos de Python para cada página. El planificador reparte primero PDF y después páginas. Limita el máximo a 32 workers, reserva memoria del sistema y asigna de uno a tres hilos internos por proceso. Los resultados conservan el orden del lote.
+El batch usa procesos persistentes, no hilos de Python para cada página. El planificador reparte primero PDF y después páginas. Limita el máximo a 32 workers, reserva memoria del sistema y asigna de uno a tres hilos internos por proceso. Los resultados conservan el orden del batch.
 
 ## 6. Mejora de matrícula y fecha
 
@@ -203,7 +203,7 @@ La clave de libro es:
 (primeros cinco dígitos, A si logpage 00-49; B si logpage 50-99)
 ```
 
-La agrupación abarca todos los PDF de la corrida y se ordena por `log_number`, no por posición física. Si existe un solo libro conocido, sus páginas sin número se agregan a él. Si existen varios, todas las páginas sin número forman un grupo separado.
+La agrupación abarca todos los PDF de la ejecución y se ordena por `log_number`, no por posición física. Si existe un solo libro conocido, sus páginas sin número se agregan a él. Si existen varios, todas las páginas sin número forman un grupo separado.
 
 > **PRECAUCIÓN:** el grupo separado puede mezclar libros reales. No use sus inferencias sin revisar la fuente.
 
@@ -257,7 +257,7 @@ Los puntos dobles son notación de este manual. `fleet.json` no admite rangos.
 
 ### 6.5 Corrección de fecha
 
-`correct_dates_by_book()` ordena y crea anclas con páginas no blancas que tienen `log_number` legible. Si la corrida contiene un solo libro conocido, el consenso del libro y el relleno del día también pueden alcanzar sus páginas sin número:
+`correct_dates_by_book()` ordena y crea anclas con páginas no blancas que tienen `log_number` legible. Si la ejecución contiene un solo libro conocido, el consenso del libro y el relleno del día también pueden alcanzar sus páginas sin número:
 
 1. prueba alternativas OCR y solo aplica una alternativa que reduzca las regresiones;
 2. corrige lecturas minoritarias del año por mayoría cuando hay al menos tres lecturas, dos votos y 60 % de apoyo;
@@ -310,7 +310,7 @@ Las discrepancias de firma se guardan en `page.discrepancy`. No cambian `page.st
 
 La matrícula inferida por `book_correction` es una excepción: queda en `OK` y puede dejar la página en `OK`; su fuente conserva la trazabilidad. Las celdas auxiliares de fecha, firmas y `flight_number` no deciden el estado. `page_status()` clasifica un blanco como `ERROR`, pero el retorno temprano del pipeline lo deja en `WARNING` sin campos. Los resúmenes cuentan los blancos aparte y no los incluyen en los PDF de entrega.
 
-`dup=true` se marca desde la segunda aparición de un `log_number` válido en el orden del lote. No se compara el contenido de la imagen.
+`dup=true` se marca desde la segunda aparición de un `log_number` válido en el orden del batch. No se compara el contenido de la imagen.
 
 En la GUI, **Procesar** guarda CSV, JSON y estadísticas sin componer PDF. **Exportar** genera los PDF de entrega. `write_outputs()` también clasifica discrepancias y aplica la política de fecha del CSV. El índice que relaciona páginas fuente con separadores solo se escribe al generar **Un solo PDF** o sus partes.
 
@@ -326,13 +326,13 @@ El flujo es:
 
 1. repartir para Quick Upload los PDF que excedan el máximo elegido en la ventana, 300 páginas por batch de forma predeterminada;
 2. cargar cada PDF mediante Quick Upload;
-3. detectar el lote nuevo y asignarle nombre;
+3. detectar el batch nuevo y asignarle nombre;
 4. leer páginas y construir un plan sin escribir;
 5. generar `revision.html` y `revision.csv`;
 6. escribir solo registros habilitados;
 7. releerlos y confirmar estado `Valid`;
 8. guardar el manifiesto después de cada página;
-9. liberar el lote al terminar, cancelar o abandonar.
+9. liberar el batch al terminar, cancelar o abandonar.
 
 BITS escribe siempre `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status` y `End Date`. Añade `Batch Name` cuando se proporciona y `Lessor` cuando está resuelto. `Description` recibe `<flight_number> AUTO INDEX` cuando existe vuelo y `AUTO INDEX` cuando no existe. Esta marca se agrega al payload remoto y no altera los CSV.
 
@@ -340,11 +340,11 @@ La flota de AirVault se resuelve primero desde `airvault_flota.json`, en la raí
 
 El OCR y `fleet.json` solo admiten `HP-XXXXCMP` o `HP-XXXXWWP`. El adaptador de AirVault también acepta `HK-XXXX` con sufijo opcional al importar CSV o caché.
 
-Las validaciones comprueban la cantidad de páginas, los datos obligatorios, la coincidencia de `log_number` y el estado remoto. También comprueban la matrícula cuando el catálogo de AirVault se obtuvo y no está vacío. Un catálogo vacío desactiva esa guarda y debe tratarse como condición de revisión. Una diferencia en la cantidad de páginas detiene el lote. Los demás fallos bloquean la página afectada. La GUI no sobrescribe una página `Valid`.
+Las validaciones comprueban la cantidad de páginas, los datos obligatorios, la coincidencia de `log_number` y el estado remoto. También comprueban la matrícula cuando el catálogo de AirVault se obtuvo y no está vacío. Un catálogo vacío desactiva esa guarda y debe tratarse como condición de revisión. Una diferencia en la cantidad de páginas detiene el batch. Los demás fallos bloquean la página afectada. La GUI no sobrescribe una página `Valid`.
 
 La sesión normal se obtiene con un perfil propio de Edge. Las peticiones usan `requests`, cookies de sesión y el token `AntiForgery` de cada aplicación de AirVault. Las respuestas transitorias se reintentan. El estado queda en `output/airvault/<job>/parte-XX/manifiesto.json`; `revision.html` y `revision.csv` documentan el plan. El manifiesto permite reanudar sin repetir páginas confirmadas.
 
-El PDF `REVISAR` recoge solo matrículas ausentes o marcadas, conflictos canónicos, alineaciones dudosas e inferencias con menos de dos respaldos. Se sube como lote separado, no se indexa y se libera para intervención manual; las advertencias de fecha no envían por sí solas una página a este lote.
+El PDF `REVISAR` recoge solo matrículas ausentes o marcadas, conflictos canónicos, alineaciones dudosas e inferencias con menos de dos respaldos. Se sube como batch separado, no se indexa y se libera para intervención manual; las advertencias de fecha no envían por sí solas una página a este batch.
 
 ### 9.1 Operación por consola
 
@@ -426,7 +426,7 @@ Las pruebas de AirVault usan un cliente falso y no escriben en producción. Una 
 4. Suite completa aprobada.
 5. Inferencia Paddle aprobada en CPU y sin red.
 6. Ninguna caché persistente creada fuera de `portable/`.
-7. CSV y JSON comparados con una corrida conocida.
+7. CSV y JSON comparados con una ejecución conocida.
 8. PDF de entrega revisado página por página en una muestra.
 9. Perfil autenticado `portable/edge-airvault/` excluido o limpio.
 10. Carpeta completa copiada y abierta desde otra ubicación sin privilegios de administrador.

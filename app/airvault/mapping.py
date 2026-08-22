@@ -1,4 +1,4 @@
-"""Del CSV de la corrida a los valores de indice de AirVault.
+"""Del CSV de la ejecución a los valores de indice de AirVault.
 
 Aqui viven las tres traducciones que hacen falta: el formato de fecha, la
 matricula contra el picklist de AirVault y la flota que AirVault deduce de
@@ -142,7 +142,7 @@ class ResolutorFlota:
 
 
 def leer_csv_corrida(path: Path | str) -> List[dict]:
-    """Lee el CSV minimo de una corrida respetando el BOM que escribe Excel."""
+    """Lee el CSV minimo de una ejecución respetando el BOM que escribe Excel."""
     ruta = Path(path)
     with ruta.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
@@ -156,16 +156,16 @@ def registros_desde_csv(
     """Construye los registros del manifiesto a partir del CSV.
 
     Args:
-        filas: filas del CSV de la corrida.
+        filas: filas del CSV de la ejecución.
         resolutor: traductor de matricula a flota.
         orden: pares ``(archivo, pagina)`` en el orden exacto en que las
             paginas quedaron en el PDF que se sube. Sin esta lista se asume
-            que el lote conserva el orden del CSV, que solo es cierto
+            que el batch conserva el orden del CSV, que solo es cierto
             cuando el PDF se genero sin separar ni reordenar.
 
     Las paginas en blanco del CSV (sin log number ni matricula) se
     descartan: no llegan al PDF que se sube, asi que incluirlas descuadraria
-    la correspondencia con las paginas del lote.
+    la correspondencia con las paginas del batch.
     """
     resolutor = resolutor or ResolutorFlota()
     filas = list(filas)
@@ -245,11 +245,11 @@ def _registro_de_fila(
 
 
 def leer_indice_paginas(path: Path | str) -> List[dict]:
-    """Lee el indice de la entrega que escribe la corrida.
+    """Lee el indice de la entrega que escribe la ejecución.
 
     Devuelve una entrada por archivo de entrega, ``{"pdf", "paginas"}``, con
     las paginas en el orden en que estan dentro de ese archivo. Cada archivo
-    es un lote distinto en AirVault, asi que el reparto importa tanto como
+    es un batch distinto en AirVault, asi que el reparto importa tanto como
     el orden.
 
     Sin indice devuelve una lista vacia y quien llame decide si puede seguir
@@ -291,16 +291,16 @@ def registros_desde_entrega(
 ) -> List[Registro]:
     """Construye los registros siguiendo el PDF que se sube, no el CSV.
 
-    El lote de AirVault tiene una pagina por cada pagina del PDF, y el PDF
+    El batch de AirVault tiene una pagina por cada pagina del PDF, y el PDF
     lleva separadores que el CSV no tiene. Recorrer el indice en vez del
-    CSV es lo que mantiene ``seq`` igual a la pagina del lote: los
+    CSV es lo que mantiene ``seq`` igual a la pagina del batch: los
     separadores ocupan su sitio y quedan marcados para que nadie les
     escriba nada.
     """
     resolutor = resolutor or ResolutorFlota()
     filas = list(filas)
     # Las fechas se deducen con el CSV entero, no con las paginas de esta
-    # parte: una ejecucion repartida en varios lotes sigue siendo un solo
+    # parte: una ejecucion repartida en varios batches sigue siendo un solo
     # juego de libros, y las anclas de un libro pueden haber caido en otra
     # parte.
     inferidas = fechas_inferidas(filas)
