@@ -141,7 +141,7 @@ def parse_args() -> argparse.Namespace:
              "parte es un lote aparte en AirVault. Cero deja un solo "
              "archivo.",
     )
-    salida.add_argument(
+    parser.add_argument(
         "--un-solo-pdf", action="store_true",
         help="Generar un único PDF con el mismo nombre que la carpeta de "
              "salida: con --separar-por se "
