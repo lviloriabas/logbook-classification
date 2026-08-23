@@ -4,8 +4,10 @@
   "index_scheme_id": 137,
   "doc_type": "Log Page",
   "audit_status": "PUBLISHED",
+  "paginas_por_batch": 200,
   "espera_descubrimiento_s": 20,
   "espera_maxima_s": 900,
+  "espera_reenvio_s": 1800,
   "timeout_s": 60,
   "reintentos": 3,
   "usuario": ""

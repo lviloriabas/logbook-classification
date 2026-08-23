@@ -28,6 +28,13 @@ from app.airvault.naming import limpiar_nombre_remoto
 _SEPARADORES = re.compile(r"[\s_|\-]+")
 
 
+def _detalle_candidatos(lotes: Sequence[ResumenLote]) -> str:
+    return "; ".join(
+        f"ID {lote.batch_id}, «{lote.nombre}», {lote.paginas} páginas"
+        for lote in lotes
+    )
+
+
 def normalizar_nombre(nombre: str) -> str:
     """Normaliza para comparar: sin mayusculas, sin separadores repetidos.
 
@@ -85,12 +92,17 @@ def buscar_nuevo(
         if por_paginas:
             nuevos = por_paginas
     if len(nuevos) > 1:
-        detalle = ", ".join(
-            f"{l.batch_id} ({l.paginas} pags)" for l in nuevos
-        )
         raise LoteAmbiguo(
-            f"Desde que empezo la subida aparecieron {len(nuevos)} batches "
-            f"en la cola: {detalle}. Indicar el batch id a mano."
+            f"AirVault mostró {len(nuevos)} batches nuevos que podrían ser "
+            f"esta carga: {_detalle_candidatos(nuevos)}. No se eligió ni "
+            "se indexó ninguno para evitar escribir en el batch equivocado. "
+            "En Web Index confirme por ID y cantidad de páginas cuál contiene "
+            "el PDF esperado: puede renombrar ese al título mostrado en la "
+            "tabla y pulsar «Revisar en AirVault». Si un candidato es una "
+            "carga equivocada o duplicada, elimínelo allí. El programa "
+            "seguirá comprobando y, después de la espera de seguridad, "
+            "reenviará automáticamente una sola vez el batch que siga "
+            "ausente."
         )
     return nuevos[0]
 
@@ -149,12 +161,15 @@ def buscar(
         if por_paginas:
             elegibles = por_paginas
     if len(elegibles) > 1:
-        nombres = ", ".join(
-            f"{c.lote.batch_id} ({c.lote.paginas} pags)" for c in elegibles
-        )
+        lotes_elegibles = [c.lote for c in elegibles]
         raise LoteAmbiguo(
-            f"Hay {len(elegibles)} batches que coinciden con {nombre!r}: "
-            f"{nombres}. Indicar el batch id a mano."
+            f"AirVault encontró {len(lotes_elegibles)} batches que coinciden "
+            f"con «{nombre}»: {_detalle_candidatos(lotes_elegibles)}. No se "
+            "eligió ni se indexó ninguno para evitar escribir en el batch "
+            "equivocado. Confirme los IDs y las páginas en Web Index, deje un "
+            "solo batch correcto con ese título y vuelva a pulsar «Revisar en "
+            "AirVault». Elimine allí únicamente el duplicado que ya haya "
+            "confirmado."
         )
     return elegibles[0].lote
 

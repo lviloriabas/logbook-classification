@@ -237,9 +237,8 @@ class ClienteHttp:
         distingue en la pantalla un batch de otro. Es la misma accion
         «Rename» que ofrece el Web Index.
 
-        Devuelve si el servidor lo acepto. No se levanta error: el batch ya
-        esta subido y encontrado, y quedarse sin nombre bonito no es razon
-        para tirar el trabajo.
+        Devuelve si el servidor acepto la petición. El flujo vuelve a leer la
+        cola y exige ver el mismo ID con el título esperado antes de indexar.
         """
         limpio = str(nombre or "").strip()
         if not limpio:

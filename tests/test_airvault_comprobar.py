@@ -192,6 +192,27 @@ def test_la_comprobacion_periodica_recupera_un_empty_batch_interrumpido(
     assert trabajo.manifiesto.batch_id == "003NUEVO"
     assert trabajo.manifiesto.etapa_hecha("subir")
     assert trabajo.manifiesto.etapa_hecha("descubrir")
+    assert cliente.renombrados == [
+        ("003NUEVO", trabajo.manifiesto.nombre_batch)
+    ]
+
+
+def test_no_indexa_si_airvault_no_confirma_el_nombre_del_empty_batch(tmp_path):
+    class ClienteSinRename(ClienteFalso):
+        def renombrar_lote(self, _batch_id, _nombre):
+            return False
+
+    trabajo, _ = trabajo_subido(tmp_path)
+    cliente = ClienteSinRename(lotes=[
+        lote("003VIEJO", "DP | ANTERIOR", 9),
+        lote("003VACIO", "Empty-Batch", 2),
+    ])
+
+    with pytest.raises(ErrorDeCorrida, match="no confirmó el título"):
+        comprobar_partes([trabajo], cliente)
+
+    assert trabajo.manifiesto.batch_id is None
+    assert not trabajo.manifiesto.etapa_hecha("descubrir")
 
 
 def test_el_nombre_corregido_a_mano_reemplaza_un_id_de_index_batch(tmp_path):
@@ -390,6 +411,61 @@ def test_un_empty_batch_tardio_no_reabre_ni_resube_un_lote_completado(
     assert subidas == []
     assert trabajo.manifiesto.batch_id == "003ORIGINAL"
     assert trabajo.manifiesto.etapa_hecha("completar")
+
+
+def test_reenvia_automaticamente_un_batch_ausente_tras_media_hora(
+    tmp_path, monkeypatch
+):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.manifiesto.etapa("subir").actualizada = "2020-01-01T00:00:00"
+    trabajo.guardar()
+    cliente.lotes = [lote("003VIEJO", "DP | ANTERIOR", 9)]
+    subidos = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        subidos.append(self.manifiesto.nombre_batch)
+        self.manifiesto.lotes_previos = [
+            actual.batch_id for actual in cliente.listar_lotes()
+        ]
+        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "reenviado")
+        cliente.lotes.append(
+            lote("003REENV", self.manifiesto.nombre_batch, 2)
+        )
+        self.guardar()
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    fallos = subir_partes(
+        [trabajo], SesionFalsa(), cliente=cliente,
+        dormir=lambda _s: None, reintentar_estancados=True,
+    )
+
+    assert fallos == []
+    assert subidos == [trabajo.manifiesto.nombre_batch]
+    assert trabajo.manifiesto.batch_id == "003REENV"
+    assert trabajo.manifiesto.reenvios_automaticos == 1
+
+
+def test_no_reenvia_dos_veces_un_batch_que_sigue_ausente(
+    tmp_path, monkeypatch
+):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.manifiesto.reenvios_automaticos = 1
+    trabajo.manifiesto.etapa("subir").actualizada = "2020-01-01T00:00:00"
+    trabajo.guardar()
+    cliente.lotes = []
+    subidos = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidos.append(True)
+    )
+
+    subir_partes(
+        [trabajo], SesionFalsa(), cliente=cliente,
+        dormir=lambda _s: None, reintentar_estancados=True,
+    )
+
+    assert subidos == []
+    assert trabajo.manifiesto.reenvios_automaticos == 1
 
 
 def test_un_cierre_omitido_no_se_confunde_con_un_batch_completado(tmp_path):
@@ -715,10 +791,40 @@ def test_varios_empty_batch_del_mismo_tamano_conservan_su_id(
     assert [trabajo.manifiesto.batch_id for trabajo in trabajos] == [
         "003UNO", "003DOS", "003TRE",
     ]
-    assert all(
-        trabajo.manifiesto.etapa_hecha("descubrir")
-        for trabajo in trabajos
+
+
+def test_un_nombre_no_confirmado_detiene_las_siguientes_subidas(
+    tmp_path, monkeypatch
+):
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)[:2]
+
+    class ClienteSinRename(ClienteFalso):
+        def renombrar_lote(self, _batch_id, _nombre):
+            return False
+
+    cliente = ClienteSinRename(lotes=[
+        lote("003VIEJO", "DP | ANTERIOR", 9),
+    ])
+    subidos = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        self.manifiesto.lotes_previos = [
+            actual.batch_id for actual in cliente.listar_lotes()
+        ]
+        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
+        subidos.append(self.manifiesto.nombre_batch)
+        cliente.lotes.append(lote("003VACIO", "Empty-Batch", 2))
+        self.guardar()
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    fallos = subir_partes(
+        trabajos, SesionFalsa(), cliente=cliente, dormir=lambda _s: None
     )
+
+    assert len(fallos) == 1
+    assert subidos == [trabajos[0].manifiesto.nombre_batch]
+    assert not trabajos[1].manifiesto.etapa_hecha("subir")
 
 
 def test_el_id_se_publica_antes_de_empezar_la_siguiente_carga(

@@ -130,6 +130,10 @@ class Manifiesto(BaseModel):
     # publicar esos archivos como ``Empty-Batch`` aunque reciba C_BatchName;
     # la diferencia de IDs permite reconocer el batch propio sin adivinar.
     lotes_previos: List[str] = Field(default_factory=list)
+    # Un archivo ausente se reenvia una sola vez. Despues se sigue
+    # comprobando Web Index, pero no se crean copias indefinidamente si el
+    # procesamiento remoto esta detenido.
+    reenvios_automaticos: int = 0
 
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"

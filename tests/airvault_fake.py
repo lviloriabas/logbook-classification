@@ -6,6 +6,7 @@ exactamente que paginas se tocaron, con que valores y en que orden.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Dict, List, Mapping, Optional
 
 from app.airvault.client import PaginaDelLote, PaginaIndexada, ResumenLote
@@ -44,6 +45,7 @@ class ClienteFalso:
         self.abiertos: List[str] = []
         self.cerrados: List[str] = []
         self.completados: List[str] = []
+        self.renombrados: List[tuple[str, str]] = []
 
     # ── contrato que usa el indexador ──────────────────────────────
 
@@ -61,6 +63,20 @@ class ClienteFalso:
     def cerrar_lote(self, batch_id: str) -> Mapping[str, object]:
         self.cerrados.append(batch_id)
         return {"ok": True}
+
+    def renombrar_lote(self, batch_id: str, nombre: str) -> bool:
+        encontrado = False
+        nuevos = []
+        for lote in self.lotes:
+            if lote.batch_id.strip().upper() == str(batch_id).strip().upper():
+                nuevos.append(replace(lote, nombre=str(nombre)))
+                encontrado = True
+            else:
+                nuevos.append(lote)
+        if encontrado:
+            self.lotes = nuevos
+            self.renombrados.append((str(batch_id), str(nombre)))
+        return encontrado
 
     def leer_pagina(self, batch_id: str, pagina: int) -> PaginaIndexada:
         self.lecturas.append(pagina)
