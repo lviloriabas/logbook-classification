@@ -59,7 +59,7 @@ Estados que puede tener un batch en la lista:
 | Cantidad de paginas incorrecta | Tiene mas paginas de las posibles; se detiene porque AirVault junto cargas o el PDF no corresponde al indice |
 | Listo para indexar | Entero y libre: se puede escribir |
 | Abierto por otra persona | Alguien lo tiene tomado; AirVault no lo entrega a nadie mas |
-| Para revisar a mano | Es el batch REVISAR, que no se indexa |
+| Indexar lo disponible y revisar | Es el batch REVISAR: el programa escribe los datos confirmados y lo deja abierto para corregir lo dudoso |
 | Indexado / Terminado | Ya escrito, y cerrado si se pidio |
 
 Cuando AirVault devuelve el batch en el índice, la fila empieza por **Subido
@@ -175,8 +175,8 @@ ejecución durante una subida abre una segunda ventana y ambas continúan.
 
 ## El batch REVISAR
 
-Las bitácoras cuya matrícula no permite asignarlas con seguridad no se
-indexan automáticamente: una matrícula ausente o marcada, una lectura
+Las bitácoras cuya matrícula no permite asignarlas con seguridad se separan
+del flujo que termina automáticamente: una matrícula ausente o marcada, una lectura
 canónica que contradice al consenso del libro, una alineación dudosa o una
 inferencia con menos de dos lecturas de respaldo. La inferencia se conserva
 para ayudar a quien revise, pero la página no se coloca bajo ese separador.
@@ -189,10 +189,12 @@ Ahora salen en su **propio archivo**, y por tanto en su propio batch:
 DP | BITS 18 AUG 2026 05 42 REVISAR
 ```
 
-Ese batch **se sube y no se toca**. El indexado no le lee ni le escribe
-ninguna página; queda en la cola del Web Index, marcado y a la vista, para
-que alguien lo resuelva a mano. En el reporte sus páginas aparecen con el
-aviso `revisar_a_mano`.
+Ese batch también se indexa automáticamente. El programa escribe en cada
+página todos los campos confirmados que tenga —por ejemplo, número de
+bitácora y fecha—, sin inventar los ausentes ni sustituir valores dudosos.
+Las páginas incompletas quedan amarillas (`Need Correction`) y el batch
+permanece abierto en Web Index para corregir solamente lo pendiente. Nunca
+se completa automáticamente.
 
 No se numera como una parte automática más: lleva su propia cuenta. En el
 caso normal su manifiesto vive en `output/airvault/<corrida>/revisar/`; si

@@ -540,7 +540,12 @@ def test_el_lote_de_revisar_no_se_numera_como_una_parte_mas(tmp_path):
 
 
 def test_en_el_lote_de_revisar_se_escribe_lo_disponible_en_amarillo(tmp_path):
-    from app.airvault.config import ESTADO_NECESITA_CORRECCION
+    from app.airvault.config import (
+        CAMPO_END_DATE,
+        CAMPO_LOG_NUMBER,
+        CAMPO_MATRICULA,
+        ESTADO_NECESITA_CORRECCION,
+    )
     from app.airvault.indexer import Indexador
     from tests.airvault_fake import ClienteFalso, pagina
 
@@ -562,6 +567,17 @@ def test_en_el_lote_de_revisar_se_escribe_lo_disponible_en_amarillo(tmp_path):
     assert all(
         estado == ESTADO_NECESITA_CORRECCION
         for _pagina, _valores, estado in cliente.escrituras
+    )
+    assert {
+        (valores[CAMPO_LOG_NUMBER], valores[CAMPO_END_DATE])
+        for _pagina, valores, _estado in cliente.escrituras
+    } == {
+        ("2271621", "08/12/2026"),
+        ("2293107", "08/13/2026"),
+    }
+    assert all(
+        valores[CAMPO_MATRICULA] == ""
+        for _pagina, valores, _estado in cliente.escrituras
     )
     assert cliente.lecturas == [2, 3]
     assert len(plan.escribibles) == 2

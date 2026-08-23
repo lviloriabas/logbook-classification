@@ -123,8 +123,9 @@ class ParteDeEntrega:
     total: int
     pdf: Path
     paginas: List[dict]
-    # El archivo con las bitacoras que requieren revision. Se sube igual que
-    # los demas, pero no se indexa.
+    # El archivo con las bitacoras que requieren revision. Se sube e indexa
+    # con todos los datos confirmados, pero se conserva abierto para corregir
+    # lo dudoso.
     revisar: bool = False
 
     def nombre_lote(self, base: str) -> str:
@@ -467,7 +468,7 @@ NOMBRE_ESTADO_PARTE = {
     LISTO: "Listo para indexar",
     INCOMPLETO: "Indexado incompleto",
     TOMADO: "Abierto por otra persona",
-    SOLO_REVISAR: "Para revisar a mano",
+    SOLO_REVISAR: "Indexar lo disponible y revisar",
     INDEXADO: "Indexado",
     COMPLETADO: "Terminado",
 }
@@ -1018,7 +1019,7 @@ class Trabajo:
         que es mucho peor de diagnosticar.
 
         Soltar dos veces no se intenta. El batch de Revisar ya se suelta al
-        planificarlo —nadie va a escribir en el—, y volver a pedirlo hacia
+        planificarlo; volver a pedirlo antes de indexar hacia
         que AirVault contestara «Batch no esta tomado por este usuario» con
         un 500, que ademas se reintentaba tres veces y terminaba en un
         aviso que hacia pensar que el batch habia quedado colgado.
@@ -1121,7 +1122,8 @@ class Trabajo:
         if self.manifiesto.solo_subir:
             return ResultadoCompletar(
                 False, [], len(self.manifiesto.registros),
-                "el batch REVISAR se conserva para indexarlo a mano",
+                "el batch REVISAR se conserva abierto para corregir los "
+                "datos que no pudieron confirmarse",
             )
         batch_id = self.manifiesto.batch_id or ""
         if not batch_id:
@@ -2168,8 +2170,9 @@ def completar_partes(
     hechos: List[Tuple["Trabajo", ResultadoCompletar]] = []
     for trabajo in trabajos:
         if trabajo.manifiesto.solo_subir:
-            # El batch de Revisar existe justamente para que una persona lo
-            # indexe a mano; cerrarlo seria archivarlo sin mirarlo.
+            # El programa ya escribe todo lo confirmado. El batch se conserva
+            # abierto para que una persona corrija solamente lo dudoso;
+            # cerrarlo seria archivarlo sin esa revision.
             continue
         cabeza = _prefijo(trabajo)
         if avisar is not None:
