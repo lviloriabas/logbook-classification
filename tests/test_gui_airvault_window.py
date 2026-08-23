@@ -428,11 +428,13 @@ class TrabajoFalso:
         self.carpeta = carpeta
 
 
-def parte(estado, nombre="DP | BITS", detalle="", carpeta="job"):
+def parte(estado, nombre="DP | BITS", detalle="", carpeta="job", lote=None):
     """Una fila de la lista de batches, como la devuelve el módulo."""
     from app.airvault.flujo import EstadoParte
 
-    return EstadoParte(TrabajoFalso(nombre, carpeta=carpeta), estado, detalle)
+    return EstadoParte(
+        TrabajoFalso(nombre, carpeta=carpeta), estado, detalle, lote
+    )
 
 
 def test_subir_no_indexa_nada_y_dice_que_falta_esperar(ventana):
@@ -450,9 +452,27 @@ def test_la_tabla_marca_subido_antes_de_que_airvault_devuelva_el_id(ventana):
     ventana._al_actualizar_subidas({"trabajos": [trabajo]})
 
     assert ventana.lotes.item(0, 0).text() == ""
-    assert "Subido; esperando a AirVault" in (
+    assert "Subido pendiente confirmación" in (
         ventana.lotes.item(0, 3).text()
     )
+
+
+def test_la_tabla_dice_subido_confirmado_al_encontrar_el_batch(ventana):
+    from app.airvault.client import ResumenLote
+    from app.airvault.flujo import LISTO
+
+    confirmado = ResumenLote(
+        batch_id="003SRO", nombre="DP | BITS", paginas=5, repo_id=3209,
+        repositorio="MXDocs", paso="Web Index", bloqueado_por="",
+        recibido="",
+    )
+    ventana._estados = [parte(LISTO, lote=confirmado)]
+
+    ventana._pintar_lotes()
+
+    texto = ventana.lotes.item(0, 3).text()
+    assert "Subido confirmado" in texto
+    assert "Listo para indexar" in texto
 
 
 def test_cada_click_en_subir_confirma_los_batches_en_airvault(
