@@ -147,7 +147,7 @@ def test_no_se_escribe_en_las_paginas_divisorias(tmp_path):
 
     escritas = [p for p, _v, _e in cliente.escrituras]
     assert 1 not in escritas and 4 not in escritas
-    assert escritas == [2, 3]
+    assert escritas == [2, 3, 5]
     assert cliente.borradas == [1, 4]
 
 
@@ -172,16 +172,17 @@ def test_el_separador_no_cuenta_como_omitido(tmp_path):
     plan = indexador.planificar(5)
     resultado = indexador.aplicar(plan)
 
-    assert resultado.escritas == 2
-    # La pagina 5 no tiene matricula y queda bloqueada; los dos separadores
-    # no son ni escritos ni omitidos porque nunca hubo nada que escribir.
-    assert resultado.omitidas == 1
+    assert resultado.escritas == 3
+    # La pagina 5 no tiene matricula, pero recibe los demas datos y queda
+    # amarilla. Los separadores no son escritos ni omitidos porque nunca
+    # hubo nada que escribir en ellos.
+    assert resultado.omitidas == 0
     assert resultado.separadores_borrados == 2
     assert resultado.separadores_pendientes == 0
     assert plan.resumen()["separadores"] == 2
 
 
-def test_los_separadores_de_revisar_no_se_borran(tmp_path):
+def test_revisar_conserva_separadores_y_escribe_los_datos_disponibles(tmp_path):
     cliente = ClienteFalso(page_count=5)
     manifiesto = manifiesto_con_separadores(tmp_path)
     manifiesto.solo_subir = True
@@ -191,7 +192,11 @@ def test_los_separadores_de_revisar_no_se_borran(tmp_path):
 
     assert resultado.separadores_borrados == 0
     assert cliente.borradas == []
-    assert cliente.escrituras == []
+    assert [pagina for pagina, _valores, _estado in cliente.escrituras] == [
+        2,
+        3,
+        5,
+    ]
 
 
 def test_si_airvault_no_deja_borrar_un_separador_se_informa(tmp_path):

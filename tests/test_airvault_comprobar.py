@@ -303,14 +303,14 @@ def test_un_lote_abierto_por_otro_no_se_ofrece_para_indexar(tmp_path):
     assert not parte.se_puede_indexar
 
 
-def test_el_lote_de_revisar_no_se_ofrece_para_indexar(tmp_path):
-    """Existe para que una persona lo indexe a mano."""
+def test_el_lote_de_revisar_se_ofrece_para_indexar_lo_disponible(tmp_path):
+    """Los datos del CSV se escriben y la persona confirma lo dudoso."""
     trabajo, cliente = trabajo_subido(tmp_path)
     trabajo.manifiesto.solo_subir = True
     parte, = comprobar_partes([trabajo], cliente)
     assert parte.estado == SOLO_REVISAR
-    assert not parte.se_puede_indexar
-    assert parte.se_acabo
+    assert parte.se_puede_indexar
+    assert not parte.se_acabo
 
 
 def test_lo_ya_indexado_deja_de_esperar_a_nada(tmp_path):
@@ -506,6 +506,21 @@ def test_al_conectar_se_recuperan_manifiestos_subidos_y_pendientes(tmp_path):
     encontrados = cargar_trabajos_pendientes(AirVaultConfig(), raiz)
 
     assert [t.manifiesto.batch_id for t in encontrados] == ["003ANT"]
+
+
+def test_al_conectar_tambien_se_recupera_un_revisar_pendiente(tmp_path):
+    csv = corrida(tmp_path)
+    raiz = tmp_path / "output" / "airvault"
+    trabajo = Trabajo.preparar(
+        AirVaultConfig(), raiz / "revisar", csv, "DP | BIT REVISAR"
+    )
+    trabajo.manifiesto.solo_subir = True
+    trabajo.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
+    trabajo.fijar_lote("003REV")
+
+    encontrados = cargar_trabajos_pendientes(AirVaultConfig(), raiz)
+
+    assert [t.manifiesto.batch_id for t in encontrados] == ["003REV"]
 
 
 def test_reiniciar_indexado_incompleto_conserva_la_subida(tmp_path):
@@ -738,6 +753,30 @@ def test_el_id_se_publica_antes_de_empezar_la_siguiente_carga(
         ("subir", "DP | BIT -2"), ("id", "DP | BIT -2"),
         ("subir", "DP | BIT REVISAR"),
         ("id", "DP | BIT REVISAR"),
+    ]
+
+
+def test_un_batch_que_falla_no_impide_subir_los_otros(tmp_path, monkeypatch):
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    intentados: list[str] = []
+
+    def subir(self, _sesion, **_kwargs):
+        nombre = self.manifiesto.nombre_batch
+        intentados.append(nombre)
+        if nombre == "DP | BIT -2":
+            raise ErrorDeCorrida("fallo aislado")
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    fallos = subir_partes(trabajos, SesionFalsa())
+
+    assert intentados == [
+        "DP | BIT",
+        "DP | BIT -2",
+        "DP | BIT REVISAR",
+    ]
+    assert [(t.manifiesto.nombre_batch, detalle) for t, detalle in fallos] == [
+        ("DP | BIT -2", "fallo aislado")
     ]
 
 

@@ -360,19 +360,31 @@ def test_antes_de_subir_valida_el_pdf_aunque_el_indice_diga_que_cabe(
         trabajo.subir(object())
 
 
-def test_antes_de_subir_rechaza_paginas_que_quedarian_amarillas(tmp_path):
+def test_antes_de_subir_acepta_paginas_que_quedaran_amarillas(
+    tmp_path, monkeypatch
+):
+    from app.airvault.uploader import ResultadoSubida
+
+    class SubidorQueAcepta:
+        def __init__(self, *_args):
+            pass
+
+        def subir(self, ruta, _valores, avisar=None):
+            return ResultadoSubida(str(ruta), True)
+
+    monkeypatch.setattr(
+        "app.airvault.uploader.SubidorQuickUpload", SubidorQueAcepta
+    )
     csv_path, _partes = corrida(tmp_path)
     trabajo = preparar_partes(
         AirVaultConfig(), tmp_path / "job", csv_path
     )[0]
     trabajo.manifiesto.bitacoras()[0].log_number = ""
 
-    with pytest.raises(ErrorDeCorrida, match="deben quedar en REVISAR"):
-        trabajo.subir(object())
+    trabajo.subir(object())
 
     etapa = trabajo.manifiesto.etapa("subir")
-    assert etapa.estado is EstadoEtapa.ERROR
-    assert "No se subio ningun archivo" in etapa.detalle
+    assert etapa.estado is EstadoEtapa.HECHA
 
 
 def test_antes_de_subir_respeta_el_limite_de_2048_mb(tmp_path, monkeypatch):
@@ -527,7 +539,8 @@ def test_el_lote_de_revisar_no_se_numera_como_una_parte_mas(tmp_path):
     assert principal[0].manifiesto.nombre_batch == "DP | BITS PRUEBA"
 
 
-def test_en_el_lote_de_revisar_no_se_escribe_nada(tmp_path):
+def test_en_el_lote_de_revisar_se_escribe_lo_disponible_en_amarillo(tmp_path):
+    from app.airvault.config import ESTADO_NECESITA_CORRECCION
     from app.airvault.indexer import Indexador
     from tests.airvault_fake import ClienteFalso, pagina
 
@@ -545,13 +558,16 @@ def test_en_el_lote_de_revisar_no_se_escribe_nada(tmp_path):
     plan = indexador.planificar(total)
     indexador.aplicar(plan)
 
-    assert cliente.escrituras == []
-    # Tampoco se leen: serian peticiones de mas contra el servidor.
-    assert cliente.lecturas == []
-    assert plan.escribibles == []
+    assert len(cliente.escrituras) == 2
+    assert all(
+        estado == ESTADO_NECESITA_CORRECCION
+        for _pagina, _valores, estado in cliente.escrituras
+    )
+    assert cliente.lecturas == [2, 3]
+    assert len(plan.escribibles) == 2
 
 
-def test_el_reporte_dice_que_hay_que_indexarlas_a_mano(tmp_path):
+def test_el_reporte_muestra_los_avisos_sin_bloquear_la_escritura(tmp_path):
     from app.airvault.indexer import Indexador
     from tests.airvault_fake import ClienteFalso
 
@@ -563,8 +579,9 @@ def test_el_reporte_dice_que_hay_que_indexarlas_a_mano(tmp_path):
     total = len(revisar.manifiesto.registros)
     plan = Indexador(ClienteFalso(page_count=total), revisar.manifiesto,
                      []).planificar(total)
-    motivos = {a.codigo for p in plan.bloqueadas for a in p.avisos}
-    assert motivos == {"revisar_a_mano"}
+    motivos = {a.codigo for p in plan.escribibles for a in p.avisos}
+    assert "matricula_vacia" in motivos
+    assert plan.bloqueadas == []
 
 
 def test_sin_bitacoras_sueltas_no_hay_lote_de_revisar(tmp_path):

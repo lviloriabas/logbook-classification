@@ -368,7 +368,6 @@ class TrabajoAirVaultWorker(QThread):
             clave = str(trabajo.carpeta)
             if (
                 not estado.get("indexar_al_encontrar")
-                or trabajo.manifiesto.solo_subir
                 or not remoto.se_puede_indexar
                 or clave in en_cola
             ):
@@ -1481,13 +1480,11 @@ class AirVaultWindow(QDialog):
 
     def _falta_esperar(self) -> bool:
         """Si queda algún batch que AirVault todavía no ha terminado."""
-        from app.airvault.flujo import LISTO
-
         return (
             self._indexado_incompleto
             and self.auto_indexar_check.isChecked()
         ) or any(
-            not parte.se_acabo and parte.estado != LISTO
+            not parte.se_acabo and not parte.se_puede_indexar
             for parte in self._estados
         )
 
@@ -1838,8 +1835,6 @@ class AirVaultWindow(QDialog):
         )
 
     def _al_comprobar(self, datos: dict) -> None:
-        from app.airvault.flujo import LISTO
-
         self._estado["planes"] = datos["planes"]
         self._trabajos = list(self._estado.get("trabajos") or self._trabajos)
         self._estados = datos["estados"]
@@ -1848,7 +1843,7 @@ class AirVaultWindow(QDialog):
         self._ajustar_vigilancia()
         if datos.get("reporte"):
             self.boton_reporte.setEnabled(True)
-        listos = [p for p in self._estados if p.estado == LISTO]
+        listos = [p for p in self._estados if p.se_puede_indexar]
         self.boton_indexar.setEnabled(bool(self._listos()))
         self.estado_label.setText("Comprobado")
         if listos:
