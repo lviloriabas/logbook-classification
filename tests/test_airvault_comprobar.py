@@ -26,6 +26,7 @@ from app.airvault.flujo import (
     COMPLETADO,
     DESCUADRADO,
     ErrorDeCorrida,
+    INCOMPLETO,
     INDEXADO,
     LISTO,
     PROCESANDO,
@@ -329,6 +330,33 @@ def test_indexar_hecho_no_oculta_paginas_que_no_se_verificaron(tmp_path):
 
     assert parte.estado == LISTO
     assert parte.se_puede_indexar
+
+
+def test_verificacion_incompleta_muestra_el_progreso_real_y_se_reintenta(
+    tmp_path,
+):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.ERROR, "1/2 en Valid"
+    )
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == INCOMPLETO
+    assert "1/2 en Valid" in str(parte)
+    assert parte.se_puede_indexar
+
+
+def test_estado_local_no_disfraza_una_verificacion_incompleta(tmp_path):
+    trabajo, _cliente = trabajo_subido(tmp_path)
+    trabajo.manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.ERROR, "1/2 en Valid"
+    )
+
+    parte = estado_local(trabajo)
+
+    assert parte.estado == INCOMPLETO
+    assert "1/2 en Valid" in str(parte)
 
 
 def test_un_lote_ya_cerrado_no_se_vuelve_a_buscar(tmp_path):

@@ -577,7 +577,7 @@ def test_gris_solo_significa_sin_subir_y_subido_queda_blanco(ventana):
     assert ventana.lotes.item(1, 0).foreground().style() is Qt.BrushStyle.NoBrush
 
 
-def test_un_batch_indexado_por_lo_menos_una_vez_queda_verde(ventana):
+def test_un_batch_parcial_no_se_pinta_como_terminado(ventana):
     from app.airvault.flujo import LISTO
     from app.airvault.model import EstadoEtapa, Etapa
 
@@ -591,7 +591,7 @@ def test_un_batch_indexado_por_lo_menos_una_vez_queda_verde(ventana):
 
     assert all(
         ventana.lotes.item(0, columna).foreground().color()
-        == QColor(COLOR_INDEXADO)
+        != QColor(COLOR_INDEXADO)
         for columna in range(ventana.lotes.columnCount())
     )
 

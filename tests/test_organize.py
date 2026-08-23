@@ -70,7 +70,7 @@ class TestAgrupar(unittest.TestCase):
         numeros = [g.page.page_number for g in grupos[("HP-1534CMP",)]]
         self.assertEqual(numeros, [3, 2, 1])
 
-    def test_sin_logpage_va_al_final_en_orden_original(self):
+    def test_sin_logpage_va_a_revisar_y_no_al_batch_automatico(self):
         pages = [
             _page(1, None, "HP-1534CMP"),
             _page(2, "2147300", "HP-1534CMP"),
@@ -79,7 +79,9 @@ class TestAgrupar(unittest.TestCase):
         ]
         grupos = agrupar_paginas([_reporte(*pages)], ["avion"], None)
         numeros = [g.page.page_number for g in grupos[("HP-1534CMP",)]]
-        self.assertEqual(numeros, [2, 3, 1, 4])
+        self.assertEqual(numeros, [2, 3])
+        revisar = paginas_para_revisar([_reporte(*pages)])
+        self.assertEqual([ref.page.page_number for ref in revisar], [1, 4])
 
     def test_por_mes(self):
         pages = [

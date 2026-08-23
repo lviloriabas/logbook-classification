@@ -1421,7 +1421,6 @@ class AirVaultWindow(QDialog):
     def _pintar_lotes(self) -> None:
         """Vuelca en la tabla en qué va cada batch."""
         from app.airvault.flujo import COMPLETADO, INDEXADO, SIN_SUBIR
-        from app.airvault.model import EstadoEtapa, EstadoRegistro
 
         tabla = self.lotes
         tabla.setRowCount(0)
@@ -1433,18 +1432,10 @@ class AirVaultWindow(QDialog):
             celdas = (
                 parte.batch_id, nombre, str(esperadas), str(parte),
             )
-            etapa_indexar = getattr(
-                parte.trabajo.manifiesto, "etapas", {}
-            ).get("indexar")
-            ya_indexado = parte.estado in (INDEXADO, COMPLETADO) or bool(
-                etapa_indexar
-                and etapa_indexar.estado in (
-                    EstadoEtapa.HECHA, EstadoEtapa.ERROR,
-                )
-            ) or any(
-                getattr(registro, "estado", None) is EstadoRegistro.ESCRITA
-                for registro in parte.trabajo.manifiesto.registros
-            )
+            # Verde significa una sola cosa: la verificación remota confirmó
+            # todas las bitácoras. Una escritura parcial o fallida conserva el
+            # color normal y dice «Indexado incompleto» en Estado.
+            ya_indexado = parte.estado in (INDEXADO, COMPLETADO)
             for columna, texto in enumerate(celdas):
                 item = QTableWidgetItem(texto)
                 if columna == 1:

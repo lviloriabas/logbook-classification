@@ -11,7 +11,9 @@ import json
 
 import pytest
 
-from app.airvault.config import AirVaultConfig, CAMPO_MATRICULA
+from app.airvault.config import (
+    AirVaultConfig, CAMPO_LOG_NUMBER, CAMPO_MATRICULA,
+)
 from app.airvault.flujo import Trabajo, ruta_indice_paginas
 from app.airvault.guards import ErrorDeGuarda, verificar_cantidad
 from app.airvault.indexer import Indexador
@@ -231,8 +233,17 @@ def test_la_verificacion_no_espera_que_una_divisoria_sea_valida(tmp_path):
         if not registro.es_separador:
             registro.estado = EstadoRegistro.ESCRITA
     cliente = ClienteFalso(paginas={
-        1: pagina(1, estado=2), 2: pagina(2, estado=0), 3: pagina(3, estado=0),
-        4: pagina(4, estado=2), 5: pagina(5, estado=0),
+        1: pagina(1, estado=2),
+        2: pagina(2, estado=0, valores={
+            CAMPO_LOG_NUMBER: "2312238", CAMPO_MATRICULA: "HP-1848CMP",
+        }),
+        3: pagina(3, estado=0, valores={
+            CAMPO_LOG_NUMBER: "2312239", CAMPO_MATRICULA: "HP-1848CMP",
+        }),
+        4: pagina(4, estado=2),
+        5: pagina(5, estado=0, valores={
+            CAMPO_LOG_NUMBER: "2312240", CAMPO_MATRICULA: "",
+        }),
     }, page_count=5)
     validas, total, problemas = verificar_lote(cliente, manifiesto)
     assert (validas, total) == (3, 3)
