@@ -61,6 +61,7 @@ La GUI delega los trabajos largos a `PipelineWorker`, `PreprocessWorker` y `Outp
 | `pydantic>=2.6.0` | Validación de configuración, plantillas y modelos de datos. |
 | `loguru>=0.7.2` | Registro operativo y rotación de logs. |
 | `requests>=2.31.0` | Sesión HTTP, carga e indexado en AirVault. |
+| `truststore>=0.10.4` | Confianza TLS del almacén de Windows, incluidas CA corporativas. |
 
 Solo `paddleocr` y `paddlex` tienen versión exacta. Las demás entradas fijan una versión mínima. Para reproducibilidad estricta, registre las versiones instaladas del portable aprobado.
 
@@ -118,7 +119,7 @@ El VLM opcional también puede resolver binarios desde variables de entorno o `P
 
 Todos los motores se crean con `device="cpu"`, `use_gpu=False` o el equivalente. El VLM opcional arranca con cero capas de GPU. oneDNN está desactivado por un fallo conocido de Paddle en Windows.
 
-En la operación normal, el OCR no requiere red y AirVault sí. Microsoft Edge es el método normal para obtener la sesión; también se admite una cookie y, por consola, una cuenta local. El perfil de Edge queda en `portable/edge-airvault/`. La reconstrucción y las descargas de modelos también requieren red. `airvault.json` contiene URL, repositorio, esquema, tiempos y valores de índice; no contiene credenciales. Las cookies y contraseñas no se escriben en el log.
+En la operación normal, el OCR no requiere red y AirVault sí. Microsoft Edge es el método normal para obtener la sesión; también se admite una cookie y, por consola, una cuenta local. El perfil de Edge queda en `portable/edge-airvault/`. Las conexiones de Python validan TLS contra el almacén de certificados de Windows mediante `truststore`, por lo que respetan las CA corporativas instaladas por TI sin desactivar la verificación. `REQUESTS_CA_BUNDLE` permite agregar un archivo PEM entregado por TI. La reconstrucción y las descargas de modelos también requieren red. `airvault.json` contiene URL, repositorio, esquema, tiempos y valores de índice; no contiene credenciales. Las cookies y contraseñas no se escriben en el log.
 
 > **PRECAUCIÓN:** `portable/edge-airvault/` contiene la sesión y sus cookies. Nunca distribuya un perfil autenticado. Excluya o limpie ese directorio antes de liberar el paquete y deje que el equipo de destino lo regenere.
 

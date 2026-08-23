@@ -110,6 +110,23 @@ def test_un_tiempo_agotado_se_reintenta():
     assert s.get("/x") == {"ok": True}
 
 
+def test_un_certificado_invalido_no_se_reintenta_y_se_explica():
+    s = sesion([
+        requests.exceptions.SSLError("CERTIFICATE_VERIFY_FAILED"),
+        RespuestaFalsa(json_data={"no": "deberia llegar"}),
+    ])
+
+    with pytest.raises(ErrorDeConexion) as fallo:
+        s.get("/x")
+
+    motivo = str(fallo.value)
+    assert "certificado SSL" in motivo
+    assert "certificados confiables de Windows" in motivo
+    assert "fecha y hora" in motivo
+    assert "REQUESTS_CA_BUNDLE" in motivo
+    assert len(s.http.pedidas) == 1
+
+
 def test_el_servidor_ocupado_se_reintenta():
     """503 es «vuelve luego», no «esto esta mal»."""
     s = sesion([
