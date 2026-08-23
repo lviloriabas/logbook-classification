@@ -542,8 +542,8 @@ class Trabajo:
         cual escribir.
 
         El titulo viaja dentro de los valores de Quick Upload, aunque AirVault
-        publica primero ``Empty-Batch``. El coordinador identifica y nombra
-        esta parte antes de permitir que empiece la subida de la siguiente.
+        publica primero ``Empty-Batch``. El coordinador termina de subir todos
+        los archivos y despues identifica y nombra cada batch en AirVault.
         """
         from app.airvault.uploader import SubidorQuickUpload
 
@@ -1106,11 +1106,11 @@ def subir_partes(
     Solo un trabajo local realmente pendiente vuelve a Quick Upload. Sin
     cliente se conserva el recorrido local para los usos antiguos del modulo.
 
-    Cada archivo nuevo se confirma y se nombra antes de mandar el siguiente.
-    Quick Upload publica primero ``Empty-Batch`` y dos cargas simultaneas del
-    mismo tamano no se podrian distinguir con seguridad. La instantanea de la
-    cola tomada antes de cada subida permite recuperar tambien una carga cuya
-    confirmacion se interrumpio.
+    Primero se mandan todos los archivos faltantes y solo despues se espera a
+    que aparezca cada batch en Web Index. La instantanea de la cola tomada
+    inmediatamente antes de cada subida permite distinguir los resultados
+    temporales ``Empty-Batch`` y recuperar una carga cuya confirmacion se
+    interrumpio.
     """
     _validar_nombres_de_batches(trabajos)
     por_subir = list(trabajos)
@@ -1154,17 +1154,16 @@ def subir_partes(
             # incluso si AirVault tarda o falla antes de publicar su ID.
             al_finalizar_subidas(trabajos)
 
-        if cliente is not None:
-            if avisar is not None:
-                avisar(
-                    f"{cabeza}Subido; esperando a que AirVault publique "
-                    "y nombre el batch antes de continuar",
-                    0, 0,
-                )
-            trabajo.descubrir(
-                cliente, esperar=True, dormir=dormir,
-                avisar=propio if avisar else None,
+    if cliente is not None and por_subir:
+        if avisar is not None:
+            avisar(
+                "Todos los batches pendientes se subieron; comprobando "
+                "cuales aparecen en AirVault",
+                0, 0,
             )
+        descubrir_partes(
+            por_subir, cliente, esperar=True, dormir=dormir, avisar=avisar,
+        )
 
 
 def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:
@@ -1187,11 +1186,11 @@ def subir_y_descubrir_partes(
     dormir: Callable[[float], None] = time.sleep,
     avisar: Optional[Aviso] = None,
 ) -> None:
-    """Sube y ubica cada parte antes de empezar la siguiente.
+    """Sube todas las partes y despues ubica todos sus batches.
 
-    La separacion conserva una instantanea distinta de la cola para cada
-    archivo. Asi varios resultados llamados ``Empty-Batch`` nunca quedan
-    mezclados entre si aunque tengan la misma cantidad de paginas.
+    Ninguna consulta de descubrimiento se intercala con Quick Upload: la
+    primera fase termina de enviar todos los archivos y la segunda espera a
+    que AirVault vaya mostrando cada titulo esperado.
     """
     for trabajo in trabajos:
         cabeza = _prefijo(trabajo)
@@ -1203,10 +1202,9 @@ def subir_y_descubrir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
-        trabajo.descubrir(
-            cliente, esperar=esperar, dormir=dormir,
-            avisar=propio if avisar else None,
-        )
+    descubrir_partes(
+        trabajos, cliente, esperar=esperar, dormir=dormir, avisar=avisar,
+    )
 
 
 def descubrir_partes(
@@ -1214,8 +1212,28 @@ def descubrir_partes(
     dormir: Callable[[float], None] = time.sleep,
     avisar: Optional[Aviso] = None,
 ) -> None:
-    """Ubica en AirVault el batch de cada parte."""
-    for trabajo in trabajos:
+    """Ubica en AirVault los batches despues de terminar todas las subidas.
+
+    Se recorren en orden inverso porque la instantanea de una subida posterior
+    ya puede contener los batches que aparecieron tras las anteriores. Cada ID
+    resuelto se agrega a las instantaneas anteriores; asi queda fuera de sus
+    candidatos y varios ``Empty-Batch`` no se intercambian entre si.
+    """
+    ids_posteriores: list[str] = []
+    for trabajo in reversed(list(trabajos)):
+        manifiesto = trabajo.manifiesto
+        if ids_posteriores and manifiesto.lotes_previos:
+            conocidos = {
+                str(batch_id).strip().upper()
+                for batch_id in manifiesto.lotes_previos
+            }
+            agregados = [
+                batch_id for batch_id in ids_posteriores
+                if str(batch_id).strip().upper() not in conocidos
+            ]
+            if agregados:
+                manifiesto.lotes_previos.extend(agregados)
+                trabajo.guardar()
         cabeza = _prefijo(trabajo)
 
         def propio(texto: str, hechas: int, total: int,
@@ -1225,6 +1243,8 @@ def descubrir_partes(
 
         trabajo.descubrir(cliente, esperar, dormir,
                           propio if avisar else None)
+        if manifiesto.batch_id:
+            ids_posteriores.append(manifiesto.batch_id)
 
 
 def cargar_partes(
