@@ -325,9 +325,9 @@ El índice de páginas `<corrida>_paginas.json` representa cada hoja del PDF, in
 
 El flujo es:
 
-1. repartir para Quick Upload los PDF que excedan el máximo elegido en la ventana, 300 páginas por batch de forma predeterminada;
+1. repartir para Quick Upload los PDF que excedan la última cantidad guardada por la interfaz;
 2. cargar cada PDF mediante Quick Upload;
-3. detectar el batch nuevo y asignarle nombre;
+3. detectar el batch nuevo, asignarle nombre y confirmar el mismo ID antes de continuar; tras 30 minutos de ausencia se reenvía automáticamente una sola vez solo el faltante y luego se sigue comprobando sin duplicarlo;
 4. leer páginas y construir un plan sin escribir;
 5. generar `revision.html` y `revision.csv`;
 6. escribir solo registros habilitados;

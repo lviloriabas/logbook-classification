@@ -470,6 +470,7 @@ class MainWindow(QMainWindow):
         # ejecución que le tocaría se guarda aquí, para que abrirla después de
         # exportar la encuentre ya elegida.
         self._airvault_window: AirVaultWindow | None = None
+        self._airvault_windows: list[AirVaultWindow] = []
         self._airvault_corrida: Path | None = None
 
         self._preview_thread = QThread(self)
@@ -1001,7 +1002,7 @@ class MainWindow(QMainWindow):
     def _build_options_group(self) -> QGroupBox:
         # El cuadro de salidas es el mismo que muestra el visor de CSV; aquí
         # se le añaden las opciones que solo tienen sentido al procesar.
-        group = self.export_options = ExportOptionsGroup()
+        group = self.export_options = ExportOptionsGroup(raiz=SCRIPT_DIR)
         layout = group.layout()
         self._register_density_layout(layout, stacked=True)
         self.modo_grupo = group.modo_grupo
@@ -1167,19 +1168,31 @@ class MainWindow(QMainWindow):
         return panel
 
     def _open_airvault(self) -> None:
-        """Abre el indexado como una ventana independiente.
+        """Abre una ventana libre o crea otra para trabajar en paralelo.
 
         Se construye la primera vez que se pide: quien no sube nada a
         AirVault no paga el recorrido del historial ni la ventana.
         """
-        if self._airvault_window is None:
-            self._airvault_window = AirVaultWindow(SCRIPT_DIR, self)
-            self._airvault_window.setWindowIcon(self.windowIcon())
+        ventana = self._airvault_window
+        if ventana is None or ventana.hilo() is not None:
+            ventana = AirVaultWindow(SCRIPT_DIR)
+            ventana.setWindowIcon(self.windowIcon())
+            ventana.abrir_corrida_paralela.connect(
+                self._open_airvault_corrida
+            )
+            self._airvault_windows.append(ventana)
+            self._airvault_window = ventana
             if self._airvault_corrida is not None:
-                self._airvault_window.fijar_corrida(self._airvault_corrida)
-        self._airvault_window.show()
-        self._airvault_window.raise_()
-        self._airvault_window.activateWindow()
+                ventana.fijar_corrida(self._airvault_corrida)
+        ventana.show()
+        ventana.raise_()
+        ventana.activateWindow()
+
+    def _open_airvault_corrida(self, csv: str) -> None:
+        """Abre otra ejecución sin tocar la ventana que ya está ocupada."""
+        self._airvault_window = None
+        self._airvault_corrida = Path(csv)
+        self._open_airvault()
 
     def _effective_threads(self, selected: int) -> int:
         """Hilos efectivos del pipeline según la reserva para la interfaz."""
@@ -3129,11 +3142,10 @@ class MainWindow(QMainWindow):
         self._airvault_corrida = (
             Path(output_dir) / "datos" / f"{Path(output_dir).name}.CSV"
         )
-        ventana = self._airvault_window
-        # Con un batch a medio escribir no se le cambia la ejecución debajo:
-        # el trabajo en vuelo es de la que estaba elegida al arrancarlo.
-        if ventana is not None and ventana.hilo() is None:
-            ventana.fijar_corrida(self._airvault_corrida)
+        for ventana in reversed(self._airvault_windows):
+            if ventana.hilo() is None:
+                ventana.fijar_corrida(self._airvault_corrida)
+                break
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         if self._outputs_context == "export":
@@ -3980,14 +3992,17 @@ class MainWindow(QMainWindow):
         running: list[QThread] = []
         # La ventana puede haberse destruido ya: el cierre se aplaza y vuelve
         # a preguntar, y para entonces su objeto de C++ puede no estar.
-        ventana = self._airvault_window
-        try:
-            indexado = ventana.hilo() if ventana is not None else None
-        except RuntimeError:
-            indexado = None
+        indexados = []
+        for ventana in self._airvault_windows:
+            try:
+                indexado = ventana.hilo()
+            except RuntimeError:
+                indexado = None
+            if indexado is not None:
+                indexados.append(indexado)
         for worker in (
             self._worker, self._preprocess_worker, self._outputs_worker,
-            self._input_scan_worker, indexado,
+            self._input_scan_worker, *indexados,
         ):
             if worker is None:
                 continue
@@ -4061,13 +4076,13 @@ class MainWindow(QMainWindow):
             timer.stop()
         if self._csv_viewer is not None:
             self._csv_viewer.close()
-        if self._airvault_window is not None:
+        for ventana in self._airvault_windows:
             # Suelta los batches que una revisión sin indexar dejó tomados en
             # AirVault. Uno que queda tomado no da error: cuelga la próxima
             # vez que alguien lo abra en el Web Index.
             try:
-                self._airvault_window.detener()
-                self._airvault_window.close()
+                ventana.detener()
+                ventana.close()
             except RuntimeError:
                 # El objeto C++ ya se destruyó con la ventana principal.
                 pass

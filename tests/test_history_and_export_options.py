@@ -104,3 +104,23 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
     assert options.discrepancias_check.text() == "Posibles discrepancias"
     assert options.discrepancias_check.isChecked()
     assert not options.errores_check.isChecked()
+
+
+def test_la_cantidad_de_paginas_se_recuerda_entre_los_dos_lugares(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    (tmp_path / "airvault.json").write_text(
+        '{"paginas_por_batch": 275}\n', encoding="utf-8"
+    )
+    options = ExportOptionsGroup(raiz=tmp_path)
+    assert options.partes_spin.value() == 275
+
+    options.partes_spin.setValue(425)
+
+    from app.gui.airvault_window import AirVaultWindow
+
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        assert ventana.limite_batch_spin.value() == 425
+    finally:
+        ventana.close()
+        app.processEvents()

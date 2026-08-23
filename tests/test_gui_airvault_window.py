@@ -23,7 +23,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
+from PySide6.QtWidgets import (
+    QApplication, QLineEdit, QMessageBox, QTableWidgetItem,
+)
 
 from app.gui.airvault_window import (
     ANCHO_MAXIMO_NOMBRE_BATCH,
@@ -42,8 +44,12 @@ def app():
 
 
 @pytest.fixture
-def ventana(app):
-    return AirVaultWindow(RAIZ)
+def ventana(app, tmp_path):
+    (tmp_path / "airvault.json").write_text(
+        (RAIZ / "airvault.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    return AirVaultWindow(tmp_path)
 
 
 def corrida(
@@ -126,8 +132,8 @@ def test_completar_el_batch_no_viene_marcado(ventana):
     assert not ventana.completar_check.isChecked()
 
 
-def test_el_limite_de_quick_upload_empieza_en_300_paginas(ventana):
-    assert ventana.limite_batch_spin.value() == 300
+def test_el_limite_de_quick_upload_usa_la_preferencia_guardada(ventana):
+    assert ventana.limite_batch_spin.value() == 200
 
 
 def test_la_compresion_es_opcional_y_explica_los_200_dpi(ventana):
@@ -444,6 +450,24 @@ def test_subir_no_indexa_nada_y_dice_que_falta_esperar(ventana):
     assert "Subida terminada" in texto
     assert "procesar" in texto
     assert not ventana.boton_indexar.isEnabled()
+
+
+def test_un_batch_ausente_se_programa_para_reenvio_automatico(ventana):
+    from app.airvault.flujo import BUSCANDO
+    from app.airvault.model import EstadoEtapa, Etapa
+
+    estancado = parte(BUSCANDO, "DP | BITS SIN PUBLICAR")
+    estancado.trabajo.manifiesto.etapas["subir"] = Etapa(
+        estado=EstadoEtapa.HECHA,
+        actualizada="2020-01-01T00:00:00",
+    )
+    ventana._al_comprobar({
+        "estados": [estancado], "planes": {}, "partes": [],
+        "reporte": None,
+    })
+
+    assert ventana._reenvio_al_terminar
+    assert "automáticamente" in ventana.resumen.text()
 
 
 def test_la_tabla_marca_subido_antes_de_que_airvault_devuelva_el_id(ventana):
@@ -781,12 +805,33 @@ def test_el_avance_sale_por_la_barra_de_la_ventana(ventana):
 
 # ── mientras escribe ───────────────────────────────────────────────
 
-def test_con_un_lote_a_medias_no_se_cambia_de_ejecucion(ventana):
+def test_con_un_lote_a_medias_se_puede_abrir_otra_ejecucion(ventana):
     ventana._habilitar(False)
-    assert not ventana.historial.isEnabled()
-    assert not ventana.boton_buscar.isEnabled()
+    assert ventana.historial.isEnabled()
+    assert ventana.boton_buscar.isEnabled()
     assert not ventana.boton_subir.isEnabled()
     assert not ventana.boton_comprobar.isEnabled()
+
+
+def test_elegir_otra_ejecucion_en_marcha_la_abre_en_paralelo(
+    ventana, tmp_path, monkeypatch
+):
+    primera = corrida(tmp_path, "BITS 17 AUG 2026 05 50")
+    segunda = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
+    ventana.fijar_corrida(primera)
+    ventana.historial.setRowCount(1)
+    ventana.historial.setItem(0, 0, QTableWidgetItem("otra"))
+    ventana.historial.item(0, 0).setData(
+        Qt.ItemDataRole.UserRole, str(segunda)
+    )
+    solicitadas = []
+    ventana.abrir_corrida_paralela.connect(solicitadas.append)
+    monkeypatch.setattr(ventana, "hilo", lambda: object())
+
+    ventana.historial.selectRow(0)
+
+    assert solicitadas == [str(segunda)]
+    assert ventana.corrida_edit.text() == str(primera)
 
 
 def test_mientras_trabaja_siempre_hay_algo_que_pulsar(ventana):
@@ -908,6 +953,26 @@ def test_el_cierre_espera_al_lote_a_medio_escribir(app):
             principal._airvault_window, "hilo", return_value=falso
         ):
             assert falso in principal._running_workers()
+    finally:
+        principal.close()
+
+
+def test_abrir_airvault_con_otra_ejecucion_activa_crea_otra_ventana(app):
+    from app.gui.main_window import MainWindow
+
+    principal = MainWindow()
+    try:
+        principal._open_airvault()
+        primera = principal._airvault_window
+        with patch.object(primera, "hilo", return_value=object()):
+            principal._open_airvault_corrida("D:/corridas/otra/datos/otra.CSV")
+
+        segunda = principal._airvault_window
+        assert segunda is not primera
+        assert principal._airvault_windows == [primera, segunda]
+        assert Path(segunda.corrida_edit.text()) == Path(
+            "D:/corridas/otra/datos/otra.CSV"
+        )
     finally:
         principal.close()
 

@@ -148,8 +148,9 @@ El reporte de revisión sigue siendo uno solo para toda la ejecución: se
 aprueba de una vez y no batch por batch.
 
 La ventana **Indexar en AirVault** aplica además un máximo propio justo
-antes de Quick Upload. Abre en **300 páginas por batch** y el usuario puede
-cambiarlo antes de subir. Si un PDF exportado supera ese valor, se copia en
+antes de Quick Upload. Comparte la última cantidad elegida con **Repartir
+en** y no define otro valor fijo en el código. Si un PDF exportado supera esa
+preferencia guardada, se copia en
 tramos consecutivos dentro de `output/airvault/<corrida>/cargas/`; el PDF de
 la entrega, su índice y el CSV no se modifican. El mismo límite protege al
 batch `REVISAR`; si hace falta más de uno, se nombran `REVISAR -1`,
@@ -158,6 +159,16 @@ batch `REVISAR`; si hace falta más de uno, se nombran `REVISAR -1`,
 Los batches automáticos se numeran `-1`, `-2`, etc. La correspondencia con el
 tramo que se subió queda en cada manifiesto y en el índice de páginas; no
 depende del nombre interno del PDF de carga.
+
+Quick Upload publica inicialmente el archivo como `Empty-Batch`. El programa
+lo reconoce por la instantánea previa, repositorio y páginas; renombra el ID y
+vuelve a consultar la cola. Mientras ese mismo ID no tenga el título esperado,
+no indexa ni envía el siguiente PDF. Si una carga sigue ausente 30 minutos, la
+consulta automática la reenvía una sola vez y vuelve a exigir esa confirmación;
+después continúa consultando sin volver a duplicarla.
+
+Cada ejecución activa usa su propia ventana y su propio hilo. Elegir otra
+ejecución durante una subida abre una segunda ventana y ambas continúan.
 
 ## El batch REVISAR
 
@@ -499,8 +510,10 @@ completo a mano; los dos se pasan a mayusculas igual.
 llega a la cola como `Empty-Batch`, igual para todos; el valor del campo
 `Batch Name` viaja en las paginas pero no nombra el batch. Asi que el nombre
 se le pone **despues de encontrarlo**, con la misma accion «Rename» del Web
-Index (`Batch/UpdateBatchName`). Si el renombrado falla no se corta nada: el
-batch ya esta subido y encontrado, y quedarse sin nombre no vale un trabajo.
+Index (`Batch/UpdateBatchName`). El nombre se confirma volviendo a leer el
+mismo ID. Si el renombrado falla, no se indexa ese batch y se detienen las
+siguientes subidas de esa ejecucion: continuar crearia mas `Empty-Batch`.
+Las otras ejecuciones abiertas conservan sus propios hilos y no se detienen.
 
 La marca de tiempo no es decoracion. El filtro "Filter by" de AirVault es
 una coincidencia de subcadena sin distinguir mayusculas, asi que escribir

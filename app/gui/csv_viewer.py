@@ -1155,7 +1155,7 @@ class CsvViewerWindow(QMainWindow):
         search_row.addWidget(self.search_context, 1)
         layout.addLayout(search_row)
 
-        self.export_options = ExportOptionsGroup()
+        self.export_options = ExportOptionsGroup(raiz=_PROGRAM_DIR)
         layout.addWidget(self.export_options)
 
         # Horizontal, y con el PDF a la izquierda igual que la vista previa de

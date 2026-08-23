@@ -29,7 +29,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional
 
-from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import Qt, QSignalBlocker, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -53,7 +53,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.airvault.flujo import PAGINAS_POR_BATCH_POR_DEFECTO
+from app.airvault.config import (
+    AIRVAULT_FILENAME,
+    AirVaultConfig,
+    guardar_paginas_por_batch,
+)
 from app.gui.csv_utils import find_csv_files, find_run_dirs
 from app.gui.responsive import fit_to_screen
 from app.gui.widgets import (
@@ -384,6 +388,7 @@ class TrabajoAirVaultWorker(QThread):
                 cliente=cliente, dormir=self._dormir,
                 al_finalizar_subidas=self._notificar_subidas,
                 al_encontrar=al_encontrar,
+                reintentar_estancados=True,
             )
             # La escritura corre mientras este hilo sube y busca las partes
             # siguientes. Antes de anunciar el final se espera solo lo que
@@ -643,6 +648,8 @@ class SoltarLotesWorker(QThread):
 class AirVaultWindow(QDialog):
     """Ventana aparte que sube al Web Index una ejecución del historial."""
 
+    abrir_corrida_paralela = Signal(str)
+
     def __init__(self, raiz: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._raiz = Path(raiz)
@@ -654,7 +661,7 @@ class AirVaultWindow(QDialog):
         self._estado: dict = {}
         self._trabajos: list = []
         self._estados: list = []
-        self._config = None
+        self._config = AirVaultConfig.load(self._raiz / AIRVAULT_FILENAME)
         self._listo_para_subir = False
         self._listas: list[bool] = []
         # Reloj del paso en curso y último texto anotado, para no repetir
@@ -668,6 +675,7 @@ class AirVaultWindow(QDialog):
         # subir e indexar dejan la lista desactualizada.
         self._comprobar_al_terminar = False
         self._indexar_al_terminar = False
+        self._reenvio_al_terminar = False
         self._indexado_incompleto = False
         # Cerrar con trabajo en vuelo no bloquea: se pide la cancelación y
         # la ventana se va en cuanto el hilo suelta lo que tenía tomado.
@@ -813,7 +821,8 @@ class AirVaultWindow(QDialog):
         self.limite_batch_spin = QSpinBox()
         self.limite_batch_spin.setRange(10, 5000)
         self.limite_batch_spin.setSingleStep(50)
-        self.limite_batch_spin.setValue(PAGINAS_POR_BATCH_POR_DEFECTO)
+        if self._config.paginas_por_batch is not None:
+            self.limite_batch_spin.setValue(self._config.paginas_por_batch)
         self.limite_batch_spin.setSuffix(" pág.")
         self.limite_batch_spin.setFixedHeight(
             self.lote_edit.sizeHint().height()
@@ -822,6 +831,9 @@ class AirVaultWindow(QDialog):
             "Cantidad máxima de páginas que se envía en cada batch de "
             "Quick Upload, contando los separadores. Los PDF más grandes "
             "se reparten automáticamente sin modificar la entrega original."
+        )
+        self.limite_batch_spin.valueChanged.connect(
+            self._guardar_limite_batch
         )
         grid.addWidget(self.limite_batch_spin, 2, 1)
 
@@ -1064,7 +1076,9 @@ class AirVaultWindow(QDialog):
             "Busca en AirVault todos los batches de la entrega, incluidos "
             "el principal sin número, sus divisiones y REVISAR. Los reconoce "
             "por el nombre esperado, actualiza su ID y sube solamente los "
-            "que falten. Identifica cada uno antes de subir el siguiente; "
+            "que falten. Si uno lleva 30 minutos sin aparecer, vuelve a "
+            "comprobar la cola y lo reenvía. Identifica cada uno antes de "
+            "subir el siguiente; "
             "con la automatización activa, indexa en paralelo los que ya "
             "estén enteros."
         )
@@ -1220,6 +1234,10 @@ class AirVaultWindow(QDialog):
         item = self.historial.item(filas[0].row(), 0)
         csv = item.data(Qt.ItemDataRole.UserRole) if item else None
         if csv and csv != self.corrida_edit.text():
+            if self.hilo() is not None:
+                self.abrir_corrida_paralela.emit(str(csv))
+                self._marcar_en_historial(self.corrida_edit.text())
+                return
             self.fijar_corrida(csv)
 
     def _marcar_en_historial(self, csv: Path | str) -> None:
@@ -1276,7 +1294,10 @@ class AirVaultWindow(QDialog):
             if t.manifiesto.paginas_por_batch > 0
         }
         if len(limites) == 1:
-            self.limite_batch_spin.setValue(limites.pop())
+            # Retomar un manifiesto antiguo no reemplaza la preferencia global
+            # que la persona eligió por última vez.
+            with QSignalBlocker(self.limite_batch_spin):
+                self.limite_batch_spin.setValue(limites.pop())
         compresiones = {t.manifiesto.compresion for t in self._trabajos}
         if len(compresiones) == 1:
             self.compresion_check.setChecked(compresiones.pop())
@@ -1413,6 +1434,9 @@ class AirVaultWindow(QDialog):
             str(self._raiz / "output"), "CSV (*.csv *.CSV)",
         )
         if ruta:
+            if self.hilo() is not None:
+                self.abrir_corrida_paralela.emit(ruta)
+                return
             self.fijar_corrida(ruta)
 
     # ── la lista de batches ──────────────────────────────────────────
@@ -1480,12 +1504,45 @@ class AirVaultWindow(QDialog):
 
     def _falta_esperar(self) -> bool:
         """Si queda algún batch que AirVault todavía no ha terminado."""
+        estancadas = {id(parte) for parte in self._subidas_estancadas()}
         return (
             self._indexado_incompleto
             and self.auto_indexar_check.isChecked()
         ) or any(
-            not parte.se_acabo and not parte.se_puede_indexar
+            not parte.se_acabo
+            and not parte.se_puede_indexar
+            and id(parte) not in estancadas
             for parte in self._estados
+        )
+
+    def _subidas_estancadas(self) -> list:
+        from app.airvault.flujo import BUSCANDO, subida_estancada
+
+        limite = self._config_actual().espera_reenvio_s
+        return [
+            parte
+            for parte in self._estados
+            if parte.estado == BUSCANDO
+            and getattr(
+                parte.trabajo.manifiesto, "reenvios_automaticos", 0
+            ) < 1
+            and subida_estancada(parte.trabajo, limite)
+        ]
+
+    def _aviso_para_volver_a_subir(self) -> str:
+        estancadas = self._subidas_estancadas()
+        if not estancadas:
+            return ""
+        nombres = ", ".join(parte.nombre for parte in estancadas)
+        minutos = max(1, round(self._config_actual().espera_reenvio_s / 60))
+        cuantos = "ese batch" if len(estancadas) == 1 else "esos batches"
+        return (
+            f"AirVault no publicó en Web Index: {nombres}. Ya pasó el tiempo "
+            f"de espera de {minutos} minutos y es probable que la carga no "
+            "vaya a aparecer. El programa comprobará la cola una vez más y "
+            f"volverá a enviar automáticamente solamente {cuantos}. «Subir "
+            "a AirVault» permite adelantar ese reintento manualmente. Después "
+            "del reenvío seguirá comprobando el índice sin crear más copias."
         )
 
     # ── la comprobación periódica ──────────────────────────────────
@@ -1520,11 +1577,15 @@ class AirVaultWindow(QDialog):
     # ── acciones ───────────────────────────────────────────────────
 
     def _config_actual(self):
-        from app.airvault.config import AIRVAULT_FILENAME, AirVaultConfig
-
-        if self._config is None:
-            self._config = AirVaultConfig.load(self._raiz / AIRVAULT_FILENAME)
         return self._config
+
+    def _guardar_limite_batch(self, cantidad: int) -> None:
+        if guardar_paginas_por_batch(
+            self._raiz / AIRVAULT_FILENAME, cantidad
+        ):
+            self._config = self._config.with_overrides(
+                paginas_por_batch=int(cantidad)
+            )
 
     def _base_del_estado(self) -> Optional[dict]:
         """Los datos comunes del trabajo, o ``None`` si falta algo."""
@@ -1684,11 +1745,11 @@ class AirVaultWindow(QDialog):
         worker.start()
 
     def _habilitar(self, activo: bool) -> None:
-        # Mientras se trabaja no se cambia de ejecución: lo que está en
-        # vuelo es de la que estaba elegida cuando arrancó.
-        self.historial.setEnabled(activo)
+        # El historial sigue disponible: elegir otra ejecución emite la señal
+        # para abrir una ventana aparte y no altera este trabajo en vuelo.
+        self.historial.setEnabled(True)
         self.boton_subir.setEnabled(activo and self._listo_para_subir)
-        self.boton_buscar.setEnabled(activo)
+        self.boton_buscar.setEnabled(True)
         self.boton_eliminar_registro.setEnabled(
             activo and bool(self._rutas_del_registro())
         )
@@ -1848,6 +1909,9 @@ class AirVaultWindow(QDialog):
         self.estado_label.setText("Comprobado")
         if listos:
             self.resumen.setText(self._resumen_de_listos(datos["partes"]))
+        elif self._subidas_estancadas():
+            self.resumen.setText(self._aviso_para_volver_a_subir())
+            self._reenvio_al_terminar = True
         elif self._falta_esperar():
             pendientes = ", ".join(
                 f"{p.nombre}: {p}" for p in self._estados if not p.se_acabo
@@ -2021,6 +2085,14 @@ class AirVaultWindow(QDialog):
         if self._cerrar_al_terminar:
             self._cerrar_al_terminar = False
             self.close()
+            return
+        if self._reenvio_al_terminar:
+            self._reenvio_al_terminar = False
+            self._anotar(
+                "La espera de seguridad venció; se comprueba y reenvía "
+                "automáticamente solo lo que siga ausente"
+            )
+            self._subir()
             return
         if getattr(self, "_comprobar_al_terminar", False):
             self._comprobar_al_terminar = False

@@ -8,11 +8,14 @@ y no se guarda en disco.
 from __future__ import annotations
 
 import json
+import os
+import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
 
 AIRVAULT_FILENAME = "airvault.json"
+_CONFIG_WRITE_LOCK = threading.Lock()
 
 # Identificadores de campo del repositorio MXDocs (repoId 3209). Son
 # estables: los asigna el administrador de AirVault al definir el
@@ -98,9 +101,15 @@ class AirVaultConfig:
     # decidir por el administrador, con el valor valido como defecto.
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
+    # Preferencia portable compartida por todos los controles de reparto.
+    # El valor inicial vive en airvault.json y cada cambio reemplaza ese valor.
+    paginas_por_batch: int | None = None
     # Segundos de espera entre sondeos al buscar el batch por nombre.
     espera_descubrimiento_s: float = 20.0
     espera_maxima_s: float = 900.0
+    # Quick Upload puede tardar en publicar un batch; antes de media hora no
+    # se reenvia para evitar duplicar una carga todavia en proceso.
+    espera_reenvio_s: float = 1800.0
     # Tiempo limite de cada peticion. El servidor cuelga la peticion de
     # apertura cuando el mismo usuario tiene el batch abierto en otra sesion,
     # asi que sin limite el proceso se queda esperando para siempre.
@@ -144,3 +153,30 @@ class AirVaultConfig:
 
     def url(self, ruta: str) -> str:
         return f"{self.base_url.rstrip('/')}/{ruta.lstrip('/')}"
+
+
+def guardar_paginas_por_batch(path: Path | str, cantidad: int) -> bool:
+    """Guarda la última cantidad elegida sin perder las demás opciones."""
+    ruta = Path(path)
+    try:
+        with _CONFIG_WRITE_LOCK:
+            if ruta.is_file():
+                datos = json.loads(ruta.read_text(encoding="utf-8"))
+                if not isinstance(datos, Mapping):
+                    return False
+            else:
+                datos = {}
+            valor = int(cantidad)
+            if valor <= 0:
+                return False
+            datos["paginas_por_batch"] = valor
+            ruta.parent.mkdir(parents=True, exist_ok=True)
+            temporal = ruta.with_name(f"{ruta.name}.tmp")
+            temporal.write_text(
+                json.dumps(datos, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporal, ruta)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return True
