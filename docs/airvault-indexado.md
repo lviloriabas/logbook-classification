@@ -161,9 +161,12 @@ tramo que se subió queda en cada manifiesto y en el índice de páginas; no
 depende del nombre interno del PDF de carga.
 
 Quick Upload publica inicialmente el archivo como `Empty-Batch`. El programa
-lo reconoce por la instantánea previa, repositorio y páginas; renombra el ID y
-vuelve a consultar la cola. Mientras ese mismo ID no tenga el título esperado,
-no indexa ni envía el siguiente PDF. Si una carga sigue ausente 30 minutos, la
+lee el campo `Batch Name` dentro de la primera página, lo combina con la
+instantánea previa, el repositorio y la cantidad de páginas, renombra el ID y
+vuelve a consultar la cola. Incluso varios `Empty-Batch` del mismo tamaño se
+resuelven así sin intervención. Mientras ese mismo ID no tenga el título
+esperado, no indexa ni envía el siguiente PDF; al confirmarlo continúa solo
+con las cargas pendientes. Si una carga sigue ausente 30 minutos, la
 consulta automática la reenvía una sola vez y vuelve a exigir esa confirmación;
 después continúa consultando sin volver a duplicarla.
 
@@ -512,8 +515,10 @@ llega a la cola como `Empty-Batch`, igual para todos; el valor del campo
 se le pone **despues de encontrarlo**, con la misma accion «Rename» del Web
 Index (`Batch/UpdateBatchName`). El nombre se confirma volviendo a leer el
 mismo ID. Si el renombrado falla, no se indexa ese batch y se detienen las
-siguientes subidas de esa ejecucion: continuar crearia mas `Empty-Batch`.
-Las otras ejecuciones abiertas conservan sus propios hilos y no se detienen.
+siguientes subidas de esa ejecucion: continuar crearia mas `Empty-Batch`. El
+programa reintenta el nombre automáticamente y, cuando lo confirma, reanuda
+los PDF pendientes. Las otras ejecuciones abiertas conservan sus propios
+hilos y no se detienen.
 
 La marca de tiempo no es decoracion. El filtro "Filter by" de AirVault es
 una coincidencia de subcadena sin distinguir mayusculas, asi que escribir

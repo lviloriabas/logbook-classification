@@ -470,6 +470,23 @@ def test_un_batch_ausente_se_programa_para_reenvio_automatico(ventana):
     assert "automáticamente" in ventana.resumen.text()
 
 
+def test_al_corregir_empty_batch_continua_las_cargas_sin_boton(ventana):
+    from app.airvault.flujo import LISTO, SIN_SUBIR
+
+    confirmado = parte(LISTO, "DP | BITS -1")
+    pendiente = parte(SIN_SUBIR, "DP | BITS -2", carpeta="job-2")
+    ventana._al_comprobar({
+        "estados": [confirmado, pendiente], "planes": {}, "partes": [],
+        "reporte": None,
+    })
+
+    assert ventana._subir_pendientes_al_terminar
+    assert "continuará automáticamente" in ventana.resumen.text()
+    with patch.object(ventana, "_subir") as subir:
+        ventana._al_terminar()
+    subir.assert_called_once_with()
+
+
 def test_la_tabla_marca_subido_antes_de_que_airvault_devuelva_el_id(ventana):
     trabajo = TrabajoFalso(batch_id=None)
 
@@ -910,6 +927,14 @@ def test_la_bitacora_cuenta_los_pasos_y_no_repite_el_mismo(ventana):
     assert ventana.bitacora.count() == 2
     assert "Subiendo entrega.pdf" in ventana.bitacora.item(0).text()
     assert "Buscando el batch" in ventana.bitacora.item(1).text()
+
+
+def test_la_bitacora_envuelve_los_mensajes_sin_scroll_horizontal(ventana):
+    assert ventana.bitacora.wordWrap()
+    assert ventana.bitacora.textElideMode() == Qt.TextElideMode.ElideNone
+    assert ventana.bitacora.horizontalScrollBarPolicy() == (
+        Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
 
 
 def test_cancelado_se_cuenta_y_no_deja_la_barra_girando(ventana):

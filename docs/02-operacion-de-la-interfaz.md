@@ -238,8 +238,9 @@ las advertencias de fecha tampoco la envían por sí solas a `REVISAR`.
 Los batches se llaman como la ejecución, en mayúsculas y con la fecha y hora
 del procesamiento: `DP | BITS 18 AUG 2026 05 42`, y `-1`, `-2`… si la
 entrega se repartió. En la cola aparecen primero como `Empty-Batch` —la
-subida de AirVault no admite nombre— y el programa se lo pone en cuanto lo
-encuentra. El mismo ID debe reaparecer con el título correcto antes de
+subida de AirVault no admite nombre— y el programa lee el `Batch Name` que
+viaja dentro de la primera página para identificar y renombrar cada uno sin
+intervención. El mismo ID debe reaparecer con el título correcto antes de
 indexar o enviar el siguiente PDF. Si no lo confirma, la ejecución se detiene
 para no acumular nombres provisionales. Una ausencia de 30 minutos activa una
 consulta y una sola resubida automática únicamente del batch faltante; luego

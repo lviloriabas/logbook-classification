@@ -96,13 +96,9 @@ def buscar_nuevo(
             f"AirVault mostró {len(nuevos)} batches nuevos que podrían ser "
             f"esta carga: {_detalle_candidatos(nuevos)}. No se eligió ni "
             "se indexó ninguno para evitar escribir en el batch equivocado. "
-            "En Web Index confirme por ID y cantidad de páginas cuál contiene "
-            "el PDF esperado: puede renombrar ese al título mostrado en la "
-            "tabla y pulsar «Revisar en AirVault». Si un candidato es una "
-            "carga equivocada o duplicada, elimínelo allí. El programa "
-            "seguirá comprobando y, después de la espera de seguridad, "
-            "reenviará automáticamente una sola vez el batch que siga "
-            "ausente."
+            "El programa leerá el Batch Name guardado dentro de cada archivo, "
+            "elegirá el ID correspondiente, lo renombrará y confirmará el "
+            "cambio automáticamente antes de continuar."
         )
     return nuevos[0]
 
