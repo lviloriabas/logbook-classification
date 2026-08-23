@@ -12,16 +12,19 @@ Nada de esto toca la red: todo va contra el cliente falso.
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from app.airvault.client import PaginaDelLote
 from app.airvault.config import AirVaultConfig
-from app.airvault.discovery import LoteAmbiguo, LoteNoEncontrado
+from app.airvault.discovery import LoteNoEncontrado
 from app.airvault.flujo import (
     BUSCANDO,
     COMPLETADO,
+    DESCUADRADO,
     ErrorDeCorrida,
     INDEXADO,
     LISTO,
@@ -149,6 +152,19 @@ def test_con_todas_las_paginas_queda_listo_para_indexar(tmp_path):
     assert parte.estado == LISTO
     assert parte.se_puede_indexar
     assert parte.batch_id == "003SRO"
+
+
+def test_un_batch_mayor_que_el_manifiesto_se_detiene(tmp_path):
+    """Un 200 para una parte de 100 no va a reducirse mientras se espera."""
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.lotes = [lote("003JUNTO", "DP | BIT", 200)]
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == DESCUADRADO
+    assert parte.se_acabo
+    assert not parte.se_puede_indexar
+    assert "AirVault junto dos cargas" in parte.detalle
 
 
 def test_el_lote_encontrado_queda_anotado_y_con_su_nombre(tmp_path):
@@ -588,10 +604,10 @@ def test_no_repite_un_batch_que_quick_upload_ya_confirmo_mientras_procesa(
     assert any("1 sigue procesándose" in texto for texto in avisos)
 
 
-def test_todos_los_batches_se_suben_antes_de_confirmar_el_primero(
+def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
     tmp_path, monkeypatch
 ):
-    """Web Index no retrasa la subida de los archivos que aun faltan."""
+    """La confirmacion separa cargas para que AirVault no las agrupe."""
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     cliente = ClienteFalso()
     eventos: list[tuple[str, str]] = []
@@ -619,13 +635,13 @@ def test_todos_los_batches_se_suben_antes_de_confirmar_el_primero(
     assert eventos == [
         ("subir", "DP | BIT"),
         ("actualizar", "3"),
+        ("confirmar", "DP | BIT"),
         ("subir", "DP | BIT -2"),
         ("actualizar", "3"),
+        ("confirmar", "DP | BIT -2"),
         ("subir", "DP | BIT REVISAR"),
         ("actualizar", "3"),
         ("confirmar", "DP | BIT REVISAR"),
-        ("confirmar", "DP | BIT -2"),
-        ("confirmar", "DP | BIT"),
     ]
 
 
@@ -662,40 +678,102 @@ def test_varios_empty_batch_del_mismo_tamano_conservan_su_id(
     )
 
 
-def test_empty_batch_ambiguos_no_reciben_un_id_inventado(
+def test_el_id_se_publica_antes_de_empezar_la_siguiente_carga(
     tmp_path, monkeypatch
 ):
-    """Todos se suben, pero una cola indistinguible exige intervencion."""
+    """La UI puede asignar e indexar uno mientras sigue el recorrido."""
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
-    cliente = ClienteFalso(lotes=[
-        lote("003VIEJO", "DP | LO DE ANTES", 9),
-    ])
-    subidas: list[str] = []
+    cliente = ClienteFalso()
+    eventos: list[tuple[str, str]] = []
 
     def subir(self, sesion, pdf="", avisar=None, cliente=None):
-        self.manifiesto.lotes_previos = ["003VIEJO"]
+        eventos.append(("subir", self.manifiesto.nombre_batch))
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
-        subidas.append(self.manifiesto.nombre_batch)
-        if len(subidas) == len(trabajos):
-            cliente.lotes.extend([
-                lote("003UNO", "Empty-Batch", 2),
-                lote("003DOS", "Empty-Batch", 2),
-                lote("003TRE", "Empty-Batch", 2),
-            ])
-        self.guardar()
+
+    def descubrir(self, cliente, esperar=True, dormir=None, avisar=None):
+        self.manifiesto.batch_id = f"ID-{self.manifiesto.parte}"
+        return self.manifiesto.batch_id
+
+    def encontrado(trabajo, todos):
+        eventos.append(("id", trabajo.manifiesto.nombre_batch))
 
     monkeypatch.setattr(Trabajo, "subir", subir)
+    monkeypatch.setattr(Trabajo, "descubrir", descubrir)
 
-    with pytest.raises(LoteAmbiguo):
-        subir_partes(
-            trabajos, SesionFalsa(), cliente=cliente,
-            dormir=lambda _s: None,
-        )
+    subir_partes(
+        trabajos, SesionFalsa(), cliente=cliente,
+        al_encontrar=encontrado,
+    )
 
-    assert subidas == [
-        "DP | BIT", "DP | BIT -2", "DP | BIT REVISAR",
+    assert eventos == [
+        ("subir", "DP | BIT"), ("id", "DP | BIT"),
+        ("subir", "DP | BIT -2"), ("id", "DP | BIT -2"),
+        ("subir", "DP | BIT REVISAR"),
+        ("id", "DP | BIT REVISAR"),
     ]
-    assert all(trabajo.manifiesto.batch_id is None for trabajo in trabajos)
+
+
+def test_el_indexado_arranca_mientras_se_busca_el_siguiente_batch(
+    tmp_path, monkeypatch
+):
+    """La escritura tiene un carril distinto al de subida y descubrimiento."""
+    from app.airvault.flujo import EstadoParte
+    from app.gui.airvault_window import TrabajoAirVaultWorker
+
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)[:2]
+    cliente = ClienteFalso()
+    eventos: list[tuple[str, str]] = []
+    indexando = threading.Event()
+
+    monkeypatch.setattr(
+        "app.airvault.flujo.comprobar_entrega",
+        lambda _csv: [SimpleNamespace(paginas=[1, 2])],
+    )
+    monkeypatch.setattr(
+        "app.airvault.flujo.preparar_partes",
+        lambda *args, **kwargs: trabajos,
+    )
+    monkeypatch.setattr(
+        "app.airvault.flujo.comprobar_partes",
+        lambda lotes, _cliente, avisar=None: [
+            EstadoParte(lotes[0], LISTO, "2 paginas")
+        ],
+    )
+
+    def subir_falso(lotes, _sesion, al_encontrar=None, **_kwargs):
+        primero, segundo = lotes
+        primero.manifiesto.batch_id = "ID-1"
+        eventos.append(("encontrar", primero.manifiesto.nombre_batch))
+        al_encontrar(primero, lotes)
+        assert indexando.wait(1), "el indexado no arranco en paralelo"
+        segundo.manifiesto.batch_id = "ID-2"
+        eventos.append(("encontrar", segundo.manifiesto.nombre_batch))
+        al_encontrar(segundo, lotes)
+
+    monkeypatch.setattr("app.airvault.flujo.subir_partes", subir_falso)
+    estado = {
+        "config": AirVaultConfig(), "csv": tmp_path / "corrida.csv",
+        "raiz": tmp_path, "carpeta_job": tmp_path / "job",
+        "nombre_lote": "DP | BIT", "paginas_por_batch": 100,
+        "sesion": SesionFalsa(), "indexar_al_encontrar": True,
+        "completar": False,
+    }
+    worker = TrabajoAirVaultWorker("subir", estado)
+    monkeypatch.setattr(worker, "_conectar", lambda: cliente)
+    monkeypatch.setattr(worker, "_cliente_paralelo", lambda _c: cliente)
+
+    def indexar_falso(trabajo, _cliente, _raiz):
+        eventos.append(("indexar", trabajo.manifiesto.nombre_batch))
+        indexando.set()
+        return {}
+
+    monkeypatch.setattr(worker, "_indexar_batch_encontrado", indexar_falso)
+
+    worker._subir()
+
+    assert eventos.index(("indexar", trabajos[0].manifiesto.nombre_batch)) < (
+        eventos.index(("encontrar", trabajos[1].manifiesto.nombre_batch))
+    )
 
 
 def test_un_automatico_con_titulo_revisar_no_se_sube(tmp_path, monkeypatch):

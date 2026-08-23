@@ -138,11 +138,9 @@ def test_el_menu_de_automatizacion_empieza_oculto_y_es_secuencial(ventana):
     assert ventana.menu_automatizacion.isHidden()
     assert ventana.auto_subir_check.isChecked()
     assert ventana.auto_esperar_check.isChecked()
-    assert not ventana.auto_indexar_check.isChecked()
-    assert not ventana.auto_completar_check.isEnabled()
-
-    ventana.auto_indexar_check.setChecked(True)
+    assert ventana.auto_indexar_check.isChecked()
     assert ventana.auto_completar_check.isEnabled()
+
     ventana.auto_esperar_check.setChecked(False)
     assert not ventana.auto_indexar_check.isChecked()
     assert not ventana.auto_indexar_check.isEnabled()
@@ -155,6 +153,23 @@ def test_la_ventana_usa_batch_en_sus_campos_y_tabla(ventana):
         for columna in range(ventana.lotes.columnCount())
     ] == ["ID", "Batch", "Páginas", "Estado"]
     assert "batch" in ventana.lote_edit.placeholderText().lower()
+
+
+def test_las_tablas_tienen_el_mismo_espacio_y_la_barra_bajo_el_header(
+    app, ventana,
+):
+    from app.gui.widgets import FlatSelectionDelegate
+
+    ventana.show()
+    app.processEvents()
+    assert ventana.historial.minimumHeight() == ventana.lotes.minimumHeight()
+    assert ventana.historial.maximumHeight() == ventana.lotes.maximumHeight()
+    for tabla in (ventana.historial, ventana.lotes):
+        assert isinstance(tabla.itemDelegate(), FlatSelectionDelegate)
+        assert (
+            f"margin-top: {tabla.horizontalHeader().height()}px"
+            in tabla.verticalScrollBar().styleSheet()
+        )
 
 
 def test_revisar_airvault_esta_a_la_derecha_de_subir(ventana):
@@ -507,6 +522,22 @@ def test_todos_los_batches_confirmados_quedan_activos_en_blanco(ventana):
         is Qt.BrushStyle.NoBrush
         for fila in range(ventana.lotes.rowCount())
     )
+
+
+def test_gris_solo_significa_sin_subir_y_subido_queda_blanco(ventana):
+    from app.airvault.flujo import BUSCANDO, SIN_SUBIR
+
+    ventana._estados = [
+        parte(SIN_SUBIR, "DP | FALTA"),
+        parte(BUSCANDO, "DP | SUBIDO", carpeta="parte-02"),
+    ]
+
+    ventana._pintar_lotes()
+
+    assert ventana.lotes.item(0, 0).foreground().color() == QColor(
+        Qt.GlobalColor.gray
+    )
+    assert ventana.lotes.item(1, 0).foreground().style() is Qt.BrushStyle.NoBrush
 
 
 def test_un_batch_indexado_por_lo_menos_una_vez_queda_verde(ventana):

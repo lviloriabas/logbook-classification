@@ -14,19 +14,18 @@ sola.
 
 El trabajo va en tres tiempos, separados porque duran cosas muy distintas:
 
-1. **Subir a AirVault** manda los PDF. Termina cuando termina la subida.
-2. **Comprobar** pregunta si AirVault ya procesó lo subido. Eso puede
-   tardar minutos u horas, así que no se espera delante: se pregunta cada
-   tantos minutos, o cuando alguien pulse. Según van quedando listos, los
-   batches aparecen en la lista con lo que se les escribiría.
-3. **Indexar** escribe los que ya están listos, y con «Completar batch»
-   marcado los da además por terminados en AirVault.
+1. **Subir a AirVault** manda un PDF y espera a identificarlo antes de mandar
+   el siguiente, para que AirVault no junte dos partes en el mismo batch.
+2. **Comprobar** asigna el ID apenas aparece y confirma si ya está entero.
+3. **Indexar** trabaja en paralelo los batches listos mientras el primer
+   carril sigue buscando los demás. Se puede desactivar en Automatización.
 """
 
 from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -62,6 +61,8 @@ from app.gui.widgets import (
     DATA_TABLE_QSS,
     PANE_STATUS_COLORS,
     ElidedLabel,
+    align_vertical_scrollbar_to_header,
+    style_data_table,
 )
 from app.utils.io import send_to_trash
 
@@ -95,8 +96,8 @@ ANCHO_MINIMO_NOMBRE_BATCH = 220
 ANCHO_MAXIMO_NOMBRE_BATCH = 420
 
 TEXTO_SIN_SUBIR = (
-    "Sin subir. «Subir a AirVault» manda los PDF de la entrega; nada se "
-    "indexa hasta que los batches estén listos y se apruebe."
+    "Sin subir. «Subir a AirVault» manda cada PDF por separado; cuando "
+    "AirVault le asigna un ID, el indexado automático empieza en paralelo."
 )
 
 AIRVAULT_TOOLTIP = (
@@ -179,6 +180,8 @@ class TrabajoAirVaultWorker(QThread):
 
     paso = Signal(str, int, int)
     subidas_actualizadas = Signal(object)
+    batch_encontrado = Signal(object)
+    batch_indexado = Signal(object)
     subido = Signal(object)
     comprobado = Signal(object)
     indexado = Signal(object)
@@ -344,15 +347,89 @@ class TrabajoAirVaultWorker(QThread):
             )
 
         cliente = self._conectar()
-        subir_partes(
-            trabajos, estado["sesion"], avisar=self._avisar, cliente=cliente,
-            dormir=self._dormir,
-            al_finalizar_subidas=self._notificar_subidas,
+        futuros: list[Future] = []
+        en_cola: set[str] = set()
+        ejecutor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="airvault-indexado"
         )
+        cliente_indice = self._cliente_paralelo(cliente)
+
+        def al_encontrar(trabajo, todos) -> None:
+            """Publica el ID y pone el batch listo en el carril de escritura."""
+            from app.airvault.flujo import comprobar_partes
+
+            remoto = comprobar_partes(
+                [trabajo], cliente, avisar=self._avisar
+            )[0]
+            self.batch_encontrado.emit({
+                "trabajos": list(todos), "estado": remoto,
+            })
+            clave = str(trabajo.carpeta)
+            if (
+                not estado.get("indexar_al_encontrar")
+                or trabajo.manifiesto.solo_subir
+                or not remoto.se_puede_indexar
+                or clave in en_cola
+            ):
+                return
+            en_cola.add(clave)
+            futuros.append(ejecutor.submit(
+                self._indexar_batch_encontrado,
+                trabajo, cliente_indice, raiz,
+            ))
+
+        try:
+            subir_partes(
+                trabajos, estado["sesion"], avisar=self._avisar,
+                cliente=cliente, dormir=self._dormir,
+                al_finalizar_subidas=self._notificar_subidas,
+                al_encontrar=al_encontrar,
+            )
+            # La escritura corre mientras este hilo sube y busca las partes
+            # siguientes. Antes de anunciar el final se espera solo lo que
+            # todavía siga en el carril de indexado.
+            for futuro in futuros:
+                futuro.result()
+        finally:
+            ejecutor.shutdown(wait=True, cancel_futures=True)
         self.subido.emit({
             "trabajos": estado["trabajos"], "cliente": cliente,
             "sesion": estado.get("sesion"),
         })
+
+    def _cliente_paralelo(self, cliente):
+        """Cliente independiente para indexar sin compartir Session con Upload."""
+        from app.airvault.client import ClienteHttp
+
+        sesion = self.estado.get("sesion")
+        clonar = getattr(sesion, "clonar", None)
+        if not callable(clonar):
+            # Clientes falsos y adaptadores antiguos ya son objetos aislados
+            # en sus pruebas; conservarlos mantiene ese contrato.
+            return cliente
+        return ClienteHttp(clonar(), self.estado["config"])
+
+    def _indexar_batch_encontrado(self, trabajo, cliente, raiz: Path) -> dict:
+        """Planifica e indexa un batch mientras se buscan los siguientes."""
+        from app.airvault.mapping import FLOTA_CACHE_FILENAME, ResolutorFlota
+
+        self._avisar(
+            f"Batch {trabajo.manifiesto.batch_id} encontrado; preparando su "
+            "indexado en paralelo", 0, 0,
+        )
+        resolutor = ResolutorFlota.load(raiz / FLOTA_CACHE_FILENAME)
+        plan = trabajo.planificar(
+            cliente, resolutor, avisar=self._avisar
+        )
+        self.estado.setdefault("planes", {})[str(trabajo.carpeta)] = plan
+        resolutor.guardar(raiz / FLOTA_CACHE_FILENAME)
+        datos = self._ejecutar_indexado(
+            [trabajo], [plan], cliente,
+            completar=bool(self.estado.get("completar")),
+        )
+        datos["trabajo"] = trabajo
+        self.batch_indexado.emit(datos)
+        return datos
 
     def _subir_pendientes(self) -> None:
         """Reanuda cargas locales sin volver a preparar la ejecución actual."""
@@ -436,6 +513,19 @@ class TrabajoAirVaultWorker(QThread):
     # ── indexar ────────────────────────────────────────────────────
 
     def _indexar(self) -> None:
+        estado = self.estado
+        cliente = estado["cliente"]
+        trabajos = list(estado["listos"])
+        planes = [estado["planes"][str(t.carpeta)] for t in trabajos]
+        self.indexado.emit(self._ejecutar_indexado(
+            trabajos, planes, cliente,
+            completar=bool(estado.get("completar")),
+        ))
+
+    def _ejecutar_indexado(
+        self, trabajos, planes, cliente, completar: bool = False,
+    ) -> dict:
+        """Escribe y verifica uno o varios batches con el mismo reintento."""
         from app.airvault.flujo import (
             cerrar_partes,
             completar_partes,
@@ -445,10 +535,6 @@ class TrabajoAirVaultWorker(QThread):
         )
         from app.airvault.indexer import Resultado
 
-        estado = self.estado
-        cliente = estado["cliente"]
-        trabajos = list(estado["listos"])
-        planes = [estado["planes"][str(t.carpeta)] for t in trabajos]
         cierres: list = []
         resultado = Resultado()
         validas = total = 0
@@ -486,8 +572,10 @@ class TrabajoAirVaultWorker(QThread):
                         avisar=self._avisar,
                     )
                     for trabajo, plan in zip(trabajos, planes):
-                        estado["planes"][str(trabajo.carpeta)] = plan
-            if estado.get("completar") and validas == total:
+                        self.estado.setdefault("planes", {})[
+                            str(trabajo.carpeta)
+                        ] = plan
+            if completar and validas == total:
                 cierres = completar_partes(
                     trabajos, cliente, avisar=self._avisar
                 )
@@ -497,11 +585,11 @@ class TrabajoAirVaultWorker(QThread):
             # que queda tomado no da error: cuelga la próxima vez que
             # alguien lo abra.
             cerrar_partes(trabajos, cliente)
-        self.indexado.emit({
+        return {
             "resultado": resultado, "validas": validas, "total": total,
             "lotes": len(trabajos), "cierres": cierres,
             "incompleto": validas != total,
-        })
+        }
 
     def _completar(self) -> None:
         """Cierra batches ya verificados sin reescribir sus paginas."""
@@ -614,7 +702,7 @@ class AirVaultWindow(QDialog):
         cuerpo.addWidget(self._historial(), 1)
         cuerpo.addLayout(self._campos())
         cuerpo.addWidget(self._titulo("Batches en AirVault"))
-        cuerpo.addWidget(self._lotes())
+        cuerpo.addWidget(self._lotes(), 1)
         cuerpo.addLayout(self._fila_vigilancia())
         cuerpo.addWidget(self._menu_automatizacion())
         cuerpo.addLayout(self._fila_avance())
@@ -665,6 +753,7 @@ class AirVaultWindow(QDialog):
             2, QHeaderView.ResizeMode.ResizeToContents
         )
         tabla.itemSelectionChanged.connect(self._al_elegir_del_historial)
+        self._ajustar_tabla(tabla)
         self.historial = tabla
         return tabla
 
@@ -781,7 +870,6 @@ class AirVaultWindow(QDialog):
         tabla.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         tabla.setAlternatingRowColors(True)
         tabla.verticalHeader().setVisible(False)
-        tabla.setMaximumHeight(132)
         cabecera = tabla.horizontalHeader()
         cabecera.setSectionResizeMode(
             0, QHeaderView.ResizeMode.ResizeToContents
@@ -794,8 +882,17 @@ class AirVaultWindow(QDialog):
         )
         cabecera.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         tabla.setColumnWidth(1, ANCHO_MINIMO_NOMBRE_BATCH)
+        self._ajustar_tabla(tabla)
         self.lotes = tabla
         return tabla
+
+    @staticmethod
+    def _ajustar_tabla(tabla: QTableWidget) -> None:
+        """Iguala las dos tablas y deja la barra debajo de la cabecera."""
+        style_data_table(tabla)
+        tabla.setMinimumHeight(132)
+        tabla.setMaximumHeight(176)
+        align_vertical_scrollbar_to_header(tabla)
 
     def _fila_vigilancia(self) -> QHBoxLayout:
         """Cada cuánto se pregunta automáticamente a AirVault."""
@@ -845,6 +942,7 @@ class AirVaultWindow(QDialog):
         )
         self.auto_esperar_check.setChecked(True)
         self.auto_indexar_check = QCheckBox("Indexar páginas")
+        self.auto_indexar_check.setChecked(True)
         self.auto_completar_check = QCheckBox("Completar batches")
         for control in (
             self.auto_esperar_check,
@@ -959,8 +1057,9 @@ class AirVaultWindow(QDialog):
             "Busca en AirVault todos los batches de la entrega, incluidos "
             "el principal sin número, sus divisiones y REVISAR. Los reconoce "
             "por el nombre esperado, actualiza su ID y sube solamente los "
-            "que falten. El indexado se habilita cuando AirVault confirma "
-            "sus páginas."
+            "que falten. Identifica cada uno antes de subir el siguiente; "
+            "con la automatización activa, indexa en paralelo los que ya "
+            "estén enteros."
         )
         self.boton_subir.clicked.connect(self._subir)
 
@@ -1301,7 +1400,7 @@ class AirVaultWindow(QDialog):
 
     def _pintar_lotes(self) -> None:
         """Vuelca en la tabla en qué va cada batch."""
-        from app.airvault.flujo import COMPLETADO, INDEXADO, LISTO
+        from app.airvault.flujo import COMPLETADO, INDEXADO, SIN_SUBIR
         from app.airvault.model import EstadoEtapa, EstadoRegistro
 
         tabla = self.lotes
@@ -1337,9 +1436,10 @@ class AirVaultWindow(QDialog):
                     )
                 if ya_indexado:
                     item.setForeground(QColor(COLOR_INDEXADO))
-                elif parte.estado != LISTO and not parte.se_acabo:
-                    # Todavía no hay nada que hacer con él: se ve, pero sin
-                    # llamar la atención de quien busca cuál puede indexar.
+                elif parte.estado == SIN_SUBIR:
+                    # Gris significa una sola cosa: el archivo aun no fue
+                    # aceptado por Quick Upload. Desde que se sube queda en
+                    # blanco, incluso mientras AirVault lo procesa.
                     item.setForeground(Qt.GlobalColor.gray)
                 tabla.setItem(fila, columna, item)
         ancho_nombre = min(
@@ -1440,6 +1540,8 @@ class AirVaultWindow(QDialog):
             "nombre_lote": self.lote_edit.text().strip(),
             "cookie": self.cookie_edit.text(),
             "paginas_por_batch": self.limite_batch_spin.value(),
+            "indexar_al_encontrar": self.auto_indexar_check.isChecked(),
+            "completar": self.completar_check.isChecked(),
         })
         self._estado.setdefault("trabajos", self._trabajos)
         return self._estado
@@ -1560,6 +1662,8 @@ class AirVaultWindow(QDialog):
         worker = TrabajoAirVaultWorker(modo, estado, self)
         worker.paso.connect(self._mostrar_paso)
         worker.subidas_actualizadas.connect(self._al_actualizar_subidas)
+        worker.batch_encontrado.connect(self._al_batch_encontrado)
+        worker.batch_indexado.connect(self._al_batch_indexado)
         worker.subido.connect(self._al_subir)
         worker.comprobado.connect(self._al_comprobar)
         worker.indexado.connect(self._al_indexar)
@@ -1682,6 +1786,42 @@ class AirVaultWindow(QDialog):
         self._estado["trabajos"] = self._trabajos
         self._estados = [estado_local(t) for t in self._trabajos]
         self._pintar_lotes()
+
+    def _al_batch_encontrado(self, datos: dict) -> None:
+        """Muestra el ID apenas se resuelve, sin esperar las otras búsquedas."""
+        from app.airvault.flujo import estado_local
+
+        self._trabajos = list(datos["trabajos"])
+        self._estado["trabajos"] = self._trabajos
+        remoto = datos["estado"]
+        self._estados = [estado_local(t) for t in self._trabajos]
+        clave = str(remoto.trabajo.carpeta)
+        for indice, parte in enumerate(self._estados):
+            if str(parte.trabajo.carpeta) == clave:
+                self._estados[indice] = remoto
+                break
+        self._pintar_lotes()
+        self._anotar(
+            f"Batch {remoto.batch_id} asignado a «{remoto.nombre}»"
+        )
+
+    def _al_batch_indexado(self, datos: dict) -> None:
+        """Pinta en verde un batch terminado por el carril paralelo."""
+        from app.airvault.flujo import estado_local
+
+        trabajo = datos["trabajo"]
+        self._estados = [estado_local(t) for t in self._trabajos]
+        self._pintar_lotes()
+        resultado = datos["resultado"]
+        self._anotar(
+            f"Batch {trabajo.manifiesto.batch_id} indexado: "
+            f"{resultado.escritas} escritas, {resultado.fallidas} fallidas"
+        )
+        self.resumen.setText(
+            f"El batch {trabajo.manifiesto.nombre_batch} ya se indexó "
+            f"({datos['validas']} de {datos['total']} páginas válidas). "
+            "La búsqueda y subida de los demás continúa en paralelo."
+        )
 
     def _al_comprobar(self, datos: dict) -> None:
         from app.airvault.flujo import LISTO

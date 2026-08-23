@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from copy import copy
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -253,6 +254,26 @@ class SesionAirVault:
     def origen(self) -> str:
         """De donde salio la sesion, para poder decirlo sin adivinar."""
         return self._origen
+
+    def clonar(self) -> "SesionAirVault":
+        """Crea una conexion HTTP independiente con la misma autenticacion.
+
+        ``requests.Session`` no es segura para dos hilos. La subida y el
+        indexado pueden avanzar a la vez sobre batches distintos, pero cada
+        carril necesita su propio pool de conexiones, cookies y tokens para
+        que una respuesta no altere la peticion que el otro esta armando.
+        """
+        paralela = SesionAirVault(self.config)
+        paralela.http.headers.clear()
+        paralela.http.headers.update(dict(self.http.headers))
+        for cookie in self.http.cookies:
+            paralela.http.cookies.set_cookie(copy(cookie))
+        paralela._autenticada = self._autenticada
+        paralela._origen = self._origen
+        paralela._perfil = self._perfil
+        paralela._tokens = dict(self._tokens)
+        paralela.dormir = self.dormir
+        return paralela
 
     # ── autenticacion ──────────────────────────────────────────────
 

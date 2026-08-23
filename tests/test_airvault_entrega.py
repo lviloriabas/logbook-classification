@@ -11,6 +11,7 @@ diccionarios de mentira.
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 
 import pymupdf as fitz
@@ -18,6 +19,7 @@ import pytest
 
 from app.airvault.config import AirVaultConfig
 from app.airvault.flujo import (
+    ErrorDeCorrida,
     Trabajo,
     cargar_partes,
     comprobar_entrega,
@@ -255,6 +257,27 @@ def test_airvault_reparte_una_entrega_que_supera_el_limite(tmp_path):
         assert paginas_del_pdf(pdf) == len(trabajo.manifiesto.registros)
     # El reparto de AirVault no reexporta ni reemplaza la entrega original.
     assert partes[0].ruta.read_bytes() == original
+
+
+def test_antes_de_subir_valida_el_pdf_aunque_el_indice_diga_que_cabe(
+    tmp_path,
+):
+    """Un PDF de 107 no puede viajar con un manifiesto que declara 100."""
+    csv_path, _partes = corrida(tmp_path)
+    trabajo = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path,
+        paginas_por_batch=100,
+    )[0]
+    pdf = Path(trabajo.manifiesto.pdf_origen)
+    alterado = pdf.with_name("alterado.pdf")
+    documento = fitz.open(str(pdf))
+    documento.new_page()
+    documento.save(str(alterado))
+    documento.close()
+    os.replace(alterado, pdf)
+
+    with pytest.raises(ErrorDeCorrida, match="datos quedarian corridos"):
+        trabajo.subir(object())
 
 
 def test_el_reparto_de_airvault_no_pierde_ni_duplica_bitacoras(tmp_path):
