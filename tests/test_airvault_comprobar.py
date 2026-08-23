@@ -18,7 +18,7 @@ import pytest
 
 from app.airvault.client import PaginaDelLote
 from app.airvault.config import AirVaultConfig
-from app.airvault.discovery import LoteNoEncontrado
+from app.airvault.discovery import LoteAmbiguo, LoteNoEncontrado
 from app.airvault.flujo import (
     BUSCANDO,
     COMPLETADO,
@@ -588,10 +588,10 @@ def test_no_repite_un_batch_que_quick_upload_ya_confirmo_mientras_procesa(
     assert any("1 sigue procesándose" in texto for texto in avisos)
 
 
-def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
+def test_todos_los_batches_se_suben_antes_de_confirmar_el_primero(
     tmp_path, monkeypatch
 ):
-    """Dos Empty-Batch iguales necesitan instantaneas distintas de la cola."""
+    """Web Index no retrasa la subida de los archivos que aun faltan."""
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     cliente = ClienteFalso()
     eventos: list[tuple[str, str]] = []
@@ -619,20 +619,20 @@ def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
     assert eventos == [
         ("subir", "DP | BIT"),
         ("actualizar", "3"),
-        ("confirmar", "DP | BIT"),
         ("subir", "DP | BIT -2"),
         ("actualizar", "3"),
-        ("confirmar", "DP | BIT -2"),
         ("subir", "DP | BIT REVISAR"),
         ("actualizar", "3"),
         ("confirmar", "DP | BIT REVISAR"),
+        ("confirmar", "DP | BIT -2"),
+        ("confirmar", "DP | BIT"),
     ]
 
 
 def test_varios_empty_batch_del_mismo_tamano_conservan_su_id(
     tmp_path, monkeypatch
 ):
-    """La siguiente instantanea incluye el batch que acaba de aparecer."""
+    """Las instantaneas anidadas se concilian despues de subirlos todos."""
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     cliente = ClienteFalso(lotes=[
         lote("003VIEJO", "DP | LO DE ANTES", 9),
@@ -660,6 +660,42 @@ def test_varios_empty_batch_del_mismo_tamano_conservan_su_id(
         trabajo.manifiesto.etapa_hecha("descubrir")
         for trabajo in trabajos
     )
+
+
+def test_empty_batch_ambiguos_no_reciben_un_id_inventado(
+    tmp_path, monkeypatch
+):
+    """Todos se suben, pero una cola indistinguible exige intervencion."""
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    cliente = ClienteFalso(lotes=[
+        lote("003VIEJO", "DP | LO DE ANTES", 9),
+    ])
+    subidas: list[str] = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        self.manifiesto.lotes_previos = ["003VIEJO"]
+        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
+        subidas.append(self.manifiesto.nombre_batch)
+        if len(subidas) == len(trabajos):
+            cliente.lotes.extend([
+                lote("003UNO", "Empty-Batch", 2),
+                lote("003DOS", "Empty-Batch", 2),
+                lote("003TRE", "Empty-Batch", 2),
+            ])
+        self.guardar()
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    with pytest.raises(LoteAmbiguo):
+        subir_partes(
+            trabajos, SesionFalsa(), cliente=cliente,
+            dormir=lambda _s: None,
+        )
+
+    assert subidas == [
+        "DP | BIT", "DP | BIT -2", "DP | BIT REVISAR",
+    ]
+    assert all(trabajo.manifiesto.batch_id is None for trabajo in trabajos)
 
 
 def test_un_automatico_con_titulo_revisar_no_se_sube(tmp_path, monkeypatch):
