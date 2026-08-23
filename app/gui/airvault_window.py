@@ -336,6 +336,7 @@ class TrabajoAirVaultWorker(QThread):
             estado["nombre_lote"], resolutor=resolutor,
             paginas_por_batch=estado["paginas_por_batch"],
             avisar=self._avisar,
+            compresion=estado.get("compresion", False),
         )
         estado["trabajos"] = trabajos
         for trabajo in trabajos:
@@ -825,6 +826,13 @@ class AirVaultWindow(QDialog):
         )
         grid.addWidget(self.limite_batch_spin, 2, 1)
 
+        self.compresion_check = QCheckBox("Compresión")
+        self.compresion_check.setToolTip(
+            "Reduce los PDF que se envían a AirVault a 200 DPI con calidad "
+            "moderada. No modifica los PDF exportados de la ejecución."
+        )
+        grid.addWidget(self.compresion_check, 2, 2, 1, 2)
+
         # El campo de la sesión queda por si el navegador no puede: el
         # camino normal es que se resuelva sola.
         self.cookie_edit = QLineEdit()
@@ -1262,7 +1270,11 @@ class AirVaultWindow(QDialog):
         }
         if len(limites) == 1:
             self.limite_batch_spin.setValue(limites.pop())
+        compresiones = {t.manifiesto.compresion for t in self._trabajos}
+        if len(compresiones) == 1:
+            self.compresion_check.setChecked(compresiones.pop())
         self.limite_batch_spin.setEnabled(not bool(self._trabajos))
+        self.compresion_check.setEnabled(not bool(self._trabajos))
         # La conexion sobrevive al cambio de ejecucion: es el mismo
         # servidor, y volver a abrirla es volver a arrancar el navegador.
         self._estado = {
@@ -1540,6 +1552,7 @@ class AirVaultWindow(QDialog):
             "nombre_lote": self.lote_edit.text().strip(),
             "cookie": self.cookie_edit.text(),
             "paginas_por_batch": self.limite_batch_spin.value(),
+            "compresion": self.compresion_check.isChecked(),
             "indexar_al_encontrar": self.auto_indexar_check.isChecked(),
             "completar": self.completar_check.isChecked(),
         })
@@ -1686,6 +1699,7 @@ class AirVaultWindow(QDialog):
         self.lote_edit.setEnabled(activo)
         self.cookie_edit.setEnabled(activo)
         self.limite_batch_spin.setEnabled(activo and not self._trabajos)
+        self.compresion_check.setEnabled(activo and not self._trabajos)
         self.boton_comprobar.setEnabled(activo and bool(self._trabajos))
         self.boton_automatizacion.setEnabled(activo)
         self.boton_continuar.setEnabled(activo)
@@ -1761,6 +1775,7 @@ class AirVaultWindow(QDialog):
     def _al_subir(self, datos: dict) -> None:
         self._al_actualizar_subidas(datos)
         self.limite_batch_spin.setEnabled(False)
+        self.compresion_check.setEnabled(False)
         cuantos = len(self._trabajos)
         lotes = "el batch" if cuantos == 1 else f"los {cuantos} batches"
         self.resumen.setText(
@@ -1981,6 +1996,7 @@ class AirVaultWindow(QDialog):
             self._estados = [estado_local(t) for t in self._trabajos]
             self._pintar_lotes()
             self.limite_batch_spin.setEnabled(False)
+            self.compresion_check.setEnabled(False)
         self.resumen.setText(mensaje)
         self.estado_label.setText("El indexado no pudo continuar")
         self._anotar(f"Se detuvo: {mensaje}")
