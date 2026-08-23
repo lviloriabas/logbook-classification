@@ -112,7 +112,7 @@ def test_que_el_lanzador_termine_no_es_que_edge_se_haya_caido(monkeypatch,
     reloj = iter([i * 0.5 for i in range(200)])
     ws = _postizos(
         monkeypatch, _LanzadorQueSeVa(21),
-        iter([OSError("todavia no"), OSError("todavia no"),
+        iter([OSError("todavía no"), OSError("todavía no"),
               {"Browser": "Edg/151", "webSocketDebuggerUrl": "ws://x/y"}]),
         reloj=lambda: next(reloj),
     )

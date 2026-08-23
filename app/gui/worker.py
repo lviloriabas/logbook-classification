@@ -388,7 +388,7 @@ class InputScanWorker(QThread):
     Abrir los PDFs de ``input/`` es lo primero que hace la ventana al
     arrancar, y es lo que la dejaba en «no responde» nada mas aparecer: los
     escaneos son de cientos de megas y la primera apertura arrastra ademas
-    PyMuPDF, NumPy y OpenCV, que no estan cargados todavia. Medido con ocho
+    PyMuPDF, NumPy y OpenCV, que no estan cargados todavía. Medido con ocho
     archivos de la carpeta de trabajo, un cuarto de segundo largo con la
     ventana ya dibujada y sin atender un solo clic.
 

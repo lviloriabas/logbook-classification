@@ -612,7 +612,7 @@ def test_un_lote_listo_se_puede_indexar_y_dice_cuanto_escribiria(ventana):
     assert ventana.boton_indexar.isEnabled()
 
 
-def test_un_lote_listo_sin_plan_todavia_no_se_indexa(ventana):
+def test_un_lote_listo_sin_plan_todavía_no_se_indexa(ventana):
     """El plan es lo que dice qué se escribiría; sin él no hay qué aprobar."""
     from app.airvault.flujo import LISTO
 
