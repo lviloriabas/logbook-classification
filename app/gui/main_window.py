@@ -3057,7 +3057,7 @@ class MainWindow(QMainWindow):
             )
         # Solo se guardan los datos. Los PDFs son la entrega, y componerlos
         # vuelve a abrir cada original y tarda tanto como para no imponerlo a
-        # quien todavia va a cambiar la separacion: se hacen al exportar.
+        # quien todavía va a cambiar la separacion: se hacen al exportar.
         self.status_label.setText("Guardando datos…")
         self._timer.start()
         self._start_outputs(reports, context="proceso", skip_pdfs=True)

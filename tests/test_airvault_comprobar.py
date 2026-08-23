@@ -124,7 +124,7 @@ def test_sin_subir_lo_dice_y_no_pregunta_por_ningun_lote(tmp_path):
     assert not parte.se_puede_indexar
 
 
-def test_subido_pero_todavia_no_en_la_cola_no_es_un_fallo(tmp_path):
+def test_subido_pero_todavía_no_en_la_cola_no_es_un_fallo(tmp_path):
     """AirVault tarda en sacar un batch recien subido; eso es lo normal."""
     trabajo, cliente = trabajo_subido(tmp_path)
     cliente.lotes = []
@@ -134,7 +134,7 @@ def test_subido_pero_todavia_no_en_la_cola_no_es_un_fallo(tmp_path):
     assert not parte.se_acabo
 
 
-def test_un_lote_a_medio_procesar_todavia_no_esta_listo(tmp_path):
+def test_un_lote_a_medio_procesar_todavía_no_esta_listo(tmp_path):
     """Aparece en la cola antes de tener todas sus paginas.
 
     Escribir asi correria cada dato a la bitacora de al lado, asi que

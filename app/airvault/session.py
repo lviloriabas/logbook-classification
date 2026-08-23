@@ -358,7 +358,7 @@ class SesionAirVault:
         """Si con esas cookies el servidor deja trabajar.
 
         Lo pregunta con una sesion aparte, sin tocar la propia: se llama
-        mientras el navegador todavia esta rehaciendo el acceso, y adoptar
+        mientras el navegador todavía esta rehaciendo el acceso, y adoptar
         cookies a medio hacer dejaria el tarro con dos juegos mezclados.
         """
         if not cookies:
