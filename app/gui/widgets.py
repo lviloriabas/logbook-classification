@@ -307,6 +307,32 @@ def style_data_table(table: QAbstractItemView) -> None:
     round_corners(table)
 
 
+class _HeaderScrollbarAligner(QObject):
+    """Mantiene la barra vertical debajo de la cabecera de una tabla."""
+
+    def __init__(self, table: QAbstractItemView) -> None:
+        super().__init__(table)
+        self._table = table
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self._aplicar(watched.height())
+        return False
+
+    def _aplicar(self, alto: int) -> None:
+        self._table.verticalScrollBar().setStyleSheet(
+            f"QScrollBar:vertical {{ margin-top: {max(0, alto)}px; }}"
+        )
+
+
+def align_vertical_scrollbar_to_header(table: QAbstractItemView) -> None:
+    """Hace que la barra vertical empiece donde termina la cabecera."""
+    cabecera = table.horizontalHeader()
+    filtro = _HeaderScrollbarAligner(table)
+    cabecera.installEventFilter(filtro)
+    filtro._aplicar(cabecera.height())
+
+
 def style_dark_pane(pane: QWidget) -> None:
     """Deja un panel completo en el gris oscuro, con sus controles.
 

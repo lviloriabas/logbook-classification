@@ -33,10 +33,9 @@ delante.
 
 ### Los tres tiempos
 
-1. **Subir.** Manda los archivos y ya. Entre una parte y la siguiente se
-   espera a que la anterior aparezca en la cola —AirVault junta en un mismo
-   batch los archivos que le llegan seguidos—, pero detras de la ultima no
-   se espera a nada.
+1. **Subir y ubicar.** Manda un archivo y espera a que aparezca y quede
+   nombrado antes de mandar el siguiente. Esa barrera es necesaria porque
+   AirVault junta en un mismo batch los archivos que le llegan seguidos.
 2. **Esperar a AirVault.** El batch entra en la cola del servidor y tarda en
    quedar indexable: aparece antes de tener todas sus paginas. Mientras le
    falte alguna no esta listo, porque escribir con las paginas corridas
@@ -44,10 +43,11 @@ delante.
    cinco minutos —o cuando se pulse **Comprobar ahora**— y va pasando los
    batches a **Listo para indexar** segun quedan. Cuando ya no queda nada que
    esperar deja de preguntar sola.
-3. **Indexar.** Escribe los que estan listos. En cuanto un batch queda listo
-   se lee y se calcula que se le escribiria, asi que la lista y el reporte
-   dicen cuantas paginas se escribirian y cuantas quedan bloqueadas **antes**
-   de tocar nada.
+3. **Indexar.** Con la automatizacion inicial, en cuanto un batch aparece
+   entero se asigna su ID en la tabla y empieza a escribirse en un carril
+   paralelo, mientras la subida sigue buscando las partes restantes. Si se
+   desmarca **Indexar paginas**, solo se calcula el plan y se espera la
+   aprobacion manual.
 
 Estados que puede tener un batch en la lista:
 
@@ -56,6 +56,7 @@ Estados que puede tener un batch en la lista:
 | Sin subir | Todavia no se ha mandado |
 | Subido; esperando a AirVault | Mandado, pero el servidor aun no lo saca en la cola |
 | Procesandose en AirVault | Ya esta en la cola, con menos paginas de las que lleva el PDF |
+| Cantidad de paginas incorrecta | Tiene mas paginas de las posibles; se detiene porque AirVault junto cargas o el PDF no corresponde al indice |
 | Listo para indexar | Entero y libre: se puede escribir |
 | Abierto por otra persona | Alguien lo tiene tomado; AirVault no lo entrega a nadie mas |
 | Para revisar a mano | Es el batch REVISAR, que no se indexa |
@@ -459,10 +460,10 @@ quedaron las dos en un solo batch de 33 paginas, y dos partes en el mismo
 batch no se pueden indexar por separado, que es justo para lo que se
 reparten.
 
-Detras de la **ultima** no se espera a nada. Ahi la subida termina; que el
-servidor haya acabado de procesarla es otra cosa, puede tardar mucho mas, y
-se pregunta despues —cada tantos minutos— en vez de dejar la ventana
-esperando delante.
+La espera solo llega hasta que cada archivo tiene un ID inequívoco y un
+nombre. Que AirVault haya terminado de procesar todas sus paginas es otra
+cosa; eso puede tardar mucho mas y se sigue comprobando mientras el carril
+de indexado trabaja los batches que ya estan enteros.
 
 Toda escritura lleva la cabecera `AntiForgery`; sin ella `FinishUpload`
 contesta 500 despues de haber recibido el archivo entero.

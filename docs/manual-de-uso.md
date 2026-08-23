@@ -235,10 +235,10 @@ El CSV principal contiene las columnas seleccionadas. El CSV completo añade con
 3. Abra **Indexar en AirVault…**.
 4. Elija una de las últimas 25 ejecuciones o pulse **Otra ejecución…**.
 5. Confirme el nombre del batch y el **Máximo por batch**. El valor inicial es 300 páginas; los PDF que lo superen se dividen para Quick Upload sin modificar la entrega ni el CSV. Deje **Sesión** vacío. En el primer acceso, complete el inicio de sesión y el segundo factor en Edge.
-6. Pulse **Subir y revisar**. El programa sube cada PDF, encuentra su batch y prepara el plan sin indexar.
-7. Pulse **Ver reporte…** y revise `revision.html`.
+6. La automatización viene con **Indexar páginas** marcada. Pulse **Subir a AirVault**: el programa sube un PDF, encuentra y muestra su ID, y empieza a indexarlo en paralelo mientras busca los demás. Cada PDF queda identificado antes de enviar el siguiente para impedir que AirVault una dos partes en un batch mayor que el límite.
+7. Si necesita aprobar el reporte antes de escribir, desmarque **Indexar páginas** en **Automatización…**, pulse **Subir a AirVault** y después abra **Ver reporte…**.
 8. Confirme `pagina_lote`, `archivo_origen`, `pagina_origen`, matrícula, flota, `log_number`, fecha, acción y avisos. Revise toda fila con `fleet_inferido=si`. Las discrepancias de firmas no aparecen en este reporte y no bloquean AirVault; revíselas antes en la ejecución.
-9. Pulse **Indexar** solo después de aprobar el reporte completo. El programa escribirá todas las filas cuya acción sea **escribir**; no hay aprobación individual por página. Si una fila habilitada es incorrecta, no indexe: corrija o reprocese la ejecución, expórtela y repita la revisión.
+9. En el recorrido manual, pulse **Indexar** solo después de aprobar el reporte completo. El programa escribirá todas las filas cuya acción sea **escribir**; no hay aprobación individual por página. Si una fila habilitada es incorrecta, no indexe: corrija o reprocese la ejecución, expórtela y repita la revisión.
 
 Las acciones del reporte significan:
 

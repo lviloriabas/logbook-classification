@@ -333,6 +333,7 @@ def _enumerar(numeros: Sequence[int], cuantos: int = 8) -> str:
 SIN_SUBIR = "sin_subir"
 BUSCANDO = "buscando"
 PROCESANDO = "procesando"
+DESCUADRADO = "descuadrado"
 LISTO = "listo"
 TOMADO = "tomado"
 SOLO_REVISAR = "solo_revisar"
@@ -343,6 +344,7 @@ NOMBRE_ESTADO_PARTE = {
     SIN_SUBIR: "Sin subir",
     BUSCANDO: "Subido; esperando a AirVault",
     PROCESANDO: "Procesándose en AirVault",
+    DESCUADRADO: "Cantidad de páginas incorrecta",
     LISTO: "Listo para indexar",
     TOMADO: "Abierto por otra persona",
     SOLO_REVISAR: "Para revisar a mano",
@@ -379,7 +381,9 @@ class EstadoParte:
     @property
     def se_acabo(self) -> bool:
         """Ya no hay nada que esperar de esta parte."""
-        return self.estado in (SOLO_REVISAR, INDEXADO, COMPLETADO)
+        return self.estado in (
+            DESCUADRADO, SOLO_REVISAR, INDEXADO, COMPLETADO
+        )
 
     def __str__(self) -> str:
         titulo = NOMBRE_ESTADO_PARTE.get(self.estado, self.estado)
@@ -554,6 +558,21 @@ class Trabajo:
         if not archivo.is_file():
             raise ErrorDeCorrida(
                 f"No esta el archivo de entrega {archivo.name}"
+            )
+        paginas_pdf = _paginas_del_pdf(archivo)
+        paginas_indice = len(self.manifiesto.registros)
+        limite = int(self.manifiesto.paginas_por_batch or 0)
+        if paginas_pdf != paginas_indice:
+            raise ErrorDeCorrida(
+                f"El PDF {archivo.name} tiene {paginas_pdf} paginas y el "
+                f"indice declara {paginas_indice}; no se sube porque los "
+                "datos quedarian corridos. Vuelva a exportar la ejecucion."
+            )
+        if limite > 0 and paginas_pdf > limite:
+            raise ErrorDeCorrida(
+                f"El PDF {archivo.name} tiene {paginas_pdf} paginas y supera "
+                f"el maximo elegido de {limite}; no se sube. Reinicie el "
+                "registro local para volver a repartir la ejecucion."
             )
         if cliente is not None:
             # AirVault publica lo cargado como ``Empty-Batch`` aunque Quick
@@ -1096,6 +1115,9 @@ def subir_partes(
     al_finalizar_subidas: Optional[
         Callable[[Sequence["Trabajo"]], None]
     ] = None,
+    al_encontrar: Optional[
+        Callable[["Trabajo", Sequence["Trabajo"]], None]
+    ] = None,
 ) -> None:
     """Confirma todos los batches y sube solamente los que falten.
 
@@ -1106,11 +1128,12 @@ def subir_partes(
     Solo un trabajo local realmente pendiente vuelve a Quick Upload. Sin
     cliente se conserva el recorrido local para los usos antiguos del modulo.
 
-    Primero se mandan todos los archivos faltantes y solo despues se espera a
-    que aparezca cada batch en Web Index. La instantanea de la cola tomada
-    inmediatamente antes de cada subida permite distinguir los resultados
-    temporales ``Empty-Batch`` y recuperar una carga cuya confirmacion se
-    interrumpio.
+    Cada archivo nuevo se confirma y se nombra antes de mandar el siguiente.
+    AirVault agrupa en un solo batch los PDF que Quick Upload recibe seguidos;
+    esperar a que el primero aparezca y quede nombrado es la barrera que evita
+    que dos partes de 100 paginas terminen como un batch de 200. La instantanea
+    de la cola tomada antes de cada subida permite reconocer tambien el nombre
+    temporal ``Empty-Batch`` sin cruzar IDs.
     """
     _validar_nombres_de_batches(trabajos)
     por_subir = list(trabajos)
@@ -1139,6 +1162,11 @@ def subir_partes(
         for trabajo in por_subir:
             _reiniciar_subida_ausente(trabajo)
 
+        if al_encontrar is not None:
+            for parte in estados:
+                if parte.batch_id:
+                    al_encontrar(parte.trabajo, trabajos)
+
     for trabajo in por_subir:
         cabeza = _prefijo(trabajo)
 
@@ -1153,17 +1181,19 @@ def subir_partes(
             # La UI debe reflejar que Quick Upload ya acepto este archivo
             # incluso si AirVault tarda o falla antes de publicar su ID.
             al_finalizar_subidas(trabajos)
-
-    if cliente is not None and por_subir:
-        if avisar is not None:
-            avisar(
-                "Todos los batches pendientes se subieron; comprobando "
-                "cuales aparecen en AirVault",
-                0, 0,
+        if cliente is not None:
+            if avisar is not None:
+                avisar(
+                    f"{cabeza}Subido; esperando a que AirVault publique y "
+                    "nombre el batch antes de continuar",
+                    0, 0,
+                )
+            trabajo.descubrir(
+                cliente, esperar=True, dormir=dormir,
+                avisar=propio if avisar else None,
             )
-        descubrir_partes(
-            por_subir, cliente, esperar=True, dormir=dormir, avisar=avisar,
-        )
+            if al_encontrar is not None:
+                al_encontrar(trabajo, trabajos)
 
 
 def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:
@@ -1185,12 +1215,16 @@ def subir_y_descubrir_partes(
     trabajos: Sequence["Trabajo"], sesion, cliente, esperar: bool = True,
     dormir: Callable[[float], None] = time.sleep,
     avisar: Optional[Aviso] = None,
+    al_encontrar: Optional[
+        Callable[["Trabajo", Sequence["Trabajo"]], None]
+    ] = None,
 ) -> None:
-    """Sube todas las partes y despues ubica todos sus batches.
+    """Sube y ubica cada parte antes de empezar la siguiente.
 
-    Ninguna consulta de descubrimiento se intercala con Quick Upload: la
-    primera fase termina de enviar todos los archivos y la segunda espera a
-    que AirVault vaya mostrando cada titulo esperado.
+    La separación entre archivos evita que AirVault los agrupe en un batch
+    mayor que el limite elegido. ``al_encontrar`` permite que otra tarea
+    empiece a trabajar el batch resuelto mientras este recorrido sigue con
+    las partes restantes.
     """
     for trabajo in trabajos:
         cabeza = _prefijo(trabajo)
@@ -1202,38 +1236,24 @@ def subir_y_descubrir_partes(
 
         trabajo.subir(sesion, avisar=propio if avisar else None,
                       cliente=cliente)
-    descubrir_partes(
-        trabajos, cliente, esperar=esperar, dormir=dormir, avisar=avisar,
-    )
+        trabajo.descubrir(
+            cliente, esperar=esperar, dormir=dormir,
+            avisar=propio if avisar else None,
+        )
+        if al_encontrar is not None:
+            al_encontrar(trabajo, trabajos)
 
 
 def descubrir_partes(
     trabajos: Sequence["Trabajo"], cliente, esperar: bool = True,
     dormir: Callable[[float], None] = time.sleep,
     avisar: Optional[Aviso] = None,
+    al_encontrar: Optional[
+        Callable[["Trabajo", Sequence["Trabajo"]], None]
+    ] = None,
 ) -> None:
-    """Ubica en AirVault los batches despues de terminar todas las subidas.
-
-    Se recorren en orden inverso porque la instantanea de una subida posterior
-    ya puede contener los batches que aparecieron tras las anteriores. Cada ID
-    resuelto se agrega a las instantaneas anteriores; asi queda fuera de sus
-    candidatos y varios ``Empty-Batch`` no se intercambian entre si.
-    """
-    ids_posteriores: list[str] = []
-    for trabajo in reversed(list(trabajos)):
-        manifiesto = trabajo.manifiesto
-        if ids_posteriores and manifiesto.lotes_previos:
-            conocidos = {
-                str(batch_id).strip().upper()
-                for batch_id in manifiesto.lotes_previos
-            }
-            agregados = [
-                batch_id for batch_id in ids_posteriores
-                if str(batch_id).strip().upper() not in conocidos
-            ]
-            if agregados:
-                manifiesto.lotes_previos.extend(agregados)
-                trabajo.guardar()
+    """Ubica en AirVault batches ya subidos y publica cada hallazgo."""
+    for trabajo in trabajos:
         cabeza = _prefijo(trabajo)
 
         def propio(texto: str, hechas: int, total: int,
@@ -1243,8 +1263,8 @@ def descubrir_partes(
 
         trabajo.descubrir(cliente, esperar, dormir,
                           propio if avisar else None)
-        if manifiesto.batch_id:
-            ids_posteriores.append(manifiesto.batch_id)
+        if al_encontrar is not None:
+            al_encontrar(trabajo, trabajos)
 
 
 def cargar_partes(
@@ -1530,6 +1550,14 @@ def _estado_de(trabajo: "Trabajo", cliente,
         # cada dato a la bitacora de al lado, asi que hasta que las
         # paginas cuadren la parte no esta lista.
         cantidades = sorted(cantidades_compatibles)
+        if lote.paginas > cantidades[-1]:
+            return EstadoParte(
+                trabajo, DESCUADRADO,
+                f"tiene {lote.paginas} paginas; el maximo de esta parte "
+                f"es {cantidades[-1]}. No se indexa porque AirVault junto "
+                "dos cargas o el PDF no corresponde al indice",
+                lote,
+            )
         detalle = (
             f"{lote.paginas} de {cantidades[0]} paginas"
             if len(cantidades) == 1 else

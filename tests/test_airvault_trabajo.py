@@ -48,6 +48,7 @@ def corrida(tmp_path, nombre: str = "BITS 18 AUG 2026 05 42",
     repartir; con varios, cada uno lleva una de las dos bitacoras del CSV.
     """
     import json
+    import pymupdf as fitz
 
     carpeta = tmp_path / "output" / nombre
     (carpeta / "datos").mkdir(parents=True)
@@ -56,7 +57,11 @@ def corrida(tmp_path, nombre: str = "BITS 18 AUG 2026 05 42",
 
     archivos = list(pdfs) or [f"{nombre}.pdf"]
     for pdf in archivos:
-        (carpeta / pdf).write_bytes(b"%PDF-1.4\n")
+        documento = fitz.open()
+        for _pagina in range(2 if len(archivos) == 1 else 1):
+            documento.new_page()
+        documento.save(str(carpeta / pdf))
+        documento.close()
     if con_indice:
         paginas = [
             [{"archivo": "Image_001.pdf", "pagina": 1},
