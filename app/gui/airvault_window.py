@@ -1141,6 +1141,13 @@ class AirVaultWindow(QDialog):
             )
         ]
         tabla = self.historial
+        # Reconstruir la tabla limpia la selección y ``selectRow`` vuelve a
+        # llevar la ejecución activa a la vista. Eso hace que la barra salte
+        # sola cada vez que la ventana se muestra de nuevo, aunque la persona
+        # estuviera consultando otra zona del historial. Conservamos la
+        # posición que tenía la lista y la restauramos después de marcar la
+        # ejecución elegida.
+        desplazamiento = tabla.verticalScrollBar().value()
         # Rellenar mueve la selección; las señales se cortan para que eso no
         # se lea como que alguien eligió otra ejecución y tire lo hecho.
         tabla.blockSignals(True)
@@ -1165,6 +1172,7 @@ class AirVaultWindow(QDialog):
             self.fijar_corrida(self._primera_que_se_puede_subir())
         else:
             self._marcar_en_historial(self.corrida_edit.text())
+        tabla.verticalScrollBar().setValue(desplazamiento)
 
     def _primera_que_se_puede_subir(self) -> str:
         """CSV con el que abrir: la ejecución exportada más reciente.
