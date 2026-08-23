@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QMessageBox,
     QProgressBar,
@@ -676,6 +677,7 @@ class AirVaultWindow(QDialog):
         self._comprobar_al_terminar = False
         self._indexar_al_terminar = False
         self._reenvio_al_terminar = False
+        self._subir_pendientes_al_terminar = False
         self._indexado_incompleto = False
         # Cerrar con trabajo en vuelo no bloquea: se pide la cancelación y
         # la ventana se va en cuanto el hilo suelta lo que tenía tomado.
@@ -1050,6 +1052,12 @@ class AirVaultWindow(QDialog):
         lista = QListWidget()
         lista.setToolTip("Lo que el indexado va haciendo, con la hora de cada paso")
         lista.setMaximumHeight(110)
+        lista.setWordWrap(True)
+        lista.setTextElideMode(Qt.TextElideMode.ElideNone)
+        lista.setResizeMode(QListView.ResizeMode.Adjust)
+        lista.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         lista.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         lista.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.bitacora = lista
@@ -1529,6 +1537,20 @@ class AirVaultWindow(QDialog):
             and subida_estancada(parte.trabajo, limite)
         ]
 
+    def _subida_interrumpida_lista_para_continuar(self) -> bool:
+        """Si ya se corrigió el Empty-Batch y quedan PDF sin enviar."""
+        from app.airvault.flujo import BUSCANDO, SIN_SUBIR
+
+        faltan = any(parte.estado == SIN_SUBIR for parte in self._estados)
+        esperando_nombre = any(
+            parte.estado == BUSCANDO for parte in self._estados
+        )
+        ya_hubo_subida = any(
+            parte.trabajo.manifiesto.etapa_hecha("subir")
+            for parte in self._estados
+        )
+        return faltan and ya_hubo_subida and not esperando_nombre
+
     def _aviso_para_volver_a_subir(self) -> str:
         estancadas = self._subidas_estancadas()
         if not estancadas:
@@ -1540,9 +1562,9 @@ class AirVaultWindow(QDialog):
             f"AirVault no publicó en Web Index: {nombres}. Ya pasó el tiempo "
             f"de espera de {minutos} minutos y es probable que la carga no "
             "vaya a aparecer. El programa comprobará la cola una vez más y "
-            f"volverá a enviar automáticamente solamente {cuantos}. «Subir "
-            "a AirVault» permite adelantar ese reintento manualmente. Después "
-            "del reenvío seguirá comprobando el índice sin crear más copias."
+            f"volverá a enviar automáticamente solamente {cuantos}. Después "
+            "del reenvío seguirá comprobando y renombrando en el índice sin "
+            "crear más copias ni requerir intervención."
         )
 
     # ── la comprobación periódica ──────────────────────────────────
@@ -1924,6 +1946,13 @@ class AirVaultWindow(QDialog):
             self.resumen.setText(
                 "No queda nada pendiente en AirVault para esta ejecución."
             )
+        if self._subida_interrumpida_lista_para_continuar():
+            self._subir_pendientes_al_terminar = True
+            self.resumen.setText(
+                self.resumen.text()
+                + " El Empty-Batch ya quedó identificado y renombrado; el "
+                "programa continuará automáticamente con los PDF pendientes."
+            )
         self._anotar(
             "Comprobado: "
             + "; ".join(f"{p.nombre} {p}" for p in self._estados)
@@ -2091,6 +2120,14 @@ class AirVaultWindow(QDialog):
             self._anotar(
                 "La espera de seguridad venció; se comprueba y reenvía "
                 "automáticamente solo lo que siga ausente"
+            )
+            self._subir()
+            return
+        if self._subir_pendientes_al_terminar:
+            self._subir_pendientes_al_terminar = False
+            self._anotar(
+                "Empty-Batch confirmado; se continúa automáticamente con "
+                "las cargas pendientes"
             )
             self._subir()
             return

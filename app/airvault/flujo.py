@@ -25,9 +25,10 @@ from typing import Callable, List, Mapping, Optional, Sequence, Tuple
 from loguru import logger
 
 from app.airvault import manifest as manifiestos
-from app.airvault.config import AirVaultConfig
+from app.airvault.config import CAMPO_BATCH_NAME, AirVaultConfig
 from app.airvault.client import ResumenLote
 from app.airvault.discovery import (
+    LoteAmbiguo,
     LoteNoEncontrado,
     buscar_nuevo,
     normalizar_nombre,
@@ -774,18 +775,56 @@ class Trabajo:
         nombre = self.manifiesto.nombre_batch
         if avisar is not None:
             avisar(f"Buscando el batch {nombre} en AirVault", 0, 0)
-        if esperar:
-            lote = esperar_lote(
-                cliente.listar_lotes, nombre, self.manifiesto.repo_id,
-                esperadas, self.config.espera_descubrimiento_s,
-                self.config.espera_maxima_s, dormir=dormir,
-                previos=self.manifiesto.lotes_previos or None,
+        error_busqueda: Optional[Exception] = None
+        try:
+            if esperar:
+                lote = esperar_lote(
+                    cliente.listar_lotes, nombre, self.manifiesto.repo_id,
+                    esperadas, self.config.espera_descubrimiento_s,
+                    self.config.espera_maxima_s, dormir=dormir,
+                    previos=self.manifiesto.lotes_previos or None,
+                )
+            else:
+                lote = buscar_lote(
+                    cliente.listar_lotes(), nombre,
+                    self.manifiesto.repo_id, esperadas,
+                )
+        except (LoteAmbiguo, LoteNoEncontrado) as exc:
+            error_busqueda = exc
+            lote = None
+
+        if lote is None or _es_nombre_temporal(lote.nombre):
+            lotes_actuales = cliente.listar_lotes()
+            nombres_embebidos: dict[str, str] = {}
+            por_contenido = _empty_batch_por_nombre_embebido(
+                self, cliente, lotes_actuales, avisar=avisar,
+                cache=nombres_embebidos,
             )
-        else:
-            lote = buscar_lote(
-                cliente.listar_lotes(), nombre,
-                self.manifiesto.repo_id, esperadas,
-            )
+            if por_contenido is not None:
+                lote = por_contenido
+            elif lote is not None:
+                interno = nombres_embebidos.get(
+                    lote.batch_id.strip().upper(), ""
+                )
+                if interno and normalizar_nombre(interno) != normalizar_nombre(
+                    nombre
+                ):
+                    lote = None
+            if lote is None:
+                if (
+                    isinstance(error_busqueda, LoteNoEncontrado)
+                    and not any(
+                        _es_nombre_temporal(actual.nombre)
+                        for actual in lotes_actuales
+                    )
+                ):
+                    raise error_busqueda
+                raise ErrorDeCorrida(
+                    f"AirVault todavía no permite confirmar automáticamente "
+                    f"cuál Empty-Batch corresponde a «{nombre}». El programa "
+                    "lo volverá a leer y renombrar sin intervención antes de "
+                    "continuar con la siguiente carga."
+                )
         return self.anotar_lote(cliente, lote, avisar)
 
     def anotar_lote(self, cliente, lote: ResumenLote,
@@ -823,10 +862,13 @@ class Trabajo:
                 "dejar otro Empty-Batch."
             )
         if avisar is not None:
-            avisar(f"Nombrando el batch {nombre}", 0, 0)
-        if not renombrar(lote.batch_id, nombre):
-            raise ErrorDeCorrida(self._mensaje_nombre_no_confirmado(lote))
+            avisar(
+                f"Renombrando automáticamente {lote.nombre or 'Empty-Batch'} "
+                f"{lote.batch_id} como {nombre}",
+                0, 0,
+            )
         for intento in range(5):
+            aceptado = renombrar(lote.batch_id, nombre)
             try:
                 actuales = cliente.listar_lotes(nombre)
             except TypeError:
@@ -837,9 +879,22 @@ class Trabajo:
                 and normalizar_nombre(actual.nombre) == normalizar_nombre(nombre)
                 for actual in actuales
             ):
+                if avisar is not None:
+                    avisar(
+                        f"Confirmado: {lote.batch_id} ya aparece como "
+                        f"{nombre}",
+                        0, 0,
+                    )
                 return
             if intento < 4:
-                time.sleep(2.0)
+                if avisar is not None and not aceptado:
+                    avisar(
+                        f"AirVault aún no aceptó el nombre de {lote.batch_id}; "
+                        "se reintenta automáticamente",
+                        0, 0,
+                    )
+                if aceptado:
+                    time.sleep(2.0)
         raise ErrorDeCorrida(self._mensaje_nombre_no_confirmado(lote))
 
     def _mensaje_nombre_no_confirmado(self, lote: ResumenLote) -> str:
@@ -848,8 +903,9 @@ class Trabajo:
             f"AirVault recibió el archivo como ID {lote.batch_id}, pero no "
             f"confirmó el título «{nombre}» y todavía puede figurar como "
             f"«{lote.nombre or 'Empty-Batch'}». No se indexó ninguna página. "
-            "El programa seguirá comprobándolo y volverá a intentar "
-            "identificarlo y renombrarlo. Si el ID desaparece de Web Index, "
+            "El programa seguirá comprobándolo, leerá el Batch Name interno "
+            "y volverá a identificarlo y renombrarlo automáticamente. Si el "
+            "ID desaparece de Web Index, "
             "esperará 30 minutos y reenviará automáticamente una sola vez "
             "el PDF; después continuará confirmando sin crear más copias."
         )
@@ -1754,6 +1810,79 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
     return EstadoParte(trabajo, BUSCANDO, "subido; falta comprobar")
 
 
+def _nombre_embebido_empty_batch(cliente, lote: ResumenLote) -> str:
+    """Lee el Batch Name que Quick Upload dejó dentro de la primera página.
+
+    La cola llama ``Empty-Batch`` a todos los archivos, pero el campo 9631
+    conserva el título enviado por el programa. Leerlo permite distinguir
+    automáticamente dos cargas del mismo tamaño sin depender del orden.
+    """
+    abierto = False
+    try:
+        cliente.abrir_lote(lote.batch_id)
+        abierto = True
+        pagina = cliente.leer_pagina(lote.batch_id, 1)
+        return str(
+            pagina.valores.get(CAMPO_BATCH_NAME)
+            or pagina.columnas.get("Batch Name")
+            or pagina.columnas.get("C_BatchName")
+            or ""
+        ).strip()
+    except Exception as exc:  # noqa: BLE001 - se vuelve a intentar en el sondeo
+        logger.info(
+            "Todavia no se pudo leer el Batch Name interno de {}: {}",
+            lote.batch_id,
+            exc,
+        )
+        return ""
+    finally:
+        if abierto:
+            try:
+                cliente.cerrar_lote(lote.batch_id)
+            except Exception as exc:  # noqa: BLE001 - no oculta la lectura
+                logger.info(
+                    "No se pudo soltar {} despues de identificarlo: {}",
+                    lote.batch_id,
+                    exc,
+                )
+
+
+def _empty_batch_por_nombre_embebido(
+    trabajo: "Trabajo",
+    cliente,
+    lotes: Sequence[ResumenLote],
+    avisar: Optional[Aviso] = None,
+    cache: Optional[dict[str, str]] = None,
+) -> Optional[ResumenLote]:
+    """Encuentra el Empty-Batch cuyo campo interno trae el nombre esperado."""
+    manifiesto = trabajo.manifiesto
+    compatibles = manifiesto.cantidades_paginas_compatibles()
+    previos = manifiesto.lotes_previos
+    candidatos = recien_llegados(lotes, previos, manifiesto.repo_id)
+    cache = cache if cache is not None else {}
+    encontrados = []
+    for lote in candidatos:
+        clave = lote.batch_id.strip().upper()
+        if lote.paginas not in compatibles or not _es_nombre_temporal(lote.nombre):
+            continue
+        if clave not in cache:
+            cache[clave] = _nombre_embebido_empty_batch(cliente, lote)
+        if normalizar_nombre(cache[clave]) == normalizar_nombre(
+            manifiesto.nombre_batch
+        ):
+            encontrados.append(lote)
+    if len(encontrados) != 1:
+        return None
+    lote = encontrados[0]
+    if avisar is not None:
+        avisar(
+            f"Identificado automáticamente {lote.batch_id}: su Batch Name "
+            f"interno corresponde a {manifiesto.nombre_batch}",
+            0, 0,
+        )
+    return lote
+
+
 def _ubicar(trabajo: "Trabajo", cliente,
             lotes: Sequence[ResumenLote]) -> Optional[ResumenLote]:
     """Busca la parte por su nombre o por la instantanea previa y actualiza ID.
@@ -1772,23 +1901,45 @@ def _ubicar(trabajo: "Trabajo", cliente,
         lote = buscar_lote(
             lotes, manifiesto.nombre_batch, manifiesto.repo_id, esperadas
         )
-    except LoteNoEncontrado:
+    except (LoteNoEncontrado, LoteAmbiguo):
         lote = None
+        lote = _empty_batch_por_nombre_embebido(trabajo, cliente, lotes)
         if not manifiesto.batch_id and manifiesto.lotes_previos:
-            lote = buscar_nuevo(
-                lotes, manifiesto.lotes_previos,
-                manifiesto.repo_id, esperadas,
-            )
+            if lote is None:
+                try:
+                    lote = buscar_nuevo(
+                        lotes, manifiesto.lotes_previos,
+                        manifiesto.repo_id, esperadas,
+                    )
+                except LoteAmbiguo:
+                    lote = None
         if lote is not None:
-            trabajo.anotar_lote(cliente, lote)
-            return lote
+            try:
+                trabajo.anotar_lote(cliente, lote)
+                return lote
+            except ErrorDeCorrida as exc:
+                logger.info(
+                    "La correccion automatica de {} seguira en el proximo "
+                    "sondeo: {}",
+                    lote.batch_id,
+                    exc,
+                )
+                return None
         if manifiesto.batch_id:
             manifiesto.batch_id = None
             manifiesto.etapas["descubrir"] = Etapa()
             trabajo.guardar()
         return None
-    trabajo.anotar_lote(cliente, lote)
-    return lote
+    try:
+        trabajo.anotar_lote(cliente, lote)
+        return lote
+    except ErrorDeCorrida as exc:
+        logger.info(
+            "La confirmacion automatica de {} seguira en el proximo sondeo: {}",
+            lote.batch_id,
+            exc,
+        )
+        return None
 
 
 def _es_nombre_temporal(nombre: str) -> bool:
@@ -1801,7 +1952,7 @@ def _reconciliar_empty_batches(
     lotes: Sequence[ResumenLote],
     avisar: Optional[Aviso] = None,
 ) -> int:
-    """Reconoce nombres provisionales solo cuando existe una asignación segura."""
+    """Identifica, renombra y confirma automáticamente nombres provisionales."""
     usados = {
         str(trabajo.manifiesto.batch_id).strip().upper()
         for trabajo in trabajos
@@ -1816,6 +1967,7 @@ def _reconciliar_empty_batches(
         and not trabajo.manifiesto.etapa_hecha("completar")
     ]
     resueltos = 0
+    nombres_embebidos: dict[str, str] = {}
     while pendientes:
         candidatos = {}
         for trabajo in pendientes:
@@ -1830,32 +1982,79 @@ def _reconciliar_empty_batches(
                 and lote.paginas in compatibles
                 and _es_nombre_temporal(lote.nombre)
             ]
+        # Primero manda el nombre que Quick Upload dejó dentro de la página.
+        # Es una identidad exacta incluso si hay muchos Empty-Batch con la
+        # misma cantidad de páginas y llegaron a la cola al mismo tiempo.
         elegido = next(
             (
-                (trabajo, suyos[0])
-                for trabajo, suyos in candidatos.items()
-                if len(suyos) == 1
-                and all(
-                    otro is trabajo
-                    or suyos[0].batch_id.strip().upper()
-                    not in {lote.batch_id.strip().upper() for lote in otros}
-                    or len(otros) > 1
-                    for otro, otros in candidatos.items()
-                )
+                (trabajo, por_contenido)
+                for trabajo in pendientes
+                if (
+                    por_contenido := _empty_batch_por_nombre_embebido(
+                        trabajo, cliente, lotes, avisar, nombres_embebidos
+                    )
+                ) is not None
+                and por_contenido.batch_id.strip().upper() not in usados
             ),
             None,
         )
+        # Los manifiestos antiguos pueden no traer Batch Name en las páginas.
+        # En ese caso se conserva el respaldo seguro de instantánea + páginas.
+        if elegido is None:
+            for trabajo, suyos in candidatos.items():
+                esperado = normalizar_nombre(trabajo.manifiesto.nombre_batch)
+                candidatos[trabajo] = [
+                    lote
+                    for lote in suyos
+                    if not nombres_embebidos.get(
+                        lote.batch_id.strip().upper(), ""
+                    )
+                    or normalizar_nombre(
+                        nombres_embebidos[lote.batch_id.strip().upper()]
+                    ) == esperado
+                ]
+            elegido = next(
+                (
+                    (trabajo, suyos[0])
+                    for trabajo, suyos in candidatos.items()
+                    if len(suyos) == 1
+                    and all(
+                        otro is trabajo
+                        or suyos[0].batch_id.strip().upper()
+                        not in {
+                            lote.batch_id.strip().upper() for lote in otros
+                        }
+                        or len(otros) > 1
+                        for otro, otros in candidatos.items()
+                    )
+                ),
+                None,
+            )
         if elegido is None:
             break
         trabajo, lote = elegido
         if avisar is not None:
             avisar(
-                f"Se reconoció {lote.batch_id} por la subida y sus "
-                f"{lote.paginas} páginas; corrigiendo Empty-Batch",
+                f"Corrigiendo automáticamente Empty-Batch {lote.batch_id}: "
+                f"se renombrará como {trabajo.manifiesto.nombre_batch}",
                 0,
                 0,
             )
-        trabajo.anotar_lote(cliente, lote, avisar)
+        try:
+            trabajo.anotar_lote(cliente, lote, avisar)
+        except ErrorDeCorrida as exc:
+            if avisar is not None:
+                avisar(
+                    f"AirVault aún no confirmó el nombre de {lote.batch_id}; "
+                    "el programa lo reintentará automáticamente",
+                    0, 0,
+                )
+            logger.info(
+                "La correccion automatica de {} queda para el proximo sondeo: {}",
+                lote.batch_id,
+                exc,
+            )
+            break
         usados.add(lote.batch_id.strip().upper())
         pendientes.remove(trabajo)
         resueltos += 1

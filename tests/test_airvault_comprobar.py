@@ -18,8 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.airvault.client import PaginaDelLote
-from app.airvault.config import AirVaultConfig
+from app.airvault.client import PaginaDelLote, PaginaIndexada
+from app.airvault.config import CAMPO_BATCH_NAME, AirVaultConfig
 from app.airvault.discovery import LoteNoEncontrado
 from app.airvault.flujo import (
     BUSCANDO,
@@ -197,7 +197,103 @@ def test_la_comprobacion_periodica_recupera_un_empty_batch_interrumpido(
     ]
 
 
-def test_no_indexa_si_airvault_no_confirma_el_nombre_del_empty_batch(tmp_path):
+def test_varios_empty_batch_iguales_se_identifican_por_su_nombre_interno(
+    tmp_path,
+):
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)[:2]
+    for trabajo in trabajos:
+        trabajo.manifiesto.etapa("subir").marcar(
+            EstadoEtapa.HECHA, "subido"
+        )
+        trabajo.guardar()
+
+    class ClienteConNombreInterno(ClienteFalso):
+        def leer_pagina(self, batch_id, pagina):
+            indice = {"003UNO": 0, "003DOS": 1}[batch_id]
+            return PaginaIndexada(
+                pagina=pagina,
+                estado=3,
+                valores={
+                    CAMPO_BATCH_NAME: trabajos[indice].manifiesto.nombre_batch
+                },
+                columnas={},
+            )
+
+    cliente = ClienteConNombreInterno(lotes=[
+        lote("003VIEJO", "DP | ANTERIOR", 9),
+        lote("003UNO", "Empty-Batch", 2),
+        lote("003DOS", "Empty-Batch", 2),
+    ])
+
+    estados = comprobar_partes(trabajos, cliente)
+
+    assert [parte.batch_id for parte in estados] == ["003UNO", "003DOS"]
+    assert cliente.renombrados == [
+        ("003UNO", trabajos[0].manifiesto.nombre_batch),
+        ("003DOS", trabajos[1].manifiesto.nombre_batch),
+    ]
+    assert cliente.abiertos == ["003UNO", "003DOS"]
+    assert cliente.cerrados == ["003UNO", "003DOS"]
+
+
+def test_descubrir_elije_el_empty_batch_por_nombre_interno_antes_de_continuar(
+    tmp_path,
+):
+    trabajo, _ = trabajo_subido(tmp_path)
+
+    class ClienteConDosEmpty(ClienteFalso):
+        def leer_pagina(self, batch_id, pagina):
+            nombre = (
+                trabajo.manifiesto.nombre_batch
+                if batch_id == "003PROPIO"
+                else "DP | OTRA EJECUCION"
+            )
+            return PaginaIndexada(
+                pagina=pagina, estado=3,
+                valores={CAMPO_BATCH_NAME: nombre}, columnas={},
+            )
+
+    cliente = ClienteConDosEmpty(lotes=[
+        lote("003VIEJO", "DP | ANTERIOR", 9),
+        lote("003AJENO", "Empty-Batch", 2),
+        lote("003PROPIO", "Empty-Batch", 2),
+    ])
+
+    batch_id = trabajo.descubrir(cliente, esperar=False)
+
+    assert batch_id == "003PROPIO"
+    assert cliente.renombrados == [
+        ("003PROPIO", trabajo.manifiesto.nombre_batch)
+    ]
+
+
+def test_el_renombrado_de_empty_batch_se_reintenta_automaticamente(tmp_path):
+    trabajo, _ = trabajo_subido(tmp_path)
+
+    class ClienteRenameIntermitente(ClienteFalso):
+        intentos = 0
+
+        def renombrar_lote(self, batch_id, nombre):
+            self.intentos += 1
+            if self.intentos < 3:
+                return False
+            return super().renombrar_lote(batch_id, nombre)
+
+    cliente = ClienteRenameIntermitente(lotes=[
+        lote("003VIEJO", "DP | ANTERIOR", 9),
+        lote("003VACIO", "Empty-Batch", 2),
+    ])
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.batch_id == "003VACIO"
+    assert cliente.intentos == 3
+    assert cliente.renombrados == [
+        ("003VACIO", trabajo.manifiesto.nombre_batch)
+    ]
+
+
+def test_si_airvault_no_confirma_el_nombre_lo_reintenta_sin_indexar(tmp_path):
     class ClienteSinRename(ClienteFalso):
         def renombrar_lote(self, _batch_id, _nombre):
             return False
@@ -208,9 +304,9 @@ def test_no_indexa_si_airvault_no_confirma_el_nombre_del_empty_batch(tmp_path):
         lote("003VACIO", "Empty-Batch", 2),
     ])
 
-    with pytest.raises(ErrorDeCorrida, match="no confirmó el título"):
-        comprobar_partes([trabajo], cliente)
+    parte, = comprobar_partes([trabajo], cliente)
 
+    assert parte.estado == BUSCANDO
     assert trabajo.manifiesto.batch_id is None
     assert not trabajo.manifiesto.etapa_hecha("descubrir")
 
