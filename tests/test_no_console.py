@@ -9,10 +9,13 @@ terminales parpadeando.
 
 from __future__ import annotations
 
+import ssl
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
+import truststore
 
 from app.utils.no_console import CREATE_NO_WINDOW, suppress_child_consoles
 
@@ -78,6 +81,19 @@ def test_installing_twice_does_not_stack_wrappers(popen_calls):
     assert popen_calls[0]["creationflags"] == CREATE_NO_WINDOW
 
 
+def test_certificados_de_windows_se_instalan_una_sola_vez(monkeypatch):
+    from app.utils import portable
+
+    llamadas = []
+    falso = SimpleNamespace(inject_into_ssl=lambda: llamadas.append(True))
+    monkeypatch.setitem(sys.modules, "truststore", falso)
+    monkeypatch.setattr(portable, "_TLS_DEL_SISTEMA_ACTIVO", False)
+
+    assert portable.usar_certificados_de_windows() is True
+    assert portable.usar_certificados_de_windows() is True
+    assert llamadas == [True]
+
+
 def test_portable_environment_installs_the_patch(popen_calls):
     """El motor OCR llama a ``ensure_portable_env`` antes de importar paddle.
 
@@ -90,3 +106,4 @@ def test_portable_environment_installs_the_patch(popen_calls):
     subprocess.Popen(["where", "nvcc"])
 
     assert popen_calls[0]["creationflags"] & CREATE_NO_WINDOW
+    assert ssl.SSLContext is truststore.SSLContext

@@ -196,6 +196,18 @@ def _describir_cuerpo(respuesta: requests.Response, limite: int = 160) -> str:
     return f"codigo {respuesta.status_code}, empieza por «{recorte}»"
 
 
+def _motivo_ssl(exc: BaseException) -> str:
+    """Explica un fallo TLS sin proponer desactivar la seguridad."""
+    return (
+        "No se pudo validar el certificado SSL de AirVault. El programa usa "
+        "los certificados confiables de Windows, igual que Edge. Revise la "
+        "fecha y hora del equipo y confirme con TI que la CA raiz del proxy "
+        "corporativo este instalada en Windows. Si TI entrega un archivo PEM, "
+        "tambien se puede indicar con REQUESTS_CA_BUNDLE. "
+        f"Detalle tecnico: {exc}"
+    )
+
+
 @dataclass
 class Credenciales:
     """Usuario y contrasena de una cuenta local, solo en memoria."""
@@ -361,6 +373,8 @@ class SesionAirVault:
                 self.config.url(RUTA_DE_PRUEBA), params=dict(CONSULTA_DE_PRUEBA),
                 timeout=self.config.timeout_s,
             )
+        except requests.exceptions.SSLError as exc:
+            raise ErrorDeConexion(_motivo_ssl(exc)) from exc
         except requests.RequestException as exc:
             logger.debug("No se pudo probar la sesion del perfil: {}", exc)
             return False
@@ -556,6 +570,10 @@ class SesionAirVault:
                     metodo, url, timeout=self.config.timeout_s,
                     headers=cabeceras or None, **extra
                 )
+            except requests.exceptions.SSLError as exc:
+                # Una CA desconocida no se arregla reintentando y esconderla
+                # como un corte de red hace imposible diagnosticar la empresa.
+                raise ErrorDeConexion(_motivo_ssl(exc)) from exc
             except requests.Timeout as exc:
                 ultimo = (
                     f"no contesto en {self.config.timeout_s:.0f}s ({exc})"

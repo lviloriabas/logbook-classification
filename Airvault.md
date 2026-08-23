@@ -434,7 +434,7 @@ D:\BITS\
   airvault.json                    configuracion del modulo
   airvault_flota.json              cache matricula -> flota y arrendador
   fleet.json                       lista de matriculas de la flota
-  requirements.txt                 requests>=2.31 ya declarado
+  requirements.txt                 requests y truststore ya declarados
   pytest.ini                       testpaths = tests
   run_cli.py                       CLI de clasificacion (no tocar)
   run_gui.py / run_editor.py       interfaz (no tocar sin preguntar)
