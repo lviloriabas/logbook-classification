@@ -130,6 +130,12 @@ def test_el_limite_de_quick_upload_empieza_en_300_paginas(ventana):
     assert ventana.limite_batch_spin.value() == 300
 
 
+def test_la_compresion_es_opcional_y_explica_los_200_dpi(ventana):
+    assert ventana.compresion_check.text() == "Compresión"
+    assert not ventana.compresion_check.isChecked()
+    assert "200 DPI" in ventana.compresion_check.toolTip()
+
+
 def test_la_espera_automatica_empieza_en_dos_minutos(ventana):
     assert ventana.minutos_spin.value() == 2
 
@@ -193,6 +199,17 @@ def test_el_usuario_puede_elegir_el_limite_antes_de_subir(ventana, tmp_path):
     estado = ventana._base_del_estado()
 
     assert estado["paginas_por_batch"] == 450
+
+
+def test_el_usuario_puede_activar_la_compresion_antes_de_subir(
+    ventana, tmp_path,
+):
+    ventana.fijar_corrida(corrida(tmp_path))
+    ventana.compresion_check.setChecked(True)
+
+    estado = ventana._base_del_estado()
+
+    assert estado["compresion"] is True
 
 
 # ── el historial ───────────────────────────────────────────────────

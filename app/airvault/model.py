@@ -120,6 +120,9 @@ class Manifiesto(BaseModel):
     # Maximo elegido al preparar los archivos que van a Quick Upload.
     # Cero identifica manifiestos antiguos, anteriores a este reparto.
     paginas_por_batch: int = 0
+    # Si el PDF interno que se envia fue rasterizado a 200 DPI. Se guarda
+    # para que una reanudacion use exactamente el mismo archivo y ajuste.
+    compresion: bool = False
     # El batch se sube pero no se indexa: recoge las bitacoras con algun dato
     # dudoso o en conflicto, que nadie debe publicar sin mirarlas una por una.
     solo_subir: bool = False

@@ -172,23 +172,27 @@ los sube y los indexa todos, y cuenta el avance sobre el total.
    de una que no esté en la lista.
 3. Revise el nombre en **Batch**. Lleva la fecha y la hora de la ejecución
    porque en la cola de AirVault conviven batches con nombres repetidos.
-4. **Sesión** se deja vacío. La primera vez que pulse **Subir a AirVault**
+4. Si necesita reducir el peso de la carga, marque **Compresión**. La copia
+   interna que se envía se rasteriza a 200 DPI y JPEG de calidad moderada;
+   los PDF exportados de la ejecución no cambian. Quick Upload admite hasta
+   2.048 MB por archivo y el programa comprueba ese límite antes de enviar.
+5. **Sesión** se deja vacío. La primera vez que pulse **Subir a AirVault**
    se abre una ventana de Edge para que entre a AirVault con su usuario de
    Microsoft; se cierra sola al terminar y las veces siguientes no vuelve a
    aparecer. El campo es el respaldo por si eso falla: se pega ahí la cookie
    de la sesión copiada del navegador, y no se guarda.
-5. Pulse **Subir a AirVault**. Manda los PDF y termina ahí. Nada se indexa
+6. Pulse **Subir a AirVault**. Manda los PDF y termina ahí. Nada se indexa
    todavía.
-6. Espere. AirVault mete el batch en su cola y tarda en dejarlo indexable:
+7. Espere. AirVault mete el batch en su cola y tarda en dejarlo indexable:
    minutos, a veces mucho más. La ventana pregunta sola cada cinco minutos
    —se cambia en **Comprobar cada**, o se apaga— y con **Comprobar ahora**
    pregunta en el momento. En **Batches en AirVault** cada batch va pasando de
    *Subido; esperando* a *Procesándose* y a **Listo para indexar**. Cuando
    ya no queda nada que esperar, deja de preguntar.
-7. Pulse **Ver reporte…** y revise las páginas bloqueadas.
-8. Si quiere que el batch quede cerrado y fuera de la cola, marque
+8. Pulse **Ver reporte…** y revise las páginas bloqueadas.
+9. Si quiere que el batch quede cerrado y fuera de la cola, marque
    **Completar batch**.
-9. Pulse **Indexar**. Escribe en los batches que estén listos. El avance sale
+10. Pulse **Indexar**. Escribe en los batches que estén listos. El avance sale
    por la barra de esta ventana; la principal queda libre para seguir
    trabajando.
 

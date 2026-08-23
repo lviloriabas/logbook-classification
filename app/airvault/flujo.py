@@ -56,6 +56,14 @@ CARPETA_TRABAJOS = Path("output") / "airvault"
 # La ventana deja cambiarlo antes de preparar la carga.
 PAGINAS_POR_BATCH_POR_DEFECTO = 300
 
+# La pantalla de Quick Upload declara 2048 MB por archivo. La compresion
+# conserva margen respecto de ese techo y usa una calidad JPEG moderada:
+# bajar de 300/600 DPI a 200 aporta la mayor parte del ahorro sin castigar
+# los numeros y trazos manuscritos con una cuantizacion agresiva.
+DPI_COMPRESION = 200
+CALIDAD_JPEG_COMPRESION = 88
+MAXIMO_QUICK_UPLOAD_BYTES = 2048 * 1024 * 1024
+
 # Avisos de avance: reciben un texto y, cuando se sabe, cuanto se lleva de
 # cuanto. Es lo que la interfaz convierte en barra de progreso.
 Aviso = Callable[[str, int, int], None]
@@ -199,9 +207,15 @@ def _paginas_del_pdf(ruta: Path) -> int:
 
 def _pdf_de_carga(
     origen: ParteDeEntrega, numero_origen: int, inicio: int, fin: int,
-    carpeta: Path,
+    carpeta: Path, comprimir: bool = False,
+    avisar: Optional[Aviso] = None,
 ) -> Path:
-    """Copia un tramo contiguo a un PDF interno y estable de Quick Upload."""
+    """Prepara un tramo contiguo y estable para Quick Upload.
+
+    Sin compresion copia las paginas como estan. Con compresion rasteriza cada
+    pagina a 200 DPI y la guarda en JPEG de calidad moderada. En ambos casos
+    la entrega exportada queda intacta.
+    """
     from app.vision.pdf_loader import copy_pdf_pages
 
     huella = hashlib.sha1(
@@ -211,7 +225,8 @@ def _pdf_de_carga(
     destino = (
         carpeta / "cargas" /
         f"{clase}-{numero_origen:02d}-{huella}-"
-        f"p{inicio + 1:05d}-{fin:05d}.pdf"
+        f"p{inicio + 1:05d}-{fin:05d}"
+        f"{'-200dpi' if comprimir else ''}.pdf"
     )
     esperadas = fin - inicio
     if destino.is_file():
@@ -229,10 +244,44 @@ def _pdf_de_carga(
     temporal = Path(nombre_temporal)
     temporal.unlink(missing_ok=True)
     try:
-        copy_pdf_pages(
-            ((origen.pdf, pagina) for pagina in range(inicio + 1, fin + 1)),
-            temporal,
-        )
+        if comprimir:
+            import pymupdf as fitz
+
+            fuente = fitz.open(str(origen.pdf))
+            salida = fitz.open()
+            try:
+                for desplazamiento, numero_pagina in enumerate(
+                    range(inicio, fin), start=1
+                ):
+                    if avisar is not None:
+                        avisar(
+                            f"Comprimiendo {origen.pdf.name} a "
+                            f"{DPI_COMPRESION} DPI",
+                            desplazamiento - 1, esperadas,
+                        )
+                    pagina = fuente.load_page(numero_pagina)
+                    pixmap = pagina.get_pixmap(
+                        dpi=DPI_COMPRESION, colorspace=fitz.csRGB, alpha=False,
+                    )
+                    imagen = pixmap.tobytes(
+                        "jpeg", jpg_quality=CALIDAD_JPEG_COMPRESION
+                    )
+                    nueva = salida.new_page(
+                        width=pagina.rect.width, height=pagina.rect.height
+                    )
+                    nueva.insert_image(nueva.rect, stream=imagen)
+                salida.save(str(temporal), garbage=4, deflate=True)
+            finally:
+                salida.close()
+                fuente.close()
+        else:
+            copy_pdf_pages(
+                (
+                    (origen.pdf, pagina)
+                    for pagina in range(inicio + 1, fin + 1)
+                ),
+                temporal,
+            )
         os.replace(temporal, destino)
     finally:
         temporal.unlink(missing_ok=True)
@@ -243,12 +292,14 @@ def partes_para_airvault(
     partes: Sequence[ParteDeEntrega], carpeta: Path | str,
     paginas_por_batch: int = PAGINAS_POR_BATCH_POR_DEFECTO,
     avisar: Optional[Aviso] = None,
+    compresion: bool = False,
 ) -> List[ParteDeEntrega]:
     """Acota los PDF que recibira Quick Upload sin tocar la entrega original.
 
     Cada tramo conserva el mismo orden y los mismos diccionarios del indice
     de paginas. Solo los archivos que exceden el limite se copian a la
-    carpeta interna del trabajo; los que ya caben se usan directamente.
+    carpeta interna del trabajo, salvo que se active la compresion: entonces
+    todos se rasterizan a 200 DPI sin modificar la entrega original.
     Automaticos y REVISAR se numeran por separado.
     """
     try:
@@ -268,7 +319,13 @@ def partes_para_airvault(
     for numero_origen, parte in enumerate(partes, start=1):
         cantidad = len(parte.paginas)
         if limite <= 0 or cantidad <= limite:
-            crudas.append((parte.pdf, list(parte.paginas), parte.revisar))
+            pdf = parte.pdf
+            if compresion:
+                pdf = _pdf_de_carga(
+                    parte, numero_origen, 0, cantidad, Path(carpeta),
+                    comprimir=True, avisar=avisar,
+                )
+            crudas.append((pdf, list(parte.paginas), parte.revisar))
             preparadas += cantidad
             continue
 
@@ -287,7 +344,8 @@ def partes_para_airvault(
                     preparadas, total_paginas,
                 )
             pdf = _pdf_de_carga(
-                parte, numero_origen, inicio, fin, Path(carpeta)
+                parte, numero_origen, inicio, fin, Path(carpeta),
+                comprimir=compresion, avisar=avisar,
             )
             crudas.append((pdf, list(parte.paginas[inicio:fin]), parte.revisar))
             preparadas += fin - inicio
@@ -411,6 +469,7 @@ class Trabajo:
         resolutor: Optional[ResolutorFlota] = None,
         parte: Optional[ParteDeEntrega] = None,
         paginas_por_batch: int = PAGINAS_POR_BATCH_POR_DEFECTO,
+        compresion: bool = False,
     ) -> "Trabajo":
         """Arma el manifiesto de un archivo de entrega.
 
@@ -467,6 +526,7 @@ class Trabajo:
             parte=parte.indice if parte else 1,
             partes=parte.total if parte else 1,
             paginas_por_batch=int(paginas_por_batch),
+            compresion=bool(compresion),
             solo_subir=bool(parte and parte.revisar),
             doc_type=config.doc_type,
             audit_status=config.audit_status,
@@ -493,6 +553,7 @@ class Trabajo:
         resolutor: Optional[ResolutorFlota] = None,
         parte: Optional[ParteDeEntrega] = None,
         paginas_por_batch: int = PAGINAS_POR_BATCH_POR_DEFECTO,
+        compresion: bool = False,
     ) -> "Trabajo":
         """Retoma el trabajo si ya existe para este CSV; si no, lo crea.
 
@@ -515,7 +576,10 @@ class Trabajo:
             mismo_limite = trabajo.manifiesto.paginas_por_batch in (
                 0, int(paginas_por_batch)
             )
-            if mismo_csv and mismo_pdf and mismo_limite:
+            misma_compresion = (
+                trabajo.manifiesto.compresion == bool(compresion)
+            )
+            if mismo_csv and mismo_pdf and mismo_limite and misma_compresion:
                 propuesto = (
                     parte.nombre_lote(nombre_lote) if parte and nombre_lote
                     else nombre_lote
@@ -529,7 +593,7 @@ class Trabajo:
             )
         return cls.preparar(
             config, carpeta, csv, nombre_lote, prefijo, resolutor, parte,
-            paginas_por_batch,
+            paginas_por_batch, compresion,
         )
 
     def guardar(self) -> Path:
@@ -573,6 +637,12 @@ class Trabajo:
                 f"El PDF {archivo.name} tiene {paginas_pdf} paginas y supera "
                 f"el maximo elegido de {limite}; no se sube. Reinicie el "
                 "registro local para volver a repartir la ejecucion."
+            )
+        if archivo.stat().st_size > MAXIMO_QUICK_UPLOAD_BYTES:
+            raise ErrorDeCorrida(
+                f"El PDF {archivo.name} pesa mas de 2048 MB, que es el "
+                "maximo de Quick Upload; no se sube. Reduzca el maximo de "
+                "paginas por batch y reinicie el registro local."
             )
         if cliente is not None:
             # AirVault publica lo cargado como ``Empty-Batch`` aunque Quick
@@ -1031,6 +1101,7 @@ def preparar_partes(
     resolutor: Optional[ResolutorFlota] = None,
     paginas_por_batch: int = PAGINAS_POR_BATCH_POR_DEFECTO,
     avisar: Optional[Aviso] = None,
+    compresion: bool = False,
 ) -> List["Trabajo"]:
     """Un trabajo por cada archivo de entrega de la ejecución.
 
@@ -1046,13 +1117,15 @@ def preparar_partes(
         # haria desaparecer el batch correcto de la lista.
         return existentes
     partes = partes_para_airvault(
-        comprobar_entrega(csv), carpeta, paginas_por_batch, avisar
+        comprobar_entrega(csv), carpeta, paginas_por_batch, avisar,
+        compresion,
     )
     resolutor = resolutor or ResolutorFlota()
     return [
         Trabajo.abrir_o_preparar(
             config, carpeta_de_parte(carpeta, parte), csv,
             nombre_lote, prefijo, resolutor, parte, paginas_por_batch,
+            compresion,
         )
         for parte in partes
     ]

@@ -11,6 +11,7 @@ diccionarios de mentira.
 from __future__ import annotations
 
 import csv
+import io
 import os
 from pathlib import Path
 
@@ -19,10 +20,14 @@ import pytest
 
 from app.airvault.config import AirVaultConfig
 from app.airvault.flujo import (
+    CALIDAD_JPEG_COMPRESION,
+    DPI_COMPRESION,
     ErrorDeCorrida,
+    ParteDeEntrega,
     Trabajo,
     cargar_partes,
     comprobar_entrega,
+    partes_para_airvault,
     preparar_partes,
 )
 from app.airvault.guards import verificar_cantidad
@@ -259,6 +264,57 @@ def test_airvault_reparte_una_entrega_que_supera_el_limite(tmp_path):
     assert partes[0].ruta.read_bytes() == original
 
 
+def test_compresion_reduce_un_escaneo_y_lo_deja_a_200_dpi(tmp_path):
+    """La calidad moderada reduce pixeles, no los PDF originales."""
+    from PIL import Image
+
+    fuente = tmp_path / "escaneo-300dpi.pdf"
+    imagen = Image.effect_noise((2550, 3300), 35).convert("RGB")
+    datos = io.BytesIO()
+    imagen.save(datos, format="JPEG", quality=98)
+    documento = fitz.open()
+    pagina = documento.new_page(width=612, height=792)
+    pagina.insert_image(pagina.rect, stream=datos.getvalue())
+    documento.save(str(fuente))
+    documento.close()
+    original = fuente.read_bytes()
+
+    parte = ParteDeEntrega(1, 1, fuente, [{}])
+    comprimida = partes_para_airvault(
+        [parte], tmp_path / "job", compresion=True
+    )[0].pdf
+
+    assert DPI_COMPRESION == 200
+    assert CALIDAD_JPEG_COMPRESION == 88
+    assert comprimida.name.endswith("-200dpi.pdf")
+    assert comprimida.stat().st_size < fuente.stat().st_size
+    assert fuente.read_bytes() == original
+    with fitz.open(str(comprimida)) as salida:
+        assert salida.page_count == 1
+        pagina = salida[0]
+        imagenes = pagina.get_images(full=True)
+        assert len(imagenes) == 1
+        incrustada = salida.extract_image(imagenes[0][0])
+        assert incrustada["width"] == round(pagina.rect.width * 200 / 72)
+        assert incrustada["height"] == round(pagina.rect.height * 200 / 72)
+        assert incrustada["ext"] == "jpeg"
+
+
+def test_la_compresion_queda_guardada_para_reanudar(tmp_path):
+    csv_path, _partes = corrida(tmp_path)
+
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, compresion=True
+    )
+    retomados = cargar_partes(AirVaultConfig(), tmp_path / "job", csv_path)
+
+    assert all(t.manifiesto.compresion for t in trabajos)
+    assert all(t.manifiesto.compresion for t in retomados)
+    assert [t.manifiesto.pdf_origen for t in retomados] == [
+        t.manifiesto.pdf_origen for t in trabajos
+    ]
+
+
 def test_antes_de_subir_valida_el_pdf_aunque_el_indice_diga_que_cabe(
     tmp_path,
 ):
@@ -277,6 +333,17 @@ def test_antes_de_subir_valida_el_pdf_aunque_el_indice_diga_que_cabe(
     os.replace(alterado, pdf)
 
     with pytest.raises(ErrorDeCorrida, match="datos quedarian corridos"):
+        trabajo.subir(object())
+
+
+def test_antes_de_subir_respeta_el_limite_de_2048_mb(tmp_path, monkeypatch):
+    csv_path, _partes = corrida(tmp_path)
+    trabajo = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path
+    )[0]
+    monkeypatch.setattr("app.airvault.flujo.MAXIMO_QUICK_UPLOAD_BYTES", 1)
+
+    with pytest.raises(ErrorDeCorrida, match="maximo de Quick Upload"):
         trabajo.subir(object())
 
 
