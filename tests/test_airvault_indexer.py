@@ -9,6 +9,7 @@ from app.airvault.config import (
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
     CAMPO_WORK_LOCATION,
+    ESTADO_NECESITA_CORRECCION,
     ESTADO_VALIDO,
 )
 from app.airvault.guards import ErrorDeGuarda
@@ -259,13 +260,33 @@ def test_verificar_no_cuenta_una_verde_con_identidad_equivocada():
     assert any("HP-1852CMP" in problema for problema in problemas)
 
 
-def test_matricula_fuera_de_picklist_bloquea():
+def test_matricula_fuera_de_picklist_se_escribe_completa_y_valida():
     m = manifiesto(1)
     m.registros[0].matricula = "HP-0000CMP"
     cliente = ClienteFalso(page_count=1)
-    plan = Indexador(cliente, m, PICKLIST).planificar(1)
-    codigos = {a.codigo for a in plan.bloqueadas[0].avisos}
+    indexador = Indexador(cliente, m, PICKLIST)
+    plan = indexador.planificar(1)
+    codigos = {a.codigo for a in plan.escribibles[0].avisos}
     assert "matricula_desconocida" in codigos
+    assert plan.escribibles[0].requiere_revision
+
+    indexador.aplicar(plan)
+
+    assert cliente.escrituras[0][2] == ESTADO_VALIDO
+
+
+def test_campo_obligatorio_vacio_se_envia_con_lo_que_hay():
+    m = manifiesto(1)
+    m.registros[0].log_number = ""
+    cliente = ClienteFalso(page_count=1)
+    indexador = Indexador(cliente, m, PICKLIST)
+
+    plan = indexador.planificar(1)
+    indexador.aplicar(plan)
+
+    assert len(plan.escribibles) == 1
+    assert cliente.escrituras[0][1][CAMPO_LOG_NUMBER] == ""
+    assert cliente.escrituras[0][2] == ESTADO_NECESITA_CORRECCION
 
 
 def test_aprende_la_flota_que_airvault_ya_tiene():

@@ -20,6 +20,7 @@ from app.airvault.config import (
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
     CAMPO_WORK_LOCATION,
+    ESTADO_NECESITA_CORRECCION,
     ESTADO_VALIDO,
 )
 from app.airvault.guards import (
@@ -40,6 +41,16 @@ from app.airvault.session import ErrorDeConexion, ErrorDeSesion
 # siguiente solo sirve para marcar cuatrocientas paginas con el mismo error.
 FALLOS_DE_CAMINO = (ErrorDeSesion, ErrorDeConexion)
 
+# Estos avisos describen calidad incompleta, no una correspondencia rota. Se
+# envia lo disponible y AirVault deja la pagina pendiente de revision. Todo
+# aviso nuevo bloquea por defecto hasta que se clasifique expresamente aqui.
+AVISOS_DE_REVISION = {
+    "matricula_vacia",
+    "matricula_desconocida",
+    "obligatorio_vacio",
+    "log_duplicado",
+}
+
 
 @dataclass
 class PlanPagina:
@@ -55,7 +66,20 @@ class PlanPagina:
     @property
     def escribible(self) -> bool:
         """Una divisoria nunca se escribe: no es un documento que indexar."""
-        return not self.avisos and not self.registro.es_separador
+        return not self.bloqueos and not self.registro.es_separador
+
+    @property
+    def bloqueos(self) -> List[Aviso]:
+        return [a for a in self.avisos if a.codigo not in AVISOS_DE_REVISION]
+
+    @property
+    def requiere_revision(self) -> bool:
+        return self.escribible and bool(self.avisos)
+
+    @property
+    def queda_incompleta(self) -> bool:
+        """AirVault no puede validarla porque falta un campo obligatorio."""
+        return any(a.codigo == "obligatorio_vacio" for a in self.avisos)
 
 
 @dataclass
@@ -152,12 +176,6 @@ class Indexador:
             registros, paginas_lote,
             self.manifiesto.separadores_borrados(),
         )
-
-        if self.manifiesto.solo_subir:
-            # El batch esta subido para que alguien lo resuelva a mano. No se
-            # lee ni se escribe: leerlo serian peticiones de mas y escribirlo
-            # es justo lo que no se puede hacer sin mirar la bitacora.
-            return self._plan_para_revisar(registros)
 
         globales: List[Aviso] = []
         globales.extend(verificar_matriculas(registros, self.picklist))
@@ -262,21 +280,6 @@ class Indexador:
         ]
         return plan
 
-    def _plan_para_revisar(self, registros) -> Plan:
-        """Plan de un batch que se sube pero no se indexa."""
-        plan = Plan(batch_id=self.manifiesto.batch_id or "")
-        for indice, registro in enumerate(registros, start=1):
-            avisos = [] if registro.es_separador else [Aviso(
-                registro.seq, "revisar_a_mano",
-                "lectura dudosa o en conflicto; se indexa a mano en AirVault",
-            )]
-            plan.paginas.append(PlanPagina(
-                seq=registro.seq,
-                pagina_batch=registro.pagina_batch or indice,
-                registro=registro, valores={}, avisos=avisos,
-            ))
-        return plan
-
     def _aprender_flota(self, remotas) -> None:
         """Guarda los pares matricula/flota que AirVault ya tiene puestos."""
         for remota in remotas:
@@ -352,11 +355,16 @@ class Indexador:
                 # explicita para limpiar cualquier valor que AirVault haya
                 # heredado o completado por su cuenta.
                 valores[CAMPO_WORK_LOCATION] = ""
+                estado = (
+                    ESTADO_NECESITA_CORRECCION
+                    if entrada.queda_incompleta
+                    else ESTADO_VALIDO
+                )
                 self.cliente.guardar_pagina(
                     plan.batch_id,
                     entrada.pagina_batch,
                     valores,
-                    ESTADO_VALIDO,
+                    estado,
                     entrada.pagina_batch,
                 )
             except FALLOS_DE_CAMINO as exc:

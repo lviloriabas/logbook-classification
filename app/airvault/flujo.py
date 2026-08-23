@@ -33,7 +33,6 @@ from app.airvault.discovery import (
 )
 from app.airvault.discovery import esperar as esperar_lote
 from app.airvault.discovery import buscar as buscar_lote
-from app.airvault.guards import verificar_duplicados, verificar_obligatorios
 from app.airvault.indexer import Indexador, Plan, Resultado, verificar_lote
 from app.airvault.mapping import (
     ResolutorFlota,
@@ -498,17 +497,14 @@ class EstadoParte:
 
     @property
     def se_puede_indexar(self) -> bool:
-        return (
-            self.estado in (LISTO, INCOMPLETO)
-            and not (self.lote and self.lote.bloqueado_por)
+        return self.estado in (LISTO, INCOMPLETO, SOLO_REVISAR) and not (
+            self.lote and self.lote.bloqueado_por
         )
 
     @property
     def se_acabo(self) -> bool:
         """Ya no hay nada que esperar de esta parte."""
-        return self.estado in (
-            DESCUADRADO, SOLO_REVISAR, INDEXADO, COMPLETADO
-        )
+        return self.estado in (DESCUADRADO, INDEXADO, COMPLETADO)
 
     def __str__(self) -> str:
         titulo = NOMBRE_ESTADO_PARTE.get(self.estado, self.estado)
@@ -691,28 +687,6 @@ class Trabajo:
         if self.manifiesto.etapa_hecha("subir"):
             logger.info("El batch ya estaba subido; no se vuelve a subir")
             return
-        if not self.manifiesto.solo_subir:
-            bloqueos = []
-            for registro in self.manifiesto.bitacoras():
-                valores = valores_de_indice(
-                    registro, self.manifiesto.doc_type,
-                    self.manifiesto.audit_status,
-                    self.manifiesto.nombre_batch,
-                )
-                bloqueos.extend(verificar_obligatorios(registro, valores))
-            bloqueos.extend(verificar_duplicados(self.manifiesto.registros))
-            if bloqueos:
-                paginas = sorted({aviso.seq for aviso in bloqueos})
-                detalle = (
-                    f"{len(paginas)} paginas no son seguras para indexado "
-                    f"automatico ({_enumerar(paginas)}); deben quedar en "
-                    "REVISAR. No se subio ningun archivo"
-                )
-                self.manifiesto.etapa("subir").marcar(
-                    EstadoEtapa.ERROR, detalle
-                )
-                self.guardar()
-                raise ErrorDeCorrida(detalle)
         archivo = Path(pdf or self.manifiesto.pdf_origen)
         if not archivo.is_file():
             raise ErrorDeCorrida(
@@ -1278,15 +1252,14 @@ def _validar_nombres_de_batches(trabajos: Sequence["Trabajo"]) -> None:
 
 
 def subir_partes(
-    trabajos: Sequence["Trabajo"], sesion, avisar: Optional[Aviso] = None,
-    cliente=None, dormir: Callable[[float], None] = time.sleep,
-    al_finalizar_subidas: Optional[
-        Callable[[Sequence["Trabajo"]], None]
-    ] = None,
-    al_encontrar: Optional[
-        Callable[["Trabajo", Sequence["Trabajo"]], None]
-    ] = None,
-) -> None:
+    trabajos: Sequence["Trabajo"],
+    sesion,
+    avisar: Optional[Aviso] = None,
+    cliente=None,
+    dormir: Callable[[float], None] = time.sleep,
+    al_finalizar_subidas: Optional[Callable[[Sequence["Trabajo"]], None]] = None,
+    al_encontrar: Optional[Callable[["Trabajo", Sequence["Trabajo"]], None]] = None,
+) -> List[Tuple["Trabajo", str]]:
     """Confirma todos los batches y sube solamente los que falten.
 
     Con cliente se buscan tambien el batch sin sufijo y los de REVISAR. Los
@@ -1301,7 +1274,8 @@ def subir_partes(
     esperar a que el primero aparezca y quede nombrado es la barrera que evita
     que dos partes de 100 paginas terminen como un batch de 200. La instantanea
     de la cola tomada antes de cada subida permite reconocer tambien el nombre
-    temporal ``Empty-Batch`` sin cruzar IDs.
+    temporal ``Empty-Batch`` sin cruzar IDs. Un fallo queda aislado en su
+    trabajo: no impide intentar las demas partes de la ejecucion.
     """
     _validar_nombres_de_batches(trabajos)
     por_subir = list(trabajos)
@@ -1335,6 +1309,7 @@ def subir_partes(
                 if parte.batch_id:
                     al_encontrar(parte.trabajo, trabajos)
 
+    fallos: List[Tuple["Trabajo", str]] = []
     for trabajo in por_subir:
         cabeza = _prefijo(trabajo)
 
@@ -1343,8 +1318,25 @@ def subir_partes(
             if avisar is not None:
                 avisar(f"{cabeza}{texto}", hechas, total)
 
-        trabajo.subir(sesion, avisar=propio if avisar else None,
-                      cliente=cliente)
+        try:
+            trabajo.subir(
+                sesion, avisar=propio if avisar else None, cliente=cliente
+            )
+        except Exception as exc:  # noqa: BLE001 - cada batch es independiente
+            detalle = str(exc)
+            fallos.append((trabajo, detalle))
+            logger.error(
+                "No se pudo subir el batch {}: {}. Se intenta el siguiente.",
+                trabajo.manifiesto.nombre_batch,
+                detalle,
+            )
+            if avisar is not None:
+                avisar(
+                    f"{cabeza}No se pudo subir; se intenta el siguiente batch",
+                    0,
+                    0,
+                )
+            continue
         if al_finalizar_subidas is not None:
             # La UI debe reflejar que Quick Upload ya acepto este archivo
             # incluso si AirVault tarda o falla antes de publicar su ID.
@@ -1356,12 +1348,32 @@ def subir_partes(
                     "nombre el batch antes de continuar",
                     0, 0,
                 )
-            trabajo.descubrir(
-                cliente, esperar=True, dormir=dormir,
-                avisar=propio if avisar else None,
-            )
+            try:
+                trabajo.descubrir(
+                    cliente,
+                    esperar=True,
+                    dormir=dormir,
+                    avisar=propio if avisar else None,
+                )
+            except Exception as exc:  # noqa: BLE001 - se sigue con las demas
+                detalle = str(exc)
+                fallos.append((trabajo, detalle))
+                logger.error(
+                    "No se pudo encontrar el batch {}: {}. Se intenta el siguiente.",
+                    trabajo.manifiesto.nombre_batch,
+                    detalle,
+                )
+                if avisar is not None:
+                    avisar(
+                        f"{cabeza}AirVault aun no lo publica; se intenta "
+                        "el siguiente batch",
+                        0,
+                        0,
+                    )
+                continue
             if al_encontrar is not None:
                 al_encontrar(trabajo, trabajos)
+    return fallos
 
 
 def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:
@@ -1549,9 +1561,9 @@ def cargar_trabajos_pendientes(
 ) -> List["Trabajo"]:
     """Recupera batches creados por la aplicacion que aun requieren trabajo.
 
-    Solo se confia en manifiestos propios. Los batches de REVISAR se dejan
-    fuera porque su indexado es deliberadamente manual, y los completados ya
-    salieron de la cola de Web Index.
+    Solo se confia en manifiestos propios. Los batches de REVISAR tambien se
+    recuperan: conservan datos del CSV que deben intentarse antes de la
+    revision manual. Los completados ya salieron de la cola de Web Index.
     """
     raiz = Path(carpeta_raiz)
     if not raiz.is_dir():
@@ -1565,7 +1577,7 @@ def cargar_trabajos_pendientes(
         manifiesto = trabajo.manifiesto
         subida = manifiesto.etapas.get("subir")
         completar = manifiesto.etapas.get("completar")
-        if manifiesto.solo_subir or not subida:
+        if not subida:
             continue
         if subida.estado not in (
             EstadoEtapa.HECHA, EstadoEtapa.OMITIDA, EstadoEtapa.EN_CURSO,
@@ -1652,7 +1664,9 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
     if verificar and verificar.estado is EstadoEtapa.ERROR:
         return EstadoParte(trabajo, INCOMPLETO, verificar.detalle)
     if manifiesto.solo_subir and manifiesto.batch_id:
-        return EstadoParte(trabajo, SOLO_REVISAR, "subido, se indexa a mano")
+        return EstadoParte(
+            trabajo, SOLO_REVISAR, "subido; falta escribir los datos disponibles"
+        )
     return EstadoParte(trabajo, BUSCANDO, "subido; falta comprobar")
 
 
@@ -1745,7 +1759,10 @@ def _estado_de(trabajo: "Trabajo", cliente,
         )
     if manifiesto.solo_subir:
         return EstadoParte(
-            trabajo, SOLO_REVISAR, f"{esperadas} paginas para revisar", lote
+            trabajo,
+            SOLO_REVISAR,
+            f"{esperadas} paginas para indexar y revisar",
+            lote,
         )
     verificar = manifiesto.etapas.get("verificar")
     if verificar and verificar.estado is EstadoEtapa.HECHA:
@@ -1899,10 +1916,6 @@ def verificar_partes(
     validas = total = 0
     problemas: List[str] = []
     for trabajo in trabajos:
-        if trabajo.manifiesto.solo_subir:
-            # No se escribio nada en el: comprobar que quedo valido seria
-            # reprochar que nadie lo haya indexado todavia.
-            continue
         cabeza = _prefijo(trabajo)
         propias, suyas, suyos = trabajo.verificar(cliente)
         validas += propias
