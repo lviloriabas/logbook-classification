@@ -31,6 +31,7 @@ from app.airvault.flujo import (
     preparar_partes,
 )
 from app.airvault.guards import verificar_cantidad
+from app.airvault.model import EstadoEtapa
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.reports.organize import (
     NOMBRE_INDICE_PAGINAS,
@@ -253,15 +254,38 @@ def test_airvault_reparte_una_entrega_que_supera_el_limite(tmp_path):
         paginas_por_batch=5,
     )
 
-    assert len(trabajos) == 3
-    assert [len(t.manifiesto.registros) for t in trabajos] == [5, 5, 2]
+    assert len(trabajos) == 4
+    assert [len(t.manifiesto.registros) for t in trabajos] == [3, 3, 3, 3]
     assert all(t.manifiesto.paginas_por_batch == 5 for t in trabajos)
     for trabajo in trabajos:
+        assert trabajo.manifiesto.registros[0].es_separador
         pdf = Path(trabajo.manifiesto.pdf_origen)
         assert pdf.parent.name == "cargas"
         assert paginas_del_pdf(pdf) == len(trabajo.manifiesto.registros)
     # El reparto de AirVault no reexporta ni reemplaza la entrega original.
     assert partes[0].ruta.read_bytes() == original
+
+
+def test_airvault_repite_el_separador_si_una_seccion_supera_el_limite(
+    tmp_path,
+):
+    csv_path, _partes = corrida(tmp_path, separar=())
+    parte = comprobar_entrega(csv_path)[0]
+    parte.paginas.insert(0, {"separador": "HP-1848CMP"})
+    fuente = fitz.open(str(parte.pdf))
+    con_separador = fitz.open()
+    con_separador.new_page(width=842, height=595)
+    con_separador.insert_pdf(fuente)
+    fuente.close()
+    temporal = parte.pdf.with_suffix(".nuevo.pdf")
+    con_separador.save(str(temporal))
+    con_separador.close()
+    os.replace(temporal, parte.pdf)
+
+    partidas = partes_para_airvault([parte], tmp_path / "job", 4)
+
+    assert [len(p.paginas) for p in partidas] == [4, 4, 3]
+    assert all(p.paginas[0].get("separador") for p in partidas)
 
 
 def test_compresion_reduce_un_escaneo_y_lo_deja_a_200_dpi(tmp_path):
@@ -334,6 +358,21 @@ def test_antes_de_subir_valida_el_pdf_aunque_el_indice_diga_que_cabe(
 
     with pytest.raises(ErrorDeCorrida, match="datos quedarian corridos"):
         trabajo.subir(object())
+
+
+def test_antes_de_subir_rechaza_paginas_que_quedarian_amarillas(tmp_path):
+    csv_path, _partes = corrida(tmp_path)
+    trabajo = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path
+    )[0]
+    trabajo.manifiesto.bitacoras()[0].log_number = ""
+
+    with pytest.raises(ErrorDeCorrida, match="deben quedar en REVISAR"):
+        trabajo.subir(object())
+
+    etapa = trabajo.manifiesto.etapa("subir")
+    assert etapa.estado is EstadoEtapa.ERROR
+    assert "No se subio ningun archivo" in etapa.detalle
 
 
 def test_antes_de_subir_respeta_el_limite_de_2048_mb(tmp_path, monkeypatch):

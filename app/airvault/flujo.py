@@ -33,6 +33,7 @@ from app.airvault.discovery import (
 )
 from app.airvault.discovery import esperar as esperar_lote
 from app.airvault.discovery import buscar as buscar_lote
+from app.airvault.guards import verificar_duplicados, verificar_obligatorios
 from app.airvault.indexer import Indexador, Plan, Resultado, verificar_lote
 from app.airvault.mapping import (
     ResolutorFlota,
@@ -206,7 +207,7 @@ def _paginas_del_pdf(ruta: Path) -> int:
 
 
 def _pdf_de_carga(
-    origen: ParteDeEntrega, numero_origen: int, inicio: int, fin: int,
+    origen: ParteDeEntrega, numero_origen: int, paginas: Sequence[int],
     carpeta: Path, comprimir: bool = False,
     avisar: Optional[Aviso] = None,
 ) -> Path:
@@ -218,17 +219,19 @@ def _pdf_de_carga(
     """
     from app.vision.pdf_loader import copy_pdf_pages
 
+    numeros = list(paginas)
+    seleccion = ",".join(str(numero) for numero in numeros)
     huella = hashlib.sha1(
-        str(origen.pdf.resolve()).casefold().encode("utf-8")
+        (str(origen.pdf.resolve()).casefold() + "|" + seleccion).encode("utf-8")
     ).hexdigest()[:10]
     clase = "revisar" if origen.revisar else "automatico"
     destino = (
         carpeta / "cargas" /
         f"{clase}-{numero_origen:02d}-{huella}-"
-        f"p{inicio + 1:05d}-{fin:05d}"
+        f"p{numeros[0] + 1:05d}-{numeros[-1] + 1:05d}-{huella}"
         f"{'-200dpi' if comprimir else ''}.pdf"
     )
-    esperadas = fin - inicio
+    esperadas = len(numeros)
     if destino.is_file():
         try:
             if _paginas_del_pdf(destino) == esperadas:
@@ -251,7 +254,7 @@ def _pdf_de_carga(
             salida = fitz.open()
             try:
                 for desplazamiento, numero_pagina in enumerate(
-                    range(inicio, fin), start=1
+                    numeros, start=1
                 ):
                     if avisar is not None:
                         avisar(
@@ -277,8 +280,8 @@ def _pdf_de_carga(
         else:
             copy_pdf_pages(
                 (
-                    (origen.pdf, pagina)
-                    for pagina in range(inicio + 1, fin + 1)
+                    (origen.pdf, pagina + 1)
+                    for pagina in numeros
                 ),
                 temporal,
             )
@@ -286,6 +289,63 @@ def _pdf_de_carga(
     finally:
         temporal.unlink(missing_ok=True)
     return destino
+
+
+def _partir_paginas_por_seccion(
+    paginas: Sequence[dict], limite: int,
+) -> List[List[int]]:
+    """Índices de páginas para batches que conservan sus separadores.
+
+    Se corta entre aeronaves siempre que sea posible. Si una sola aeronave
+    supera el límite, cada continuación repite su separador y reserva una
+    página para él. Así ninguna parte comienza con bitácoras huérfanas.
+    """
+    indices = list(range(len(paginas)))
+    if limite <= 0 or len(indices) <= limite:
+        return [indices]
+
+    secciones: List[List[int]] = []
+    actual: List[int] = []
+    for indice in indices:
+        if paginas[indice].get("separador") and actual:
+            secciones.append(actual)
+            actual = []
+        actual.append(indice)
+    if actual:
+        secciones.append(actual)
+
+    partes: List[List[int]] = []
+    actual = []
+    for seccion in secciones:
+        if len(seccion) > limite:
+            if actual:
+                partes.append(actual)
+                actual = []
+            cabecera = (
+                seccion[0] if paginas[seccion[0]].get("separador") else None
+            )
+            if cabecera is not None and limite < 2:
+                raise ErrorDeCorrida(
+                    "El límite de una página no permite repetir el separador "
+                    "junto con una bitácora; elija al menos 2 páginas por batch"
+                )
+            cuerpo = seccion[1:] if cabecera is not None else seccion
+            paso = limite - 1 if cabecera is not None else limite
+            trozos = [
+                ([cabecera] if cabecera is not None else [])
+                + cuerpo[inicio:inicio + paso]
+                for inicio in range(0, len(cuerpo), paso)
+            ]
+            partes.extend(trozos[:-1])
+            actual = trozos[-1]
+            continue
+        if actual and len(actual) + len(seccion) > limite:
+            partes.append(actual)
+            actual = []
+        actual.extend(seccion)
+    if actual:
+        partes.append(actual)
+    return partes
 
 
 def partes_para_airvault(
@@ -322,7 +382,7 @@ def partes_para_airvault(
             pdf = parte.pdf
             if compresion:
                 pdf = _pdf_de_carga(
-                    parte, numero_origen, 0, cantidad, Path(carpeta),
+                    parte, numero_origen, range(cantidad), Path(carpeta),
                     comprimir=True, avisar=avisar,
                 )
             crudas.append((pdf, list(parte.paginas), parte.revisar))
@@ -336,19 +396,21 @@ def partes_para_airvault(
                 f"indice declara {cantidad}; no se puede repartir sin "
                 "desalinear las bitacoras. Vuelva a exportar la ejecucion."
             )
-        for inicio in range(0, cantidad, limite):
-            fin = min(inicio + limite, cantidad)
+        for indices in _partir_paginas_por_seccion(parte.paginas, limite):
             if avisar is not None:
                 avisar(
                     f"Preparando batches de hasta {limite} páginas",
                     preparadas, total_paginas,
                 )
             pdf = _pdf_de_carga(
-                parte, numero_origen, inicio, fin, Path(carpeta),
+                parte, numero_origen, indices, Path(carpeta),
                 comprimir=compresion, avisar=avisar,
             )
-            crudas.append((pdf, list(parte.paginas[inicio:fin]), parte.revisar))
-            preparadas += fin - inicio
+            crudas.append((
+                pdf, [parte.paginas[indice] for indice in indices],
+                parte.revisar,
+            ))
+            preparadas += len(indices)
 
     resultado: List[ParteDeEntrega] = []
     for revisar in (False, True):
@@ -393,6 +455,7 @@ BUSCANDO = "buscando"
 PROCESANDO = "procesando"
 DESCUADRADO = "descuadrado"
 LISTO = "listo"
+INCOMPLETO = "incompleto"
 TOMADO = "tomado"
 SOLO_REVISAR = "solo_revisar"
 INDEXADO = "indexado"
@@ -404,6 +467,7 @@ NOMBRE_ESTADO_PARTE = {
     PROCESANDO: "Procesándose en AirVault",
     DESCUADRADO: "Cantidad de páginas incorrecta",
     LISTO: "Listo para indexar",
+    INCOMPLETO: "Indexado incompleto",
     TOMADO: "Abierto por otra persona",
     SOLO_REVISAR: "Para revisar a mano",
     INDEXADO: "Indexado",
@@ -434,7 +498,10 @@ class EstadoParte:
 
     @property
     def se_puede_indexar(self) -> bool:
-        return self.estado == LISTO
+        return (
+            self.estado in (LISTO, INCOMPLETO)
+            and not (self.lote and self.lote.bloqueado_por)
+        )
 
     @property
     def se_acabo(self) -> bool:
@@ -624,6 +691,28 @@ class Trabajo:
         if self.manifiesto.etapa_hecha("subir"):
             logger.info("El batch ya estaba subido; no se vuelve a subir")
             return
+        if not self.manifiesto.solo_subir:
+            bloqueos = []
+            for registro in self.manifiesto.bitacoras():
+                valores = valores_de_indice(
+                    registro, self.manifiesto.doc_type,
+                    self.manifiesto.audit_status,
+                    self.manifiesto.nombre_batch,
+                )
+                bloqueos.extend(verificar_obligatorios(registro, valores))
+            bloqueos.extend(verificar_duplicados(self.manifiesto.registros))
+            if bloqueos:
+                paginas = sorted({aviso.seq for aviso in bloqueos})
+                detalle = (
+                    f"{len(paginas)} paginas no son seguras para indexado "
+                    f"automatico ({_enumerar(paginas)}); deben quedar en "
+                    "REVISAR. No se subio ningun archivo"
+                )
+                self.manifiesto.etapa("subir").marcar(
+                    EstadoEtapa.ERROR, detalle
+                )
+                self.guardar()
+                raise ErrorDeCorrida(detalle)
         archivo = Path(pdf or self.manifiesto.pdf_origen)
         if not archivo.is_file():
             raise ErrorDeCorrida(
@@ -1548,12 +1637,20 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
     if completar and completar.estado is EstadoEtapa.HECHA:
         return EstadoParte(trabajo, COMPLETADO, "cerrado en AirVault")
     if not manifiesto.etapa_hecha("subir"):
-        return EstadoParte(trabajo, SIN_SUBIR, "todavia sin subir")
+        subir = manifiesto.etapas.get("subir")
+        detalle = (
+            subir.detalle
+            if subir and subir.estado is EstadoEtapa.ERROR and subir.detalle
+            else "todavia sin subir"
+        )
+        return EstadoParte(trabajo, SIN_SUBIR, detalle)
     verificar = manifiesto.etapas.get("verificar")
     if verificar and verificar.estado is EstadoEtapa.HECHA:
         return EstadoParte(
             trabajo, INDEXADO, verificar.detalle
         )
+    if verificar and verificar.estado is EstadoEtapa.ERROR:
+        return EstadoParte(trabajo, INCOMPLETO, verificar.detalle)
     if manifiesto.solo_subir and manifiesto.batch_id:
         return EstadoParte(trabajo, SOLO_REVISAR, "subido, se indexa a mano")
     return EstadoParte(trabajo, BUSCANDO, "subido; falta comprobar")
@@ -1655,6 +1752,11 @@ def _estado_de(trabajo: "Trabajo", cliente,
         return EstadoParte(
             trabajo, INDEXADO, verificar.detalle, lote
         )
+    if verificar and verificar.estado is EstadoEtapa.ERROR:
+        detalle = verificar.detalle
+        if lote.bloqueado_por:
+            detalle += f"; lo tiene abierto {lote.bloqueado_por}"
+        return EstadoParte(trabajo, INCOMPLETO, detalle, lote)
     if lote.bloqueado_por:
         # Tomado por alguien, AirVault no lo entrega: abrirlo dejaria la
         # peticion colgada hasta que venza el tiempo limite.

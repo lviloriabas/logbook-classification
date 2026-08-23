@@ -92,6 +92,26 @@ def test_matricula_distinta_sin_log_remoto_avisa():
     assert [a.codigo for a in avisos] == ["matricula_distinta"]
 
 
+def test_matricula_inicial_de_quick_upload_no_bloquea_una_amarilla():
+    avisos = verificar_alineacion(
+        registro(matricula="HP-1848CMP"),
+        {CAMPO_MATRICULA: "HP-1852CMP"},
+        estado_pagina=3,
+    )
+
+    assert avisos == []
+
+
+def test_matricula_distinta_si_bloquea_una_pagina_verde():
+    avisos = verificar_alineacion(
+        registro(matricula="HP-1848CMP"),
+        {CAMPO_MATRICULA: "HP-1852CMP"},
+        estado_pagina=0,
+    )
+
+    assert [aviso.codigo for aviso in avisos] == ["matricula_distinta"]
+
+
 def test_pagina_ya_valida_no_se_pisa():
     avisos = verificar_no_pisar(registro(), estado_pagina=0,
                                sobrescribir=False)

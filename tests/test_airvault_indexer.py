@@ -209,7 +209,14 @@ def test_sin_lote_no_se_planifica():
 
 def test_verificar_cuenta_las_validas():
     cliente = ClienteFalso(
-        paginas={1: pagina(1, estado=ESTADO_VALIDO), 2: pagina(2, estado=3)},
+        paginas={
+            1: pagina(1, estado=ESTADO_VALIDO, valores={
+                CAMPO_LOG_NUMBER: "2287321", CAMPO_MATRICULA: "HP-1848CMP",
+            }),
+            2: pagina(2, estado=3, valores={
+                CAMPO_LOG_NUMBER: "2287322", CAMPO_MATRICULA: "HP-1848CMP",
+            }),
+        },
         page_count=2,
     )
     validas, total, problemas = verificar_lote(cliente, manifiesto(2))
@@ -222,7 +229,11 @@ def test_verificar_exige_work_location_vacio():
         paginas={
             1: pagina(
                 1, estado=ESTADO_VALIDO,
-                valores={CAMPO_WORK_LOCATION: "BOG"},
+                valores={
+                    CAMPO_WORK_LOCATION: "BOG",
+                    CAMPO_LOG_NUMBER: "2287321",
+                    CAMPO_MATRICULA: "HP-1848CMP",
+                },
             )
         },
         page_count=1,
@@ -231,7 +242,21 @@ def test_verificar_exige_work_location_vacio():
     validas, total, problemas = verificar_lote(cliente, manifiesto(1))
 
     assert (validas, total) == (0, 1)
-    assert "Work Location" in problemas[0]
+    assert any("Work Location" in problema for problema in problemas)
+
+
+def test_verificar_no_cuenta_una_verde_con_identidad_equivocada():
+    cliente = ClienteFalso(paginas={
+        1: pagina(1, estado=ESTADO_VALIDO, valores={
+            CAMPO_LOG_NUMBER: "2287999", CAMPO_MATRICULA: "HP-1852CMP",
+        }),
+    })
+
+    validas, total, problemas = verificar_lote(cliente, manifiesto(1))
+
+    assert (validas, total) == (0, 1)
+    assert any("log 2287999" in problema for problema in problemas)
+    assert any("HP-1852CMP" in problema for problema in problemas)
 
 
 def test_matricula_fuera_de_picklist_bloquea():

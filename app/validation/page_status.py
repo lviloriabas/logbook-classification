@@ -167,7 +167,7 @@ def page_status(page: PageResult) -> Status:
 
 
 def ready_for_auto_index(page: PageResult) -> bool:
-    """La matrícula permite colocar la página bajo un separador automático.
+    """La página tiene todo lo necesario para indexarse automáticamente.
 
     No vuelve a interpretar los valores ni elimina inferencias. Un valor
     deducido por el libro sigue siendo válido cuando lo respaldan al menos
@@ -175,10 +175,10 @@ def ready_for_auto_index(page: PageResult) -> bool:
     una matrícula marcada por las reglas normales o una inferencia sostenida
     por cero o una sola página.
 
-    Las fechas no deciden el separador. Pueden inferirse por la secuencia del
-    libro o completarse con el último día del mes; las guardas de AirVault
-    comprueban después que la fecha resultante y los demás campos obligatorios
-    estén presentes para que la página se guarde en verde.
+    El número de bitácora debe conservar sus siete dígitos. La fecha puede
+    resolverse después con las anclas del libro completo; la barrera previa a
+    Quick Upload comprueba que esa inferencia sí haya producido un valor. Un
+    log inválido va a ``REVISAR`` desde la exportación.
     """
     if page.blank:
         return False
@@ -197,7 +197,7 @@ def ready_for_auto_index(page: PageResult) -> bool:
         return False
     if field.votes is not None and field.votes < AUTO_INDEX_MIN_VOTES:
         return False
-    return True
+    return has_log_number(page)
 
 
 def recompute_page_status(page: PageResult) -> None:

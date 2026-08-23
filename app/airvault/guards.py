@@ -17,6 +17,7 @@ from app.airvault.config import (
     CAMPO_MATRICULA,
     CAMPOS_OBLIGATORIOS,
     ESTADO_VALIDO,
+    ESTADO_NECESITA_CORRECCION,
     nombre_campo,
 )
 from app.airvault.model import Registro
@@ -126,6 +127,7 @@ def verificar_obligatorios(
 def verificar_alineacion(
     registro: Registro, valores_en_airvault: Mapping[int, str],
     permitir_log_distinto: bool = False,
+    estado_pagina: int | None = None,
 ) -> List[Aviso]:
     """Contrasta la pagina del batch con lo que dice el manifiesto.
 
@@ -156,6 +158,12 @@ def verificar_alineacion(
         and registro.matricula
         and mat_remota.upper() != registro.matricula.upper()
         and not log_remoto
+        # Quick Upload clasifica inicialmente todas las páginas con el
+        # Aircraft de la primera bitácora del archivo. En una página todavía
+        # amarilla y sin log ese valor es una preclasificación del batch, no
+        # evidencia de que el orden esté corrido. En una página ya verde sí
+        # se conserva como guarda: podría ser trabajo previo de una persona.
+        and estado_pagina != ESTADO_NECESITA_CORRECCION
     ):
         avisos.append(Aviso(
             registro.seq, "matricula_distinta",

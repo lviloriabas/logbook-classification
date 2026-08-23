@@ -356,12 +356,20 @@ def test_un_fallo_de_una_pagina_si_se_marca_en_esa_pagina():
 
 def test_verificar_cuenta_aparte_la_pagina_que_no_pudo_leerse():
     from app.airvault.indexer import verificar_lote
+    from app.airvault.config import CAMPO_LOG_NUMBER, CAMPO_MATRICULA
 
+    manifiesto_ = manifiesto()
     cliente = ClienteQueFalla(
-        [2], paginas={1: pagina(1, estado=0), 3: pagina(3, estado=0)},
+        [2], paginas={
+            numero: pagina(numero, estado=0, valores={
+                CAMPO_LOG_NUMBER: manifiesto_.registros[numero - 1].log_number,
+                CAMPO_MATRICULA: manifiesto_.registros[numero - 1].matricula,
+            })
+            for numero in (1, 3)
+        },
         page_count=3,
     )
-    validas, total, problemas = verificar_lote(cliente, manifiesto())
+    validas, total, problemas = verificar_lote(cliente, manifiesto_)
     assert (validas, total) == (2, 3)
     assert any("no se pudo leer" in p for p in problemas)
 

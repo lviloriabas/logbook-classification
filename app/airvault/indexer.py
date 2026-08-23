@@ -17,6 +17,7 @@ from app.airvault.config import (
     CAMPO_DESCRIPCION,
     CAMPO_FLEET,
     CAMPO_LESSOR,
+    CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
     CAMPO_WORK_LOCATION,
     ESTADO_VALIDO,
@@ -226,7 +227,8 @@ class Indexador:
                 ))
             else:
                 avisos.extend(verificar_alineacion(
-                    registro, remota.valores, self.permitir_log_distinto
+                    registro, remota.valores, self.permitir_log_distinto,
+                    remota.estado,
                 ))
                 work_location = str(
                     remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
@@ -460,12 +462,34 @@ def verificar_lote(
         work_location = str(
             remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
         ).strip()
-        if remota.estado == ESTADO_VALIDO and not work_location:
-            validas += 1
-        elif remota.estado == ESTADO_VALIDO:
+        log_remoto = str(
+            remota.valores.get(CAMPO_LOG_NUMBER, "") or ""
+        ).strip()
+        matricula_remota = str(
+            remota.valores.get(CAMPO_MATRICULA, "") or ""
+        ).strip().upper()
+        identidad_correcta = True
+        if log_remoto != registro.log_number:
+            identidad_correcta = False
             problemas.append(
-                f"pagina {pagina}: Work Location no quedo vacio"
+                f"pagina {pagina}: AirVault tiene el log "
+                f"{log_remoto or '(vacio)'} y se esperaba "
+                f"{registro.log_number or '(vacio)'}"
             )
+        if matricula_remota != registro.matricula.upper():
+            identidad_correcta = False
+            problemas.append(
+                f"pagina {pagina}: AirVault tiene la matricula "
+                f"{matricula_remota or '(vacia)'} y se esperaba "
+                f"{registro.matricula or '(vacia)'}"
+            )
+        if remota.estado == ESTADO_VALIDO:
+            if work_location:
+                problemas.append(
+                    f"pagina {pagina}: Work Location no quedo vacio"
+                )
+            if not work_location and identidad_correcta:
+                validas += 1
         else:
             problemas.append(
                 f"pagina {pagina}: estado {remota.estado}"

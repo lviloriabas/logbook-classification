@@ -123,6 +123,24 @@ def test_autoindex_admite_una_fecha_inferida_en_warning():
     assert ready_for_auto_index(page)
 
 
+def test_autoindex_rechaza_un_log_que_no_tiene_siete_digitos():
+    page = _page()
+    log = next(field for field in page.fields if field.field_id == "log_number")
+    log.value = "321955"
+
+    assert not ready_for_auto_index(page)
+
+
+def test_autoindex_deja_que_la_fecha_se_infiera_con_el_libro_completo():
+    page = _page()
+    page.date = None
+    for field in page.fields:
+        if field.field_id in ("day", "month", "year"):
+            field.value = None
+
+    assert ready_for_auto_index(page)
+
+
 def test_autoindex_admite_consenso_fuerte_del_libro():
     page = _page()
     matricula = next(
