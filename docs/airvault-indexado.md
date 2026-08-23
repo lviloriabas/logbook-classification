@@ -54,13 +54,16 @@ Estados que puede tener un batch en la lista:
 | Estado | Que significa |
 |---|---|
 | Sin subir | Todavia no se ha mandado |
-| Subido; esperando a AirVault | Mandado, pero el servidor aun no lo saca en la cola |
+| Subido pendiente confirmación | Mandado, pero el servidor aun no lo saca en la cola |
 | Procesandose en AirVault | Ya esta en la cola, con menos paginas de las que lleva el PDF |
 | Cantidad de paginas incorrecta | Tiene mas paginas de las posibles; se detiene porque AirVault junto cargas o el PDF no corresponde al indice |
 | Listo para indexar | Entero y libre: se puede escribir |
 | Abierto por otra persona | Alguien lo tiene tomado; AirVault no lo entrega a nadie mas |
 | Para revisar a mano | Es el batch REVISAR, que no se indexa |
 | Indexado / Terminado | Ya escrito, y cerrado si se pidio |
+
+Cuando AirVault devuelve el batch en el índice, la fila empieza por **Subido
+confirmado** y conserva después el estado operativo correspondiente.
 
 El avance sale por la barra y la etiqueta de estado de esta ventana, no por
 las de la principal: mientras un batch se escribe se sigue procesando.

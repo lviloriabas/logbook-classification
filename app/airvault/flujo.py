@@ -400,7 +400,7 @@ COMPLETADO = "completado"
 
 NOMBRE_ESTADO_PARTE = {
     SIN_SUBIR: "Sin subir",
-    BUSCANDO: "Subido; esperando a AirVault",
+    BUSCANDO: "Subido pendiente confirmación",
     PROCESANDO: "Procesándose en AirVault",
     DESCUADRADO: "Cantidad de páginas incorrecta",
     LISTO: "Listo para indexar",
@@ -445,6 +445,12 @@ class EstadoParte:
 
     def __str__(self) -> str:
         titulo = NOMBRE_ESTADO_PARTE.get(self.estado, self.estado)
+        if self.lote is not None:
+            # Solo se puede afirmar que la subida quedo confirmada cuando
+            # AirVault devolvio el batch en el indice. El ID guardado en el
+            # manifiesto no basta: puede venir de una subida anterior o de
+            # una carga que Quick Upload acepto pero aun no publico.
+            titulo = f"Subido confirmado; {titulo}"
         return f"{titulo}: {self.detalle}" if self.detalle else titulo
 
 
