@@ -312,8 +312,9 @@ class Indexador:
     ) -> Resultado:
         """Escribe las paginas escribibles del plan.
 
-        Las paginas con avisos se saltan siempre: el plan ya decidio que no
-        se pueden tocar y aqui no se vuelve a opinar.
+        Solo se saltan las paginas con bloqueos de correspondencia o de
+        seguridad. Los avisos de calidad permiten enviar los datos
+        confirmados y dejar la pagina en amarillo para su revision.
 
         ``al_avanzar`` recibe cuantas paginas se llevan escritas de cuantas
         habia previstas, para que la interfaz pueda mover la barra sin que

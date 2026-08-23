@@ -1573,8 +1573,9 @@ class AirVaultWindow(QDialog):
         """Arranca o para la comprobación automática según haga falta.
 
         Se pregunta mientras quede algo que esperar. Cuando todos los batches
-        están listos —o ya indexados, o son el de REVISAR— no hay nada que
-        AirVault vaya a cambiar solo, así que se deja de preguntar en vez
+        están listos —o ya indexados, o REVISAR está listo para escribir lo
+        disponible— no hay nada que AirVault vaya a cambiar solo, así que
+        se deja de preguntar en vez
         de golpear el servidor toda la tarde.
         """
         if not self.auto_check.isChecked() or not self._falta_esperar():

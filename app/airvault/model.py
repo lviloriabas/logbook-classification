@@ -123,8 +123,9 @@ class Manifiesto(BaseModel):
     # Si el PDF interno que se envia fue rasterizado a 200 DPI. Se guarda
     # para que una reanudacion use exactamente el mismo archivo y ajuste.
     compresion: bool = False
-    # El batch se sube pero no se indexa: recoge las bitacoras con algun dato
-    # dudoso o en conflicto, que nadie debe publicar sin mirarlas una por una.
+    # El batch recoge bitacoras con algun dato dudoso o en conflicto. Se
+    # indexan automaticamente los valores confirmados y queda abierto para
+    # revisar solo lo que falta o no es seguro.
     solo_subir: bool = False
     # Foto de la cola inmediatamente anterior a Quick Upload. AirVault suele
     # publicar esos archivos como ``Empty-Batch`` aunque reciba C_BatchName;
