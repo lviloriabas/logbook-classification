@@ -717,7 +717,7 @@ class EmbeddedPdfViewer(QFrame):
         self.prev.setArrowType(Qt.ArrowType.LeftArrow)
         self.prev.setToolTip("Página anterior")
         self.prev.setAccessibleName("Página anterior")
-        self.prev.clicked.connect(lambda: self.show_page(self._page - 1))
+        self.prev.clicked.connect(self._show_previous_page)
         controls.addWidget(self.prev)
         controls.addWidget(QLabel("Página"))
         self.page_edit = QLineEdit()
@@ -732,7 +732,7 @@ class EmbeddedPdfViewer(QFrame):
         self.next.setArrowType(Qt.ArrowType.RightArrow)
         self.next.setToolTip("Página siguiente")
         self.next.setAccessibleName("Página siguiente")
-        self.next.clicked.connect(lambda: self.show_page(self._page + 1))
+        self.next.clicked.connect(self._show_next_page)
         controls.addWidget(self.next)
 
         # La paginación se centra sobre todo el ancho de la página, igual que
@@ -780,6 +780,11 @@ class EmbeddedPdfViewer(QFrame):
         self._page_counts = {}
         self._pending_render = None
 
+        # El número editable y su límite describen el lote completo, no el
+        # PDF elegido en el selector. Contar todos aquí también deja lista la
+        # traducción entre página global y página local para cada clic de tabla.
+        self._total = sum(self._page_total(path) for path in documents)
+
         labels = _document_labels(documents)
         self.pdf_combo.blockSignals(True)
         self.pdf_combo.clear()
@@ -814,38 +819,79 @@ class EmbeddedPdfViewer(QFrame):
             return
         self.show_page(page)
 
-    def show_page(self, page: int, path: Path | None = None) -> None:
-        """Pide una página al hilo de render; ``path`` cambia de documento.
-
-        La navegación (número de página, total, selector y botones) se
-        actualiza en el acto y la página anterior se mantiene a la vista
-        hasta que llega la nueva, igual que en la vista previa principal.
-        """
+    def _global_page(self, path: Path | None = None, page: int | None = None) -> int:
+        """Posición de una página local dentro de todos los PDF disponibles."""
         path = Path(path) if path is not None else self._path
+        page = self._page if page is None else int(page)
+        if path is None:
+            return 0
+        offset = 0
+        for document in self._documents:
+            count = self._page_total(document)
+            if document == path:
+                return offset + min(max(1, page), count) if count else 0
+            offset += count
+        return 0
+
+    def _global_location(self, page: int) -> tuple[Path, int] | None:
+        """Convierte una página del lote en ``(PDF, página local)``."""
+        if self._total <= 0:
+            return None
+        remaining = min(max(1, int(page)), self._total)
+        for document in self._documents:
+            count = self._page_total(document)
+            if remaining <= count:
+                return document, remaining
+            remaining -= count
+        return None
+
+    def _show_previous_page(self) -> None:
+        current = self._global_page()
+        if current > 1:
+            self.show_page(current - 1)
+
+    def _show_next_page(self) -> None:
+        current = self._global_page()
+        if current < self._total:
+            self.show_page(current + 1)
+
+    def show_page(self, page: int, path: Path | None = None) -> None:
+        """Pide una página al hilo de render.
+
+        Sin ``path``, ``page`` es la página global del lote. Con ``path`` es la
+        página local de ese PDF, como la que registra cada fila del CSV. La
+        navegación muestra siempre la posición global y la imagen anterior se
+        mantiene a la vista hasta que llega la nueva.
+        """
+        if path is None:
+            location = self._global_location(page)
+            if location is None:
+                return
+            path, page = location
+        else:
+            path = Path(path)
         if path is None or not path.is_file():
             return
-        total = self._page_total(path)
-        if not total:
+        document_total = self._page_total(path)
+        if not document_total:
             self._path = path
-            self._total = 0
             self._pending_render = None
             self._show_placeholder(f"No se pudo mostrar el PDF: {path.name}")
             self._sync_combo_to(path)
             self._sync_controls()
             return
-        page = max(1, min(int(page), total))
+        page = max(1, min(int(page), document_total))
         request = (str(path), page)
         if self._pending_render == request:
             return
         if self._source is not None and path == self._path and page == self._page:
             return
         self._path = path
-        self._total = total
         self._page = page
-        self.page_edit.setText(str(page))
+        self.page_edit.setText(str(self._global_page(path, page)))
         validator = self.page_edit.validator()
         if isinstance(validator, QIntValidator):
-            validator.setTop(max(1, total))
+            validator.setTop(max(1, self._total))
         self._sync_combo_to(path)
         self._sync_controls()
         self._pending_render = request
@@ -999,10 +1045,11 @@ class EmbeddedPdfViewer(QFrame):
 
     def _sync_controls(self) -> None:
         has_page = self._source is not None
+        global_page = self._global_page()
         self.total_pages.setText(f"de {self._total}")
         self.page_edit.setEnabled(has_page)
-        self.prev.setEnabled(has_page and self._page > 1)
-        self.next.setEnabled(has_page and self._page < self._total)
+        self.prev.setEnabled(has_page and global_page > 1)
+        self.next.setEnabled(has_page and global_page < self._total)
         self._sync_zoom_controls()
 
 
@@ -1198,6 +1245,11 @@ class CsvViewerWindow(QMainWindow):
         self.table.horizontalHeader().setResizeContentsPrecision(_RESIZE_PRECISION)
         self.table_sort = ColumnSortController(self.table)
         self.table.currentCellChanged.connect(self._on_current_cell_changed)
+        # ``currentCellChanged`` cubre teclado y búsquedas, pero no se emite
+        # al volver a pulsar la fila que ya estaba activa. El clic debe volver
+        # a ubicar su bitácora aunque entre ambos el usuario haya navegado el
+        # PDF con las flechas o el campo de página.
+        self.table.cellClicked.connect(self._on_table_cell_clicked)
         splitter.addWidget(self.table)
         # El mismo reparto de la ventana principal: la tabla lleva muchas
         # columnas y la página cabe entera en la parte que le toca. Los
@@ -1993,6 +2045,14 @@ class CsvViewerWindow(QMainWindow):
         self, row: int, _column: int, _previous_row: int, _previous_column: int
     ) -> None:
         """Sigue con el visor la fila activa de la tabla."""
+        self._show_visible_row_in_pdf(row)
+
+    def _on_table_cell_clicked(self, row: int, _column: int) -> None:
+        """Reubica también una fila que ya era la selección actual."""
+        self._show_visible_row_in_pdf(row)
+
+    def _show_visible_row_in_pdf(self, row: int) -> None:
+        """Traduce una fila visible a su fila original y muestra su página."""
         item = self.table.item(row, 0) if row >= 0 else None
         if item is None:
             return
