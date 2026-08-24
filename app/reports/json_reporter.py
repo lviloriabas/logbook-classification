@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Mapping, Optional
 
 from loguru import logger
 
@@ -67,3 +69,65 @@ class JsonReporter:
         logger.info(f"Reporte JSON consolidado generado: {path} "
                     f"({len(reports)} bitácora(s))")
         return path
+
+    @staticmethod
+    def relocate_consolidated_sources(
+        path: Path, moved: Mapping[Path, Path]
+    ) -> int:
+        """Guarda en el JSON el nombre definitivo dentro de ``processed``.
+
+        Las salidas se escriben antes de archivar los originales. Si un nombre
+        ya existe, el archivo recién procesado termina como ``-2`` o ``-3``;
+        conservar la ruta anterior haría que el visor histórico abriera el PDF
+        de otra ejecución. También conserva ``source_name`` para que el CSV no
+        cambie. El JSON se reemplaza de forma atómica para no dejarlo a medias.
+        """
+        path = Path(path)
+        if not moved or not path.is_file():
+            return 0
+
+        def key(value: Path | str) -> str:
+            try:
+                return str(Path(value).resolve()).casefold()
+            except OSError:
+                return str(Path(value)).casefold()
+
+        destinations = {
+            key(source): str(destination)
+            for source, destination in moved.items()
+        }
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+
+        changed = 0
+        for report in payload.get("reportes", []):
+            if not isinstance(report, dict):
+                continue
+            original = report.get("pdf_path", "")
+            destination = destinations.get(key(original))
+            if destination is None:
+                continue
+            report["source_name"] = (
+                report.get("source_name") or Path(str(original)).name
+            )
+            report["pdf_path"] = destination
+            changed += 1
+        if not changed:
+            return 0
+
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, ensure_ascii=False)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        logger.info(
+            f"Rutas de origen actualizadas en {path}: {changed} archivo(s)"
+        )
+        return changed

@@ -198,7 +198,7 @@ def write_outputs(
         for entrada in confirmadas
     }
     for report in reports:
-        archivo = Path(report.pdf_path).name
+        archivo = report.source_filename
         for page in report.pages:
             clave = (archivo, page.page_number)
             page.airvault_review = (

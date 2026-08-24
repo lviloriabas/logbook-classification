@@ -181,7 +181,7 @@ class CsvReporter:
     ) -> dict[str, object]:
         """Construye la fila CSV correspondiente a una página."""
         row: dict[str, object] = {
-            "file": Path(report.pdf_path).name,
+            "file": report.source_filename,
             "page": page.page_number,
             "dup": str(duplicate).lower(),
             "disc": str(bool(page.discrepancy)).lower(),
