@@ -332,7 +332,17 @@ def resolve_source_documents(
     csv_path = Path(csv_path)
     row_list = list(rows)
     row_paths = source_pdf_paths_for_rows(csv_path, row_list)
-    recorded = source_documents_for_csv(csv_path) or _documents_from_rows(row_list)
+    recorded = source_documents_for_csv(csv_path)
+    # Un JSON histórico puede estar incompleto aunque el CSV sí conserve filas
+    # de todos los documentos. No se elige una fuente u otra: los nombres que
+    # solo aparecen en el CSV completan la lista del JSON. Esto es importante
+    # al trasladar una ejecución a otra computadora, donde la ruta absoluta
+    # original ya no sirve y el nombre es la referencia portable disponible.
+    recorded_names = {path.name.casefold() for path in recorded}
+    for source in _documents_from_rows(row_list):
+        if source.name.casefold() not in recorded_names:
+            recorded.append(source)
+            recorded_names.add(source.name.casefold())
     extra = [Path(folder) for folder in extra_folders]
     folders = _source_search_folders(csv_path)
     folders.extend(extra)
@@ -360,7 +370,15 @@ def resolve_source_documents(
     resolved: list[Path | None] = []
     for row, path in zip(row_list, row_paths):
         if path is not None:
-            resolved.append(by_recorded.get(str(path).casefold()))
+            found = by_recorded.get(str(path).casefold())
+            # La ruta del JSON pertenece a la computadora que procesó el
+            # lote. Si no coincide con la reconstruida aquí, un nombre único
+            # sigue identificando la fila sin ambigüedad.
+            resolved.append(
+                found
+                if found is not None
+                else by_name.get((row.get("file") or "").casefold())
+            )
         else:
             resolved.append(by_name.get((row.get("file") or "").casefold()))
     return resolved, available, missing
@@ -569,6 +587,8 @@ class EmbeddedPdfViewer(QFrame):
         self.setObjectName("embeddedPdfPane")
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self._documents: list[Path] = []
+        self._document_keys: list[str] = []
+        self._document_counts: list[int] = []
         self._missing: list[str] = []
         self._path: Path | None = None
         self._page = 1
@@ -615,7 +635,7 @@ class EmbeddedPdfViewer(QFrame):
 
     def _page_total(self, path: Path) -> int:
         """Páginas del documento, contadas una sola vez por archivo."""
-        key = str(path)
+        key = self._path_key(path)
         if key not in self._page_counts:
             from app.vision.pdf_loader import page_count
 
@@ -624,6 +644,11 @@ class EmbeddedPdfViewer(QFrame):
             except Exception:  # noqa: BLE001 - visor no crítico
                 self._page_counts[key] = 0
         return self._page_counts[key]
+
+    @staticmethod
+    def _path_key(path: Path | str) -> str:
+        """Identidad estable aunque otra PC cambie mayúsculas o ruta relativa."""
+        return str(Path(path).resolve()).casefold()
 
     def _build_ui(self) -> None:
         """Misma disposición que la vista previa de la ventana principal.
@@ -772,6 +797,7 @@ class EmbeddedPdfViewer(QFrame):
                 seen.add(key)
                 documents.append(path)
         self._documents = documents
+        self._document_keys = [self._path_key(path) for path in documents]
         self._missing = [str(name) for name in missing]
         self._path = None
         self._page = 1
@@ -783,7 +809,8 @@ class EmbeddedPdfViewer(QFrame):
         # El número editable y su límite describen el lote completo, no el
         # PDF elegido en el selector. Contar todos aquí también deja lista la
         # traducción entre página global y página local para cada clic de tabla.
-        self._total = sum(self._page_total(path) for path in documents)
+        self._document_counts = [self._page_total(path) for path in documents]
+        self._total = sum(self._document_counts)
 
         labels = _document_labels(documents)
         self.pdf_combo.blockSignals(True)
@@ -825,21 +852,20 @@ class EmbeddedPdfViewer(QFrame):
         page = self._page if page is None else int(page)
         if path is None:
             return 0
-        offset = 0
-        for document in self._documents:
-            count = self._page_total(document)
-            if document == path:
-                return offset + min(max(1, page), count) if count else 0
-            offset += count
-        return 0
+        try:
+            index = self._document_keys.index(self._path_key(path))
+        except ValueError:
+            return 0
+        count = self._document_counts[index]
+        offset = sum(self._document_counts[:index])
+        return offset + min(max(1, page), count) if count else 0
 
     def _global_location(self, page: int) -> tuple[Path, int] | None:
         """Convierte una página del lote en ``(PDF, página local)``."""
         if self._total <= 0:
             return None
         remaining = min(max(1, int(page)), self._total)
-        for document in self._documents:
-            count = self._page_total(document)
+        for document, count in zip(self._documents, self._document_counts):
             if remaining <= count:
                 return document, remaining
             remaining -= count
@@ -915,11 +941,12 @@ class EmbeddedPdfViewer(QFrame):
         self._sync_controls()
 
     def _sync_combo_to(self, path: Path) -> None:
+        wanted = self._path_key(path)
         index = next(
             (
                 position
-                for position, document in enumerate(self._documents)
-                if document == path
+                for position, key in enumerate(self._document_keys)
+                if key == wanted
             ),
             -1,
         )
