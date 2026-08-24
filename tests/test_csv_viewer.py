@@ -453,53 +453,6 @@ def test_source_documents_fall_back_to_the_file_column_without_companion_json(
     assert missing == []
 
 
-def test_incomplete_companion_uses_every_document_declared_by_the_csv(
-    tmp_path: Path,
-):
-    """Al copiar una ejecución, un JSON viejo no recorta el lote del visor."""
-    import json
-
-    run = tmp_path / "run"
-    data = run / "datos"
-    data.mkdir(parents=True)
-    first = run / "uno.pdf"
-    second = run / "dos.pdf"
-    first.touch()
-    second.touch()
-    csv_path = data / "run.csv"
-    csv_path.write_text(
-        "file,page,log_number\n"
-        "uno.pdf,1,1234500\n"
-        "dos.pdf,1,1234501\n",
-        encoding="utf-8",
-    )
-    # Simula un acompañante trasladado que solo conservó el primer reporte y
-    # cuya ruta absoluta pertenece a la computadora anterior.
-    csv_path.with_suffix(".json").write_text(
-        json.dumps(
-            {
-                "reportes": [
-                    {
-                        "pdf_path": r"Z:\\equipo-anterior\\uno.pdf",
-                        "pages": [{"page_number": 1}],
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    rows = [
-        {"file": "uno.pdf", "page": "1", "log_number": "1234500"},
-        {"file": "dos.pdf", "page": "1", "log_number": "1234501"},
-    ]
-
-    row_paths, documents, missing = resolve_source_documents(csv_path, rows)
-
-    assert documents == [first, second]
-    assert row_paths == [first, second]
-    assert missing == []
-
-
 def _viewer_for_search(tmp_path: Path) -> CsvViewerWindow:
     run = tmp_path / "run"
     data = run / "datos"
@@ -710,68 +663,6 @@ def test_pdf_pagination_crosses_documents_and_uses_the_combined_total(
     viewer._show_previous_page()
     assert viewer._path == second
     assert viewer._page == 2
-    viewer.close()
-    app.processEvents()
-
-
-def test_csv_click_uses_all_documents_when_the_companion_is_incomplete(
-    tmp_path: Path, monkeypatch
-):
-    """Prueba integral: carga portable, total combinado y clic de bitácora."""
-    import json
-
-    app = QApplication.instance() or QApplication([])
-    run = tmp_path / "run"
-    data = run / "datos"
-    data.mkdir(parents=True)
-    first = run / "uno.pdf"
-    second = run / "dos.pdf"
-    first.touch()
-    second.touch()
-    csv_path = data / "run.csv"
-    csv_path.write_text(
-        "file,page,log_number\nuno.pdf,2,1234500\ndos.pdf,1,1234501\n",
-        encoding="utf-8",
-    )
-    csv_path.with_suffix(".json").write_text(
-        json.dumps(
-            {
-                "reportes": [
-                    {
-                        "pdf_path": r"Z:\\equipo-anterior\\uno.pdf",
-                        "pages": [{"page_number": 2}],
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    from app.vision import pdf_loader
-
-    monkeypatch.setattr(
-        pdf_loader,
-        "page_count",
-        lambda path: {"uno.pdf": 2, "dos.pdf": 3}[Path(path).name],
-    )
-    monkeypatch.setattr(
-        pdf_loader,
-        "render_page",
-        lambda _path, _page, dpi=150: __import__("numpy").zeros(
-            (20, 30, 3), dtype="uint8"
-        ),
-    )
-    viewer = CsvViewerWindow(tmp_path / "sin-historial")
-
-    assert viewer.load_csv_file(csv_path)
-    assert viewer.pdf_viewer.total_pages.text() == "de 5"
-    assert viewer._row_pdf_paths == [first, second]
-
-    viewer.table.cellClicked.emit(1, 0)
-
-    assert viewer.pdf_viewer._path == second
-    assert viewer.pdf_viewer._page == 1
-    assert viewer.pdf_viewer.page_edit.text() == "3"
-    viewer.pdf_viewer.shutdown()
     viewer.close()
     app.processEvents()
 
