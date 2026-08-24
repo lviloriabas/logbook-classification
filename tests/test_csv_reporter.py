@@ -47,6 +47,19 @@ class TestCsvGates(unittest.TestCase):
         row = self._rows(page)
         self.assertEqual(row["matricula"], "HP-1534CMP")
 
+    def test_archiving_with_a_suffix_does_not_rename_the_csv_source(self):
+        page = PageResult(page_number=1)
+        report = ValidationReport(
+            pdf_path="input/processed/bitacora-2.pdf",
+            source_name="bitacora.pdf",
+            template_name="fixture",
+            pages=[page],
+        )
+
+        row = CsvReporter.row_for_page(report, page, [])
+
+        self.assertEqual(row["file"], "bitacora.pdf")
+
     def test_date_part_gates(self):
         page = PageResult(page_number=1)
         page.add_field(_field("day", "Schedule Fit 211 DATE"))

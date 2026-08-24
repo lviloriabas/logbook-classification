@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -105,6 +106,10 @@ class ValidationReport(BaseModel):
     """Reporte completo de validación de un documento PDF."""
 
     pdf_path: str
+    # Nombre lógico con el que la fuente entró a la ejecución. ``pdf_path``
+    # puede terminar en ``processed/archivo-2.pdf`` para abrir la copia exacta,
+    # pero el CSV debe conservar ``archivo.pdf`` al volver a exportarse.
+    source_name: Optional[str] = None
     template_name: str
     generated_at: str = Field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
@@ -119,3 +124,7 @@ class ValidationReport(BaseModel):
     cancelled: bool = False
     summary: Dict[str, int] = Field(default_factory=dict)
     pages: List[PageResult] = Field(default_factory=list)
+
+    @property
+    def source_filename(self) -> str:
+        return self.source_name or Path(self.pdf_path).name

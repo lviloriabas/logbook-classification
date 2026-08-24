@@ -101,6 +101,7 @@ from app.gui.widgets import (
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
 from app.models.schemas import PageResult, Status, ValidationReport
 from app.reports.csv_reporter import CSV_DATE_SPECIFIC, CsvReporter
+from app.reports.json_reporter import JsonReporter
 from app.templates.manager import TemplateManager
 from app.templates.schema import Template
 from app.utils.important_fields import (
@@ -3235,13 +3236,13 @@ class MainWindow(QMainWindow):
             # hecho y los datos escritos. Se apartan aquí, y la ventana
             # reapunta los resultados a su nueva ruta, así que exportar
             # después sigue encontrando las páginas originales.
-            self._archive_processed_inputs()
+            self._archive_processed_inputs(Path(output_dir))
             self.status_label.setText(
                 "Procesamiento terminado. Puede cambiar la separación y exportar."
             )
             logger.info(f"Outputs generados en: {output_dir}")
 
-    def _archive_processed_inputs(self) -> None:
+    def _archive_processed_inputs(self, run_dir: Path | None = None) -> None:
         """Saca de input/ los PDF de la ejecución que acaba de terminar.
 
         La entrada queda con lo que falta por procesar y nada más; lo hecho
@@ -3261,6 +3262,19 @@ class MainWindow(QMainWindow):
         if not moved:
             return
         self._remap_document_paths(moved)
+        if run_dir is not None:
+            json_path = (
+                Path(run_dir) / "datos" / f"{Path(run_dir).name}.json"
+            )
+            try:
+                JsonReporter.relocate_consolidated_sources(json_path, moved)
+            except (OSError, ValueError, TypeError) as exc:
+                # La ejecución sigue siendo válida; el visor conserva su
+                # búsqueda histórica por nombre y cantidad de páginas.
+                logger.warning(
+                    f"No se pudieron guardar las rutas definitivas de los "
+                    f"PDF procesados en {json_path.name}: {exc}"
+                )
         logger.info(
             f"{len(moved)} archivo(s) apartados en input/{PROCESSED_DIRNAME}"
         )
@@ -3281,7 +3295,10 @@ class MainWindow(QMainWindow):
             return by_key.get(self._document_key(path), Path(path))
 
         for report in self._reports:
-            report.pdf_path = str(relocated(report.pdf_path))
+            destination = relocated(report.pdf_path)
+            if destination != Path(report.pdf_path) and not report.source_name:
+                report.source_name = Path(report.pdf_path).name
+            report.pdf_path = str(destination)
         self._pdf_paths = [relocated(path) for path in self._pdf_paths]
         self._row_pdfs = [relocated(path) for path in self._row_pdfs]
         # Las filas ya construidas guardan además su PDF en el propio item de

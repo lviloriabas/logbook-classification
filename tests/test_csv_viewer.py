@@ -940,6 +940,9 @@ def test_page_is_scaled_to_fill_the_available_panel(tmp_path: Path, monkeypatch)
     assert pixmap.height() <= viewport.height()
     assert pixmap.height() > viewport.height() * 0.8
     assert pixmap.width() <= viewport.width()
+    # El área útil del QLabel coincide con la imagen. Si el estilo vuelve a
+    # reservar padding dentro del mismo tamaño, Qt recorta los cuatro bordes.
+    assert viewer.image.contentsRect().size() == pixmap.size()
 
     viewer._zoom_by(2.0)
     assert viewer.image.pixmap().height() > pixmap.height()

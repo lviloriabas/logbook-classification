@@ -139,7 +139,7 @@ _PDF_PANE_QSS = (
     f" border: 1px solid {PANE_BORDER}; border-radius: {TABLE_RADIUS}px; }}"
     # Sin fondo explícito, la etiqueta pinta el color de ventana y tapa la
     # superficie oscura justo cuando solo muestra el mensaje de estado.
-    f"#pdfPage {{ color: {PANE_TEXT}; padding: 12px; background: transparent; }}"
+    f"#pdfPage {{ color: {PANE_TEXT}; padding: 0; background: transparent; }}"
     f"#embeddedPdfPane QLabel {{ color: {PANE_TEXT}; background: transparent; }}"
     # Los campos suben un escalón sobre el panel para seguir leyéndose como
     # controles y no como parte del fondo.
@@ -174,6 +174,15 @@ def _join_names(names: Iterable[str], limit: int = 3) -> str:
     return shown if len(name_list) <= limit else f"{shown}…"
 
 
+def _archived_base_name(name: str) -> str:
+    """Nombre anterior a un sufijo de archivo ``-2``, ``-3``…"""
+    path = Path(name)
+    stem, separator, suffix = path.stem.rpartition("-")
+    if separator and suffix.isdigit() and int(suffix) >= 2 and stem:
+        return f"{stem}{path.suffix}"
+    return path.name
+
+
 def _companion_payload(csv_path: Path) -> dict:
     """Lee el JSON consolidado que acompaña al CSV; ``{}`` si no está."""
     csv_path = Path(csv_path)
@@ -204,7 +213,9 @@ def source_pdf_paths_for_rows(
     try:
         for report in _companion_payload(csv_path).get("reportes", []):
             pdf_path = Path(str(report.get("pdf_path", "")))
-            filename = pdf_path.name.casefold()
+            filename = str(
+                report.get("source_name") or pdf_path.name
+            ).casefold()
             for page in report.get("pages", []):
                 flattened.append(
                     (filename, str(page.get("page_number", "")), pdf_path)
@@ -214,7 +225,11 @@ def source_pdf_paths_for_rows(
 
     # La escritura consolidada recorre reportes y páginas en este mismo orden.
     if len(flattened) == len(row_list) and all(
-        source_name == row.get("file", "").casefold()
+        (
+            source_name == row.get("file", "").casefold()
+            or _archived_base_name(source_name).casefold()
+            == row.get("file", "").casefold()
+        )
         and source_page == row.get("page", "")
         for row, (source_name, source_page, _path) in zip(row_list, flattened)
     ):
@@ -223,6 +238,9 @@ def source_pdf_paths_for_rows(
     by_key: dict[tuple[str, str], list[Path]] = {}
     for filename, page, pdf_path in flattened:
         by_key.setdefault((filename, page), []).append(pdf_path)
+        base_name = _archived_base_name(filename).casefold()
+        if base_name != filename:
+            by_key.setdefault((base_name, page), []).append(pdf_path)
     resolved: list[Path | None] = []
     for row in row_list:
         candidates = by_key.get(
@@ -254,6 +272,36 @@ def source_documents_for_csv(csv_path: Path) -> list[Path]:
     return documents
 
 
+def _source_page_requirements(csv_path: Path) -> dict[str, int]:
+    """Mayor página local que debe existir en cada PDF de la ejecución.
+
+    Sirve únicamente para desempatar copias históricas ``archivo.pdf``,
+    ``archivo-2.pdf``… cuando el JSON fue escrito antes de que el original se
+    archivara. No se exige que el PDF tenga exactamente esa cantidad porque
+    la ejecución pudo procesar solo un rango.
+    """
+    requirements: dict[str, int] = {}
+    try:
+        reports = _companion_payload(csv_path).get("reportes", [])
+        for report in reports:
+            raw_path = str(report.get("pdf_path", ""))
+            if not raw_path:
+                continue
+            pages = []
+            for page in report.get("pages", []):
+                try:
+                    pages.append(int(page.get("page_number", 0)))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+            required = max(pages, default=0)
+            path = Path(raw_path)
+            requirements[str(path).casefold()] = required
+            requirements.setdefault(path.name.casefold(), required)
+    except (TypeError, AttributeError):
+        return {}
+    return requirements
+
+
 def _documents_from_rows(rows: Iterable[dict[str, str]]) -> list[Path]:
     """Nombres de PDF declarados por el CSV cuando no hay JSON compañero."""
     documents: list[Path] = []
@@ -281,41 +329,140 @@ def _source_search_folders(csv_path: Path) -> list[Path]:
     return [
         csv_path.parent,
         csv_path.parent.parent,
-        entrada,
         entrada / PROCESSED_DIRNAME,
+        # Una ejecución histórica debe preferir el archivo ya apartado. En
+        # input puede haber ahora otro PDF nuevo con exactamente el mismo
+        # nombre, y ese todavía no pertenece al CSV que se está consultando.
+        entrada,
     ]
 
 
+def _archive_variant_index(candidate: Path, recorded: Path) -> int | None:
+    """Número de ``archivo-2.pdf`` respecto de ``archivo.pdf``."""
+    if candidate.suffix.casefold() != recorded.suffix.casefold():
+        return None
+    prefix = f"{recorded.stem}-".casefold()
+    stem = candidate.stem.casefold()
+    if not stem.startswith(prefix):
+        return None
+    suffix = stem[len(prefix):]
+    if not suffix.isdigit() or int(suffix) < 2:
+        return None
+    return int(suffix)
+
+
+def _candidate_page_count(
+    path: Path, cache: dict[str, int | None]
+) -> int | None:
+    """Cuenta páginas una vez; ``None`` conserva un candidato ilegible."""
+    key = str(path.resolve()).casefold()
+    if key not in cache:
+        from app.vision.pdf_loader import page_count
+
+        try:
+            cache[key] = max(0, page_count(path))
+        except Exception:  # noqa: BLE001 - el render mostrará el error después
+            cache[key] = None
+    return cache[key]
+
+
 def _locate_document(
-    recorded: Path, folders: Iterable[Path], deep_folders: Iterable[Path]
+    recorded: Path,
+    folders: Iterable[Path],
+    deep_folders: Iterable[Path],
+    required_page: int = 0,
+    page_counts: dict[str, int | None] | None = None,
 ) -> Path | None:
     """Busca un PDF de origen que pudo haberse movido desde el procesamiento.
 
     ``folders`` se revisa solo por nombre exacto; el recorrido recursivo queda
     reservado a ``deep_folders``, las carpetas que el usuario indicó a mano.
+    Para ejecuciones antiguas también reconoce el sufijo que añadió el archivo
+    de procesados. Si hay varias copias, la mayor página usada por el reporte
+    descarta las que físicamente no pueden ser su fuente.
     """
-    # Un nombre suelto solo vale relativo a las carpetas de la ejecución: no se
-    # resuelve contra el directorio de trabajo, que es arbitrario.
-    if recorded.is_absolute() and recorded.is_file():
-        return recorded
+    folders = [Path(folder) for folder in folders]
+    deep_folders = [Path(folder) for folder in deep_folders]
     name = recorded.name
     if not name:
         return None
+
+    exact: list[Path] = []
+    variants: list[tuple[int, Path]] = []
+    seen: set[str] = set()
+
+    def add_exact(path: Path) -> None:
+        if not path.is_file():
+            return
+        key = str(path.resolve()).casefold()
+        if key not in seen:
+            seen.add(key)
+            exact.append(path)
+
+    def add_variant(path: Path) -> None:
+        index = _archive_variant_index(path, recorded)
+        if index is None or not path.is_file():
+            return
+        key = str(path.resolve()).casefold()
+        if key not in seen:
+            seen.add(key)
+            variants.append((index, path))
+
+    # La ruta absoluta gana siempre que siga existiendo: identifica el archivo
+    # sin inferencias incluso si hay homónimos en processed.
+    if recorded.is_absolute():
+        add_exact(recorded)
     for folder in folders:
-        candidate = Path(folder) / name
-        if candidate.is_file():
-            return candidate
+        add_exact(folder / name)
+        if folder.name.casefold() == PROCESSED_DIRNAME.casefold():
+            try:
+                for candidate in folder.iterdir():
+                    add_variant(candidate)
+            except OSError:
+                pass
     for folder in deep_folders:
         try:
-            match = next(
-                (path for path in Path(folder).rglob(name) if path.is_file()),
-                None,
-            )
+            for path in folder.rglob(name):
+                add_exact(path)
+            for path in folder.rglob(f"*{recorded.suffix}"):
+                add_variant(path)
         except OSError:
-            match = None
-        if match is not None:
-            return match
-    return None
+            continue
+
+    variants.sort(key=lambda item: item[0])
+    if exact and not variants:
+        return exact[0]
+    if not exact and len(variants) == 1:
+        return variants[0][1]
+    if not exact and not variants:
+        return None
+
+    # Solo se abre cada candidato cuando de verdad hay ambigüedad. Un PDF de
+    # prueba o dañado sigue localizándose; el visor será quien informe si no
+    # puede renderizarlo.
+    cache = page_counts if page_counts is not None else {}
+    if required_page > 0:
+        usable_exact = [
+            path for path in exact
+            if (count := _candidate_page_count(path, cache)) is None
+            or count >= required_page
+        ]
+        if usable_exact:
+            return usable_exact[0]
+        usable_variants = []
+        for index, path in variants:
+            count = _candidate_page_count(path, cache)
+            if count is None or count >= required_page:
+                # La menor holgura es la mejor coincidencia física; el sufijo
+                # solo desempata dos PDF con igual cantidad de páginas.
+                slack = count - required_page if count is not None else 10**12
+                usable_variants.append((slack, index, path))
+        if usable_variants:
+            return min(
+                usable_variants,
+                key=lambda item: (item[0], item[1], str(item[2]).casefold()),
+            )[2]
+    return exact[0] if exact else variants[0][1]
 
 
 def resolve_source_documents(
@@ -333,6 +480,18 @@ def resolve_source_documents(
     row_list = list(rows)
     row_paths = source_pdf_paths_for_rows(csv_path, row_list)
     recorded = source_documents_for_csv(csv_path) or _documents_from_rows(row_list)
+    requirements = _source_page_requirements(csv_path)
+    if not requirements:
+        for row in row_list:
+            name = (row.get("file") or "").strip()
+            try:
+                page = int(row.get("page", ""))
+            except ValueError:
+                page = 0
+            if name:
+                requirements[name.casefold()] = max(
+                    page, requirements.get(name.casefold(), 0)
+                )
     extra = [Path(folder) for folder in extra_folders]
     folders = _source_search_folders(csv_path)
     folders.extend(extra)
@@ -342,8 +501,18 @@ def resolve_source_documents(
     missing: list[str] = []
     by_recorded: dict[str, Path] = {}
     by_name: dict[str, Path | None] = {}
+    page_counts: dict[str, int | None] = {}
     for source in recorded:
-        found = _locate_document(source, folders, extra)
+        required_page = requirements.get(
+            str(source).casefold(), requirements.get(source.name.casefold(), 0)
+        )
+        found = _locate_document(
+            source,
+            folders,
+            extra,
+            required_page=required_page,
+            page_counts=page_counts,
+        )
         if found is None:
             if source.name not in missing:
                 missing.append(source.name)
@@ -422,8 +591,17 @@ def reports_for_csv(
 
     reports = []
     missing: list[str] = []
+    page_counts: dict[str, int | None] = {}
     for report in reports_from_companion(csv_path):
-        located = _locate_document(Path(report.pdf_path), folders, extra)
+        located = _locate_document(
+            Path(report.pdf_path),
+            folders,
+            extra,
+            required_page=max(
+                (page.page_number for page in report.pages), default=0
+            ),
+            page_counts=page_counts,
+        )
         if located is None:
             name = Path(report.pdf_path).name
             if name not in missing:
@@ -1011,6 +1189,10 @@ class EmbeddedPdfViewer(QFrame):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
+        # El widget debe dedicar todo su rectángulo al pixmap. Un padding de
+        # estilo reduce ``contentsRect`` después de fijar este mismo tamaño y
+        # Qt termina ocultando los bordes de la bitácora.
+        self.image.setContentsMargins(0, 0, 0, 0)
         self.image.setText("")
         self.image.setPixmap(pixmap)
         self.image.setFixedSize(pixmap.size())
@@ -1019,6 +1201,7 @@ class EmbeddedPdfViewer(QFrame):
     def _show_placeholder(self, text: str) -> None:
         """Deja el panel con un mensaje centrado y sin página cargada."""
         self._source = None
+        self.image.setContentsMargins(12, 12, 12, 12)
         self.image.setPixmap(QPixmap())
         self.image.setText(text)
         self.image.setFixedSize(self.scroll.viewport().size())
@@ -1575,7 +1758,7 @@ class CsvViewerWindow(QMainWindow):
         except Exception:  # noqa: BLE001 - color no crítico para el visor
             return statuses
         for report in reports:
-            filename = Path(report.pdf_path).name.casefold()
+            filename = report.source_filename.casefold()
             for page in report.pages:
                 key = (filename, str(page.page_number))
                 statuses[key] = {
