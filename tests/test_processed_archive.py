@@ -15,7 +15,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QTableWidgetItem
 
 from app.gui.main_window import MainWindow
 from app.utils.io import PROCESSED_DIRNAME, archive_processed_files
@@ -92,6 +93,13 @@ def test_la_ventana_reapunta_a_la_carpeta_de_procesados(tmp_path: Path):
         window._reports = [_report(pdf)]
         window._pdf_paths = [pdf]
         window._row_pdfs = [pdf]
+        window._table_columns = ["page"]
+        window.table.setColumnCount(1)
+        window.table.setRowCount(1)
+        page_item = QTableWidgetItem("1")
+        page_item.setData(Qt.ItemDataRole.UserRole, 1)
+        page_item.setData(Qt.ItemDataRole.UserRole + 1, str(pdf))
+        window.table.setItem(0, 0, page_item)
         window._preview_pdf = pdf
         window._preview_results = {(str(pdf.resolve()), 1): object()}
         window._preprocess_geometry = {(str(pdf), 1): {"skew_angle": 0.0}}
@@ -105,6 +113,7 @@ def test_la_ventana_reapunta_a_la_carpeta_de_procesados(tmp_path: Path):
         assert window._reports[0].pdf_path == str(apartado)
         assert window._pdf_paths == [apartado]
         assert window._row_pdfs == [apartado]
+        assert page_item.data(Qt.ItemDataRole.UserRole + 1) == str(apartado)
         assert window._preview_pdf == apartado
         assert list(window._preview_results) == [(str(apartado.resolve()), 1)]
         assert list(window._preprocess_geometry) == [(str(apartado), 1)]

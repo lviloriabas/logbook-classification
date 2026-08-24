@@ -617,7 +617,81 @@ def test_every_source_pdf_is_selectable_and_switching_resets_the_page(
     ] == ["uno.pdf", "dos.pdf"]
     assert viewer._path == second
     assert viewer._page == 1
+    assert viewer.page_edit.text() == "13"
+    assert viewer.total_pages.text() == "de 24"
     assert "2 PDF de origen disponibles" in viewer.source_status.text()
+    viewer.close()
+    app.processEvents()
+
+
+def test_pdf_pagination_crosses_documents_and_uses_the_combined_total(
+    tmp_path: Path, monkeypatch
+):
+    """La numeración del visor es continua entre todos los PDF de origen."""
+    app = QApplication.instance() or QApplication([])
+    from app.vision import pdf_loader
+
+    first = tmp_path / "uno.pdf"
+    second = tmp_path / "dos.pdf"
+    first.touch()
+    second.touch()
+    totals = {first: 2, second: 3}
+    monkeypatch.setattr(pdf_loader, "page_count", lambda path: totals[Path(path)])
+    monkeypatch.setattr(
+        pdf_loader,
+        "render_page",
+        lambda _path, _page, dpi=150: __import__("numpy").zeros(
+            (20, 30, 3), dtype="uint8"
+        ),
+    )
+    viewer = EmbeddedPdfViewer()
+
+    viewer.load_paths([first, second])
+    assert viewer.total_pages.text() == "de 5"
+
+    viewer.show_page(3)
+    assert viewer._path == second
+    assert viewer._page == 1
+    assert viewer.page_edit.text() == "3"
+
+    # Las filas del CSV entregan una página local y el PDF que la originó.
+    viewer.show_page(3, second)
+    assert viewer._path == second
+    assert viewer._page == 3
+    assert viewer.page_edit.text() == "5"
+
+    viewer._show_previous_page()
+    assert viewer._path == second
+    assert viewer._page == 2
+    viewer.close()
+    app.processEvents()
+
+
+def test_clicking_the_current_row_locates_its_pdf_again(tmp_path: Path):
+    """Un segundo clic en la misma bitácora no cambia la celda actual."""
+    app = QApplication.instance() or QApplication([])
+    viewer = CsvViewerWindow(tmp_path)
+    source = tmp_path / "bitacora.pdf"
+    source.touch()
+    viewer._rows = [{"file": source.name, "page": "7"}]
+    viewer._row_pdf_paths = [source]
+    viewer.table.setColumnCount(1)
+    viewer.table.setRowCount(1)
+    from PySide6.QtWidgets import QTableWidgetItem
+
+    item = QTableWidgetItem(source.name)
+    item.setData(Qt.ItemDataRole.UserRole, 0)
+    viewer.table.setItem(0, 0, item)
+    shown: list[tuple[int, Path]] = []
+    viewer.pdf_viewer.show_page = lambda page, path=None: shown.append(
+        (page, Path(path))
+    )
+
+    viewer.table.setCurrentCell(0, 0)
+    shown.clear()
+    viewer.table.cellClicked.emit(0, 0)
+
+    assert shown == [(7, source)]
     viewer.close()
     app.processEvents()
 

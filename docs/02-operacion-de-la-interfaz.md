@@ -258,7 +258,9 @@ Pulse **Visor de CSV…** para abrir una ejecución anterior.
 1. Seleccione una de las 25 ejecuciones recientes en **Historial**, o use **Seleccionar carpeta…** o **Seleccionar CSV…**.
 2. Seleccione el CSV mínimo o completo.
 3. Escriba en **Buscar** cualquier texto del CSV: número de bitácora, matrícula, archivo, página o parte de ellos. La búsqueda no distingue mayúsculas, recorre las columnas que muestra la tabla —con el CSV completo también las ocultas en la vista resumida— y prioriza las celdas que coinciden por completo sobre las que solo contienen el texto. Repetir la búsqueda, o pulsar ‹ y ›, recorre las coincidencias; el indicador dice en qué columna coincidió y qué página es.
-4. Revise la fila y la página fuente en el panel PDF.
+4. Revise la fila y la página fuente en el panel PDF. La numeración es
+   continua entre todos los PDF de origen: el límite es la suma de sus páginas
+   y al terminar un archivo las flechas continúan en el siguiente.
 5. Use **Exportar** solo si la ejecución conserva su JSON, plantilla y PDF fuente requeridos.
 
 Para quitar páginas sueltas, selecciónelas en la tabla —con `Ctrl` o `Mayús` para varias— y pulse `Supr`. Para quitar de una vez las repetidas o las vacías, pulse **Depurar**: el cuadro es el mismo de la ventana principal y escribe lo mismo. Tras confirmar, el visor reescribe el CSV mínimo, el CSV completo, el JSON y `stats.json` sin ellas. Los PDF ya exportados conservan esas páginas hasta que pulse **Exportar**. La eliminación necesita una ejecución completa con su JSON y su plantilla, y no puede dejar la ejecución sin ninguna página.

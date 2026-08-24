@@ -3284,6 +3284,25 @@ class MainWindow(QMainWindow):
             report.pdf_path = str(relocated(report.pdf_path))
         self._pdf_paths = [relocated(path) for path in self._pdf_paths]
         self._row_pdfs = [relocated(path) for path in self._row_pdfs]
+        # Las filas ya construidas guardan además su PDF en el propio item de
+        # la columna ``page``. Esa copia es la que usa el doble clic, incluso
+        # después de ordenar la tabla; si conserva la ruta anterior, el visor
+        # intenta abrir un archivo que acaba de moverse a ``processed/``.
+        try:
+            page_column = self._table_columns.index("page")
+        except ValueError:
+            page_column = -1
+        if page_column >= 0:
+            for row in range(self.table.rowCount()):
+                item = self.table.item(row, page_column)
+                if item is None:
+                    continue
+                stored = item.data(Qt.ItemDataRole.UserRole + 1)
+                if stored:
+                    item.setData(
+                        Qt.ItemDataRole.UserRole + 1,
+                        str(relocated(stored)),
+                    )
         self._preview_results = {
             (str(relocated(path).resolve()), page): result
             for (path, page), result in self._preview_results.items()
