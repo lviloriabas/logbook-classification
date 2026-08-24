@@ -327,7 +327,7 @@ def test_la_espera_agotada_dice_que_llego_y_que_falto(monkeypatch, tmp_path):
 
 def test_no_se_toma_la_primera_cookie_que_aparece_sino_la_que_sirve(
         monkeypatch, tmp_path):
-    """Recien abierto, el navegador todavia va y viene de Microsoft.
+    """Recien abierto, el navegador todavía va y viene de Microsoft.
 
     Lo que hay en el perfil en ese instante es la cookie de la vez
     anterior, caducada si paso el rato, y tomarla dejaba el trabajo

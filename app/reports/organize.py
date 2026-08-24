@@ -68,7 +68,7 @@ from app.validation.discrepancias import (
     Discrepancia,
 )
 from app.validation.grouping import log_number
-from app.validation.page_status import ready_for_auto_index
+from app.validation.page_status import has_log_number
 from app.vision.pdf_loader import PdfDocumentCache, copy_pdf_pages, render_page
 from app.vision.signature import SIGNATURE_PAD_X, SIGNATURE_PAD_Y
 
@@ -121,18 +121,23 @@ def clave_avion(page: PageResult) -> str:
 
 
 def por_revisar(page: PageResult) -> bool:
-    """La página no es suficientemente segura para indexarla sola.
+    """La página necesita el batch manual por falta de datos o discrepancia.
 
-    La inferencia por libro se conserva: una matrícula reparada puede entrar
-    cuando tiene dos o más lecturas independientes y pasa las reglas. Lo que
-    nunca abre un separador automático es una matrícula ausente, una lectura
-    canónica que contradijo al libro o una confianza baja en la matrícula.
-    Esos casos van al batch «Revisar» para que la página visible, y no una
-    suposición, decida su avión. Las advertencias de fecha no deciden el grupo.
+    ``airvault_review`` se decide con la fila final del CSV: queda activo si
+    algún obligatorio no pudo completarse o si la página tiene una
+    discrepancia confirmada. Las advertencias de confianza no bastan para
+    apartarla cuando matrícula y número ya tienen valores utilizables; el
+    indexador puede escribir esos valores y dejar la página en verde.
+
+    Las comprobaciones directas conservan segura esta función cuando se usa
+    antes de escribir el CSV o con reportes antiguos que no traen la marca.
     """
     return (
-        clave_avion(page) == SIN_MATRICULA
-        or not ready_for_auto_index(page)
+        page.airvault_review
+        or page.airvault_discrepancy
+        or page.blank
+        or clave_avion(page) == SIN_MATRICULA
+        or not has_log_number(page)
     )
 
 
@@ -142,7 +147,7 @@ def paginas_para_revisar(
     """Páginas que requieren revisión, ordenadas por libro y logpage."""
     refs = [
         ref for ref in iterar_paginas(reports)
-        if not ref.page.blank and por_revisar(ref.page)
+        if por_revisar(ref.page)
     ]
     refs.sort(key=lambda ref: clave_orden(ref.page, ref.orden))
     return refs

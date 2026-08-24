@@ -164,15 +164,13 @@ def write_outputs(
     datos_dir = run_dir / "datos"
     datos_dir.mkdir(parents=True, exist_ok=True)
 
-    from app.validation.discrepancias import clasificar_lote
+    from app.validation.discrepancias import (
+        clasificar_lote,
+        confirmadas_para_revision,
+    )
 
     entradas = clasificar_lote(reports, template)
-    excluidas: set[tuple[str, int]] = set()
-    if options.discrepancias:
-        excluidas = {
-            (Path(entrada.pdf_path).name, entrada.page_number)
-            for entrada in entradas
-        }
+    confirmadas = confirmadas_para_revision(entradas)
 
     stage("Escribiendo CSV mínimo y completo…", 10)
     csv_path = datos_dir / csv_name
@@ -186,6 +184,53 @@ def write_outputs(
     write_minimal_csv(
         full_csv_path, csv_path, options.important_csv_columns
     )
+    from app.airvault.mapping import (
+        leer_csv_corrida,
+        obligatorios_vacios_por_pagina,
+    )
+    from app.reports.organize import paginas_para_revisar
+
+    faltantes_por_pagina = obligatorios_vacios_por_pagina(
+        leer_csv_corrida(csv_path)
+    )
+    discrepancias_confirmadas = {
+        (Path(entrada.pdf_path).name, entrada.page_number)
+        for entrada in confirmadas
+    }
+    for report in reports:
+        archivo = Path(report.pdf_path).name
+        for page in report.pages:
+            clave = (archivo, page.page_number)
+            page.airvault_review = (
+                clave in faltantes_por_pagina
+                or clave in discrepancias_confirmadas
+                or page.airvault_discrepancy
+            )
+    if faltantes_por_pagina or discrepancias_confirmadas:
+        logger.info(
+            "[Organize] {} páginas van a REVISAR por campos obligatorios "
+            "vacíos y {} por discrepancias confirmadas",
+            len(faltantes_por_pagina),
+            len(discrepancias_confirmadas),
+        )
+
+    revisar = {
+        (Path(ref.pdf_path).name, ref.page.page_number)
+        for ref in paginas_para_revisar(reports)
+    }
+    # REVISAR tiene prioridad. Una página con datos críticos sin resolver y
+    # además una falta de firma no debe aparecer dos veces para la persona.
+    confirmadas_para_pdf = [
+        entrada
+        for entrada in confirmadas
+        if (Path(entrada.pdf_path).name, entrada.page_number) not in revisar
+    ]
+    excluidas: set[tuple[str, int]] = set()
+    if options.discrepancias:
+        excluidas = {
+            (Path(entrada.pdf_path).name, entrada.page_number)
+            for entrada in confirmadas_para_pdf
+        }
     stage("Escribiendo JSON…", 20)
     json_path = datos_dir / f"{corrida}.json"
     JsonReporter().write_consolidated(reports, json_path, corrida=corrida)
@@ -220,17 +265,20 @@ def write_outputs(
 
     separar = list(options.separar_por) or None
     pdf_unico = options.un_solo_pdf or not separar
-    if (options.discrepancias and entradas and not skip_pdfs
+    if (options.discrepancias and confirmadas_para_pdf and not skip_pdfs
             and not pdf_unico):
         stage("Generando discrepancias.pdf…", 45)
         from app.reports.organize import escribir_pdf_discrepancias
 
         escribir_pdf_discrepancias(
-            entradas, template, run_dir, dpi=options.dpi
+            confirmadas_para_pdf, template, run_dir, dpi=options.dpi
         )
-    elif (options.discrepancias and not entradas and not skip_pdfs
+    elif (options.discrepancias and not confirmadas_para_pdf and not skip_pdfs
           and not pdf_unico):
-        logger.info("No hay discrepancias; no se genera discrepancias.pdf")
+        logger.info(
+            "No hay ausencias de firma confirmadas; no se genera "
+            "discrepancias.pdf"
+        )
 
     if skip_pdfs:
         pdf_paths: list[Path] = []

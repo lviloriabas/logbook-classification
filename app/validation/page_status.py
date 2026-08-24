@@ -171,9 +171,10 @@ def ready_for_auto_index(page: PageResult) -> bool:
 
     No vuelve a interpretar los valores ni elimina inferencias. Un valor
     deducido por el libro sigue siendo válido cuando lo respaldan al menos
-    dos lecturas independientes. Lo que se rechaza es una alineación dudosa,
-    una matrícula marcada por las reglas normales o una inferencia sostenida
-    por cero o una sola página.
+    dos lecturas independientes. Lo que se rechaza es un dato crítico marcado
+    por las reglas normales o una inferencia sostenida por cero o una sola
+    página. Una alineación dudosa no bloquea por sí sola: si aun así
+    matrícula y ``log_number`` quedaron firmes, conserva el flujo automático.
 
     El número de bitácora debe conservar sus siete dígitos. La fecha puede
     resolverse después con las anclas del libro completo; la barrera previa a
@@ -181,8 +182,6 @@ def ready_for_auto_index(page: PageResult) -> bool:
     log inválido va a ``REVISAR`` desde la exportación.
     """
     if page.blank:
-        return False
-    if page.alignment_quality != "ok":
         return False
 
     field = field_of(page, MATRICULA_FIELD_ID)
@@ -197,7 +196,12 @@ def ready_for_auto_index(page: PageResult) -> bool:
         return False
     if field.votes is not None and field.votes < AUTO_INDEX_MIN_VOTES:
         return False
-    return has_log_number(page)
+    log_field = field_of(page, LOG_NUMBER_FIELD_ID)
+    return bool(
+        log_field
+        and log_field.status is Status.OK
+        and has_log_number(page)
+    )
 
 
 def recompute_page_status(page: PageResult) -> None:

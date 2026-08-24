@@ -41,9 +41,9 @@ from app.airvault.session import ErrorDeConexion, ErrorDeSesion
 # siguiente solo sirve para marcar cuatrocientas paginas con el mismo error.
 FALLOS_DE_CAMINO = (ErrorDeSesion, ErrorDeConexion)
 
-# Estos avisos describen calidad incompleta, no una correspondencia rota. Se
-# envia lo disponible y AirVault deja la pagina pendiente de revision. Todo
-# aviso nuevo bloquea por defecto hasta que se clasifique expresamente aqui.
+# Estos avisos describen calidad incompleta, no una correspondencia rota. En
+# el batch REVISAR se envia lo disponible para que AirVault la deje pendiente;
+# en un batch automatico los obligatorios vacios bloquean la escritura.
 AVISOS_DE_REVISION = {
     "matricula_vacia",
     "matricula_desconocida",
@@ -62,6 +62,7 @@ class PlanPagina:
     valores: Dict[int, str]
     avisos: List[Aviso] = field(default_factory=list)
     ya_indexada: bool = False
+    solo_revision: bool = False
 
     @property
     def escribible(self) -> bool:
@@ -70,7 +71,14 @@ class PlanPagina:
 
     @property
     def bloqueos(self) -> List[Aviso]:
-        return [a for a in self.avisos if a.codigo not in AVISOS_DE_REVISION]
+        return [
+            aviso for aviso in self.avisos
+            if aviso.codigo not in AVISOS_DE_REVISION
+            or (
+                aviso.codigo == "obligatorio_vacio"
+                and not self.solo_revision
+            )
+        ]
 
     @property
     def requiere_revision(self) -> bool:
@@ -225,6 +233,7 @@ class Indexador:
                 plan.paginas.append(PlanPagina(
                     seq=registro.seq, pagina_batch=pagina, registro=registro,
                     valores={}, avisos=[], ya_indexada=False,
+                    solo_revision=self.manifiesto.solo_subir,
                 ))
                 continue
             valores = valores_de_indice(
@@ -273,6 +282,7 @@ class Indexador:
                         remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
                     ).strip()
                 ),
+                solo_revision=self.manifiesto.solo_subir,
             ))
 
         plan.avisos_globales = [
@@ -358,7 +368,7 @@ class Indexador:
                 valores[CAMPO_WORK_LOCATION] = ""
                 estado = (
                     ESTADO_NECESITA_CORRECCION
-                    if entrada.queda_incompleta
+                    if self.manifiesto.solo_subir or entrada.queda_incompleta
                     else ESTADO_VALIDO
                 )
                 self.cliente.guardar_pagina(

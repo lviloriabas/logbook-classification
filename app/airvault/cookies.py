@@ -36,7 +36,7 @@ PREFIJOS_DE_AUTENTICACION = ("Critical", "FedAuth", ".ASPXAUTH")
 
 # Cookies que acompanan pero no autentican. ``ASP.NET_SessionId`` lo pone el
 # servidor al primer contacto, antes de saber quien eres: darla por buena
-# hacia pasar por sesion abierta una que todavia estaba en la pagina de
+# hacia pasar por sesion abierta una que todavía estaba en la pagina de
 # Microsoft, y el batch moria en la primera pagina.
 PREFIJOS_DE_ACOMPANAMIENTO = ("ASP.NET_SessionId",)
 
@@ -109,9 +109,7 @@ def dominio(base_url: str) -> str:
     return (partes.hostname or str(base_url or "").strip()).lower()
 
 
-def del_dominio(
-    cookies: Mapping[str, Mapping[str, str]], host: str
-) -> Dict[str, str]:
+def del_dominio(cookies: Mapping[str, Mapping[str, str]], host: str) -> Dict[str, str]:
     """Filtra un mapa ``{host: {nombre: valor}}`` para quedarse con ``host``.
 
     Se aceptan tambien los dominios padre: una cookie puesta en

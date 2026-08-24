@@ -325,15 +325,23 @@ El índice de páginas `<corrida>_paginas.json` representa cada hoja del PDF, in
 
 El flujo es:
 
-1. repartir para Quick Upload los PDF que excedan la última cantidad guardada por la interfaz;
+1. repartir para Quick Upload los PDF que excedan el máximo elegido en la ventana; la copia portable trae 200 páginas inicialmente y luego persiste la última cantidad elegida en `airvault.json` para los controles **Repartir en** y **Máximo por batch**;
 2. cargar cada PDF mediante Quick Upload;
-3. detectar el batch nuevo, asignarle nombre y confirmar el mismo ID antes de continuar; tras 30 minutos de ausencia se reenvía automáticamente una sola vez solo el faltante y luego se sigue comprobando sin duplicarlo;
+3. detectar el batch nuevo y asignarle nombre;
 4. leer páginas y construir un plan sin escribir;
 5. generar `revision.html` y `revision.csv`;
 6. escribir solo registros habilitados;
 7. releerlos y confirmar estado `Valid`;
 8. guardar el manifiesto después de cada página;
 9. liberar el batch al terminar, cancelar o abandonar.
+
+La recuperación de Quick Upload agota primero tres ciclos de identificación
+por nombre, páginas y contenido. Solo entonces guarda el inicio de una espera
+de 1800 segundos antes de considerar la carga estancada. Un nuevo clic en
+**Subir a AirVault** vuelve a consultar Web Index, reenvía solo las ausentes y
+ejecuta su descubrimiento hasta obtener el ID. Cada ventana mantiene un
+`TrabajoAirVaultWorker` independiente, por lo que varias ejecuciones pueden
+avanzar a la vez; el cierre principal reúne y detiene todos esos hilos.
 
 BITS escribe siempre `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status` y `End Date`. Añade `Batch Name` cuando se proporciona y `Lessor` cuando está resuelto. `Description` recibe `<flight_number> AUTO INDEX` cuando existe vuelo y `AUTO INDEX` cuando no existe. Esta marca se agrega al payload remoto y no altera los CSV.
 

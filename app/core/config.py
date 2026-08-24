@@ -169,6 +169,13 @@ class AppConfig(BaseModel):
         default=Path("fleet.json"),
         description="Archivo portable con la lista de aviones de la flota.",
     )
+    book_matriculas_file: Path = Field(
+        default=Path("book_matriculas.json"),
+        description=(
+            "Archivo JSON compacto y portable que recuerda la matrícula "
+            "confirmada de cada libro."
+        ),
+    )
 
 
 def config_for_pdf(config: AppConfig, pdf_path: Path) -> AppConfig:

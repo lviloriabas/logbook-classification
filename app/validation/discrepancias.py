@@ -265,3 +265,19 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
     ))
     logger.info(f"[Discrepancias] {len(entradas)} página(s) con discrepancias")
     return entradas
+
+
+def confirmadas_para_revision(
+    entradas: List[Discrepancia],
+) -> List[Discrepancia]:
+    """Devuelve solo ausencias confirmadas para la revisión manual.
+
+    Las lecturas ``UNCERTAIN`` conservan ``page.discrepancy`` y su detalle de
+    auditoría, pero no salen del flujo automático. Solo ``MISSING`` confirma
+    que falta una firma exigida y justifica separar la página.
+    """
+    return [
+        entrada
+        for entrada in entradas
+        if entrada.categoria is Categoria.MISSING
+    ]

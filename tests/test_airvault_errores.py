@@ -405,7 +405,7 @@ def test_una_sesion_caducada_se_renueva_sin_ventana_y_sigue(monkeypatch):
 
 
 def test_no_se_reentra_una_y_otra_vez_en_la_misma_peticion(monkeypatch):
-    """Si al renovar sigue sin valer, no se abre Edge en cada intento."""
+    """Se prueba el perfil y una ventana, no Edge en cada intento."""
     from app.airvault import navegador
     from app.airvault.session import ORIGEN_EDGE
 
@@ -420,7 +420,7 @@ def test_no_se_reentra_una_y_otra_vez_en_la_misma_peticion(monkeypatch):
     monkeypatch.setattr(navegador, "obtener_cookies", entrar)
     with pytest.raises(ErrorDeSesion):
         s.get("/x")
-    assert pedidos == [False]
+    assert pedidos == [False, True]
 
 
 def test_cuando_ni_renovando_vale_se_vuelve_a_entrar_con_ventana(monkeypatch):
@@ -448,6 +448,35 @@ def test_cuando_ni_renovando_vale_se_vuelve_a_entrar_con_ventana(monkeypatch):
     # Y la vieja sale del tarro: requests mandaria las dos y AirVault se
     # quedaria con la que acaba de rechazar.
     assert s.http.cookies.vaciado == 1
+
+
+def test_reentrar_repite_la_peticion_y_continua_el_trabajo(monkeypatch):
+    """La ventana de acceso no deja el paso actual detenido.
+
+    La renovacion de sesion no es un reintento de red. Incluso si la
+    configuracion permite una sola peticion, al terminar de entrar en Edge
+    se repite la que quedo pendiente y el proceso sigue solo.
+    """
+    from app.airvault import navegador
+    from app.airvault.session import ORIGEN_EDGE
+
+    s = sesion([
+        RespuestaFalsa(status_code=401),
+        RespuestaFalsa(status_code=401),
+        RespuestaFalsa(json_data={"records": 8}),
+    ], reintentos=1)
+    s._origen = ORIGEN_EDGE
+    pedidos: list[bool] = []
+
+    def entrar(*_a, forzar_login=False, **_k):
+        pedidos.append(forzar_login)
+        return {"FedAuth": "nueva"}
+
+    monkeypatch.setattr(navegador, "obtener_cookies", entrar)
+
+    assert s.get("/index/Batch/GetBatches") == {"records": 8}
+    assert pedidos == [False, True]
+    assert len(s.http.pedidas) == 3
 
 
 def test_lo_que_escribe_lleva_el_token_del_sitio():

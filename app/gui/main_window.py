@@ -92,6 +92,7 @@ from app.gui.widgets import (
     ICON_SIZE,
     TABLE_RADIUS,
     ElidedLabel,
+    SpinBoxWithButtons,
     ZoomableScrollArea,
     ZoomOverlay,
     load_icon,
@@ -147,6 +148,11 @@ _BAR_MIN_WIDTH = 140
 _PAGES_COLUMN_WIDTH = 86
 _SECS_COLUMN_WIDTH = 70
 _FILE_ROW_SPACING = 8
+# El selector conserva su ancho habitual en pantallas holgadas. En la
+# densidad compacta cede apenas lo necesario para que «Entrada» y «Salidas»
+# entren en dos columnas dentro de un escritorio lógico de 1280 px.
+_TEMPLATE_MIN_WIDTH = 200
+_COMPACT_TEMPLATE_MIN_WIDTH = 180
 
 
 _COLORS = {
@@ -599,6 +605,11 @@ class MainWindow(QMainWindow):
         self.preview_scroll.setMinimumSize(
             density.preview_min_width, density.preview_min_height
         )
+        self.template_combo.setMinimumWidth(
+            _COMPACT_TEMPLATE_MIN_WIDTH
+            if density.compact
+            else _TEMPLATE_MIN_WIDTH
+        )
         self.log_view.setMaximumHeight(density.bottom_pane_height)
         self.log_view.setMinimumWidth(density.log_min_width)
         self.times_scroll.setMaximumHeight(density.bottom_pane_height)
@@ -896,7 +907,11 @@ class MainWindow(QMainWindow):
 
         grid.addWidget(QLabel("Plantilla:"), 1, 0)
         self.template_combo = QComboBox()
-        self.template_combo.setMinimumWidth(200)
+        self.template_combo.setMinimumWidth(
+            _COMPACT_TEMPLATE_MIN_WIDTH
+            if self._density.compact
+            else _TEMPLATE_MIN_WIDTH
+        )
         self.template_combo.currentIndexChanged.connect(
             self._refresh_preview_template
         )
@@ -959,7 +974,8 @@ class MainWindow(QMainWindow):
         self.page_from_spin.setToolTip(range_tip)
         self.page_from_spin.setAccessibleName("Primera página del rango")
         self.page_from_spin.valueChanged.connect(self._on_page_from_changed)
-        row.addWidget(self.page_from_spin)
+        self.page_from_control = SpinBoxWithButtons(self.page_from_spin)
+        row.addWidget(self.page_from_control)
 
         row.addWidget(QLabel("a"))
         self.page_to_spin = QSpinBox()
@@ -970,7 +986,8 @@ class MainWindow(QMainWindow):
         self.page_to_spin.setToolTip(range_tip)
         self.page_to_spin.setAccessibleName("Última página del rango")
         self.page_to_spin.valueChanged.connect(self._on_page_to_changed)
-        row.addWidget(self.page_to_spin)
+        self.page_to_control = SpinBoxWithButtons(self.page_to_spin)
+        row.addWidget(self.page_to_control)
 
         self.page_range_label = ElidedLabel("")
         self.page_range_label.setStyleSheet("color: #667085;")
@@ -1131,7 +1148,8 @@ class MainWindow(QMainWindow):
             "Cantidad total de hilos que puede utilizar el procesamiento. "
             f"Disponibles detectados: {available}."
         )
-        top_row.addWidget(self.threads_spin)
+        self.threads_control = SpinBoxWithButtons(self.threads_spin)
+        top_row.addWidget(self.threads_control)
 
         top_row.addSpacing(12)
         top_row.addWidget(QLabel("Página de referencia:"))
@@ -1139,7 +1157,8 @@ class MainWindow(QMainWindow):
         self.ref_spin.setRange(1, 1000)
         self.ref_spin.setValue(1)
         self.ref_spin.setToolTip("Página usada como referencia de alineación")
-        top_row.addWidget(self.ref_spin)
+        self.ref_control = SpinBoxWithButtons(self.ref_spin)
+        top_row.addWidget(self.ref_control)
 
         top_row.addSpacing(16)
         self.reserve_core_check = QCheckBox(
@@ -1163,7 +1182,7 @@ class MainWindow(QMainWindow):
         # acaba de terminar, que es lo que ese sitio daba a entender.
         self.btn_airvault = QPushButton("Indexar en AirVault…")
         self.btn_airvault.setToolTip(AIRVAULT_TOOLTIP)
-        self.btn_airvault.clicked.connect(self._open_airvault)
+        self.btn_airvault.clicked.connect(lambda: self._open_airvault())
         self._desplegables_row.insertWidget(1, self.btn_airvault)
         return panel
 
@@ -1171,10 +1190,16 @@ class MainWindow(QMainWindow):
         """Abre una ventana libre o crea otra para trabajar en paralelo.
 
         Se construye la primera vez que se pide: quien no sube nada a
-        AirVault no paga el recorrido del historial ni la ventana.
+        AirVault no paga el recorrido del historial ni la ventana. Si la
+        última ya tiene un hilo activo, se crea otra; cada ejecución conserva
+        su estado, conexión y controles sin alterar las demás.
         """
         ventana = self._airvault_window
         if ventana is None or ventana.hilo() is not None:
+            # No se le da ``parent``: en Windows una ventana nativa con dueño
+            # no recibe una entrada propia en la barra de tareas. La
+            # referencia de esta clase basta para conservarla viva y el
+            # cierre ordenado se hace en ``_teardown``.
             ventana = AirVaultWindow(SCRIPT_DIR)
             ventana.setWindowIcon(self.windowIcon())
             ventana.abrir_corrida_paralela.connect(
@@ -1190,9 +1215,13 @@ class MainWindow(QMainWindow):
 
     def _open_airvault_corrida(self, csv: str) -> None:
         """Abre otra ejecución sin tocar la ventana que ya está ocupada."""
+        anterior = self._airvault_window
         self._airvault_window = None
         self._airvault_corrida = Path(csv)
         self._open_airvault()
+        if self._airvault_window is anterior:
+            return
+        self._airvault_window.fijar_corrida(csv)
 
     def _effective_threads(self, selected: int) -> int:
         """Hilos efectivos del pipeline según la reserva para la interfaz."""
@@ -1327,7 +1356,10 @@ class MainWindow(QMainWindow):
 
         self.preview_label = QLabel("Vista previa")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumSize(0, 0)
+        self.preview_label.setWordWrap(True)
+        self.preview_label.setMinimumSize(
+            self._density.preview_min_width, self._density.preview_min_height
+        )
         self.preview_label.setStyleSheet(
             f"border: 1px solid #bbb; border-radius: {TABLE_RADIUS}px;"
             " background: transparent;"
@@ -1511,6 +1543,10 @@ class MainWindow(QMainWindow):
 
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
         self.log_view.setAccessibleName("Registro de eventos")
         self.log_view.setMaximumHeight(self._density.bottom_pane_height)
         self.log_view.document().setMaximumBlockCount(2000)
@@ -1571,6 +1607,7 @@ class MainWindow(QMainWindow):
         )
         half = available // 2
         self.bottom_splitter.setSizes([half, available - half])
+        self._resize_preview_placeholder()
 
     def _times_pane_min_width(self) -> int:
         """Ancho de una fila completa del panel de avance, con sus márgenes."""
@@ -1805,18 +1842,41 @@ class MainWindow(QMainWindow):
             self._preview_base_image = None
             self._set_preview_documents([])
             self._preview_zoom = 1.0
-            self.preview_label.clear()
-            self.preview_label.setText("Vista previa")
+            self._show_preview_placeholder("Vista previa")
             self._update_preview_zoom_controls()
             self._update_preview_nav()
             return
         self._preview_source_pixmap = None
         self._preview_base_image = None
         self._preview_zoom = 1.0
-        self.preview_label.clear()
-        self.preview_label.setText("Cargando vista previa…")
+        self._show_preview_placeholder("Cargando vista previa…")
         self._update_preview_zoom_controls()
         self._show_preview_page(1, self._pdf_paths[0])
+
+    def _show_preview_placeholder(self, text: str) -> None:
+        """Muestra un mensaje legible ocupando toda la superficie del visor."""
+        self.preview_label.setPixmap(QPixmap())
+        self.preview_label.setText(text)
+        # Al mostrar una página se fija el tamaño del QLabel al de la imagen.
+        # Hay que quitar ese límite antes de volver al estado de texto, o el
+        # mensaje puede quedar en un recuadro pequeño o con el tamaño de la
+        # página anterior.
+        self.preview_label.setMaximumSize(QSize(16777215, 16777215))
+        viewport_size = self.preview_scroll.viewport().size()
+        if viewport_size.width() > 0 and viewport_size.height() > 0:
+            self.preview_label.setFixedSize(viewport_size)
+        else:
+            self.preview_label.setMinimumSize(
+                self._density.preview_min_width, self._density.preview_min_height
+            )
+
+    def _resize_preview_placeholder(self) -> None:
+        """Mantiene el mensaje del visor al tamaño disponible al redimensionar."""
+        if self._preview_source_pixmap is not None or not self.preview_label.text():
+            return
+        viewport_size = self.preview_scroll.viewport().size()
+        if viewport_size.width() > 0 and viewport_size.height() > 0:
+            self.preview_label.setFixedSize(viewport_size)
 
     @staticmethod
     def _document_key(path: Path) -> str:
@@ -2216,6 +2276,8 @@ class MainWindow(QMainWindow):
             spin.blockSignals(False)
         self._set_spin_silently(self.page_from_spin, 1)
         self._set_spin_silently(self.page_to_spin, top)
+        self.page_from_control.sync_buttons()
+        self.page_to_control.sync_buttons()
         self._refresh_page_range_label()
 
     def _refresh_page_range_label(self) -> None:
@@ -2450,7 +2512,9 @@ class MainWindow(QMainWindow):
     def _open_csv_viewer(self) -> None:
         """Abre el visor de ejecuciones como una ventana independiente."""
         if self._csv_viewer is None:
-            self._csv_viewer = CsvViewerWindow(SCRIPT_DIR / "output", self)
+            # Independiente también a nivel nativo: parentarla a la principal
+            # hace que Windows oculte su botón de la barra de tareas.
+            self._csv_viewer = CsvViewerWindow(SCRIPT_DIR / "output")
             self._csv_viewer.setWindowIcon(self.windowIcon())
         self._csv_viewer.show()
         self._csv_viewer.raise_()
@@ -2604,6 +2668,7 @@ class MainWindow(QMainWindow):
             vlm_enabled=False,
             verify_fleet=self.fleet_check.isChecked(),
             fleet_file=SCRIPT_DIR / FLEET_FILENAME,
+            book_matriculas_file=SCRIPT_DIR / "book_matriculas.json",
         )
 
     def _start_preprocessing(self) -> None:
@@ -3142,6 +3207,8 @@ class MainWindow(QMainWindow):
         self._airvault_corrida = (
             Path(output_dir) / "datos" / f"{Path(output_dir).name}.CSV"
         )
+        # Se actualiza una ventana libre, nunca una que tenga un batch en
+        # vuelo. Las demás ejecuciones continúan en paralelo.
         for ventana in reversed(self._airvault_windows):
             if ventana.hilo() is None:
                 ventana.fijar_corrida(self._airvault_corrida)
@@ -3970,6 +4037,7 @@ class MainWindow(QMainWindow):
             self._grow_to_fit_content()
         self._update_responsive_layout()
         QTimer.singleShot(0, self._balance_bottom_splitter)
+        QTimer.singleShot(0, self._resize_preview_placeholder)
 
     def resizeEvent(self, event) -> None:
         """Reajusta la vista también cuando cambia el tamaño de la ventana.
@@ -3984,6 +4052,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._balance_bottom_splitter)
         if self._preview_source_pixmap is not None:
             self._resize_preview_timer.start()
+        else:
+            self._resize_preview_placeholder()
 
     # ── Cierre ──────────────────────────────────────────────────────────
 

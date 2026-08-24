@@ -275,8 +275,22 @@ def test_matricula_fuera_de_picklist_se_escribe_completa_y_valida():
     assert cliente.escrituras[0][2] == ESTADO_VALIDO
 
 
-def test_campo_obligatorio_vacio_se_envia_con_lo_que_hay():
+def test_campo_obligatorio_vacio_bloquea_un_batch_automatico():
     m = manifiesto(1)
+    m.registros[0].log_number = ""
+    cliente = ClienteFalso(page_count=1)
+    indexador = Indexador(cliente, m, PICKLIST)
+
+    plan = indexador.planificar(1)
+    indexador.aplicar(plan)
+
+    assert len(plan.escribibles) == 0
+    assert cliente.escrituras == []
+
+
+def test_campo_obligatorio_vacio_solo_se_envia_en_revisar():
+    m = manifiesto(1)
+    m.solo_subir = True
     m.registros[0].log_number = ""
     cliente = ClienteFalso(page_count=1)
     indexador = Indexador(cliente, m, PICKLIST)
@@ -286,6 +300,17 @@ def test_campo_obligatorio_vacio_se_envia_con_lo_que_hay():
 
     assert len(plan.escribibles) == 1
     assert cliente.escrituras[0][1][CAMPO_LOG_NUMBER] == ""
+    assert cliente.escrituras[0][2] == ESTADO_NECESITA_CORRECCION
+
+
+def test_una_discrepancia_completa_se_conserva_amarilla_en_revisar():
+    m = manifiesto(1)
+    m.solo_subir = True
+    cliente = ClienteFalso(page_count=1)
+    indexador = Indexador(cliente, m, PICKLIST)
+
+    indexador.aplicar(indexador.planificar(1))
+
     assert cliente.escrituras[0][2] == ESTADO_NECESITA_CORRECCION
 
 

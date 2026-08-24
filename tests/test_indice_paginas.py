@@ -76,7 +76,17 @@ def test_las_paginas_sin_matricula_cierran_bajo_revisar():
     assert etiquetas(secuencia_pdf_unico([reporte])) == [1, ETIQUETA_REVISAR, 2]
 
 
-def test_una_matricula_en_conflicto_no_queda_bajo_su_separador():
+def test_una_fila_que_quedaria_amarilla_cierra_bajo_revisar():
+    completa = _page(1, "2147337", "HP-1534CMP")
+    incompleta = _page(2, "2147338", "HP-1534CMP")
+    incompleta.airvault_review = True
+
+    assert etiquetas(secuencia_pdf_unico([_reporte(completa, incompleta)])) == [
+        1, ETIQUETA_REVISAR, 2,
+    ]
+
+
+def test_una_matricula_completa_con_alternativas_sigue_en_su_batch():
     segura = _page(1, "2147337", "HP-1534CMP")
     dudosa = _page(2, "2147338", "HP-1534CMP")
     dudosa.status = Status.WARNING
@@ -92,9 +102,7 @@ def test_una_matricula_en_conflicto_no_queda_bajo_su_separador():
         [_reporte(segura, dudosa)], ["avion"]
     )
 
-    assert etiquetas(secuencia) == [
-        "HP-1534CMP", 1, ETIQUETA_REVISAR, 2,
-    ]
+    assert etiquetas(secuencia) == ["HP-1534CMP", 1, 2]
 
 
 def test_revisar_puede_quedar_fuera_de_la_secuencia_principal():
@@ -125,11 +133,13 @@ def test_las_discrepancias_van_al_final_con_su_separador():
     assert etiquetas(secuencia) == [1, "POSIBLES DISCREPANCIAS", 2]
 
 
-def test_la_pagina_en_blanco_no_entra():
-    """No llega al PDF, asi que tampoco puede ocupar una pagina del batch."""
+def test_la_pagina_en_blanco_va_a_revisar():
+    """La ausencia total de campos debe quedar visible para una persona."""
     en_blanco = PageResult(page_number=2, blank=True)
     reporte = _reporte(_page(1, "2147337", "HP-1534CMP"), en_blanco)
-    assert etiquetas(secuencia_pdf_unico([reporte])) == [1]
+    assert etiquetas(secuencia_pdf_unico([reporte])) == [
+        1, ETIQUETA_REVISAR, 2,
+    ]
 
 
 def test_sin_bitacoras_no_hay_secuencia():

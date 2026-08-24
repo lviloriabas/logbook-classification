@@ -40,7 +40,7 @@ from app.gui.csv_utils import (
 )
 
 
-INPUT = Path(__file__).resolve().parents[1] / "input"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _columns() -> list[str]:
@@ -177,7 +177,7 @@ def test_minimal_csv_recovers_field_color_from_companion_json(tmp_path: Path):
     )
     reports = [
         ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"),
+            pdf_path=str(FIXTURES / "test.pdf"),
             template_name=template.name,
             pages=[page],
         )
@@ -336,6 +336,18 @@ def test_column_control_is_hidden_until_a_csv_is_loaded(tmp_path: Path):
     assert viewer.content_splitter.widget(1) is viewer.table
     pdf_width, csv_width = viewer.content_splitter.sizes()
     assert abs(pdf_width / (pdf_width + csv_width) - 0.4) <= 0.01
+
+
+def test_viewer_is_an_unowned_normal_window(tmp_path: Path):
+    """Windows solo da botón propio en la barra a ventanas sin dueño."""
+    app = QApplication.instance() or QApplication([])
+    viewer = CsvViewerWindow(tmp_path)
+    try:
+        assert viewer.parent() is None
+        assert viewer.windowType() == Qt.WindowType.Window
+    finally:
+        viewer.close()
+        app.processEvents()
 
 
 def test_companion_json_resolves_source_pdf_per_csv_row(tmp_path: Path):
@@ -809,7 +821,9 @@ def _run_with_companion_json(tmp_path: Path, pdf_path: Path) -> tuple[Path, Path
     )
 
     def _page(number: int, log: str, matricula: str) -> PageResult:
-        page = PageResult(page_number=number)
+        # La ejecución de prueba representa filas completas para AirVault;
+        # la ausencia de fecha se prueba aparte como ruta de REVISAR.
+        page = PageResult(page_number=number, date="2026/08/17")
         for field_id, value in (("log_number", log), ("matricula", matricula)):
             page.add_field(
                 FieldResult(
@@ -855,7 +869,7 @@ def test_run_folder_is_recovered_from_the_csv_location(tmp_path: Path):
 
 
 def test_reports_are_rebuilt_from_the_companion_json(tmp_path: Path):
-    pdf_path = INPUT / "test.pdf"
+    pdf_path = FIXTURES / "test.pdf"
     _run, csv_path = _run_with_companion_json(tmp_path, pdf_path)
 
     reports, missing = reports_for_csv(csv_path)
@@ -888,7 +902,7 @@ def test_moved_source_pdfs_are_relocated_or_reported_as_missing(tmp_path: Path):
 
 def test_export_is_offered_only_when_the_run_can_be_rebuilt(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
-    _run, csv_path = _run_with_companion_json(tmp_path, INPUT / "test.pdf")
+    _run, csv_path = _run_with_companion_json(tmp_path, FIXTURES / "test.pdf")
     viewer = CsvViewerWindow(tmp_path)
     try:
         assert viewer.load_csv_file(csv_path) is True
@@ -912,7 +926,7 @@ def test_export_is_offered_only_when_the_run_can_be_rebuilt(tmp_path: Path):
 
 def test_exporting_rewrites_the_run_without_reprocessing(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
-    run, csv_path = _run_with_companion_json(tmp_path, INPUT / "test.pdf")
+    run, csv_path = _run_with_companion_json(tmp_path, FIXTURES / "test.pdf")
     viewer = CsvViewerWindow(tmp_path)
     try:
         assert viewer.load_csv_file(csv_path) is True

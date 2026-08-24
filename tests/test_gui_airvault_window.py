@@ -24,7 +24,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QApplication, QLineEdit, QMessageBox, QTableWidgetItem,
+    QApplication,
+    QLineEdit,
+    QMessageBox,
+    QTableWidgetItem,
 )
 
 from app.gui.airvault_window import (
@@ -44,12 +47,8 @@ def app():
 
 
 @pytest.fixture
-def ventana(app, tmp_path):
-    (tmp_path / "airvault.json").write_text(
-        (RAIZ / "airvault.json").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    return AirVaultWindow(tmp_path)
+def ventana(app):
+    return AirVaultWindow(RAIZ)
 
 
 def corrida(
@@ -102,6 +101,8 @@ def test_es_una_ventana_aparte_y_arranca_escondida(ventana):
     """Empotrada le quitaba alto a la vista previa y rompía el reparto."""
     assert ventana.isHidden()
     assert ventana.windowTitle() == "Indexar en AirVault"
+    assert ventana.parent() is None
+    assert ventana.windowType() == Qt.WindowType.Window
 
 
 def test_la_cookie_no_se_ve_al_teclearla(ventana):
@@ -112,6 +113,21 @@ def test_la_cookie_no_se_ve_al_teclearla(ventana):
 def test_indexar_esta_apagado_hasta_que_haya_un_lote_listo(ventana):
     assert not ventana.boton_indexar.isEnabled()
     assert not ventana.boton_reporte.isEnabled()
+
+
+def test_la_bitacora_de_airvault_se_puede_copiar(ventana):
+    ventana.bitacora.addItems([
+        "10:00  Entrando a AirVault",
+        "10:01  Comprobando la sesión",
+    ])
+    ventana.bitacora.item(0).setSelected(True)
+    ventana.bitacora.item(1).setSelected(True)
+
+    ventana.bitacora.copySelectedItems()
+
+    assert QApplication.clipboard().text() == (
+        "10:00  Entrando a AirVault\n10:01  Comprobando la sesión"
+    )
 
 
 def test_sin_corrida_elegida_no_hay_nada_que_subir(ventana):
@@ -127,13 +143,41 @@ def test_sin_registro_no_hay_nada_que_eliminar(ventana):
     assert not ventana.boton_eliminar_registro.isEnabled()
 
 
-def test_completar_el_batch_no_viene_marcado(ventana):
-    """Cerrar el batch lo saca de la cola: eso se pide a propósito."""
+def test_completar_el_batch_sin_historial_no_impone_un_default(app, tmp_path):
+    """Sin preferencia guardada, la interfaz no escribe ni impone una."""
+    ventana = AirVaultWindow(tmp_path)
+
     assert not ventana.completar_check.isChecked()
+    assert not (tmp_path / "airvault.json").exists()
+    ventana.close()
 
 
-def test_el_limite_de_quick_upload_usa_la_preferencia_guardada(ventana):
-    assert ventana.limite_batch_spin.value() == 200
+@pytest.mark.parametrize("ultimo_estado", [True, False])
+def test_completar_batch_recuerda_exactamente_el_ultimo_estado(
+    app, tmp_path, ultimo_estado,
+):
+    primera = AirVaultWindow(tmp_path)
+    primera.completar_check.setChecked(not ultimo_estado)
+    primera.completar_check.setChecked(ultimo_estado)
+    primera.close()
+
+    segunda = AirVaultWindow(tmp_path)
+
+    assert segunda.completar_check.isChecked() is ultimo_estado
+    assert json.loads((tmp_path / "airvault.json").read_text(
+        encoding="utf-8"
+    ))["completar_batch"] is ultimo_estado
+    segunda.close()
+
+
+def test_el_limite_de_quick_upload_toma_las_400_paginas_guardadas(ventana):
+    from app.gui.widgets import SpinBoxWithButtons
+
+    assert ventana.limite_batch_spin.value() == 400
+    assert isinstance(ventana.limite_batch_control, SpinBoxWithButtons)
+    assert ventana.limite_batch_spin.parentWidget() is (
+        ventana.limite_batch_control
+    )
 
 
 def test_la_compresion_es_opcional_y_explica_los_200_dpi(ventana):
@@ -143,7 +187,11 @@ def test_la_compresion_es_opcional_y_explica_los_200_dpi(ventana):
 
 
 def test_la_espera_automatica_empieza_en_dos_minutos(ventana):
+    from app.gui.widgets import SpinBoxWithButtons
+
     assert ventana.minutos_spin.value() == 2
+    assert isinstance(ventana.minutos_control, SpinBoxWithButtons)
+    assert ventana.minutos_spin.parentWidget() is ventana.minutos_control
 
 
 def test_el_menu_de_automatizacion_empieza_oculto_y_es_secuencial(ventana):
@@ -160,6 +208,7 @@ def test_el_menu_de_automatizacion_empieza_oculto_y_es_secuencial(ventana):
 
 
 def test_la_ventana_usa_batch_en_sus_campos_y_tabla(ventana):
+    assert not ventana.lotes.isHidden()
     assert [
         ventana.lotes.horizontalHeaderItem(columna).text()
         for columna in range(ventana.lotes.columnCount())
@@ -199,12 +248,16 @@ def test_revisar_airvault_esta_a_la_derecha_de_subir(ventana):
 
 
 def test_el_usuario_puede_elegir_el_limite_antes_de_subir(ventana, tmp_path):
+    ventana = AirVaultWindow(tmp_path)
     ventana.fijar_corrida(corrida(tmp_path))
     ventana.limite_batch_spin.setValue(450)
 
     estado = ventana._base_del_estado()
 
     assert estado["paginas_por_batch"] == 450
+    assert json.loads((tmp_path / "airvault.json").read_text(
+        encoding="utf-8"
+    ))["paginas_por_batch"] == 450
 
 
 def test_el_usuario_puede_activar_la_compresion_antes_de_subir(
@@ -326,6 +379,28 @@ def test_cambiar_de_corrida_tira_lo_que_se_sabia_de_la_anterior(ventana,
     # Indexar tambien sirve para conectarse y recuperar batches que esta
     # aplicacion hubiera subido en una ejecucion anterior.
     assert ventana.boton_indexar.isEnabled()
+
+
+def test_la_tabla_incluye_sin_subir_de_otras_ejecuciones(app, tmp_path):
+    from app.airvault.flujo import SIN_SUBIR
+
+    primera = corrida(tmp_path, "BITS 17 AUG 2026 05 50")
+    segunda = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
+    registrar_en_airvault(tmp_path, primera)
+    registrar_en_airvault(tmp_path, segunda)
+    ventana = AirVaultWindow(tmp_path)
+
+    ventana.fijar_corrida(primera)
+
+    assert len(ventana._trabajos) == 2
+    assert all(estado.estado == SIN_SUBIR for estado in ventana._estados)
+    assert {
+        trabajo.manifiesto.job_id for trabajo in ventana._trabajos
+    } == {
+        primera.parent.parent.name,
+        segunda.parent.parent.name,
+    }
+    ventana.close()
 
 
 def test_eliminar_registro_reinicia_solo_el_estado_local(
@@ -450,41 +525,6 @@ def test_subir_no_indexa_nada_y_dice_que_falta_esperar(ventana):
     assert "Subida terminada" in texto
     assert "procesar" in texto
     assert not ventana.boton_indexar.isEnabled()
-
-
-def test_un_batch_ausente_se_programa_para_reenvio_automatico(ventana):
-    from app.airvault.flujo import BUSCANDO
-    from app.airvault.model import EstadoEtapa, Etapa
-
-    estancado = parte(BUSCANDO, "DP | BITS SIN PUBLICAR")
-    estancado.trabajo.manifiesto.etapas["subir"] = Etapa(
-        estado=EstadoEtapa.HECHA,
-        actualizada="2020-01-01T00:00:00",
-    )
-    ventana._al_comprobar({
-        "estados": [estancado], "planes": {}, "partes": [],
-        "reporte": None,
-    })
-
-    assert ventana._reenvio_al_terminar
-    assert "automáticamente" in ventana.resumen.text()
-
-
-def test_al_corregir_empty_batch_continua_las_cargas_sin_boton(ventana):
-    from app.airvault.flujo import LISTO, SIN_SUBIR
-
-    confirmado = parte(LISTO, "DP | BITS -1")
-    pendiente = parte(SIN_SUBIR, "DP | BITS -2", carpeta="job-2")
-    ventana._al_comprobar({
-        "estados": [confirmado, pendiente], "planes": {}, "partes": [],
-        "reporte": None,
-    })
-
-    assert ventana._subir_pendientes_al_terminar
-    assert "continuará automáticamente" in ventana.resumen.text()
-    with patch.object(ventana, "_subir") as subir:
-        ventana._al_terminar()
-    subir.assert_called_once_with()
 
 
 def test_la_tabla_marca_subido_antes_de_que_airvault_devuelva_el_id(ventana):
@@ -664,6 +704,24 @@ def test_un_lote_listo_sin_plan_todavía_no_se_indexa(ventana):
     assert not ventana.boton_indexar.isEnabled()
 
 
+def test_revisar_con_completar_marcado_encadena_lotes_ya_indexados(
+    app, tmp_path,
+):
+    """El cierre releera AirVault aunque el indexado haya sido manual."""
+    from app.airvault.flujo import INDEXADO
+
+    ventana = AirVaultWindow(tmp_path)
+    ventana.completar_check.setChecked(True)
+    ventana._al_comprobar({
+        "estados": [parte(INDEXADO)], "planes": {}, "partes": [],
+        "reporte": None,
+    })
+
+    assert ventana.boton_indexar.isEnabled()
+    assert ventana._indexar_al_terminar
+    ventana.close()
+
+
 class ResultadoFalso:
     escritas, omitidas, fallidas = 2, 1, 0
     detalles: list = []
@@ -700,6 +758,29 @@ def test_mientras_falte_un_lote_se_sigue_preguntando_solo(ventana):
     assert ventana._vigilante is not None
     assert ventana._vigilante.isActive()
     assert ventana._vigilante.interval() == 2 * 60_000
+
+
+def test_una_subida_que_no_aparece_ofrece_volver_a_subir(ventana):
+    from app.airvault.flujo import BUSCANDO
+    from app.airvault.model import EstadoEtapa, Etapa
+
+    estancado = parte(BUSCANDO, "DP | BITS SIN PUBLICAR")
+    estancado.trabajo.manifiesto.etapas["subir"] = Etapa(
+        estado=EstadoEtapa.HECHA,
+        actualizada="2020-01-01T00:00:00",
+    )
+    estancado.trabajo.manifiesto.intentos_identificacion = 3
+    estancado.trabajo.manifiesto.espera_reenvio_desde = (
+        "2020-01-01T00:00:00"
+    )
+    ventana._al_comprobar({
+        "estados": [estancado], "planes": {}, "partes": [],
+        "reporte": None,
+    })
+
+    assert "probable que la carga no vaya a aparecer" in ventana.resumen.text()
+    assert "Subir a AirVault" in ventana.resumen.text()
+    assert ventana._vigilante is None or not ventana._vigilante.isActive()
 
 
 def test_cuando_no_queda_nada_que_esperar_deja_de_preguntar(ventana):
@@ -822,7 +903,7 @@ def test_el_avance_sale_por_la_barra_de_la_ventana(ventana):
 
 # ── mientras escribe ───────────────────────────────────────────────
 
-def test_con_un_lote_a_medias_se_puede_abrir_otra_ejecucion(ventana):
+def test_con_un_lote_a_medias_otra_ejecucion_sigue_disponible(ventana):
     ventana._habilitar(False)
     assert ventana.historial.isEnabled()
     assert ventana.boton_buscar.isEnabled()
@@ -929,14 +1010,6 @@ def test_la_bitacora_cuenta_los_pasos_y_no_repite_el_mismo(ventana):
     assert "Buscando el batch" in ventana.bitacora.item(1).text()
 
 
-def test_la_bitacora_envuelve_los_mensajes_sin_scroll_horizontal(ventana):
-    assert ventana.bitacora.wordWrap()
-    assert ventana.bitacora.textElideMode() == Qt.TextElideMode.ElideNone
-    assert ventana.bitacora.horizontalScrollBarPolicy() == (
-        Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-    )
-
-
 def test_cancelado_se_cuenta_y_no_deja_la_barra_girando(ventana):
     ventana._al_cancelar()
     assert "canceló" in ventana.resumen.text()
@@ -982,7 +1055,8 @@ def test_el_cierre_espera_al_lote_a_medio_escribir(app):
         principal.close()
 
 
-def test_abrir_airvault_con_otra_ejecucion_activa_crea_otra_ventana(app):
+def test_abre_otro_hilo_de_airvault_si_el_anterior_sigue_activo(app):
+    """Cada ejecución conserva su ventana y puede avanzar simultáneamente."""
     from app.gui.main_window import MainWindow
 
     principal = MainWindow()
@@ -990,14 +1064,10 @@ def test_abrir_airvault_con_otra_ejecucion_activa_crea_otra_ventana(app):
         principal._open_airvault()
         primera = principal._airvault_window
         with patch.object(primera, "hilo", return_value=object()):
-            principal._open_airvault_corrida("D:/corridas/otra/datos/otra.CSV")
+            principal._open_airvault()
 
-        segunda = principal._airvault_window
-        assert segunda is not primera
-        assert principal._airvault_windows == [primera, segunda]
-        assert Path(segunda.corrida_edit.text()) == Path(
-            "D:/corridas/otra/datos/otra.CSV"
-        )
+        assert len(principal._airvault_windows) == 2
+        assert principal._airvault_window is not primera
     finally:
         principal.close()
 

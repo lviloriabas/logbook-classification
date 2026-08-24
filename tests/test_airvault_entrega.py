@@ -18,6 +18,7 @@ from pathlib import Path
 import pymupdf as fitz
 import pytest
 
+import app.airvault.flujo as flujo
 from app.airvault.config import AirVaultConfig
 from app.airvault.flujo import (
     CALIDAD_JPEG_COMPRESION,
@@ -324,6 +325,38 @@ def test_compresion_reduce_un_escaneo_y_lo_deja_a_200_dpi(tmp_path):
         assert incrustada["ext"] == "jpeg"
 
 
+def test_la_compresion_se_hace_antes_de_repartir_los_batches(
+    tmp_path, monkeypatch
+):
+    csv_path, _partes = corrida(tmp_path)
+    llamadas = []
+    real = flujo._pdf_de_carga
+
+    def registrar(*args, **kwargs):
+        resultado = real(*args, **kwargs)
+        llamadas.append(
+            (
+                kwargs.get("comprimir", False),
+                kwargs.get("fuente_pdf"),
+                list(args[2]),
+                resultado,
+            )
+        )
+        return resultado
+
+    monkeypatch.setattr(flujo, "_pdf_de_carga", registrar)
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path,
+        paginas_por_batch=5, compresion=True,
+    )
+
+    assert len(trabajos) == 4
+    assert [llamada[0] for llamada in llamadas] == [True, False, False, False, False]
+    comprimido = llamadas[0][3]
+    assert llamadas[0][2] == list(range(12))
+    assert all(llamada[1] == comprimido for llamada in llamadas[1:])
+
+
 def test_la_compresion_queda_guardada_para_reanudar(tmp_path):
     csv_path, _partes = corrida(tmp_path)
 
@@ -360,7 +393,7 @@ def test_antes_de_subir_valida_el_pdf_aunque_el_indice_diga_que_cabe(
         trabajo.subir(object())
 
 
-def test_antes_de_subir_acepta_paginas_que_quedaran_amarillas(
+def test_antes_de_subir_rechaza_paginas_amarillas_en_batch_automatico(
     tmp_path, monkeypatch
 ):
     from app.airvault.uploader import ResultadoSubida
@@ -381,10 +414,10 @@ def test_antes_de_subir_acepta_paginas_que_quedaran_amarillas(
     )[0]
     trabajo.manifiesto.bitacoras()[0].log_number = ""
 
-    trabajo.subir(object())
+    with pytest.raises(ErrorDeCorrida, match="páginas amarillas"):
+        trabajo.subir(object())
 
-    etapa = trabajo.manifiesto.etapa("subir")
-    assert etapa.estado is EstadoEtapa.HECHA
+    assert not trabajo.manifiesto.etapa_hecha("subir")
 
 
 def test_antes_de_subir_respeta_el_limite_de_2048_mb(tmp_path, monkeypatch):

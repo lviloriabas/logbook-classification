@@ -27,7 +27,7 @@ from app.gui.depuracion_dialog import DepurarPaginasDialog
 from test_csv_viewer import _run_with_companion_json
 
 
-INPUT = Path(__file__).resolve().parents[1] / "input"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 class DialogoDuplicados(DepurarPaginasDialog):
@@ -55,7 +55,7 @@ def _pages_in_json(csv_path: Path) -> list[int]:
 
 
 def _viewer_on_run(tmp_path: Path) -> tuple[CsvViewerWindow, Path, Path]:
-    run, csv_path = _run_with_companion_json(tmp_path, INPUT / "test.pdf")
+    run, csv_path = _run_with_companion_json(tmp_path, FIXTURES / "test.pdf")
     viewer = CsvViewerWindow(tmp_path)
     assert viewer.load_csv_file(csv_path)
     return viewer, run, csv_path

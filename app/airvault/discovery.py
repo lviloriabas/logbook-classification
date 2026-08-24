@@ -1,16 +1,15 @@
 """Localizar en AirVault el batch que corresponde a un trabajo.
 
-El usuario sube el batch y el sistema lo tiene que encontrar solo. Hay dos
-formas, y se usan en este orden:
+El usuario sube el batch y el sistema lo tiene que encontrar solo. Usa varias
+señales y ninguna cantidad se usa por sí sola para adivinar:
 
-1. **Por nombre**, para un batch que alguien subio a mano poniendoselo. Con
-   dos precauciones: los batches creados desde la pagina llegan como
-   ``<nombre> - <usuario>``, y puede haber mas de un batch con nombres
-   parecidos, en cuyo caso no se adivina.
-2. **Por lo que aparecio despues de subir**, que es lo que hace falta
-   cuando lo sube el propio programa: Quick Upload no admite un nombre de
-   batch y la cola los recibe todos como ``Empty-Batch``, asi que el nombre
-   no distingue nada. La lista de batches de justo antes de subir si.
+1. **Nombre visible**, incluido ``<nombre> - <usuario>``.
+2. **Cantidad exacta de páginas**, que es un requisito y no un desempate
+   suficiente.
+3. **Contenido**, mediante Batch Name interno y una muestra distribuida de
+   Log Page Number. Este contraste también se aplica cuando el nombre visible
+   ya parece correcto; si AirVault pierde o trunca el nombre, permite corregir
+   el mismo ID sin volver a subir el PDF.
 """
 
 from __future__ import annotations
@@ -56,30 +55,33 @@ def _nombre_base(nombre: str) -> str:
 
 
 def recien_llegados(
-    lotes: Sequence[ResumenLote], previos: Sequence[str],
+    lotes: Sequence[ResumenLote],
+    previos: Sequence[str],
     repo_id: int | None = None,
 ) -> List[ResumenLote]:
     """Batches que no estaban en la cola antes de subir."""
     conocidos = {str(b).strip().upper() for b in previos or ()}
     return [
-        lote for lote in lotes
+        lote
+        for lote in lotes
         if lote.batch_id.strip().upper() not in conocidos
         and (repo_id is None or not lote.repo_id or lote.repo_id == repo_id)
     ]
 
 
 def buscar_nuevo(
-    lotes: Sequence[ResumenLote], previos: Sequence[str],
-    repo_id: int | None = None, paginas_esperadas: int | None = None,
+    lotes: Sequence[ResumenLote],
+    previos: Sequence[str],
+    repo_id: int | None = None,
+    paginas_esperadas: int | None = None,
 ) -> Optional[ResumenLote]:
     """El batch que aparecio despues de subir, cuando el nombre no sirve.
 
-    Quick Upload no deja ponerle nombre al batch: la cola lo recibe siempre
-    como ``Empty-Batch``, medido subiendo y mirando como quedo, asi que
-    buscarlo por nombre no puede funcionar por mucho que se espere. Lo que
-    si es exacto es la diferencia con la lista de antes de subir.
+    Quick Upload envia el nombre, pero AirVault puede perderlo y mostrar
+    ``Empty-Batch``. La diferencia con la cola previa identifica candidatos;
+    quien llama debe confirmar despues el contenido antes de renombrar.
 
-    Devuelve ``None`` mientras todavia no ha aparecido nada, que no es un
+    Devuelve ``None`` mientras todavía no ha aparecido nada, que no es un
     fallo: el servidor tarda en procesar lo subido. Si aparecio mas de uno
     se desempata por cantidad de paginas, y si aun asi queda mas de uno se
     levanta :class:`LoteAmbiguo` en vez de escribir en el equivocado.
@@ -98,7 +100,7 @@ def buscar_nuevo(
             "se indexó ninguno para evitar escribir en el batch equivocado. "
             "El programa leerá el Batch Name guardado dentro de cada archivo, "
             "elegirá el ID correspondiente, lo renombrará y confirmará el "
-            "cambio automáticamente antes de continuar."
+            "cambio automáticamente."
         )
     return nuevos[0]
 
@@ -118,7 +120,9 @@ class Coincidencia:
 
 
 def buscar(
-    lotes: Sequence[ResumenLote], nombre: str, repo_id: int | None = None,
+    lotes: Sequence[ResumenLote],
+    nombre: str,
+    repo_id: int | None = None,
     paginas_esperadas: int | None = None,
 ) -> ResumenLote:
     """Elige el batch que corresponde al nombre pedido.
@@ -144,16 +148,12 @@ def buscar(
             candidatas.append(Coincidencia(lote, False))
 
     if not candidatas:
-        raise LoteNoEncontrado(
-            f"No hay ningun batch llamado {nombre!r} en AirVault"
-        )
+        raise LoteNoEncontrado(f"No hay ningun batch llamado {nombre!r} en AirVault")
 
     exactas = [c for c in candidatas if c.exacta]
     elegibles = exactas or candidatas
     if len(elegibles) > 1 and paginas_esperadas is not None:
-        por_paginas = [
-            c for c in elegibles if c.lote.paginas == paginas_esperadas
-        ]
+        por_paginas = [c for c in elegibles if c.lote.paginas == paginas_esperadas]
         if por_paginas:
             elegibles = por_paginas
     if len(elegibles) > 1:
@@ -192,8 +192,7 @@ def esperar(
     while True:
         intento += 1
         try:
-            return buscar(_listar(listar, nombre), nombre, repo_id,
-                          paginas_esperadas)
+            return buscar(_listar(listar, nombre), nombre, repo_id, paginas_esperadas)
         except LoteNoEncontrado:
             if previos is not None:
                 nuevo = buscar_nuevo(
@@ -203,21 +202,26 @@ def esperar(
                     logger.info(
                         "El batch llego a la cola como {!r}; se reconoce "
                         "porque no estaba antes de subir: {}",
-                        nuevo.nombre, nuevo.batch_id,
+                        nuevo.nombre,
+                        nuevo.batch_id,
                     )
                     return nuevo
             transcurrido = reloj() - inicio
             if transcurrido >= limite_s:
                 raise
             logger.info(
-                "El batch {!r} todavia no aparece ({:.0f}s de {:.0f}s), "
-                "reintento {}", nombre, transcurrido, limite_s, intento,
+                "El batch {!r} todavía no aparece ({:.0f}s de {:.0f}s), reintento {}",
+                nombre,
+                transcurrido,
+                limite_s,
+                intento,
             )
             dormir(espera_s)
 
 
-def _listar(listar: Callable[..., Sequence[ResumenLote]],
-            nombre: str) -> Sequence[ResumenLote]:
+def _listar(
+    listar: Callable[..., Sequence[ResumenLote]], nombre: str
+) -> Sequence[ResumenLote]:
     """Pide el listado filtrado si el cliente lo admite.
 
     Filtrar del lado del servidor evita traerse la cola entera en cada
@@ -230,9 +234,7 @@ def _listar(listar: Callable[..., Sequence[ResumenLote]],
         return listar()
 
 
-def buscar_por_id(
-    lotes: Sequence[ResumenLote], batch_id: str
-) -> Optional[ResumenLote]:
+def buscar_por_id(lotes: Sequence[ResumenLote], batch_id: str) -> Optional[ResumenLote]:
     objetivo = str(batch_id).strip().upper()
     for lote in lotes:
         if lote.batch_id.strip().upper() == objetivo:

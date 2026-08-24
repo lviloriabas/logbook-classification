@@ -16,6 +16,7 @@ from app.airvault.mapping import (
     fecha_airvault,
     normalizar_log_number,
     normalizar_matricula,
+    obligatorios_vacios_por_pagina,
     registros_desde_csv,
     valores_de_indice,
 )
@@ -136,6 +137,22 @@ def test_sin_log_number_la_fecha_sigue_vacia():
     registros = registros_desde_csv(filas)
     assert registros[1].fecha == ""
     assert registros[1].fecha_inferida == ""
+
+
+def test_detecta_solo_los_obligatorios_que_quedarian_vacios():
+    filas = [
+        _fila(page="1", log_number="2287310", date="2026/08/03"),
+        _fila(page="2", log_number="2287311", date=""),
+        _fila(page="3", log_number="2287312", date="2026/08/28"),
+        _fila(page="4", log_number="", date=""),
+    ]
+
+    faltantes = obligatorios_vacios_por_pagina(filas)
+
+    assert ("Image_001.pdf", 2) not in faltantes
+    assert faltantes[("Image_001.pdf", 4)] == (
+        "Log Page Number", "End Date"
+    )
 
 
 def test_valores_de_indice_llevan_los_seis_obligatorios():

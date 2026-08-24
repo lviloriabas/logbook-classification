@@ -147,7 +147,9 @@ def test_no_se_escribe_en_las_paginas_divisorias(tmp_path):
 
     escritas = [p for p, _v, _e in cliente.escrituras]
     assert 1 not in escritas and 4 not in escritas
-    assert escritas == [2, 3, 5]
+    # Aunque un manifiesto antiguo mezcle REVISAR con el batch automático,
+    # la página incompleta no se escribe allí.
+    assert escritas == [2, 3]
     assert cliente.borradas == [1, 4]
 
 
@@ -172,11 +174,10 @@ def test_el_separador_no_cuenta_como_omitido(tmp_path):
     plan = indexador.planificar(5)
     resultado = indexador.aplicar(plan)
 
-    assert resultado.escritas == 3
-    # La pagina 5 no tiene matricula, pero recibe los demas datos y queda
-    # amarilla. Los separadores no son escritos ni omitidos porque nunca
-    # hubo nada que escribir en ellos.
-    assert resultado.omitidas == 0
+    assert resultado.escritas == 2
+    # La página 5 no tiene matrícula y queda bloqueada: solo el manifiesto
+    # REVISAR puede enviar datos incompletos y dejarla amarilla.
+    assert resultado.omitidas == 1
     assert resultado.separadores_borrados == 2
     assert resultado.separadores_pendientes == 0
     assert plan.resumen()["separadores"] == 2

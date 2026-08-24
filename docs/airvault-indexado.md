@@ -15,27 +15,26 @@ duran cosas muy distintas: subir tarda lo que tarde la red; que AirVault
 procese lo subido tarda lo que quiera el servidor, y eso no se espera
 delante.
 
-| Control | Que hace |
-|---|---|
-| Historial | Ultimas 25 ejecuciones procesadas, de la mas reciente a la mas antigua, con sus paginas y lo que tienen para subir. Viene señalada la exportada mas reciente. |
-| `Ejecucion:` | CSV de la ejecucion elegida arriba. No se teclea. |
-| `Otra ejecucion…` | Elige el CSV de una ejecucion que no este en la lista. |
-| `Batch:` | Nombre con el que el batch queda en AirVault. Viene propuesto con la fecha y la hora de la ejecucion. |
-| `Sesion:` | Respaldo, normalmente vacio: la sesion la resuelve el navegador. Lo que se pegue aqui no se guarda en el disco. |
-| **Batches en AirVault** | Una fila por batch de esta ejecucion, con sus paginas y en que va. Es donde se ve cual ya se puede indexar. |
-| `Comprobar cada N min` | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 5 minutos, y deja de preguntar cuando no queda nada por esperar. |
-| `Comprobar ahora` | La misma pregunta, en el momento. |
-| `Subir a AirVault` | Manda los PDF de la entrega. Termina cuando termina la subida. |
-| `Completar batch` | Al terminar de escribir, da el batch por terminado en AirVault (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo. |
-| `Indexar` | Escribe en los batches que ya estan listos. |
-| `Ver reporte…` | Abre el detalle pagina por pagina de lo que se escribiria. |
-| `Cancelar` | Detiene lo que este en marcha y suelta los batches tomados. |
+| Control                 | Que hace                                                                                                                                                      |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Historial               | Ultimas 25 ejecuciones procesadas, de la mas reciente a la mas antigua, con sus paginas y lo que tienen para subir. Viene señalada la exportada mas reciente. |
+| `Ejecucion:`            | CSV de la ejecucion elegida arriba. No se teclea.                                                                                                             |
+| `Otra ejecucion…`       | Elige el CSV de una ejecucion que no este en la lista.                                                                                                        |
+| `Batch:`                | Nombre con el que el batch queda en AirVault. Viene propuesto con la fecha y la hora de la ejecucion.                                                         |
+| `Sesion:`               | Respaldo, normalmente vacio: la sesion la resuelve el navegador. Lo que se pegue aqui no se guarda en el disco.                                               |
+| `Comprobar cada N min`  | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 5 minutos, y deja de preguntar cuando no queda nada por esperar.                        |
+| `Comprobar ahora`       | La misma pregunta, en el momento.                                                                                                                             |
+| `Subir a AirVault`      | Manda los PDF de la entrega. Termina cuando termina la subida.                                                                                                |
+| `Completar batch`       | Al terminar de escribir, da el batch por terminado en AirVault (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo.                      |
+| `Indexar`               | Escribe en los batches que ya estan listos.                                                                                                                   |
+| `Ver reporte…`          | Abre el detalle pagina por pagina de lo que se escribiria.                                                                                                    |
+| `Cancelar`              | Detiene lo que este en marcha y suelta los batches tomados.                                                                                                   |
 
 ### Los tres tiempos
 
-1. **Subir y ubicar.** Manda un archivo y espera a que aparezca y quede
-   nombrado antes de mandar el siguiente. Esa barrera es necesaria porque
-   AirVault junta en un mismo batch los archivos que le llegan seguidos.
+1. **Subir y ubicar.** Manda primero todos los archivos pendientes. Solo
+   después empieza a buscarlos y nombrarlos en AirVault; ningún indexado se
+   inicia mientras quede una subida por intentar.
 2. **Esperar a AirVault.** El batch entra en la cola del servidor y tarda en
    quedar indexable: aparece antes de tener todas sus paginas. Mientras le
    falte alguna no esta listo, porque escribir con las paginas corridas
@@ -44,23 +43,23 @@ delante.
    batches a **Listo para indexar** segun quedan. Cuando ya no queda nada que
    esperar deja de preguntar sola.
 3. **Indexar.** Con la automatizacion inicial, en cuanto un batch aparece
-   entero se asigna su ID en la tabla y empieza a escribirse en un carril
-   paralelo, mientras la subida sigue buscando las partes restantes. Si se
+   entero empieza a escribirse en un carril paralelo mientras se buscan las
+   partes restantes. Para entonces ya terminaron todas las subidas. Si se
    desmarca **Indexar paginas**, solo se calcula el plan y se espera la
    aprobacion manual.
 
 Estados que puede tener un batch en la lista:
 
-| Estado | Que significa |
-|---|---|
-| Sin subir | Todavia no se ha mandado |
-| Subido pendiente confirmación | Mandado, pero el servidor aun no lo saca en la cola |
-| Procesandose en AirVault | Ya esta en la cola, con menos paginas de las que lleva el PDF |
+| Estado                         | Que significa                                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Sin subir                      | Todavia no se ha mandado                                                                                     |
+| Subido pendiente confirmación  | Mandado, pero el servidor aun no lo saca en la cola                                                          |
+| Procesandose en AirVault       | Ya esta en la cola, con menos paginas de las que lleva el PDF                                                |
 | Cantidad de paginas incorrecta | Tiene mas paginas de las posibles; se detiene porque AirVault junto cargas o el PDF no corresponde al indice |
-| Listo para indexar | Entero y libre: se puede escribir |
-| Abierto por otra persona | Alguien lo tiene tomado; AirVault no lo entrega a nadie mas |
-| Indexar lo disponible y revisar | Es el batch REVISAR: el programa escribe los datos confirmados y lo deja abierto para corregir lo dudoso |
-| Indexado / Terminado | Ya escrito, y cerrado si se pidio |
+| Listo para indexar             | Entero y libre: se puede escribir                                                                            |
+| Abierto por otra persona       | Alguien lo tiene tomado; AirVault no lo entrega a nadie mas                                                  |
+| Para revisar a mano            | Es el batch REVISAR, que no se indexa                                                                        |
+| Indexado / Terminado           | Ya escrito, y cerrado si se pidio                                                                            |
 
 Cuando AirVault devuelve el batch en el índice, la fila empieza por **Subido
 confirmado** y conserva después el estado operativo correspondiente.
@@ -86,16 +85,16 @@ Cada etapa se corre sola o todas de corrido. El estado vive en el
 manifiesto del trabajo (`output/airvault/<job>/manifiesto.json`), asi que
 se puede procesar hoy, subir manana e indexar despues sin repetir nada.
 
-| Etapa | Que hace |
-|---|---|
-| `preparar` | Arma el manifiesto a partir del CSV y del indice de paginas (uno por parte, y otro para REVISAR) |
-| `subir` | Sube los PDFs por Quick Upload (opcional: se puede subir a mano) |
-| `descubrir` | Ubica el batch en AirVault por su nombre |
-| `plan` | Dry run: calcula todo, escribe el reporte y no toca nada |
-| `indexar` | Escribe los indices |
-| `verificar` | Relee el batch y confirma como quedo |
-| `completar` | Da el batch por terminado en AirVault, si lo acepta (`indexar --completar`) |
-| `todo` | Descubrir, indexar y verificar de corrido |
+| Etapa       | Que hace                                                                                         |
+| ----------- | ------------------------------------------------------------------------------------------------ |
+| `preparar`  | Arma el manifiesto a partir del CSV y del indice de paginas (uno por parte, y otro para REVISAR) |
+| `subir`     | Sube los PDFs por Quick Upload (opcional: se puede subir a mano)                                 |
+| `descubrir` | Ubica el batch en AirVault por su nombre                                                         |
+| `plan`      | Dry run: calcula todo, escribe el reporte y no toca nada                                         |
+| `indexar`   | Escribe los indices                                                                              |
+| `verificar` | Relee el batch y confirma como quedo                                                             |
+| `completar` | Da el batch por terminado en AirVault, si lo acepta (`indexar --completar`)                      |
+| `todo`      | Descubrir, indexar y verificar de corrido                                                        |
 
 ```batch
 portable\python312\tools\python.exe run_airvault.py preparar  --job varias24 --csv "output\BITS 18 AUG 2026 05 42\datos\BITS 18 AUG 2026 05 42.CSV" --lote "DP | BITS VARIAS 24"
@@ -148,35 +147,39 @@ El reporte de revisión sigue siendo uno solo para toda la ejecución: se
 aprueba de una vez y no batch por batch.
 
 La ventana **Indexar en AirVault** aplica además un máximo propio justo
-antes de Quick Upload. Comparte la última cantidad elegida con **Repartir
-en** y no define otro valor fijo en el código. Si un PDF exportado supera esa
-preferencia guardada, se copia en
+antes de Quick Upload. La instalación portable empieza en **200 páginas por
+batch** y después recuerda la última cantidad elegida, tanto aquí como en
+**Repartir en**. Si un PDF exportado supera ese valor, se copia en
 tramos consecutivos dentro de `output/airvault/<corrida>/cargas/`; el PDF de
 la entrega, su índice y el CSV no se modifican. El mismo límite protege al
 batch `REVISAR`; si hace falta más de uno, se nombran `REVISAR -1`,
 `REVISAR -2`, etc.
 
+Si Quick Upload aceptó un archivo pero el batch no aparece con el nombre
+esperado, la ventana hace primero **tres revisiones completas** de la cola.
+En cada una contrasta también nombres distintos, cantidad de páginas, Batch
+Name interno y Log Page Number para corregir el mismo ID sin resubir. Solo si
+las tres terminan sin identificarlo empieza la espera de **30 minutos**. Al
+final de esa espera ofrece **Subir a AirVault**; antes de reenviar vuelve a
+comprobar la cola. Los batches que aparecieron o pudieron corregirse no se
+repiten.
+
+Cada ejecución activa vive en su propia ventana y su propio hilo. Mientras
+una sube, espera o indexa, se puede elegir otra ejecución en el historial o
+con **Otra ejecución…**; se abre aparte y ambas continúan simultáneamente.
+
+Si se activa **Compresión**, cada PDF de entrega se rasteriza una sola vez a
+200 DPI antes de formar esos tramos. Los batches se copian desde ese archivo
+interno ya comprimido, para no repetir la compresión por cada parte.
+
 Los batches automáticos se numeran `-1`, `-2`, etc. La correspondencia con el
 tramo que se subió queda en cada manifiesto y en el índice de páginas; no
 depende del nombre interno del PDF de carga.
 
-Quick Upload publica inicialmente el archivo como `Empty-Batch`. El programa
-lee el campo `Batch Name` dentro de la primera página, lo combina con la
-instantánea previa, el repositorio y la cantidad de páginas, renombra el ID y
-vuelve a consultar la cola. Incluso varios `Empty-Batch` del mismo tamaño se
-resuelven así sin intervención. Mientras ese mismo ID no tenga el título
-esperado, no indexa ni envía el siguiente PDF; al confirmarlo continúa solo
-con las cargas pendientes. Si una carga sigue ausente 30 minutos, la
-consulta automática la reenvía una sola vez y vuelve a exigir esa confirmación;
-después continúa consultando sin volver a duplicarla.
-
-Cada ejecución activa usa su propia ventana y su propio hilo. Elegir otra
-ejecución durante una subida abre una segunda ventana y ambas continúan.
-
 ## El batch REVISAR
 
-Las bitácoras cuya matrícula no permite asignarlas con seguridad se separan
-del flujo que termina automáticamente: una matrícula ausente o marcada, una lectura
+Las bitácoras cuya matrícula no permite asignarlas con seguridad no se
+indexan automáticamente: una matrícula ausente o marcada, una lectura
 canónica que contradice al consenso del libro, una alineación dudosa o una
 inferencia con menos de dos lecturas de respaldo. La inferencia se conserva
 para ayudar a quien revise, pero la página no se coloca bajo ese separador.
@@ -189,12 +192,10 @@ Ahora salen en su **propio archivo**, y por tanto en su propio batch:
 DP | BITS 18 AUG 2026 05 42 REVISAR
 ```
 
-Ese batch también se indexa automáticamente. El programa escribe en cada
-página todos los campos confirmados que tenga —por ejemplo, número de
-bitácora y fecha—, sin inventar los ausentes ni sustituir valores dudosos.
-Las páginas incompletas quedan amarillas (`Need Correction`) y el batch
-permanece abierto en Web Index para corregir solamente lo pendiente. Nunca
-se completa automáticamente.
+Ese batch **se sube y no se toca**. El indexado no le lee ni le escribe
+ninguna página; queda en la cola del Web Index, marcado y a la vista, para
+que alguien lo resuelva a mano. En el reporte sus páginas aparecen con el
+aviso `revisar_a_mano`.
 
 No se numera como una parte automática más: lleva su propia cuenta. En el
 caso normal su manifiesto vive en `output/airvault/<corrida>/revisar/`; si
@@ -217,11 +218,15 @@ Por eso la exportacion escribe junto al CSV un indice de paginas,
 `<corrida>_paginas.json`, que declara que hay en cada pagina del PDF:
 
 ```json
-{"version": 1, "pdf": "BITS 18 AUG 2026 05 42.pdf", "paginas": [
-  {"separador": "HP-1848CMP"},
-  {"archivo": "Image_001.pdf", "pagina": 12},
-  {"separador": "REVISAR"}
-]}
+{
+  "version": 1,
+  "pdf": "BITS 18 AUG 2026 05 42.pdf",
+  "paginas": [
+    { "separador": "HP-1848CMP" },
+    { "archivo": "Image_001.pdf", "pagina": 12 },
+    { "separador": "REVISAR" }
+  ]
+}
 ```
 
 Ese archivo, y no el CSV, es el que fija el orden del manifiesto. Los
@@ -261,16 +266,16 @@ De los veinte campos del panel, el sistema controla seis fijos y dos mas
 cuando hay dato, y deja el resto intacto. Lo que no se manda, AirVault lo
 conserva, asi que un indexado no pisa lo que alguien haya puesto a mano.
 
-| Campo | Origen |
-|---|---|
-| Doc Type | valor del trabajo (`airvault.json`) |
-| Aircraft | columna `matricula` del CSV |
-| Fleet | se deduce de la matricula |
-| Log Page Number | columna `log_number` del CSV |
-| Audit Status | valor del trabajo |
-| End Date | columna `date` del CSV en `MM/DD/YYYY`; si no se leyo, se deduce del libro |
-| Description | `<flight_number> AUTO INDEX`, o solo `AUTO INDEX` si no se leyó vuelo |
-| Lessor | del cache de flota, solo si lo trae |
+| Campo           | Origen                                                                     |
+| --------------- | -------------------------------------------------------------------------- |
+| Doc Type        | valor del trabajo (`airvault.json`)                                        |
+| Aircraft        | columna `matricula` del CSV                                                |
+| Fleet           | se deduce de la matricula                                                  |
+| Log Page Number | columna `log_number` del CSV                                               |
+| Audit Status    | valor del trabajo                                                          |
+| End Date        | columna `date` del CSV en `MM/DD/YYYY`; si no se leyo, se deduce del libro |
+| Description     | `<flight_number> AUTO INDEX`, o solo `AUTO INDEX` si no se leyó vuelo      |
+| Lessor          | del cache de flota, solo si lo trae                                        |
 
 **El vuelo.** `Description` lleva el vuelo de esa bitacora, pagina por
 pagina: un vuelo numerado (`703`, `CM137`) o un codigo de mantenimiento
@@ -287,14 +292,14 @@ lectura no dejo fecha pero si el log number —que es el que ordena el libro—
 se deduce con las mismas reglas que el corrector de fechas del
 procesamiento, de la que mas evidencia tiene a la que menos:
 
-| Que hay | Que fecha se pone |
-|---|---|
-| La misma bitacora repetida, y una de las dos si trae fecha | esa |
-| Bitacoras fechadas antes y despues en el libro | la de la mas cercana; en un empate, la posterior |
-| Solo fechadas antes | el ultimo dia de ese mes |
-| Solo fechadas despues | la de la primera de ellas |
-| Ninguna en el libro | el ultimo dia del mes dominante del avion |
-| El avion entero sin fechas | el ultimo dia del mes dominante de la ejecucion |
+| Que hay                                                    | Que fecha se pone                                |
+| ---------------------------------------------------------- | ------------------------------------------------ |
+| La misma bitacora repetida, y una de las dos si trae fecha | esa                                              |
+| Bitacoras fechadas antes y despues en el libro             | la de la mas cercana; en un empate, la posterior |
+| Solo fechadas antes                                        | el ultimo dia de ese mes                         |
+| Solo fechadas despues                                      | la de la primera de ellas                        |
+| Ninguna en el libro                                        | el ultimo dia del mes dominante del avion        |
+| El avion entero sin fechas                                 | el ultimo dia del mes dominante de la ejecucion  |
 
 Dentro de un libro la fecha no retrocede al aumentar el log number, asi que
 una pagina sin fecha esta entre la de la anterior y la de la siguiente: lo
@@ -396,7 +401,7 @@ acusaba a la ventana de haberse quedado en la pagina de Microsoft. Los dos
 nombres de ASP.NET se siguen aceptando por si otra instalacion los usa.
 
 Y no se toma la primera cookie que aparece, sino la primera que **sirve**:
-recien abierto, el navegador todavia va y viene de Microsoft, y lo que hay
+recien abierto, el navegador todavía va y viene de Microsoft, y lo que hay
 en el perfil en ese instante es lo de la vez anterior. Se prueba contra el
 servidor hasta que una funciona. Eso es tambien lo que renueva la sesion
 sola, sin ventana ni segundo factor: si AirVault contesta a mitad del
@@ -472,17 +477,10 @@ primera pagina: la primera suele ser un separador, sin avion, y `Aircraft`
 es obligatorio en Quick Upload. Son solo la clasificacion inicial del
 archivo; lo de cada pagina lo escribe `indexar` despues.
 
-**Entre una parte y la siguiente se espera a que la anterior aparezca en
-la cola.** AirVault junta en un mismo batch los archivos que le llegan
-seguidos: subiendo la entrega y la parte de Revisar una detras de otra
-quedaron las dos en un solo batch de 33 paginas, y dos partes en el mismo
-batch no se pueden indexar por separado, que es justo para lo que se
-reparten.
-
-La espera solo llega hasta que cada archivo tiene un ID inequívoco y un
-nombre. Que AirVault haya terminado de procesar todas sus paginas es otra
-cosa; eso puede tardar mucho mas y se sigue comprobando mientras el carril
-de indexado trabaja los batches que ya estan enteros.
+Primero se terminan todas las subidas. La busqueda y el indexado empiezan
+despues, para que las consultas del Web Index no retrasen Quick Upload. Cada
+archivo lleva su propio `Batch Name` y su manifiesto conserva la cola previa
+a esa carga.
 
 Toda escritura lleva la cabecera `AntiForgery`; sin ella `FinishUpload`
 contesta 500 despues de haber recibido el archivo entero.
@@ -511,16 +509,23 @@ subirla.
 Con `--prefijo` se cambia el prefijo y con `--lote` se fija el nombre
 completo a mano; los dos se pasan a mayusculas igual.
 
-**Quick Upload no admite nombre de batch.** Todo lo que sube el programa
-llega a la cola como `Empty-Batch`, igual para todos; el valor del campo
-`Batch Name` viaja en las paginas pero no nombra el batch. Asi que el nombre
-se le pone **despues de encontrarlo**, con la misma accion «Rename» del Web
-Index (`Batch/UpdateBatchName`). El nombre se confirma volviendo a leer el
-mismo ID. Si el renombrado falla, no se indexa ese batch y se detienen las
-siguientes subidas de esa ejecucion: continuar crearia mas `Empty-Batch`. El
-programa reintenta el nombre automáticamente y, cuando lo confirma, reanuda
-los PDF pendientes. Las otras ejecuciones abiertas conservan sus propios
-hilos y no se detienen.
+Quick Upload envia `Batch Name` y el caso normal aparece en la cola con ese
+titulo. Algunas cargas anómalas pierden el nombre y figuran como
+`Empty-Batch`; también puede dejar el título truncado. En esos casos se usa
+`Batch/UpdateBatchName`: antes se exige el mismo repositorio, la cantidad
+exacta de paginas y una coincidencia unica de contenido. Se prioriza el
+`Batch Name` interno; si falta, se contrastan varios `Log Page Number`
+repartidos por el batch y se refuerzan con matricula y fecha cuando AirVault
+las leyo. Un OCR vacio no contradice; un valor distinto si descarta el
+candidato. El orden de llegada o el tamaño por si solos nunca autorizan un
+renombrado.
+
+El programa vuelve a consultar la cola y solo guarda el ID o empieza a
+indexar cuando ese mismo ID aparece con el titulo esperado. Si el renombrado
+falla, se detiene ese batch con un mensaje que incluye su ID; **Revisar en
+AirVault** vuelve a intentar la identificacion y el renombrado.
+Si el ID no corresponde al PDF esperado, se confirma en Web Index, se elimina
+alli y **Subir a AirVault** lo reenvia despues de la espera de seguridad.
 
 La marca de tiempo no es decoracion. El filtro "Filter by" de AirVault es
 una coincidencia de subcadena sin distinguir mayusculas, asi que escribir
@@ -534,20 +539,22 @@ cual escribir. La marca de tiempo los separa.
 
 Hay dos caminos, en este orden:
 
-1. **Por nombre**, para un batch que alguien subio a mano poniendoselo.
+1. **Por nombre**, incluido el que envia Quick Upload y un batch que alguien
+   subio a mano poniendoselo.
    `descubrir` manda `DP | BIT ...` como filtro al servidor, el mismo que
    aplica la caja "Filter by" de la pantalla, y despues compara el nombre
    completo sin distinguir mayusculas ni separadores. Contempla el sufijo
    `<batch> - usuario@dominio` que dejan algunas subidas.
 
-2. **Por lo que aparecio despues de subir**, que es el caso normal cuando
-   sube el programa. Justo antes de subir se anota que batches habia en la
-   cola; el que no estaba es el propio. Es exacto y no depende del nombre,
-   que aqui no distingue nada.
+2. **Por contenido**, para un `Empty-Batch`. Justo antes de cada subida se
+   anota qué IDs habia en la cola. Los nuevos solo son candidatos: cantidad
+   exacta de paginas y huella interna deciden cuál corresponde.
 
-En los dos, si hay mas de un candidato desempata por cantidad de paginas, y
-si aun asi queda mas de uno se detiene y pide el batch id a mano: escribir
-en el batch equivocado es peor que preguntar.
+Si queda más de una coincidencia con la misma evidencia, se detiene sin
+renombrar ni escribir: la siguiente comprobacion vuelve a intentarlo.
+Mientras exista una carga provisional compatible, **Revisar en AirVault** no
+la considera ausente ni la vuelve a subir por antigüedad; sigue intentando
+confirmar y completar el nombre del mismo ID.
 
 Con `--esperar` sondea hasta que el batch aparezca, porque un batch recien
 subido tarda en pasar por el procesamiento del servidor.
@@ -558,15 +565,15 @@ Un batch son cientos de peticiones y una subida completa casi dos mil. A esa
 escala los tropiezos dejan de ser raros, así que cada uno tiene una
 respuesta decidida de antemano.
 
-| Qué pasa | Qué hace el indexado |
-|---|---|
-| Se corta la red, vence el tiempo o el servidor responde que está ocupado (408, 429, 5xx) | Reintenta, esperando más en cada intento. Por defecto tres intentos con 5 s, 10 s. |
-| Se agotan los reintentos | Corta y dice qué pasó. Lo escrito queda anotado. |
-| El servidor responde 404 o 403 | No reintenta: insistir devuelve lo mismo. |
-| Una página del batch no carga | Bloquea **esa** página y sigue con el resto. Sin poder leerla no se puede comprobar que el batch y el manifiesto hablan de la misma bitácora, así que no se escribe. |
-| Caduca la cookie a media escritura | Corta el batch entero. Lo que no se llegó a intentar queda **pendiente**, no fallido: al volver a revisar se retoma sin repetir lo escrito. |
-| Falla el guardado de una página concreta | Se marca esa página con el motivo. Con `--continuar-con-errores` el resto del batch sigue. |
-| Un trozo de la subida se pierde | Se reenvía ese trozo. Reenviar el mismo índice es inocuo: el servidor arma el archivo por posición. |
+| Qué pasa                                                                                 | Qué hace el indexado                                                                                                                                                 |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Se corta la red, vence el tiempo o el servidor responde que está ocupado (408, 429, 5xx) | Reintenta, esperando más en cada intento. Por defecto tres intentos con 5 s, 10 s.                                                                                   |
+| Se agotan los reintentos                                                                 | Corta y dice qué pasó. Lo escrito queda anotado.                                                                                                                     |
+| El servidor responde 404 o 403                                                           | No reintenta: insistir devuelve lo mismo.                                                                                                                            |
+| Una página del batch no carga                                                            | Bloquea **esa** página y sigue con el resto. Sin poder leerla no se puede comprobar que el batch y el manifiesto hablan de la misma bitácora, así que no se escribe. |
+| Caduca la cookie a media escritura                                                       | Corta el batch entero. Lo que no se llegó a intentar queda **pendiente**, no fallido: al volver a revisar se retoma sin repetir lo escrito.                          |
+| Falla el guardado de una página concreta                                                 | Se marca esa página con el motivo. Con `--continuar-con-errores` el resto del batch sigue.                                                                           |
+| Un trozo de la subida se pierde                                                          | Se reenvía ese trozo. Reenviar el mismo índice es inocuo: el servidor arma el archivo por posición.                                                                  |
 
 ### El batch se abre y se cierra
 
@@ -613,11 +620,11 @@ se queda donde estaba.
 Los cuatro estados de una pagina son los de AirVault:
 
 | Estado | Nombre en AirVault | Cierra el batch |
-|---|---|---|
-| 0 | Valid | si |
-| 1 | No Template Match | no |
-| 2 | Separator | no |
-| 3 | Need Correction | no |
+| ------ | ------------------ | --------------- |
+| 0      | Valid              | si              |
+| 1      | No Template Match  | no              |
+| 2      | Separator          | no              |
+| 3      | Need Correction    | no              |
 
 **Las divisorias del PDF cuentan.** Medido en el batch `003SUS`: sus trece
 paginas separadoras quedaron en estado 1, «No Template Match», y para
@@ -628,10 +635,13 @@ El batch `REVISAR` no se indexa automaticamente y conserva todas sus
 paginas para que una persona lo resuelva.
 
 Lo otro que bloquea son las bitacoras que quedaron en amarillo. Antes de
-escribir, BITS exige todos los campos obligatorios; la fecha puede venir de
+**subir un batch automatico**, BITS exige todos los campos obligatorios; si
+falta alguno, detiene la carga para que la pagina se reexporte en `REVISAR`.
+La fecha puede venir de
 las reglas del libro, incluido el ultimo dia del mes. Despues relee el batch:
-si AirVault aun deja una pagina en «Need Correction», no intenta completar
-el batch y dice cual fue.
+si AirVault aun deja una pagina en «Need Correction», reintenta el indexado y
+no declara el batch automatico terminado ni intenta completarlo mientras no
+queden todas las bitacoras en verde.
 
 ## Reanudacion
 

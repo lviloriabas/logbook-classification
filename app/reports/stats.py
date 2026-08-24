@@ -170,7 +170,9 @@ def _stats_separacion(
         and not por_revisar(ref.page)
         and (Path(ref.pdf_path).name, ref.page.page_number) in excluidas
     )
-    fuera = total_paginas - paginas_en_blanco - excluidas_count - distribuidas
+    # Las páginas en blanco forman parte de REVISAR y ya están contadas en
+    # ``distribuidas``. Restarlas otra vez produciría un total negativo.
+    fuera = total_paginas - excluidas_count - distribuidas
     return {
         "criterios": list(separar_por),
         "total_pdfs": len(pdfs),

@@ -186,9 +186,9 @@ los sube y los indexa todos, y cuenta el avance sobre el total.
 7. Espere. AirVault mete el batch en su cola y tarda en dejarlo indexable:
    minutos, a veces mucho más. La ventana pregunta sola cada cinco minutos
    —se cambia en **Comprobar cada**, o se apaga— y con **Comprobar ahora**
-   pregunta en el momento. En **Batches en AirVault** cada batch va pasando de
-   *Subido; esperando* a *Procesándose* y a **Listo para indexar**. Cuando
-   ya no queda nada que esperar, deja de preguntar.
+   pregunta en el momento. El estado y el resumen indican cuándo los batches
+   ya están listos para indexar. Cuando no queda nada que esperar, deja de
+   preguntar.
 8. Pulse **Ver reporte…** y revise las páginas bloqueadas.
 9. Si quiere que el batch quede cerrado y fuera de la cola, marque
    **Completar batch**.
@@ -228,23 +228,23 @@ basta con **Comprobar ahora**.
 Las páginas separadoras del PDF —la matrícula de cada grupo y **POSIBLES
 DISCREPANCIAS**— ocupan su página en el batch y no se indexan.
 
-Las bitácoras con matrícula ausente, marcada, contradicha por otra lectura
-canónica o inferida con un solo respaldo salen en un archivo aparte y forman
+Las bitácoras con matrícula o `log_number` ausentes, marcados, contradichos por otra lectura
+canónica o inferidos con un solo respaldo, además de las páginas detectadas en blanco, salen en un archivo aparte y forman
 su propio batch, `… REVISAR`. Ese batch se sube pero no se indexa: queda en la
 cola del Web Index, a la vista, para resolverlo a mano. Una inferencia de
 libro coherente respaldada por dos o más lecturas sigue en el batch automático;
-las advertencias de fecha tampoco la envían por sí solas a `REVISAR`.
+las advertencias de fecha y una alineación dudosa con los campos críticos
+firmes tampoco la envían por sí solas a `REVISAR`. Los libros confirmados se
+recuerdan en un JSON compacto para reutilizar su matrícula en otras ejecuciones.
 
 Los batches se llaman como la ejecución, en mayúsculas y con la fecha y hora
 del procesamiento: `DP | BITS 18 AUG 2026 05 42`, y `-1`, `-2`… si la
-entrega se repartió. En la cola aparecen primero como `Empty-Batch` —la
-subida de AirVault no admite nombre— y el programa lee el `Batch Name` que
-viaja dentro de la primera página para identificar y renombrar cada uno sin
-intervención. El mismo ID debe reaparecer con el título correcto antes de
-indexar o enviar el siguiente PDF. Si no lo confirma, la ejecución se detiene
-para no acumular nombres provisionales. Una ausencia de 30 minutos activa una
-consulta y una sola resubida automática únicamente del batch faltante; luego
-se sigue comprobando el índice sin producir más copias.
+entrega se repartió. Quick Upload envia ese nombre. Si AirVault lo pierde y
+publica un `Empty-Batch` o un título incompleto, el programa solo lo corrige
+despues de confirmar la cantidad exacta de paginas y su contenido mediante el
+nombre interno o varios `Log Page Number`. Mientras el mismo ID no aparezca
+con el título completo, el batch no se considera listo ni se indexa; tampoco
+se vuelve a subir solo por llevar tiempo con el nombre provisional.
 
 Si el trabajo se corta, vuelva a pulsar **Comprobar ahora**: las páginas ya
 escritas no se repiten y el PDF no se vuelve a subir.

@@ -63,8 +63,8 @@ def test_out_of_fleet_registration_is_reclassified_as_the_closest(
     assert field.status is Status.WARNING
     assert page.status is Status.WARNING
     assert report.summary["warning_pages"] == 1
-    # El candidato se conserva para ayudar a revisar, pero el mero parecido
-    # no autoriza a poner la página bajo el separador HP-1234CMP.
+    # El candidato se conserva para ayudar a revisar. Esta fixture no trae
+    # log_number, así que sigue sin poder llenar todos los obligatorios.
     assert por_revisar(page)
 
 

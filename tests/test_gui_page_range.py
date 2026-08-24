@@ -9,9 +9,10 @@ import pymupdf as fitz
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QAbstractSpinBox, QApplication
 
 from app.gui.main_window import MainWindow
+from app.gui.widgets import SpinBoxWithButtons
 
 
 def _pdf(path: Path, pages: int) -> Path:
@@ -47,6 +48,51 @@ def test_the_batch_starts_on_the_first_and_last_page_of_the_input(tmp_path):
         assert window._batch_total_pages() == 35
         assert len(window._resolved_paths()) == 3
         assert window.page_range_label.text() == "de 35 pág."
+    finally:
+        window.close()
+
+
+def test_page_range_fields_do_not_mix_arrows_with_the_number(tmp_path):
+    window = _window(tmp_path)
+    try:
+        window.show()
+        QApplication.instance().processEvents()
+        for spin, control in (
+            (window.page_from_spin, window.page_from_control),
+            (window.page_to_spin, window.page_to_control),
+            (window.threads_spin, window.threads_control),
+            (window.ref_spin, window.ref_control),
+        ):
+            assert isinstance(control, SpinBoxWithButtons)
+            assert control.spin is spin
+            assert spin.parentWidget() is control
+            assert spin.buttonSymbols() == (
+                QAbstractSpinBox.ButtonSymbols.NoButtons
+            )
+            assert control.up_button.parentWidget() is control
+            assert control.down_button.parentWidget() is control
+
+        for spin, control in (
+            (window.page_from_spin, window.page_from_control),
+            (window.page_to_spin, window.page_to_control),
+        ):
+            assert control.up_button.geometry().left() > spin.geometry().right()
+            assert control.down_button.geometry().left() > spin.geometry().right()
+            assert control.height() == spin.height()
+
+        # Las flechas externas cambian el valor y reflejan los límites.
+        assert not window.page_from_control.down_button.isEnabled()
+        window.page_from_control.up_button.click()
+        assert window.page_from_spin.value() == 2
+        window.page_from_control.down_button.click()
+        assert window.page_from_spin.value() == 1
+        assert not window.page_from_control.down_button.isEnabled()
+
+        assert not window.page_to_control.up_button.isEnabled()
+        window.page_to_control.down_button.click()
+        assert window.page_to_spin.value() == 34
+        window.page_to_control.up_button.click()
+        assert window.page_to_spin.value() == 35
     finally:
         window.close()
 

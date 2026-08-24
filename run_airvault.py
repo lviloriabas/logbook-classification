@@ -36,39 +36,25 @@ os.chdir(_ROOT)
 
 from loguru import logger  # noqa: E402
 
-from app.airvault.config import (  # noqa: E402
-    AIRVAULT_FILENAME,
-    AirVaultConfig,
-)
 from app.airvault import manifest as manifiestos  # noqa: E402
 from app.airvault.client import ClienteHttp  # noqa: E402
+from app.airvault.config import AIRVAULT_FILENAME, AirVaultConfig  # noqa: E402
 from app.airvault.discovery import (  # noqa: E402
     LoteAmbiguo,
     LoteNoEncontrado,
     buscar_por_id,
 )
+from app.airvault.flujo import ErrorDeCorrida, Trabajo, paginas_de_lote  # noqa: E402
 from app.airvault.indexer import Indexador, verificar_lote  # noqa: E402
-from app.airvault.flujo import (  # noqa: E402
-    ErrorDeCorrida,
-    Trabajo,
-    paginas_de_lote,
-)
-from app.airvault.mapping import (  # noqa: E402
-    FLOTA_CACHE_FILENAME,
-    ResolutorFlota,
-)
+from app.airvault.mapping import FLOTA_CACHE_FILENAME, ResolutorFlota  # noqa: E402
 from app.airvault.model import EstadoEtapa, Manifiesto  # noqa: E402
 from app.airvault.naming import PREFIJO_POR_DEFECTO  # noqa: E402
-from app.airvault.report import (  # noqa: E402
-    escribir_csv,
-    escribir_html,
-    resumen_texto,
-)
+from app.airvault.report import escribir_csv, escribir_html, resumen_texto  # noqa: E402
 from app.airvault.session import (  # noqa: E402
     Credenciales,
     ErrorDeSesion,
     SesionAirVault,
-    comprobar_o_renovar,
+    comprobar_o_renovar,  # noqa: E402
 )
 from app.airvault.session import abrir_sesion as _abrir_sesion  # noqa: E402
 
@@ -81,89 +67,122 @@ def carpeta_job(job: str) -> Path:
 
 # ── argumentos ─────────────────────────────────────────────────────
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="airvault",
         description="Indexa en AirVault los batches de bitacoras ya "
-                    "procesados por Logbook Classification.",
+        "procesados por Logbook Classification.",
     )
-    parser.add_argument("--verbose", action="store_true",
-                        help="Logs detallados")
+    parser.add_argument("--verbose", action="store_true", help="Logs detallados")
     sub = parser.add_subparsers(dest="etapa", required=True)
 
     comun = argparse.ArgumentParser(add_help=False)
-    comun.add_argument("--job", required=True,
-                       help="Nombre del trabajo (carpeta en output/airvault)")
-
-    p = sub.add_parser("preparar", parents=[comun],
-                       help="Arma el manifiesto a partir del CSV de la ejecución")
-    p.add_argument("--csv", required=True, help="CSV de la ejecución")
-    p.add_argument("--lote", default=None,
-                   help="Nombre del batch. Sin esta opcion se arma solo con "
-                        "el prefijo y la marca de tiempo de la ejecución.")
-    p.add_argument("--prefijo", default=PREFIJO_POR_DEFECTO,
-                   help=f"Prefijo del nombre del batch "
-                        f"(default: {PREFIJO_POR_DEFECTO})")
-    p.add_argument("--doc-type", default=None,
-                   help="Tipo de documento a escribir")
-    p.add_argument("--audit-status", default=None, help="Audit Status")
-
-    p = sub.add_parser("subir", parents=[comun],
-                       help="Sube el PDF del trabajo por Quick Upload")
-    p.add_argument("--pdf", required=True,
-                   help="PDF de este trabajo que se va a subir")
-
-    p = sub.add_parser("descubrir", parents=[comun],
-                       help="Ubica el batch en AirVault por su nombre")
-    p.add_argument("--esperar", action="store_true",
-                   help="Sondear hasta que el batch aparezca")
-    p.add_argument("--batch-id", default=None,
-                   help="Saltarse la busqueda y fijar el batch a mano")
-
-    p = sub.add_parser("plan", parents=[comun],
-                       help="Dry run: calcula todo y no escribe nada")
-
-    p = sub.add_parser("indexar", parents=[comun],
-                       help="Escribe los indices en el batch")
-    grupo = p.add_mutually_exclusive_group()
-    grupo.add_argument("--revisar", action="store_true",
-                       help="Pedir aprobacion antes de escribir")
-    grupo.add_argument("--auto", action="store_true",
-                       help="Escribir sin detenerse a preguntar")
-    p.add_argument("--sobrescribir", action="store_true",
-                   help="Tambien reescribir las paginas ya validadas")
-    p.add_argument("--continuar-con-errores", action="store_true",
-                   help="No detenerse en la primera pagina que falle")
-    p.add_argument("--completar", action="store_true",
-                   help="Al terminar, dar el batch por terminado en AirVault. Solo lo acepta con todas las paginas en verde.")
-    p.add_argument(
-        "--permitir-log-distinto", action="store_true",
-        help="Permitir reemplazar el Log Page Number que AirVault ya leyo. "
-             "Usar solo en una prueba controlada.",
+    comun.add_argument(
+        "--job", required=True, help="Nombre del trabajo (carpeta en output/airvault)"
     )
 
-    p = sub.add_parser("verificar", parents=[comun],
-                       help="Relee el batch y confirma como quedo")
+    p = sub.add_parser(
+        "preparar",
+        parents=[comun],
+        help="Arma el manifiesto a partir del CSV de la ejecución",
+    )
+    p.add_argument("--csv", required=True, help="CSV de la ejecución")
+    p.add_argument(
+        "--lote",
+        default=None,
+        help="Nombre del batch. Sin esta opcion se arma solo con "
+        "el prefijo y la marca de tiempo de la ejecución.",
+    )
+    p.add_argument(
+        "--prefijo",
+        default=PREFIJO_POR_DEFECTO,
+        help=f"Prefijo del nombre del batch (default: {PREFIJO_POR_DEFECTO})",
+    )
+    p.add_argument("--doc-type", default=None, help="Tipo de documento a escribir")
+    p.add_argument("--audit-status", default=None, help="Audit Status")
 
-    p = sub.add_parser("todo", parents=[comun],
-                       help="Descubrir, planificar, indexar y verificar")
-    p.add_argument("--auto", action="store_true",
-                   help="Escribir sin pedir aprobacion")
+    p = sub.add_parser(
+        "subir", parents=[comun], help="Sube el PDF del trabajo por Quick Upload"
+    )
+    p.add_argument("--pdf", required=True, help="PDF de este trabajo que se va a subir")
+
+    p = sub.add_parser(
+        "descubrir", parents=[comun], help="Ubica el batch en AirVault por su nombre"
+    )
+    p.add_argument(
+        "--esperar", action="store_true", help="Sondear hasta que el batch aparezca"
+    )
+    p = sub.add_parser(
+        "plan", parents=[comun], help="Dry run: calcula todo y no escribe nada"
+    )
+
+    p = sub.add_parser(
+        "indexar", parents=[comun], help="Escribe los indices en el batch"
+    )
+    grupo = p.add_mutually_exclusive_group()
+    grupo.add_argument(
+        "--revisar", action="store_true", help="Pedir aprobacion antes de escribir"
+    )
+    grupo.add_argument(
+        "--auto", action="store_true", help="Escribir sin detenerse a preguntar"
+    )
+    p.add_argument(
+        "--sobrescribir",
+        action="store_true",
+        help="Tambien reescribir las paginas ya validadas",
+    )
+    p.add_argument(
+        "--continuar-con-errores",
+        action="store_true",
+        help="No detenerse en la primera pagina que falle",
+    )
+    p.add_argument(
+        "--completar",
+        action="store_true",
+        help="Al terminar, dar el batch por terminado en AirVault. Solo lo acepta con todas las paginas en verde.",
+    )
+    p.add_argument(
+        "--permitir-log-distinto",
+        action="store_true",
+        help="Permitir reemplazar el Log Page Number que AirVault ya leyo. "
+        "Usar solo en una prueba controlada.",
+    )
+
+    p = sub.add_parser(
+        "verificar", parents=[comun], help="Relee el batch y confirma como quedo"
+    )
+
+    p = sub.add_parser(
+        "todo", parents=[comun], help="Descubrir, planificar, indexar y verificar"
+    )
+    p.add_argument("--auto", action="store_true", help="Escribir sin pedir aprobacion")
     p.add_argument("--sobrescribir", action="store_true")
 
-    for nombre in ("subir", "descubrir", "plan", "indexar", "verificar",
-                   "todo"):
+    for nombre in ("subir", "descubrir", "plan", "indexar", "verificar", "todo"):
         sp = _subparser(sub, nombre)
-        sp.add_argument("--cookie", default=None,
-                        help="Cookie de sesion ya obtenida en el navegador")
-        sp.add_argument("--perfil-edge", default=None,
-                        help="Carpeta del perfil de Edge que usa el programa "
-                             "para entrar (por defecto, portable/)")
-        sp.add_argument("--sin-edge", action="store_true",
-                        help="No abrir el navegador; usar solo la cookie")
-        sp.add_argument("--usuario", default=None,
-                        help="Usuario de una cuenta local de AirVault; las "
-                             "cuentas de Microsoft entran por cookie")
+        sp.add_argument(
+            "--cookie",
+            default=None,
+            help="Cookie de sesion ya obtenida en el navegador",
+        )
+        sp.add_argument(
+            "--perfil-edge",
+            default=None,
+            help="Carpeta del perfil de Edge que usa el programa "
+            "para entrar (por defecto, portable/)",
+        )
+        sp.add_argument(
+            "--sin-edge",
+            action="store_true",
+            help="No abrir el navegador; usar solo la cookie",
+        )
+        sp.add_argument(
+            "--usuario",
+            default=None,
+            help="Usuario de una cuenta local de AirVault; las "
+            "cuentas de Microsoft entran por cookie",
+        )
     return parser.parse_args()
 
 
@@ -172,6 +191,7 @@ def _subparser(sub, nombre: str) -> argparse.ArgumentParser:
 
 
 # ── sesion ─────────────────────────────────────────────────────────
+
 
 def abrir_sesion(config: AirVaultConfig, args) -> SesionAirVault:
     """Abre la sesion con la primera fuente disponible y la comprueba.
@@ -202,6 +222,7 @@ def abrir_sesion(config: AirVaultConfig, args) -> SesionAirVault:
 
 # ── etapas ─────────────────────────────────────────────────────────
 
+
 def etapa_preparar(args, config: AirVaultConfig) -> int:
     """Arma el manifiesto del trabajo a partir de la ejecución.
 
@@ -214,7 +235,9 @@ def etapa_preparar(args, config: AirVaultConfig) -> int:
     resolutor = ResolutorFlota.load(_ROOT / FLOTA_CACHE_FILENAME)
     try:
         trabajo = Trabajo.preparar(
-            config, carpeta, args.csv,
+            config,
+            carpeta,
+            args.csv,
             nombre_lote=args.lote or "",
             prefijo=getattr(args, "prefijo", PREFIJO_POR_DEFECTO),
             resolutor=resolutor,
@@ -235,13 +258,17 @@ def etapa_preparar(args, config: AirVaultConfig) -> int:
     print(f"Manifiesto creado en {manifiestos.ruta_manifiesto(carpeta)}")
     print(f"  bitacoras: {len(bitacoras)}")
     if separadores:
-        print(f"  separadores del PDF: {len(separadores)} "
-              f"(ocupan pagina en el batch y no se indexan)")
+        print(
+            f"  separadores del PDF: {len(separadores)} "
+            f"(ocupan pagina en el batch y no se indexan)"
+        )
     print(f"  batch:      {manifiesto.nombre_batch}")
     print("  el batch debe subirse a AirVault con ese mismo nombre")
     if inferidas:
-        print(f"  flota inferida por regla en {inferidas} bitacoras "
-              f"(revisar en el reporte)")
+        print(
+            f"  flota inferida por regla en {inferidas} bitacoras "
+            f"(revisar en el reporte)"
+        )
     return 0
 
 
@@ -257,24 +284,17 @@ def etapa_subir(args, config: AirVaultConfig) -> int:
     return 0
 
 
-def etapa_descubrir(args, config: AirVaultConfig,
-                    manifiesto: Manifiesto | None = None) -> int:
+def etapa_descubrir(
+    args, config: AirVaultConfig, manifiesto: Manifiesto | None = None
+) -> int:
     carpeta = carpeta_job(args.job)
     manifiesto = manifiesto or manifiestos.cargar(carpeta)
     sesion = abrir_sesion(config, args)
     cliente = ClienteHttp(sesion, config)
     esperadas = len(manifiesto.registros)
-    if getattr(args, "batch_id", None):
-        manifiesto.batch_id = args.batch_id
-        manifiesto.etapa("descubrir").marcar(
-            EstadoEtapa.HECHA, f"fijado a mano: {args.batch_id}"
-        )
-        manifiestos.guardar(manifiesto, carpeta)
-        print(f"Batch fijado a mano: {args.batch_id}")
-        return 0
-    # Lo hace el mismo recorrido que usa la ventana: ahi viven el respaldo
-    # por lo que aparecio despues de subir —el nombre no sirve, Quick
-    # Upload los deja a todos como «Empty-Batch»— y el renombrado del batch.
+    # Lo hace el mismo recorrido que usa la ventana: primero confirma el
+    # nombre enviado y, si AirVault lo perdio, identifica el Empty-Batch por
+    # cantidad de paginas y contenido antes de renombrarlo.
     trabajo = Trabajo(config, carpeta, manifiesto)
     try:
         trabajo.descubrir(cliente, esperar=getattr(args, "esperar", False))
@@ -285,13 +305,17 @@ def etapa_descubrir(args, config: AirVaultConfig,
         return 1
     lote = buscar_por_id(cliente.listar_lotes(), manifiesto.batch_id)
     paginas = lote.paginas if lote else esperadas
-    print(f"Batch encontrado: {manifiesto.batch_id} - "
-          f"{lote.nombre if lote else manifiesto.nombre_batch} "
-          f"({paginas} paginas)")
+    print(
+        f"Batch encontrado: {manifiesto.batch_id} - "
+        f"{lote.nombre if lote else manifiesto.nombre_batch} "
+        f"({paginas} paginas)"
+    )
     if paginas != esperadas:
-        print(f"AVISO: el batch tiene {paginas} paginas y el manifiesto "
-              f"{esperadas}. El indexado no va a escribir hasta que "
-              f"coincidan.")
+        print(
+            f"AVISO: el batch tiene {paginas} paginas y el manifiesto "
+            f"{esperadas}. El indexado no va a escribir hasta que "
+            f"coincidan."
+        )
     return 0
 
 
@@ -300,7 +324,7 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
     manifiesto = manifiestos.cargar(carpeta)
     if not manifiesto.batch_id:
         raise SystemExit(
-            "El trabajo todavia no tiene batch. Correr 'descubrir' primero."
+            "El trabajo todavía no tiene batch. Correr 'descubrir' primero."
         )
     sesion = abrir_sesion(config, args)
     cliente = ClienteHttp(sesion, config)
@@ -313,7 +337,10 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
         picklist = []
     resolutor = ResolutorFlota.load(_ROOT / FLOTA_CACHE_FILENAME)
     indexador = Indexador(
-        cliente, manifiesto, picklist, sobrescribir,
+        cliente,
+        manifiesto,
+        picklist,
+        sobrescribir,
         al_guardar=lambda m: manifiestos.guardar(m, carpeta),
         resolutor=resolutor,
         permitir_log_distinto=getattr(args, "permitir_log_distinto", False),
@@ -330,8 +357,11 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
     resolutor.guardar(_ROOT / FLOTA_CACHE_FILENAME)
     manifiestos.guardar(manifiesto, carpeta)
     escribir_csv(plan, carpeta / "revision.csv")
-    escribir_html(plan, carpeta / "revision.html",
-                  f"{manifiesto.nombre_batch} ({manifiesto.batch_id})")
+    escribir_html(
+        plan,
+        carpeta / "revision.html",
+        f"{manifiesto.nombre_batch} ({manifiesto.batch_id})",
+    )
     return manifiesto, indexador, plan, carpeta, cliente
 
 
@@ -351,14 +381,13 @@ def _soltar(cliente, batch_id: str) -> None:
         logger.warning(
             "No se pudo soltar el batch {}: {}. Si la siguiente apertura se "
             "queda esperando, hay que cerrarlo en AirVault a mano.",
-            batch_id, exc,
+            batch_id,
+            exc,
         )
 
 
 def etapa_plan(args, config: AirVaultConfig) -> int:
-    manifiesto, _indexador, plan, carpeta, cliente = _planificar(
-        args, config
-    )
+    manifiesto, _indexador, plan, carpeta, cliente = _planificar(args, config)
     # El plan solo lee, asi que el batch se suelta en cuanto termina:
     # dejarlo tomado cuelga la siguiente apertura, la del programa o la
     # de quien lo abra en el navegador.
@@ -381,10 +410,14 @@ def etapa_indexar(args, config: AirVaultConfig) -> int:
             print("Dry run: nada fue escrito.")
             return 0
         if args.revisar:
-            respuesta = input(
-                f"\nEscribir {len(plan.escribibles)} paginas en "
-                f"{plan.batch_id}? [escribir/no]: "
-            ).strip().lower()
+            respuesta = (
+                input(
+                    f"\nEscribir {len(plan.escribibles)} paginas en "
+                    f"{plan.batch_id}? [escribir/no]: "
+                )
+                .strip()
+                .lower()
+            )
             if respuesta != "escribir":
                 print("Cancelado. Nada fue escrito.")
                 return 0
@@ -400,26 +433,41 @@ def etapa_indexar(args, config: AirVaultConfig) -> int:
         # suelta: AirVault admite un solo dueno y el que queda tomado
         # cuelga la siguiente apertura sin decir por que.
         _soltar(cliente, manifiesto.batch_id)
-    estado = (EstadoEtapa.HECHA if not resultado.fallidas
-              else EstadoEtapa.ERROR)
+    validas, total, problemas = verificar_lote(cliente, manifiesto)
+    incompleto = not manifiesto.solo_subir and validas != total
+    hubo_error = bool(
+        resultado.fallidas
+        or resultado.separadores_pendientes
+        or resultado.interrumpido
+        or incompleto
+    )
+    estado = EstadoEtapa.ERROR if hubo_error else EstadoEtapa.HECHA
     manifiesto.etapa("indexar").marcar(
         estado,
         f"escritas {resultado.escritas}, omitidas {resultado.omitidas}, "
-        f"fallidas {resultado.fallidas}",
+        f"fallidas {resultado.fallidas}; {validas}/{total} en Valid",
+    )
+    manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.HECHA if validas == total else EstadoEtapa.ERROR,
+        f"{validas}/{total} en Valid",
     )
     manifiestos.guardar(manifiesto, carpeta)
     print(f"\nEscritas:  {resultado.escritas}")
     print(f"Omitidas:  {resultado.omitidas}")
     print(f"Fallidas:  {resultado.fallidas}")
+    print(f"En verde:  {validas}/{total}")
     for detalle in resultado.detalles[:10]:
         print(f"  {detalle}")
+    for problema in problemas[:10]:
+        print(f"  {problema}")
     if getattr(args, "completar", False):
         _completar(carpeta, manifiesto, cliente, config)
-    return 1 if resultado.fallidas else 0
+    return 1 if hubo_error else 0
 
 
-def _completar(carpeta: Path, manifiesto: Manifiesto, cliente,
-               config: AirVaultConfig) -> None:
+def _completar(
+    carpeta: Path, manifiesto: Manifiesto, cliente, config: AirVaultConfig
+) -> None:
     """Da el batch por terminado, si AirVault lo va a aceptar.
 
     Solo cierra un batch con todas las paginas en verde: basta una a
@@ -431,11 +479,9 @@ def _completar(carpeta: Path, manifiesto: Manifiesto, cliente,
     resultado = Trabajo(config, carpeta, manifiesto).completar(cliente)
     print()
     if resultado.completado:
-        print(f"Batch {manifiesto.batch_id} cerrado en AirVault "
-              f"({resultado.detalle}).")
+        print(f"Batch {manifiesto.batch_id} cerrado en AirVault ({resultado.detalle}).")
         return
-    print(f"El batch {manifiesto.batch_id} se queda en la cola: "
-          f"{resultado.detalle}")
+    print(f"El batch {manifiesto.batch_id} se queda en la cola: {resultado.detalle}")
 
 
 def etapa_verificar(args, config: AirVaultConfig) -> int:
@@ -462,7 +508,6 @@ def etapa_verificar(args, config: AirVaultConfig) -> int:
 
 def etapa_todo(args, config: AirVaultConfig) -> int:
     args.esperar = True
-    args.batch_id = None
     codigo = etapa_descubrir(args, config)
     if codigo:
         return codigo

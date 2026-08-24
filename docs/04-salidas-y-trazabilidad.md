@@ -82,7 +82,7 @@ Los metadatos exclusivos de la vista previa no se guardan.
 
 El campo histórico `total_bitacoras` cuenta reportes de entrada, es decir, PDF fuente. No representa el número de libros físicos cuando un libro cruza archivos o un PDF contiene más de un libro.
 
-El bloque de separación comprueba que cada página no blanca esté distribuida, excluida por discrepancia o destinada a revisión. `paginas_fuera` debe ser cero y `completa` debe ser `true`.
+El bloque de separación comprueba que cada página esté distribuida, excluida por discrepancia confirmada o destinada a revisión. `paginas_fuera` debe ser cero y `completa` debe ser `true`.
 
 ## 4.7 PDF único
 
@@ -93,9 +93,9 @@ Con separación por matrícula o mes, crea un solo PDF con páginas divisorias b
 1. matrícula ascendente;
 2. mes cronológico dentro de la matrícula;
 3. posibles discrepancias, si la opción está activa;
-4. **REVISAR**, si existen páginas cuya matrícula no permite asignarlas con seguridad.
+4. **REVISAR**, si existen páginas sin datos críticos seguros o detectadas en blanco.
 
-Las páginas fuente se insertan directamente desde el PDF original. No se rasterizan ni reciben anotaciones de BITS. Las páginas en blanco se omiten.
+Las páginas fuente se insertan directamente desde el PDF original. No se rasterizan ni reciben anotaciones de BITS. Las páginas en blanco se conservan bajo **REVISAR**.
 
 ## 4.8 Varios PDF
 
@@ -113,7 +113,7 @@ Las páginas de cada archivo se ordenan por libro y `log_number`. Las páginas c
 
 ## 4.9 Posibles discrepancias
 
-Si la opción está activa, las páginas afectadas salen de las secciones normales.
+Si la opción está activa, las páginas con una firma requerida cuya ausencia quedó confirmada salen de las secciones normales. Las firmas meramente inciertas conservan `disc=true` y su detalle de auditoría, pero permanecen en el flujo normal.
 
 - En PDF único, se agregan al final bajo **POSIBLES DISCREPANCIAS**.
 - En modo de varios PDF, se escriben en `discrepancias.pdf`.
@@ -122,7 +122,7 @@ El orden es global por `log_number`. La sección no se subdivide por matrícula 
 
 ## 4.10 Páginas para revisar
 
-Una página sin matrícula confirmada no se asigna a un avión supuesto. Tampoco se asigna automáticamente cuando su propia lectura canónica contradice al consenso del libro, cuando la matrícula quedó en `WARNING`, cuando la alineación fue dudosa o cuando una inferencia solo tiene una lectura de respaldo. Una inferencia coherente respaldada por dos o más lecturas sí conserva la lógica normal del libro y no se manda a revisar por el solo hecho de ser inferida.
+Una página sin matrícula o `log_number` confirmados no se asigna a un avión supuesto. Tampoco se asigna automáticamente cuando su propia lectura canónica contradice al consenso del libro, cuando un campo crítico quedó en `WARNING` o cuando una inferencia solo tiene una lectura de respaldo. Una inferencia coherente respaldada por dos o más lecturas, incluida una asociación fuerte recordada de otra ejecución, conserva la lógica normal. La alineación dudosa no basta para apartar una página si matrícula y `log_number` quedaron firmes. Las páginas detectadas en blanco también van a **REVISAR**.
 
 Las advertencias de fecha no deciden esta separación. Mes, año y día pueden inferirse con las reglas del libro, incluido el último día del mes cuando corresponde.
 
@@ -131,10 +131,7 @@ Las advertencias de fecha no deciden esta separación. Mes, año y día pueden i
 
 Esta regla se aplica aunque no se haya seleccionado separación por matrícula.
 
-Si la misma página también tiene una posible discrepancia, el resultado depende del formato:
-
-- PDF único: aparece solo en **REVISAR**;
-- varios PDF: aparece en `revisar.pdf` y también en `discrepancias.pdf`.
+Si la misma página también debe ir a **REVISAR**, esa sección tiene prioridad y la página aparece una sola vez. No se duplica en `discrepancias.pdf`.
 
 ## 4.11 Salidas opcionales
 

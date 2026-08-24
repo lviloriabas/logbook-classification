@@ -131,6 +131,22 @@ def test_autoindex_rechaza_un_log_que_no_tiene_siete_digitos():
     assert not ready_for_auto_index(page)
 
 
+def test_autoindex_admite_alineacion_dudosa_si_los_criticos_son_firmes():
+    page = _page()
+    page.alignment_quality = "low"
+
+    assert ready_for_auto_index(page)
+
+
+def test_autoindex_rechaza_log_dudoso_aunque_tenga_siete_digitos():
+    page = _page()
+    page.alignment_quality = "low"
+    log = next(field for field in page.fields if field.field_id == "log_number")
+    log.status = Status.WARNING
+
+    assert not ready_for_auto_index(page)
+
+
 def test_autoindex_deja_que_la_fecha_se_infiera_con_el_libro_completo():
     page = _page()
     page.date = None

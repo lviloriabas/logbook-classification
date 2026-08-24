@@ -59,8 +59,12 @@ def test_empate_se_resuelve_por_paginas():
 def test_empate_sin_desempate_no_adivina():
     lotes = [lote("003AAA", "DP | BITS VARIAS 24", 20),
              lote("003BBB", "DP | BITS VARIAS 24", 20)]
-    with pytest.raises(LoteAmbiguo):
+    with pytest.raises(LoteAmbiguo) as error:
         buscar(lotes, "DP | BITS VARIAS 24", paginas_esperadas=20)
+    mensaje = str(error.value)
+    assert "003AAA" in mensaje and "003BBB" in mensaje
+    assert "No se eligió ni se indexó ninguno" in mensaje
+    assert "Revisar en AirVault" in mensaje
 
 
 def test_repositorio_distinto_no_cuenta():
@@ -181,8 +185,12 @@ def test_si_no_hay_forma_de_desempatar_no_se_adivina():
     """Escribir en el batch equivocado es peor que pedir el batch id."""
     ahora = [lote("003BBB", "Empty-Batch", 29),
              lote("003CCC", "Empty-Batch", 29)]
-    with pytest.raises(LoteAmbiguo):
+    with pytest.raises(LoteAmbiguo) as error:
         buscar_nuevo(ahora, [], paginas_esperadas=29)
+    mensaje = str(error.value)
+    assert "2 batches nuevos" in mensaje
+    assert "003BBB" in mensaje and "003CCC" in mensaje
+    assert "batch equivocado" in mensaje
 
 
 def test_los_de_otro_repositorio_no_cuentan():

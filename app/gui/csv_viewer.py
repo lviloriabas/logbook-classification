@@ -1009,8 +1009,11 @@ class EmbeddedPdfViewer(QFrame):
 class CsvViewerWindow(QMainWindow):
     """Ventana independiente que visualiza CSV de ejecuciones procesadas."""
 
-    def __init__(self, start_folder: Path, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+    def __init__(self, start_folder: Path) -> None:
+        # Debe ser una ventana nativa sin dueño. Un QMainWindow parentado sigue
+        # pareciendo independiente dentro de Qt, pero Windows lo excluye de la
+        # barra de tareas y puede administrar su marco separado del contenido.
+        super().__init__(None, Qt.WindowType.Window)
         self._start_folder = Path(start_folder)
         self._folder: Path | None = None
         self._columns: list[str] = []
@@ -1073,6 +1076,7 @@ class CsvViewerWindow(QMainWindow):
         history_row = QHBoxLayout()
         history_row.addWidget(QLabel("Historial:"))
         self.history_combo = QComboBox()
+        self.history_combo.setPlaceholderText("Seleccione una ejecución…")
         self.history_combo.setToolTip(
             "Ejecuciones ya procesadas, de la más reciente a la más antigua. "
             "Al elegir una se cargan sus CSV; las anteriores siguen "
@@ -1294,6 +1298,12 @@ class CsvViewerWindow(QMainWindow):
             # Un desplegable vacío no dice nada; así se lee que todavía no
             # hay nada procesado, no que la lista falló.
             self.history_combo.addItem("No hay ejecuciones procesadas todavía")
+            self.history_combo.setCurrentIndex(0)
+        else:
+            # La primera ejecución no está cargada todavía. Dejar su nombre
+            # visible hacía creer que ya se había elegido, aunque la tabla
+            # siguiera vacía hasta volver a seleccionarla.
+            self.history_combo.setCurrentIndex(-1)
         self.history_combo.setEnabled(bool(runs))
         self._sync_history_selection()
 

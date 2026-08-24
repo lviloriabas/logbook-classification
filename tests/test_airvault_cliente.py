@@ -83,8 +83,8 @@ def test_un_nombre_vacio_no_se_manda():
     assert cli.sesion.posts == []
 
 
-def test_si_el_renombrado_falla_el_trabajo_sigue():
-    """El batch ya está subido y encontrado; el nombre no vale un fallo."""
+def test_si_el_renombrado_falla_el_cliente_lo_informa():
+    """El flujo usa False para impedir que un Empty-Batch llegue a indexarse."""
     class SesionRota(SesionFalsa):
         def post(self, *_a, **_k):
             raise RuntimeError("500")

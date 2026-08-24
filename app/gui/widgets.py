@@ -15,10 +15,14 @@ from PySide6.QtGui import (
     QRegion,
 )
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QAbstractItemView,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QScrollArea,
+    QSizePolicy,
+    QSpinBox,
     QStyle,
     QStyledItemDelegate,
     QToolButton,
@@ -192,6 +196,22 @@ QPushButton {
 }
 QPushButton:disabled { color: #8c959f; }
 QToolButton { padding: 2px 6px; }
+QToolButton#spinStepButton {
+    min-width: 18px; max-width: 18px; min-height: 0;
+    padding: 0;
+    border: 1px solid #c9d1d9;
+    border-radius: 3px;
+    background-color: transparent;
+}
+QToolButton#spinStepButton:hover,
+QToolButton#spinStepButton:pressed {
+    background-color: transparent;
+    border-color: #8c959f;
+}
+QToolButton#spinStepButton:disabled {
+    background-color: transparent;
+    color: #8c959f;
+}
 QGroupBox {
     font-weight: 600;
     border: 1px solid #c9d1d9; border-radius: 6px;
@@ -207,6 +227,72 @@ QProgressBar {
 QProgressBar::chunk { background-color: #2f81f7; border-radius: 4px; }
 QSpinBox, QComboBox, QLineEdit { padding: 3px; }
 """ + ZOOM_OVERLAY_QSS
+
+
+class SpinBoxWithButtons(QWidget):
+    """Campo numérico con las flechas fuera del área de texto.
+
+    El ``QSpinBox`` sigue siendo el dato público para no duplicar su API. Este
+    contenedor solo separa sus dos pasos en una columna a la derecha y refleja
+    tanto los límites como el estado habilitado del campo.
+    """
+
+    def __init__(self, spin: QSpinBox, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.spin = spin
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(3)
+        row.addWidget(spin)
+
+        self.up_button = self._button(Qt.ArrowType.UpArrow, "Aumentar valor")
+        self.down_button = self._button(
+            Qt.ArrowType.DownArrow, "Disminuir valor"
+        )
+        # Comparten la fila para conservar exactamente el alto del campo.
+        # Apilarlas duplicaría la altura de los controles compactos.
+        row.addWidget(self.up_button)
+        row.addWidget(self.down_button)
+
+        self.up_button.clicked.connect(spin.stepUp)
+        self.down_button.clicked.connect(spin.stepDown)
+        spin.valueChanged.connect(self.sync_buttons)
+        spin.installEventFilter(self)
+        self.sync_buttons()
+
+    def _button(self, arrow: Qt.ArrowType, accessible_name: str) -> QToolButton:
+        button = QToolButton(self)
+        button.setObjectName("spinStepButton")
+        button.setArrowType(arrow)
+        button.setAccessibleName(accessible_name)
+        button.setToolTip(accessible_name)
+        button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Ignored
+        )
+        button.setAutoRepeat(True)
+        button.setAutoRepeatDelay(300)
+        button.setAutoRepeatInterval(80)
+        return button
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        if watched is self.spin and event.type() == QEvent.Type.EnabledChange:
+            self.sync_buttons()
+        return super().eventFilter(watched, event)
+
+    def sync_buttons(self, *_args) -> None:
+        """Habilita cada flecha solo cuando ese paso se puede ejecutar."""
+        enabled = self.spin.isEnabled() and not self.spin.isReadOnly()
+        steps = self.spin.stepEnabled()
+        self.up_button.setEnabled(
+            enabled
+            and bool(steps & QAbstractSpinBox.StepEnabledFlag.StepUpEnabled)
+        )
+        self.down_button.setEnabled(
+            enabled
+            and bool(steps & QAbstractSpinBox.StepEnabledFlag.StepDownEnabled)
+        )
 
 
 class FlatSelectionDelegate(QStyledItemDelegate):
@@ -532,6 +618,10 @@ class ElidedLabel(QLabel):
         self._apply_elide()
 
     def text(self) -> str:
+        return self._full_text
+
+    def fullTextForCopy(self) -> str:  # noqa: N802 - API Qt
+        """Texto sin el recorte visual, para copiar mensajes completos."""
         return self._full_text
 
     def setToolTip(self, text: str) -> None:  # noqa: N802 - API Qt
