@@ -667,10 +667,10 @@ def test_pdf_pagination_crosses_documents_and_uses_the_combined_total(
     app.processEvents()
 
 
-def test_csv_viewer_counts_execution_pages_and_clicks_their_source_page(
+def test_csv_click_uses_the_physical_total_and_global_pdf_offset(
     tmp_path: Path, monkeypatch
 ):
-    """Los huecos del PDF no cuentan como filas ni desplazan el clic del CSV."""
+    """Una fila por hoja conserva el mismo total y orden que los originales."""
     import json
 
     app = QApplication.instance() or QApplication([])
@@ -684,9 +684,11 @@ def test_csv_viewer_counts_execution_pages_and_clicks_their_source_page(
     csv_path = data / "run.csv"
     csv_path.write_text(
         "file,page,log_number\n"
-        "uno.pdf,2,1234500\n"
-        "uno.pdf,4,1234501\n"
-        "dos.pdf,3,1234502\n",
+        + "".join(
+            f"{name}.pdf,{page},{1234500 + offset * 5 + page - 1}\n"
+            for offset, name in enumerate(("uno", "dos"))
+            for page in range(1, 6)
+        ),
         encoding="utf-8",
     )
     csv_path.with_suffix(".json").write_text(
@@ -695,11 +697,15 @@ def test_csv_viewer_counts_execution_pages_and_clicks_their_source_page(
                 "reportes": [
                     {
                         "pdf_path": str(first),
-                        "pages": [{"page_number": 2}, {"page_number": 4}],
+                        "pages": [
+                            {"page_number": page} for page in range(1, 6)
+                        ],
                     },
                     {
                         "pdf_path": str(second),
-                        "pages": [{"page_number": 3}],
+                        "pages": [
+                            {"page_number": page} for page in range(1, 6)
+                        ],
                     },
                 ]
             }
@@ -719,18 +725,13 @@ def test_csv_viewer_counts_execution_pages_and_clicks_their_source_page(
     viewer = CsvViewerWindow(tmp_path / "sin-historial")
 
     assert viewer.load_csv_file(csv_path)
-    # Los originales suman diez hojas, pero la ejecución contiene tres.
-    assert viewer.pdf_viewer.total_pages.text() == "de 3"
+    assert viewer.pdf_viewer.total_pages.text() == "de 10"
 
-    viewer.table.cellClicked.emit(1, 0)
-    assert viewer.pdf_viewer._path == first
-    assert viewer.pdf_viewer._page == 4
-    assert viewer.pdf_viewer.page_edit.text() == "2"
+    viewer.table.cellClicked.emit(7, 0)
 
-    viewer.table.cellClicked.emit(2, 0)
     assert viewer.pdf_viewer._path == second
     assert viewer.pdf_viewer._page == 3
-    assert viewer.pdf_viewer.page_edit.text() == "3"
+    assert viewer.pdf_viewer.page_edit.text() == "8"
     viewer.pdf_viewer.shutdown()
     viewer.close()
     app.processEvents()
@@ -751,16 +752,16 @@ def test_clicking_the_current_row_locates_its_pdf_again(tmp_path: Path):
     item = QTableWidgetItem(source.name)
     item.setData(Qt.ItemDataRole.UserRole, 0)
     viewer.table.setItem(0, 0, item)
-    shown: list[tuple[int, Path | None]] = []
+    shown: list[tuple[int, Path]] = []
     viewer.pdf_viewer.show_page = lambda page, path=None: shown.append(
-        (page, Path(path) if path is not None else None)
+        (page, Path(path))
     )
 
     viewer.table.setCurrentCell(0, 0)
     shown.clear()
     viewer.table.cellClicked.emit(0, 0)
 
-    assert shown == [(1, None)]
+    assert shown == [(7, source)]
     viewer.close()
     app.processEvents()
 
