@@ -573,10 +573,6 @@ class EmbeddedPdfViewer(QFrame):
         self._path: Path | None = None
         self._page = 1
         self._total = 0
-        # Secuencia exacta de la ejecución: una entrada por fila del CSV. La
-        # página local puede tener huecos aunque el PDF físico tenga más hojas.
-        self._execution_pages: list[tuple[Path | None, int]] = []
-        self._global_index = 0
         self._zoom = 1.0  # 1.0 = página ajustada al panel
         self._density = density
         self._source: QPixmap | None = None
@@ -762,12 +758,9 @@ class EmbeddedPdfViewer(QFrame):
         self._sync_controls()
 
     def load_paths(
-        self,
-        paths: Iterable[Path],
-        missing: Iterable[str] = (),
-        page_refs: Iterable[tuple[Path | None, int]] | None = None,
+        self, paths: Iterable[Path], missing: Iterable[str] = ()
     ) -> None:
-        """Publica los PDF y la secuencia de páginas de la ejecución."""
+        """Publica los PDF de origen disponibles y los que no se encontraron."""
         documents: list[Path] = []
         seen: set[str] = set()
         for path in paths:
@@ -783,32 +776,14 @@ class EmbeddedPdfViewer(QFrame):
         self._path = None
         self._page = 1
         self._total = 0
-        self._global_index = 0
         self._source = None
         self._page_counts = {}
         self._pending_render = None
 
-        if page_refs is None:
-            # Uso independiente del panel: sin CSV, todos los PDF forman una
-            # secuencia física completa.
-            self._execution_pages = [
-                (document, page)
-                for document in documents
-                for page in range(1, self._page_total(document) + 1)
-            ]
-        else:
-            self._execution_pages = []
-            for path, page in page_refs:
-                try:
-                    local_page = int(page)
-                except (TypeError, ValueError):
-                    local_page = 0
-                self._execution_pages.append(
-                    (Path(path) if path is not None else None, local_page)
-                )
-        # El límite es el número de páginas de la ejecución, no las hojas
-        # físicas que puedan seguir presentes en los originales.
-        self._total = len(self._execution_pages)
+        # El número editable y su límite describen el lote completo, no el
+        # PDF elegido en el selector. Contar todos aquí también deja lista la
+        # traducción entre página global y página local para cada clic de tabla.
+        self._total = sum(self._page_total(path) for path in documents)
 
         labels = _document_labels(documents)
         self.pdf_combo.blockSignals(True)
@@ -823,18 +798,8 @@ class EmbeddedPdfViewer(QFrame):
         self.locate_button.setVisible(bool(self._missing))
         self._update_source_status()
 
-        first_available = next(
-            (
-                index
-                for index, (path, page) in enumerate(
-                    self._execution_pages, start=1
-                )
-                if path is not None and page > 0 and path.is_file()
-            ),
-            None,
-        )
-        if first_available is not None:
-            self.show_page(first_available)
+        if documents:
+            self.show_page(1, documents[0])
             return
         self._show_placeholder(
             "No se encontraron los PDF de origen de este CSV."
@@ -845,19 +810,7 @@ class EmbeddedPdfViewer(QFrame):
 
     def _on_document_changed(self, index: int) -> None:
         if 0 <= index < len(self._documents):
-            document = self._documents[index]
-            position = next(
-                (
-                    position
-                    for position, (path, _page) in enumerate(
-                        self._execution_pages, start=1
-                    )
-                    if path == document
-                ),
-                None,
-            )
-            if position is not None:
-                self.show_page(position)
+            self.show_page(1, self._documents[index])
 
     def _jump(self) -> None:
         try:
@@ -867,30 +820,30 @@ class EmbeddedPdfViewer(QFrame):
         self.show_page(page)
 
     def _global_page(self, path: Path | None = None, page: int | None = None) -> int:
-        """Posición de una referencia dentro de la ejecución."""
-        if path is None and page is None:
-            return self._global_index
-        wanted_path = Path(path) if path is not None else self._path
-        wanted_page = self._page if page is None else int(page)
-        if wanted_path is None:
+        """Posición de una página local dentro de todos los PDF disponibles."""
+        path = Path(path) if path is not None else self._path
+        page = self._page if page is None else int(page)
+        if path is None:
             return 0
-        return next(
-            (
-                index
-                for index, (source, local_page) in enumerate(
-                    self._execution_pages, start=1
-                )
-                if source == wanted_path and local_page == wanted_page
-            ),
-            0,
-        )
+        offset = 0
+        for document in self._documents:
+            count = self._page_total(document)
+            if document == path:
+                return offset + min(max(1, page), count) if count else 0
+            offset += count
+        return 0
 
-    def _global_location(self, page: int) -> tuple[Path | None, int] | None:
-        """Convierte una página de ejecución en su referencia fuente."""
+    def _global_location(self, page: int) -> tuple[Path, int] | None:
+        """Convierte una página del lote en ``(PDF, página local)``."""
         if self._total <= 0:
             return None
-        index = min(max(1, int(page)), self._total)
-        return self._execution_pages[index - 1]
+        remaining = min(max(1, int(page)), self._total)
+        for document in self._documents:
+            count = self._page_total(document)
+            if remaining <= count:
+                return document, remaining
+            remaining -= count
+        return None
 
     def _show_previous_page(self) -> None:
         current = self._global_page()
@@ -911,46 +864,36 @@ class EmbeddedPdfViewer(QFrame):
         mantiene a la vista hasta que llega la nueva.
         """
         if path is None:
-            global_index = min(max(1, int(page)), self._total)
             location = self._global_location(page)
             if location is None:
                 return
             path, page = location
         else:
             path = Path(path)
-            global_index = self._global_page(path, page)
-        self._global_index = global_index
-        self.page_edit.setText(str(global_index))
-        validator = self.page_edit.validator()
-        if isinstance(validator, QIntValidator):
-            validator.setTop(max(1, self._total))
-        if path is None or not path.is_file() or int(page) <= 0:
-            self._path = path
-            self._page = int(page)
-            self._pending_render = None
-            self._show_placeholder("No se encontró el PDF de esta página.")
-            self._sync_controls()
+        if path is None or not path.is_file():
             return
         document_total = self._page_total(path)
-        if not document_total or int(page) > document_total:
+        if not document_total:
             self._path = path
-            self._page = int(page)
             self._pending_render = None
             self._show_placeholder(f"No se pudo mostrar el PDF: {path.name}")
             self._sync_combo_to(path)
             self._sync_controls()
             return
-        page = int(page)
+        page = max(1, min(int(page), document_total))
         request = (str(path), page)
-        same_page = self._source is not None and path == self._path and page == self._page
-        self._path = path
-        self._page = page
-        self._sync_combo_to(path)
-        self._sync_controls()
         if self._pending_render == request:
             return
-        if same_page:
+        if self._source is not None and path == self._path and page == self._page:
             return
+        self._path = path
+        self._page = page
+        self.page_edit.setText(str(self._global_page(path, page)))
+        validator = self.page_edit.validator()
+        if isinstance(validator, QIntValidator):
+            validator.setTop(max(1, self._total))
+        self._sync_combo_to(path)
+        self._sync_controls()
         self._pending_render = request
         self._ensure_loader().requested.emit(*request)
 
@@ -1101,11 +1044,12 @@ class EmbeddedPdfViewer(QFrame):
         self.zoom_label.setText(f"{round(self._zoom * 100)}%")
 
     def _sync_controls(self) -> None:
+        has_page = self._source is not None
         global_page = self._global_page()
         self.total_pages.setText(f"de {self._total}")
-        self.page_edit.setEnabled(self._total > 0)
-        self.prev.setEnabled(global_page > 1)
-        self.next.setEnabled(0 < global_page < self._total)
+        self.page_edit.setEnabled(has_page)
+        self.prev.setEnabled(has_page and global_page > 1)
+        self.next.setEnabled(has_page and global_page < self._total)
         self._sync_zoom_controls()
 
 
@@ -1648,14 +1592,7 @@ class CsvViewerWindow(QMainWindow):
         self._row_pdf_paths, documents, missing = resolve_source_documents(
             csv_path, self._rows, self._pdf_search_folders
         )
-        page_refs = []
-        for path, row in zip(self._row_pdf_paths, self._rows):
-            try:
-                page = int(row.get("page", ""))
-            except ValueError:
-                page = 0
-            page_refs.append((path, page))
-        self.pdf_viewer.load_paths(documents, missing, page_refs)
+        self.pdf_viewer.load_paths(documents, missing)
 
     def _relocate_source_pdfs(self) -> None:
         """Reintenta la búsqueda de los PDF faltantes en otra carpeta."""
@@ -2136,10 +2073,7 @@ class CsvViewerWindow(QMainWindow):
             else None
         )
         if path is not None and page > 0 and path.is_file():
-            # ``_row_pdf_paths`` y ``_execution_pages`` nacen juntas y en el
-            # mismo orden. Navegar por la posición de la fila evita inferirla
-            # otra vez a partir de (ruta, página), que podría repetirse.
-            self.pdf_viewer.show_page(source_row + 1)
+            self.pdf_viewer.show_page(page, path)
             return f"{path.name}, página {page}"
         return f"{row.get('file', 'PDF desconocido')}, página {page or '?'}"
 
