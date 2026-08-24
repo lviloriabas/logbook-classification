@@ -453,7 +453,9 @@ def _run(args: argparse.Namespace) -> int:
     from app.validation.book_corrector import correct_matricula_by_book
     from app.validation.date_corrector import correct_dates_by_book
 
-    stats = correct_matricula_by_book(reports)
+    stats = correct_matricula_by_book(
+        reports, config.book_matriculas_file
+    )
     print(f"\nCorrector de matrículas por libro: {stats['books']} libro(s), "
           f"{stats['corrected']} matrícula(s) corregidas, "
           f"{stats['flagged']} discrepante(s) marcada(s)")
@@ -470,6 +472,10 @@ def _run(args: argparse.Namespace) -> int:
 
         verify_reports_against_fleet(reports, config.fleet_file)
         print(f"Lista de aviones: {config.fleet_file}")
+
+    from app.validation.book_corrector import learn_book_matriculas
+
+    learn_book_matriculas(reports, config.book_matriculas_file)
 
     # ── Salidas de la ejecución ───────────────────────────────────────────
     # Se escriben con la misma función que usa la interfaz. Tenerlas

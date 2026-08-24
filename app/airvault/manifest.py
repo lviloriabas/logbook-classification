@@ -26,7 +26,7 @@ def cargar(carpeta_job: Path | str) -> Manifiesto:
     """Carga el manifiesto de un trabajo.
 
     Raises:
-        FileNotFoundError: si el trabajo no existe todavia.
+        FileNotFoundError: si el trabajo no existe todavía.
         ValueError: si el archivo esta corrupto o es de otra version.
     """
     ruta = ruta_manifiesto(carpeta_job)
@@ -38,9 +38,7 @@ def cargar(carpeta_job: Path | str) -> Manifiesto:
         raise ValueError(f"Manifiesto ilegible en {ruta}: {exc}") from exc
     manifiesto = Manifiesto.model_validate(datos)
     if manifiesto.version != 1:
-        raise ValueError(
-            f"Manifiesto version {manifiesto.version}, esperada 1"
-        )
+        raise ValueError(f"Manifiesto version {manifiesto.version}, esperada 1")
     return manifiesto
 
 

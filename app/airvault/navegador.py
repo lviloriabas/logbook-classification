@@ -441,7 +441,7 @@ def obtener_cookies(
         with SesionDeNavegador(perfil, edge, visible=False) as navegador:
             version = navegador.abrir(entrada)
             # Las cookies no se leen de golpe: recien abierto, el navegador
-            # todavia esta yendo y volviendo de Microsoft, y lo que hay en
+            # todavía esta yendo y volviendo de Microsoft, y lo que hay en
             # ese instante es lo de la vez anterior —caducado, si paso el
             # rato—. Esperar a que la sesion sirva es ademas lo que la
             # renueva sola: el navegador rehace el acceso federado sin que

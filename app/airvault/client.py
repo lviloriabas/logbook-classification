@@ -232,13 +232,13 @@ class ClienteHttp:
     def renombrar_lote(self, batch_id: str, nombre: str) -> bool:
         """Le pone al batch el nombre con el que se le va a reconocer.
 
-        Hace falta porque Quick Upload no admite ninguno: todo lo que sube
-        el programa llega a la cola como «Empty-Batch», y asi nadie
-        distingue en la pantalla un batch de otro. Es la misma accion
+        Quick Upload envia el nombre normalmente. Hace falta cuando AirVault
+        lo pierde y publica la carga como «Empty-Batch». Es la misma accion
         «Rename» que ofrece el Web Index.
 
         Devuelve si el servidor acepto la petición. El flujo vuelve a leer la
-        cola y exige ver el mismo ID con el título esperado antes de indexar.
+        cola y exige ver el mismo ID con el título esperado antes de indexar:
+        quedarse como ``Empty-Batch`` ya no se considera un éxito parcial.
         """
         limpio = str(nombre or "").strip()
         if not limpio:
@@ -249,7 +249,7 @@ class ClienteHttp:
                 data={"repoId": self.config.repo_id, "batchId": batch_id,
                       "encodedBatchName": codificar_texto(limpio)},
             )
-        except Exception as exc:  # noqa: BLE001 - el trabajo sigue igual
+        except Exception as exc:  # noqa: BLE001 - se informa como False
             logger.info("No se pudo renombrar el batch {}: {}", batch_id, exc)
             return False
         logger.info("El batch {} quedo como {!r}", batch_id, limpio)

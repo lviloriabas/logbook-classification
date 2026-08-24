@@ -5,7 +5,7 @@ mantenimiento (technician_license presente) requiere piloto + técnico,
 y no mira los campos de capitán.
 Una licencia de técnico ilegible deja el tipo de página INCIERTO (no se
 acusan los campos ambiguos). Las lecturas de baja confianza nunca se
-acusan como faltas: categoría UNCERTAIN (revisión manual).
+acusan como faltas: categoría UNCERTAIN para auditoría, sin apartarlas.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from app.validation.discrepancias import (
     Categoria,
     TipoEntrada,
     clasificar_lote,
+    confirmadas_para_revision,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -224,6 +225,22 @@ class TestClasificacion(unittest.TestCase):
         entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
         self.assertIs(entradas[0].categoria, Categoria.MISSING)
         self.assertEqual(len(entradas[0].campos), 2)
+
+    def test_solo_ausencias_confirmadas_se_apartan_para_revision(self):
+        incierta = _vuelo_ok(pilot_signature=("false", DUDOSA))
+        faltante = _vuelo_ok(
+            2, "2147338", "HP-1534CMP",
+            captain_signature=("false", AUSENTE),
+        )
+        entradas = clasificar_lote(
+            [_reporte(incierta, faltante)], TEMPLATE
+        )
+
+        confirmadas = confirmadas_para_revision(entradas)
+
+        self.assertEqual([entrada.page_number for entrada in confirmadas], [2])
+        self.assertTrue(incierta.discrepancy)
+        self.assertTrue(faltante.discrepancy)
 
     def test_pagina_en_blanco_se_ignora(self):
         pagina = _vuelo_ok()

@@ -17,7 +17,7 @@ La calibración prepara una referencia por documento:
 5. prepara la transformación común;
 6. cuando una función activa lo requiere y hay tres páginas o más, estima el fondo impreso repetido.
 
-La alineación usa características ORB y una transformación robusta calculada con RANSAC. AKAZE y correlación de fase sirven como respaldo. Las transformaciones confiables se estabilizan con la mediana de páginas vecinas. Si no se alcanza la calidad mínima, la página continúa sin forzar una transformación dudosa y queda marcada para revisión.
+La alineación usa características ORB y una transformación robusta calculada con RANSAC. AKAZE y correlación de fase sirven como respaldo. Las transformaciones confiables se estabilizan con la mediana de páginas vecinas. Si no se alcanza la calidad mínima, la página continúa sin forzar una transformación dudosa. Esa calidad no la envía por sí sola a revisión: solo se aparta cuando matrícula o `log_number` también quedan sin confirmar.
 
 El fondo impreso puede servir como evidencia para casillas y geometría de fecha. La plantilla y la configuración de producción actuales no lo restan del OCR. El motor conserva el escaneo alineado original para no borrar escritura repetida legítima.
 
@@ -36,7 +36,7 @@ La secuencia de página es la siguiente:
 9. Combinación de día, mes y año.
 10. Aplicación de reglas y cálculo del estado.
 
-Una página en blanco no pasa por la lectura completa. Permanece registrada en CSV, JSON y estadísticas, pero no se incorpora a los PDF organizados.
+Una página en blanco no pasa por la lectura completa. Permanece registrada en CSV, JSON y estadísticas y se incorpora a **REVISAR**, para que la ausencia total de campos quede visible antes de cerrar la ejecución.
 
 ## 3.4 Lectura de texto
 
@@ -121,6 +121,8 @@ Cada libro debe corresponder a una sola aeronave. El corrector vota cada posici�
 
 La matrícula ganadora completa o corrige las páginas del libro. El valor anterior permanece en alternativas o comentarios para auditoría y la inferencia se distingue mediante `source=book_correction`. Una página reparada puede seguir al indexado automático cuando la respaldan por lo menos dos lecturas independientes del libro; el mismo consenso puede confirmar una lectura coincidente que estaba marcada por confianza baja, sin cambiar su valor. Si la propia página había producido otra matrícula canónica, la ganadora se conserva como inferencia pero el campo queda en `WARNING`: esa contradicción puede significar que también se leyó mal el `log_number`, por lo que la página va a **REVISAR** y no abre un separador ajeno. Si el libro no aporta una lectura utilizable, la matrícula queda sin resolver.
 
+Los consensos fuertes se recuerdan entre ejecuciones en `book_matriculas.json`. El archivo guarda solamente pares compactos de clave de libro y matrícula, por ejemplo `"21473A":"HP-1534CMP"`; no contiene páginas, imágenes ni historial. Una asociación previa puede resolver una página futura del mismo libro. Nunca se reemplaza automáticamente si un consenso fuerte nuevo la contradice: el conflicto queda en revisión.
+
 ### Fecha
 
 El corrector ordena por `log_number` y aplica, en este orden:
@@ -156,10 +158,10 @@ La clasificación de firmas determina el tipo de entrada:
 | Tipo | Evidencia | Condición esperada |
 |---|---|---|
 | Vuelo | Licencia de técnico ausente con confianza suficiente. | Piloto, capitán y licencia de capitán presentes. |
-| Mantenimiento | Licencia de técnico presente con confianza suficiente. | Piloto y técnico presentes; capitán y licencia de capitán ausentes. |
+| Mantenimiento | Licencia de técnico presente con confianza suficiente. | Piloto y técnico presentes; los campos de capitán no deciden. |
 | Incierto | Licencia de técnico no concluyente. | Se revisan la licencia y las anomalías comunes a ambos tipos, sin forzar una clasificación. |
 
-Un incumplimiento firme —firma requerida ausente o firma prohibida presente— se registra en la categoría confirmada histórica `missing`. Una lectura débil o `unclear` se clasifica como `uncertain`. La página recibe `disc=true` en ambos casos y conserva la razón exacta.
+Una firma requerida cuya ausencia quedó confirmada se registra en la categoría histórica `missing` y se aparta para revisión. Una lectura débil o `unclear` se clasifica como `uncertain`, conserva el flujo automático y no se presenta como una falta. La página recibe `disc=true` en ambos casos y conserva la razón exacta para auditoría.
 
 ## 3.11 Paralelismo y orden
 
@@ -179,4 +181,4 @@ Cada campo conserva:
 - método de inferencia;
 - alternativas consideradas.
 
-Fuentes habituales: `ocr`, `date_cells`, `book_correction`, `fleet_validation`, `ocr_fallback`, `vlm` e `inferred`. El JSON consolidado conserva estos datos para auditoría.
+Fuentes habituales: `ocr`, `date_cells`, `book_correction`, `book_registry`, `fleet_validation`, `ocr_fallback`, `vlm` e `inferred`. El JSON consolidado conserva estos datos para auditoría.

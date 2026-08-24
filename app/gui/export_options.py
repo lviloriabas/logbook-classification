@@ -29,13 +29,16 @@ from app.airvault.config import (
     guardar_paginas_por_batch,
 )
 from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
+from app.gui.widgets import SpinBoxWithButtons
 
 
 class ExportOptionsGroup(QGroupBox):
     """Cuadro «Salidas»: formato, separación y fecha del CSV."""
 
     def __init__(
-        self, parent: QWidget | None = None, raiz: Path | str | None = None
+        self,
+        parent: QWidget | None = None,
+        raiz: Path | str | None = None,
     ) -> None:
         super().__init__("Salidas", parent)
         self._ruta_preferencias = (
@@ -102,7 +105,8 @@ class ExportOptionsGroup(QGroupBox):
                 self._ruta_preferencias, cantidad
             )
         )
-        formato_row.addWidget(self.partes_spin)
+        self.partes_control = SpinBoxWithButtons(self.partes_spin)
+        formato_row.addWidget(self.partes_control)
 
         # Repartir solo tiene sentido sobre el PDF único: «Varios PDF» ya
         # escribe un archivo por matrícula.

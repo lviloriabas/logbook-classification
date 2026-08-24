@@ -101,14 +101,20 @@ class AirVaultConfig:
     # decidir por el administrador, con el valor valido como defecto.
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
-    # Preferencia portable compartida por todos los controles de reparto.
-    # El valor inicial vive en airvault.json y cada cambio reemplaza ese valor.
+    # Preferencia portable de la interfaz. No hay un valor fijo en el
+    # codigo: la instalacion conserva aqui la ultima cantidad elegida tanto
+    # al repartir la entrega como al preparar los batches de Quick Upload.
     paginas_por_batch: int | None = None
+    # Preferencia de la interfaz sin valor impuesto por el programa. Cuando
+    # la persona marca o desmarca «Completar batch», se conserva exactamente
+    # ese último estado en la carpeta portable.
+    completar_batch: bool | None = None
     # Segundos de espera entre sondeos al buscar el batch por nombre.
     espera_descubrimiento_s: float = 20.0
     espera_maxima_s: float = 900.0
-    # Quick Upload puede tardar en publicar un batch; antes de media hora no
-    # se reenvia para evitar duplicar una carga todavia en proceso.
+    # Quick Upload puede tardar bastante en publicar el batch en Web Index.
+    # Tras agotar las revisiones de nombres y contenido empieza esta espera;
+    # solo al terminar se habilita una posible resubida.
     espera_reenvio_s: float = 1800.0
     # Tiempo limite de cada peticion. El servidor cuelga la peticion de
     # apertura cuando el mismo usuario tiene el batch abierto en otra sesion,
@@ -156,7 +162,12 @@ class AirVaultConfig:
 
 
 def guardar_paginas_por_batch(path: Path | str, cantidad: int) -> bool:
-    """Guarda la última cantidad elegida sin perder las demás opciones."""
+    """Conserva la ultima cantidad elegida sin perder otras opciones.
+
+    La preferencia vive en el JSON portable de AirVault, no en QSettings,
+    porque la aplicacion completa debe poder moverse a otro Windows sin
+    depender del registro ni de una ruta del perfil del usuario.
+    """
     ruta = Path(path)
     try:
         with _CONFIG_WRITE_LOCK:
@@ -170,6 +181,30 @@ def guardar_paginas_por_batch(path: Path | str, cantidad: int) -> bool:
             if valor <= 0:
                 return False
             datos["paginas_por_batch"] = valor
+            ruta.parent.mkdir(parents=True, exist_ok=True)
+            temporal = ruta.with_name(f"{ruta.name}.tmp")
+            temporal.write_text(
+                json.dumps(datos, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporal, ruta)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return True
+
+
+def guardar_completar_batch(path: Path | str, marcado: bool) -> bool:
+    """Conserva el último estado de «Completar batch» en el JSON portable."""
+    ruta = Path(path)
+    try:
+        with _CONFIG_WRITE_LOCK:
+            if ruta.is_file():
+                datos = json.loads(ruta.read_text(encoding="utf-8"))
+                if not isinstance(datos, Mapping):
+                    return False
+            else:
+                datos = {}
+            datos["completar_batch"] = bool(marcado)
             ruta.parent.mkdir(parents=True, exist_ok=True)
             temporal = ruta.with_name(f"{ruta.name}.tmp")
             temporal.write_text(

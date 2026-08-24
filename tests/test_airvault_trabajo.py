@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from app.airvault import manifest as manifiestos
-from app.airvault.config import AirVaultConfig
+from app.airvault.config import AirVaultConfig, CAMPO_LOG_NUMBER
 from app.airvault.flujo import (
     ErrorDeCorrida,
     Trabajo,
@@ -332,7 +332,13 @@ def test_descubre_el_empty_batch_que_no_estaba_antes(tmp_path):
     cliente = ClienteFalso(lotes=[
         lote("003VIEJO", "Empty-Batch", 2),
         lote("003NUEVO", "Empty-Batch", 2),
-    ])
+    ], paginas={
+        registro.seq: pagina(
+            registro.seq,
+            valores={CAMPO_LOG_NUMBER: registro.log_number},
+        )
+        for registro in trabajo.manifiesto.bitacoras()
+    })
 
     assert trabajo.descubrir(cliente, esperar=True, dormir=lambda _s: None) == (
         "003NUEVO"
@@ -457,12 +463,14 @@ def test_el_lote_se_suelta_al_terminar_cada_etapa(tmp_path):
                                "DP | BIT 18 AUG 2026 05 42")
     trabajo.descubrir(cliente, esperar=False)
     plan, indexador = trabajo.planificar(cliente)
-    assert cliente.abiertos == ["003SRO"]
-    assert cliente.cerrados == ["003SRO"]
+    # Descubrir confirma el Batch Name y la huella de Log Page Number;
+    # planificar lo vuelve a abrir para leer el indexado.
+    assert cliente.abiertos == ["003SRO", "003SRO", "003SRO"]
+    assert cliente.cerrados == ["003SRO", "003SRO", "003SRO"]
 
     trabajo.indexar(indexador, plan)
-    assert cliente.abiertos == ["003SRO", "003SRO"]
-    assert cliente.cerrados == ["003SRO", "003SRO"]
+    assert cliente.abiertos == ["003SRO"] * 4
+    assert cliente.cerrados == ["003SRO"] * 4
 
 
 def test_un_lote_sin_nada_que_escribir_ni_se_toma(tmp_path):

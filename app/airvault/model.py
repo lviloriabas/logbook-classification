@@ -127,15 +127,15 @@ class Manifiesto(BaseModel):
     # indexan automaticamente los valores confirmados y queda abierto para
     # revisar solo lo que falta o no es seguro.
     solo_subir: bool = False
-    # Foto de la cola inmediatamente anterior a Quick Upload. AirVault suele
-    # publicar esos archivos como ``Empty-Batch`` aunque reciba C_BatchName;
-    # la diferencia de IDs permite reconocer el batch propio sin adivinar.
+    # Foto de la cola inmediatamente anterior a Quick Upload. Si AirVault
+    # pierde C_BatchName y publica ``Empty-Batch``, acota los candidatos que
+    # despues se confirman por paginas y contenido.
     lotes_previos: List[str] = Field(default_factory=list)
-    # Un archivo ausente se reenvia una sola vez. Despues se sigue
-    # comprobando Web Index, pero no se crean copias indefinidamente si el
-    # procesamiento remoto esta detenido.
-    reenvios_automaticos: int = 0
-
+    # Antes de considerar perdida una subida, varias revisiones completas
+    # recorren nombres, cantidades y contenido. Solo al agotarlas empieza el
+    # reloj de espera que eventualmente permite ofrecer una resubida.
+    intentos_identificacion: int = 0
+    espera_reenvio_desde: str = ""
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
 

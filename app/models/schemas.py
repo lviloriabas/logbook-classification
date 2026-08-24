@@ -76,6 +76,16 @@ class PageResult(BaseModel):
     preview_boxes: Dict[str, List[float]] = Field(
         default_factory=dict, exclude=True, repr=False
     )
+    # Decisión efímera tomada sobre la fila final del CSV. Permite que la
+    # división de los PDF use exactamente la misma información local que
+    # recibirá AirVault, sin convertirla en una columna ni persistirla.
+    airvault_review: bool = Field(default=False, exclude=True, repr=False)
+    # Discrepancia confirmada antes de clasificar las firmas. Se mantiene
+    # separada de ``discrepancy`` porque esa columna también incluye lecturas
+    # inciertas para auditoría y no todas justifican apartar la página.
+    airvault_discrepancy: bool = Field(
+        default=False, exclude=True, repr=False
+    )
 
     def add_field(self, field: FieldResult) -> None:
         """Agrega un campo y recalcula el estado de la página."""

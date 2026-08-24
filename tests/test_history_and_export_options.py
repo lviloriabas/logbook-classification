@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication
 from app.gui.csv_utils import find_run_dirs
 from app.gui.csv_viewer import CsvViewerWindow
 from app.gui.export_options import ExportOptionsGroup
+from app.gui.widgets import SpinBoxWithButtons
 
 
 def _run(root: Path, name: str, mtime: float) -> Path:
@@ -63,6 +64,11 @@ def test_el_historial_abre_la_corrida_elegida(tmp_path: Path):
             viewer.history_combo.itemText(index)
             for index in range(viewer.history_combo.count())
         ] == ["BITS 18 AUG 2026 05 42", "BITS 16 AUG 2026 20 54"]
+        assert viewer.history_combo.currentIndex() == -1
+        assert viewer.history_combo.placeholderText() == (
+            "Seleccione una ejecución…"
+        )
+        assert viewer.table.rowCount() == 0
 
         viewer._on_history_activated(0)
 
@@ -104,6 +110,14 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
     assert options.discrepancias_check.text() == "Posibles discrepancias"
     assert options.discrepancias_check.isChecked()
     assert not options.errores_check.isChecked()
+    assert isinstance(options.partes_control, SpinBoxWithButtons)
+    assert options.partes_spin.parentWidget() is options.partes_control
+    assert not options.partes_control.up_button.isEnabled()
+    assert not options.partes_control.down_button.isEnabled()
+
+    options.partes_check.setChecked(True)
+    assert options.partes_control.up_button.isEnabled()
+    assert options.partes_control.down_button.isEnabled()
 
 
 def test_la_cantidad_de_paginas_se_recuerda_entre_los_dos_lugares(tmp_path):

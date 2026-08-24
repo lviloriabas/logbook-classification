@@ -3,11 +3,17 @@ y del corrector agresivo de matrículas (un avión por libro)."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.reports.organize import por_revisar
-from app.validation.book_corrector import correct_matricula_by_book
+from app.validation.book_corrector import (
+    correct_matricula_by_book,
+    learn_book_matriculas,
+)
 from app.validation.grouping import book_key, group_books
 
 
@@ -224,7 +230,7 @@ class TestAggressiveCorrection(unittest.TestCase):
         self.assertIs(confirmed.status, Status.OK)
         self.assertFalse(por_revisar(pages[2]))
 
-    def test_single_reading_still_infers_but_goes_to_review(self):
+    def test_single_reading_infers_and_can_use_the_normal_batch(self):
         pages = [
             _page(1, "2147337", "HP-1534CMP"),
             _page(2, "2147338", ""),
@@ -236,9 +242,9 @@ class TestAggressiveCorrection(unittest.TestCase):
         self.assertEqual(inferred.value, "HP-1534CMP")
         self.assertEqual(inferred.votes, 1)
         self.assertIs(inferred.status, Status.WARNING)
-        self.assertTrue(por_revisar(pages[1]))
+        self.assertFalse(por_revisar(pages[1]))
 
-    def test_duplicate_scan_does_not_supply_a_second_autoindex_vote(self):
+    def test_duplicate_scan_does_not_supply_a_second_vote_but_can_fill(self):
         blank = _page(2, "2147338", "")
         first = _report(
             _page(1, "2147337", "HP-1534CMP"),
@@ -254,9 +260,9 @@ class TestAggressiveCorrection(unittest.TestCase):
         self.assertEqual(inferred.value, "HP-1534CMP")
         self.assertEqual(inferred.votes, 1)
         self.assertIs(inferred.status, Status.WARNING)
-        self.assertTrue(por_revisar(blank))
+        self.assertFalse(por_revisar(blank))
 
-    def test_low_confidence_consensus_still_infers_but_goes_to_review(self):
+    def test_low_confidence_consensus_fills_and_uses_the_normal_batch(self):
         pages = [
             _page(1, "2147337", "HP-1534CMP", conf=0.49),
             _page(2, "2147338", "HP-1534CMP", conf=0.49),
@@ -269,7 +275,7 @@ class TestAggressiveCorrection(unittest.TestCase):
         self.assertEqual(inferred.value, "HP-1534CMP")
         self.assertEqual(inferred.votes, 2)
         self.assertIs(inferred.status, Status.WARNING)
-        self.assertTrue(por_revisar(pages[2]))
+        self.assertFalse(por_revisar(pages[2]))
 
     def test_no_valid_reading_no_winner(self):
         pages = [
@@ -299,6 +305,61 @@ class TestAggressiveCorrection(unittest.TestCase):
         correct_matricula_by_book([_report(*pages)])
         self.assertEqual(_matricula(pages[0]).value, "HP-1534CMP")
         self.assertEqual(_matricula(pages[2]).value, "HP-1538CMP")
+
+
+class TestPersistentBookMatriculas(unittest.TestCase):
+    def test_store_is_compact_and_contains_only_book_and_matricula(self):
+        reports = [_report(
+            _page(1, "2147337", "HP-1534CMP"),
+            _page(2, "2147338", "HP-1534CMP"),
+        )]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "book_matriculas.json"
+
+            learned = learn_book_matriculas(reports, path)
+
+            self.assertEqual(learned, 1)
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8")),
+                {"21473A": "HP-1534CMP"},
+            )
+            self.assertLess(path.stat().st_size, 50)
+
+    def test_stored_book_resolves_a_future_page_without_matricula(self):
+        known = [_report(
+            _page(1, "2147337", "HP-1534CMP"),
+            _page(2, "2147338", "HP-1534CMP"),
+        )]
+        future = _page(1, "2147339", "", status=Status.ERROR, conf=0.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "book_matriculas.json"
+            learn_book_matriculas(known, path)
+
+            stats = correct_matricula_by_book([_report(future)], path)
+
+        field = _matricula(future)
+        self.assertEqual(field.value, "HP-1534CMP")
+        self.assertEqual(field.source, "book_registry")
+        self.assertEqual(field.votes, 2)
+        self.assertIs(field.status, Status.OK)
+        self.assertFalse(por_revisar(future))
+        self.assertEqual(stats["reused"], 1)
+
+    def test_direct_conflict_with_store_stays_for_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "book_matriculas.json"
+            path.write_text(
+                '{"21473A":"HP-1534CMP"}\n', encoding="utf-8"
+            )
+            page = _page(1, "2147339", "HP-1734CMP")
+
+            correct_matricula_by_book([_report(page)], path)
+
+        field = _matricula(page)
+        self.assertEqual(field.value, "HP-1534CMP")
+        self.assertIn("HP-1734CMP", field.alternatives)
+        self.assertIs(field.status, Status.WARNING)
+        self.assertTrue(por_revisar(page))
 
 
 if __name__ == "__main__":

@@ -125,7 +125,7 @@ class TestConstruirStats(unittest.TestCase):
         stats = construir_stats(self.reports, separar_por=["avion", "mes"])
         sep = stats["separacion"]
         self.assertEqual(sep["criterios"], ["avion", "mes"])
-        self.assertEqual(sep["paginas_distribuidas"], 5)
+        self.assertEqual(sep["paginas_distribuidas"], 6)
         self.assertEqual(sep["paginas_excluidas_por_discrepancia"], 0)
         self.assertEqual(sep["paginas_fuera"], 0)
         self.assertTrue(sep["completa"])
@@ -136,7 +136,7 @@ class TestConstruirStats(unittest.TestCase):
                 "HP-1534CMP_2026-JUL.pdf": 2,
                 "HP-1534CMP_sf.pdf": 1,
                 "HP-1538CMP_2026-AUG.pdf": 1,
-                "revisar.pdf": 1,
+                "revisar.pdf": 2,
             },
         )
         self.assertEqual(sep["total_pdfs"], 4)
@@ -147,7 +147,7 @@ class TestConstruirStats(unittest.TestCase):
             self.reports, separar_por=["avion"], excluidas=excluidas
         )
         sep = stats["separacion"]
-        self.assertEqual(sep["paginas_distribuidas"], 3)
+        self.assertEqual(sep["paginas_distribuidas"], 4)
         self.assertEqual(sep["paginas_excluidas_por_discrepancia"], 2)
         self.assertEqual(sep["paginas_fuera"], 0)
         self.assertTrue(sep["completa"])
@@ -155,7 +155,7 @@ class TestConstruirStats(unittest.TestCase):
         self.assertEqual(
             archivos,
             {"HP-1534CMP.pdf": 1, "HP-1538CMP.pdf": 1,
-             "revisar.pdf": 1},
+             "revisar.pdf": 2},
         )
 
     def test_sin_separacion_no_hay_bloque(self):

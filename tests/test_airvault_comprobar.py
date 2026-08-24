@@ -18,8 +18,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.airvault.client import PaginaDelLote, PaginaIndexada
-from app.airvault.config import CAMPO_BATCH_NAME, AirVaultConfig
+from app.airvault.client import PaginaDelLote
+from app.airvault.config import (
+    AirVaultConfig,
+    CAMPO_BATCH_NAME,
+    CAMPO_END_DATE,
+    CAMPO_LOG_NUMBER,
+    CAMPO_MATRICULA,
+)
 from app.airvault.discovery import LoteNoEncontrado
 from app.airvault.flujo import (
     BUSCANDO,
@@ -38,11 +44,15 @@ from app.airvault.flujo import (
     cargar_trabajos_pendientes,
     comprobar_entrega,
     comprobar_partes,
+    detectar_indexados,
     completar_partes,
     estado_local,
+    indexar_partes,
     preparar_partes,
+    _reconciliar_batches,
     reiniciar_trabajos_incompletos,
     ruta_indice_paginas,
+    subida_estancada,
     subir_partes,
 )
 from app.airvault.model import EstadoEtapa, EstadoRegistro
@@ -112,6 +122,22 @@ def trabajo_subido(tmp_path, paginas_en_airvault: int = 2,
     return trabajo, cliente
 
 
+def paginas_ocr(trabajo, nombre_interno: str = ""):
+    """OCR que permite reconocer el contenido de un batch provisional."""
+    paginas = {}
+    for registro in trabajo.manifiesto.bitacoras():
+        valores = {
+            CAMPO_LOG_NUMBER: registro.log_number,
+            CAMPO_MATRICULA: registro.matricula,
+        }
+        if nombre_interno and registro.seq == 1:
+            valores[CAMPO_BATCH_NAME] = nombre_interno
+        paginas[registro.seq] = pagina(
+            registro.seq, estado=3, valores=valores
+        )
+    return paginas
+
+
 # ── en que va cada parte ───────────────────────────────────────────
 
 def test_sin_subir_lo_dice_y_no_pregunta_por_ningun_lote(tmp_path):
@@ -129,7 +155,8 @@ def test_subido_pero_todavía_no_en_la_cola_no_es_un_fallo(tmp_path):
     trabajo, cliente = trabajo_subido(tmp_path)
     cliente.lotes = []
     parte, = comprobar_partes([trabajo], cliente)
-    assert parte.estado == BUSCANDO
+    assert parte.estado == PROCESANDO
+    assert "(1/3)" in parte.detalle
     assert not parte.se_puede_indexar
     assert not parte.se_acabo
 
@@ -143,7 +170,7 @@ def test_un_lote_a_medio_procesar_todavía_no_esta_listo(tmp_path):
     trabajo, cliente = trabajo_subido(tmp_path, paginas_en_airvault=1)
     parte, = comprobar_partes([trabajo], cliente)
     assert parte.estado == PROCESANDO
-    assert "1 de 2 paginas" in parte.detalle
+    assert "1 de 2 páginas" in parte.detalle
     assert not parte.se_puede_indexar
 
 
@@ -155,10 +182,30 @@ def test_con_todas_las_paginas_queda_listo_para_indexar(tmp_path):
     assert parte.batch_id == "003SRO"
 
 
+def test_el_aviso_de_escritura_identifica_el_batch(tmp_path):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    comprobar_partes([trabajo], cliente)
+    plan = trabajo.planificar(cliente)
+    mensajes = []
+
+    indexar_partes(
+        [trabajo],
+        [plan],
+        avisar=lambda texto, _hechas, _total: mensajes.append(texto),
+    )
+
+    assert any(
+        texto == "Batch 003SRO: Escribiendo en AirVault"
+        for texto in mensajes
+    )
+
+
 def test_un_batch_mayor_que_el_manifiesto_se_detiene(tmp_path):
     """Un 200 para una parte de 100 no va a reducirse mientras se espera."""
     trabajo, cliente = trabajo_subido(tmp_path)
-    cliente.lotes = [lote("003JUNTO", "DP | BIT", 200)]
+    cliente.lotes = [lote(
+        "003JUNTO", trabajo.manifiesto.nombre_batch, 200
+    )]
 
     parte, = comprobar_partes([trabajo], cliente)
 
@@ -175,6 +222,114 @@ def test_el_lote_encontrado_queda_anotado_y_con_su_nombre(tmp_path):
     assert trabajo.manifiesto.etapa_hecha("descubrir")
 
 
+def test_sin_registro_recupera_por_nombre_y_detecta_el_indexado(
+    tmp_path, monkeypatch,
+):
+    """Un manifiesto reconstruido no autoriza otra carga del mismo PDF."""
+    csv = corrida(tmp_path)
+    carpeta = tmp_path / "registro-reconstruido"
+    trabajo = Trabajo.preparar(
+        AirVaultConfig(), carpeta, csv, "DP | BIT 18 AUG 2026 05 42"
+    )
+    paginas = {
+        registro.seq: pagina(
+            registro.seq,
+            estado=0,
+            valores={
+                CAMPO_LOG_NUMBER: registro.log_number,
+                CAMPO_MATRICULA: registro.matricula,
+            },
+        )
+        for registro in trabajo.manifiesto.bitacoras()
+    }
+    cliente = ClienteFalso(
+        paginas=paginas,
+        lotes=[lote(
+            "003SRO", trabajo.manifiesto.nombre_batch,
+            len(trabajo.manifiesto.registros),
+        )],
+        page_count=len(trabajo.manifiesto.registros),
+    )
+    subidas = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
+    )
+
+    subir_partes([trabajo], SesionFalsa(), cliente=cliente)
+
+    assert subidas == []
+    assert trabajo.manifiesto.batch_id == "003SRO"
+    assert trabajo.manifiesto.etapa_hecha("subir")
+    assert trabajo.manifiesto.etapa_hecha("verificar")
+    assert estado_local(trabajo).estado == INDEXADO
+    assert (carpeta / "manifiesto.json").is_file()
+
+
+def test_revisar_detecta_paginas_completadas_a_mano(tmp_path):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.fijar_lote("003SRO")
+    trabajo.manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.ERROR, "1/2 en Valid"
+    )
+    cliente.paginas = {
+        registro.seq: pagina(
+            registro.seq,
+            estado=0,
+            valores={
+                CAMPO_LOG_NUMBER: registro.log_number,
+                CAMPO_MATRICULA: registro.matricula,
+            },
+        )
+        for registro in trabajo.manifiesto.bitacoras()
+    }
+    estados = comprobar_partes([trabajo], cliente)
+
+    detectado, = detectar_indexados(estados, cliente)
+
+    assert detectado.estado == INDEXADO
+    assert trabajo.manifiesto.etapa_hecha("verificar")
+
+
+def test_worker_de_revision_descarta_el_plan_anterior_al_indexado_manual(
+    tmp_path,
+):
+    from app.gui.airvault_window import TrabajoAirVaultWorker
+
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.fijar_lote("003SRO")
+    trabajo.manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.ERROR, "1/2 en Valid"
+    )
+    cliente.paginas = {
+        registro.seq: pagina(
+            registro.seq,
+            estado=0,
+            valores={
+                CAMPO_LOG_NUMBER: registro.log_number,
+                CAMPO_MATRICULA: registro.matricula,
+            },
+        )
+        for registro in trabajo.manifiesto.bitacoras()
+    }
+    clave = str(trabajo.carpeta)
+    estado = {
+        "config": AirVaultConfig(),
+        "cliente": cliente,
+        "trabajos": [trabajo],
+        "raiz": tmp_path,
+        "carpeta_job": tmp_path / "reporte",
+        "planes": {clave: object()},
+    }
+    comprobaciones = []
+    worker = TrabajoAirVaultWorker("comprobar", estado)
+    worker.comprobado.connect(comprobaciones.append)
+
+    worker._comprobar()
+
+    assert comprobaciones[0]["estados"][0].estado == INDEXADO
+    assert clave not in comprobaciones[0]["planes"]
+
+
 def test_la_comprobacion_periodica_recupera_un_empty_batch_interrumpido(
     tmp_path,
 ):
@@ -184,6 +339,7 @@ def test_la_comprobacion_periodica_recupera_un_empty_batch_interrumpido(
         lote("003VIEJO", "DP | LO DE ANTES", 9),
         lote("003NUEVO", "Empty-Batch", 2),
     ]
+    cliente.paginas_por_lote["003NUEVO"] = paginas_ocr(trabajo)
 
     parte, = comprobar_partes([trabajo], cliente)
 
@@ -197,103 +353,348 @@ def test_la_comprobacion_periodica_recupera_un_empty_batch_interrumpido(
     ]
 
 
-def test_varios_empty_batch_iguales_se_identifican_por_su_nombre_interno(
-    tmp_path,
-):
-    trabajos = _trabajos_principal_division_y_revisar(tmp_path)[:2]
-    for trabajo in trabajos:
-        trabajo.manifiesto.etapa("subir").marcar(
-            EstadoEtapa.HECHA, "subido"
-        )
-        trabajo.guardar()
+def test_avisos_cortos_al_detectar_y_corregir_empty_batch(tmp_path):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.lotes = [lote("003NUEVO", "Empty-Batch", 2)]
+    cliente.paginas_por_lote["003NUEVO"] = paginas_ocr(trabajo)
+    mensajes = []
 
-    class ClienteConNombreInterno(ClienteFalso):
-        def leer_pagina(self, batch_id, pagina):
-            indice = {"003UNO": 0, "003DOS": 1}[batch_id]
-            return PaginaIndexada(
-                pagina=pagina,
-                estado=3,
-                valores={
-                    CAMPO_BATCH_NAME: trabajos[indice].manifiesto.nombre_batch
-                },
-                columnas={},
-            )
+    comprobar_partes(
+        [trabajo],
+        cliente,
+        avisar=lambda texto, _hechas, _total: mensajes.append(texto),
+    )
 
-    cliente = ClienteConNombreInterno(lotes=[
-        lote("003VIEJO", "DP | ANTERIOR", 9),
-        lote("003UNO", "Empty-Batch", 2),
-        lote("003DOS", "Empty-Batch", 2),
-    ])
-
-    estados = comprobar_partes(trabajos, cliente)
-
-    assert [parte.batch_id for parte in estados] == ["003UNO", "003DOS"]
-    assert cliente.renombrados == [
-        ("003UNO", trabajos[0].manifiesto.nombre_batch),
-        ("003DOS", trabajos[1].manifiesto.nombre_batch),
-    ]
-    assert cliente.abiertos == ["003UNO", "003DOS"]
-    assert cliente.cerrados == ["003UNO", "003DOS"]
+    assert any(
+        texto.startswith("Batch 003NUEVO: Empty-Batch detectado")
+        for texto in mensajes
+    )
+    assert any(
+        texto.startswith("Batch 003NUEVO: corrigiendo nombre")
+        for texto in mensajes
+    )
+    assert "Batch 003NUEVO: nombre corregido" in mensajes
 
 
-def test_descubrir_elije_el_empty_batch_por_nombre_interno_antes_de_continuar(
-    tmp_path,
-):
-    trabajo, _ = trabajo_subido(tmp_path)
-
-    class ClienteConDosEmpty(ClienteFalso):
-        def leer_pagina(self, batch_id, pagina):
-            nombre = (
-                trabajo.manifiesto.nombre_batch
-                if batch_id == "003PROPIO"
-                else "DP | OTRA EJECUCION"
-            )
-            return PaginaIndexada(
-                pagina=pagina, estado=3,
-                valores={CAMPO_BATCH_NAME: nombre}, columnas={},
-            )
-
-    cliente = ClienteConDosEmpty(lotes=[
-        lote("003VIEJO", "DP | ANTERIOR", 9),
-        lote("003AJENO", "Empty-Batch", 2),
-        lote("003PROPIO", "Empty-Batch", 2),
-    ])
-
-    batch_id = trabajo.descubrir(cliente, esperar=False)
-
-    assert batch_id == "003PROPIO"
-    assert cliente.renombrados == [
-        ("003PROPIO", trabajo.manifiesto.nombre_batch)
-    ]
-
-
-def test_el_renombrado_de_empty_batch_se_reintenta_automaticamente(tmp_path):
-    trabajo, _ = trabajo_subido(tmp_path)
-
-    class ClienteRenameIntermitente(ClienteFalso):
-        intentos = 0
-
-        def renombrar_lote(self, batch_id, nombre):
-            self.intentos += 1
-            if self.intentos < 3:
-                return False
-            return super().renombrar_lote(batch_id, nombre)
-
-    cliente = ClienteRenameIntermitente(lotes=[
-        lote("003VIEJO", "DP | ANTERIOR", 9),
-        lote("003VACIO", "Empty-Batch", 2),
-    ])
+def test_identifica_empty_batch_aunque_falte_un_log_ocr(tmp_path):
+    """Un OCR ausente no invalida las demas coincidencias del contenido."""
+    trabajo, cliente = trabajo_subido(tmp_path)
+    primero, segundo = trabajo.manifiesto.bitacoras()
+    cliente.lotes = [lote("003NUEVO", "Empty-Batch", 2)]
+    cliente.paginas_por_lote["003NUEVO"] = {
+        primero.seq: pagina(
+            primero.seq,
+            estado=3,
+            valores={
+                CAMPO_LOG_NUMBER: primero.log_number,
+                CAMPO_MATRICULA: primero.matricula,
+                CAMPO_END_DATE: "08/12/2026",
+            },
+        ),
+        segundo.seq: pagina(segundo.seq, estado=3, valores={}),
+    }
 
     parte, = comprobar_partes([trabajo], cliente)
 
-    assert parte.batch_id == "003VACIO"
-    assert cliente.intentos == 3
+    assert parte.estado == LISTO
+    assert parte.batch_id == "003NUEVO"
+
+
+def test_no_renombra_empty_batch_con_cantidad_distinta(tmp_path):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.lotes = [lote("003OTRO", "Empty-Batch", 3)]
+    cliente.paginas_por_lote["003OTRO"] = paginas_ocr(
+        trabajo, trabajo.manifiesto.nombre_batch
+    )
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == DESCUADRADO
+    assert parte.se_acabo
+    assert cliente.renombrados == []
+
+
+def test_no_renombra_empty_batch_si_el_ocr_contradice_el_manifiesto(tmp_path):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.lotes = [lote("003OTRO", "Empty-Batch", 2)]
+    cliente.paginas_por_lote["003OTRO"] = {
+        registro.seq: pagina(
+            registro.seq,
+            estado=3,
+            valores={CAMPO_LOG_NUMBER: "9999999"},
+        )
+        for registro in trabajo.manifiesto.bitacoras()
+    }
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == PROCESANDO
+    assert cliente.renombrados == []
+
+
+def test_revisar_no_confia_en_un_nombre_completo_con_logs_ajenos(tmp_path):
+    """El título correcto ya no evita la verificación del contenido."""
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.paginas_por_lote["003SRO"] = {
+        registro.seq: pagina(
+            registro.seq,
+            estado=3,
+            valores={CAMPO_LOG_NUMBER: "9999999"},
+        )
+        for registro in trabajo.manifiesto.bitacoras()
+    }
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == DESCUADRADO
+    assert trabajo.manifiesto.batch_id is None
+    assert "contenido no corresponde" in parte.detalle
+    assert cliente.renombrados == []
+
+
+def test_revisar_corrige_otro_nombre_completo_si_la_huella_coincide(tmp_path):
+    """Un nombre equivocado no obliga a resubir el PDF ni cambia su ID."""
+    trabajo, _ = trabajo_subido(tmp_path)
+    cliente = ClienteFalso(
+        lotes=[lote("003CRUZADO", "DP | NOMBRE EQUIVOCADO", 2)],
+        paginas_por_lote={"003CRUZADO": paginas_ocr(trabajo)},
+    )
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == LISTO
+    assert parte.batch_id == "003CRUZADO"
     assert cliente.renombrados == [
-        ("003VACIO", trabajo.manifiesto.nombre_batch)
+        ("003CRUZADO", trabajo.manifiesto.nombre_batch)
     ]
 
 
-def test_si_airvault_no_confirma_el_nombre_lo_reintenta_sin_indexar(tmp_path):
+def test_aviso_corto_al_detectar_un_nombre_incorrecto(tmp_path):
+    trabajo, _ = trabajo_subido(tmp_path)
+    cliente = ClienteFalso(
+        lotes=[lote("003CRUZADO", "DP | NOMBRE EQUIVOCADO", 2)],
+        paginas_por_lote={"003CRUZADO": paginas_ocr(trabajo)},
+    )
+    mensajes = []
+
+    comprobar_partes(
+        [trabajo],
+        cliente,
+        avisar=lambda texto, _hechas, _total: mensajes.append(texto),
+    )
+
+    assert any(
+        texto.startswith(
+            "Batch 003CRUZADO: nombre incorrecto «DP | NOMBRE EQUIVOCADO»"
+        )
+        for texto in mensajes
+    )
+
+
+def test_confirma_pronto_el_nombre_sin_repetir_el_renombrado(
+    tmp_path, monkeypatch
+):
+    trabajo, _ = trabajo_subido(tmp_path)
+
+    class ClienteConPropagacionDiferida(ClienteFalso):
+        def __init__(self):
+            super().__init__(lotes=[lote("003LENTO", "Empty-Batch", 2)])
+            self.nombre_pendiente = ""
+            self.intentos_renombrado = 0
+            self.consultas_confirmacion = 0
+
+        def renombrar_lote(self, _batch_id, nombre):
+            self.intentos_renombrado += 1
+            self.nombre_pendiente = nombre
+            return True
+
+        def listar_lotes(self, filtro=""):
+            self.consultas_confirmacion += 1
+            if self.consultas_confirmacion == 3:
+                self.lotes = [
+                    lote("003LENTO", self.nombre_pendiente, 2)
+                ]
+            return super().listar_lotes(filtro)
+
+    cliente = ClienteConPropagacionDiferida()
+    pausas = []
+    monkeypatch.setattr("app.airvault.flujo.time.sleep", pausas.append)
+
+    trabajo._ponerle_nombre(cliente, cliente.lotes[0])
+
+    assert cliente.intentos_renombrado == 1
+    assert pausas == [0.25, 0.5]
+
+
+def test_revisar_corrige_un_nombre_incompleto_sin_resubir(tmp_path):
+    trabajo, _ = trabajo_subido(tmp_path)
+    incompleto = trabajo.manifiesto.nombre_batch.rsplit(" ", 1)[0]
+    cliente = ClienteFalso(
+        lotes=[lote("003CORTO", incompleto, 2)],
+        paginas_por_lote={
+            "003CORTO": paginas_ocr(
+                trabajo, trabajo.manifiesto.nombre_batch
+            )
+        },
+    )
+
+    parte, = comprobar_partes([trabajo], cliente)
+
+    assert parte.estado == LISTO
+    assert parte.batch_id == "003CORTO"
+    assert cliente.renombrados == [
+        ("003CORTO", trabajo.manifiesto.nombre_batch)
+    ]
+
+
+def test_un_candidato_provisional_no_se_reenvia_por_antiguo(
+    tmp_path, monkeypatch
+):
+    trabajo, _ = trabajo_subido(tmp_path)
+    subida = trabajo.manifiesto.etapa("subir")
+    subida.actualizada = "2020-01-01T00:00:00"
+    trabajo.guardar()
+    cliente = ClienteFalso(lotes=[lote("003PEND", "Empty-Batch", 2)])
+    subidas = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
+    )
+
+    estados = comprobar_partes([trabajo], cliente)
+    subir_partes(
+        [trabajo],
+        SesionFalsa(),
+        cliente=cliente,
+        reintentar_estancados=True,
+    )
+
+    assert estados[0].estado == PROCESANDO
+    assert subidas == []
+
+
+def test_recupera_varios_empty_batch_por_las_instantaneas_de_subida(tmp_path):
+    """El orden de las instantáneas separa incluso batches de igual tamaño."""
+    ids = ["003E01", "003E02", "003E03"]
+    trabajos = []
+    for indice in range(3):
+        trabajo, _ = trabajo_subido(tmp_path / f"parte-{indice + 1}")
+        trabajo.manifiesto.nombre_batch = f"DP | BITS PRUEBA -{indice + 1}"
+        trabajo.manifiesto.lotes_previos = ["003VIEJO", *ids[:indice]]
+        trabajo.guardar()
+        trabajos.append(trabajo)
+    cliente = ClienteFalso(lotes=[
+        lote("003VIEJO", "DP | ANTERIOR", 9),
+        *(lote(batch_id, "Empty-Batch", 2) for batch_id in ids),
+    ], paginas_por_lote={
+        batch_id: paginas_ocr(trabajo, trabajo.manifiesto.nombre_batch)
+        for batch_id, trabajo in zip(ids, trabajos)
+    })
+
+    estados = comprobar_partes(trabajos, cliente)
+
+    assert [parte.batch_id for parte in estados] == ids
+    assert [lote.nombre for lote in cliente.lotes if lote.batch_id in ids] == [
+        trabajo.manifiesto.nombre_batch for trabajo in trabajos
+    ]
+
+
+def test_el_batch_name_interno_evita_el_recorrido_ocr_cruzado(tmp_path):
+    """Una pagina por batch basta cuando el PDF conserva su nombre interno."""
+    ids = ["003E01", "003E02", "003E03"]
+    trabajos = []
+    for indice, batch_id in enumerate(ids, start=1):
+        trabajo, _ = trabajo_subido(tmp_path / f"parte-{indice}")
+        trabajo.manifiesto.nombre_batch = f"DP | BITS RAPIDO -{indice}"
+        trabajo.guardar()
+        trabajos.append(trabajo)
+    cliente = ClienteFalso(
+        lotes=[lote(batch_id, "Empty-Batch", 2) for batch_id in ids],
+        paginas_por_lote={
+            batch_id: paginas_ocr(trabajo, trabajo.manifiesto.nombre_batch)
+            for batch_id, trabajo in zip(ids, trabajos)
+        },
+    )
+
+    estados = comprobar_partes(trabajos, cliente)
+
+    assert all(estado.estado == LISTO for estado in estados)
+    assert cliente.lecturas == [1, 1, 1]
+    assert [trabajo.manifiesto.batch_id for trabajo in trabajos] == ids
+
+
+def test_un_renombrado_fallido_no_frena_los_siguientes(tmp_path):
+    class ClienteConUnNombreRechazado(ClienteFalso):
+        def renombrar_lote(self, batch_id, nombre):
+            if batch_id == "003E01":
+                return False
+            return super().renombrar_lote(batch_id, nombre)
+
+    ids = ["003E01", "003E02"]
+    trabajos = []
+    for indice, batch_id in enumerate(ids, start=1):
+        trabajo, _ = trabajo_subido(tmp_path / f"parte-{indice}")
+        trabajo.manifiesto.nombre_batch = f"DP | BITS CONTINUA -{indice}"
+        trabajo.guardar()
+        trabajos.append(trabajo)
+    cliente = ClienteConUnNombreRechazado(
+        lotes=[lote(batch_id, "Empty-Batch", 2) for batch_id in ids],
+        paginas_por_lote={
+            batch_id: paginas_ocr(trabajo, trabajo.manifiesto.nombre_batch)
+            for batch_id, trabajo in zip(ids, trabajos)
+        },
+    )
+
+    renombrados = _reconciliar_batches(trabajos, cliente, cliente.lotes)
+
+    assert renombrados == 1
+    assert trabajos[0].manifiesto.batch_id is None
+    assert trabajos[1].manifiesto.batch_id == "003E02"
+    assert cliente.renombrados == [
+        ("003E02", trabajos[1].manifiesto.nombre_batch)
+    ]
+
+
+def test_corrige_un_id_cruzado_y_asigna_el_liberado_en_el_mismo_sondeo(
+    tmp_path,
+):
+    primero, _ = trabajo_subido(tmp_path / "primero")
+    segundo, _ = trabajo_subido(tmp_path / "segundo")
+    primero.manifiesto.nombre_batch = "DP | BITS CRUZADO -1"
+    segundo.manifiesto.nombre_batch = "DP | BITS CRUZADO -2"
+    segundo.fijar_lote("003E01")
+    for trabajo in (primero, segundo):
+        trabajo.manifiesto.intentos_identificacion = 3
+        trabajo.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
+        trabajo.guardar()
+    cliente = ClienteFalso(
+        lotes=[
+            lote("003E01", segundo.manifiesto.nombre_batch, 2),
+            lote("003E02", primero.manifiesto.nombre_batch, 2),
+        ],
+        paginas_por_lote={
+            "003E01": paginas_ocr(
+                primero, primero.manifiesto.nombre_batch
+            ),
+            "003E02": paginas_ocr(
+                segundo, segundo.manifiesto.nombre_batch
+            ),
+        },
+    )
+
+    estados = comprobar_partes([primero, segundo], cliente)
+
+    assert [primero.manifiesto.batch_id, segundo.manifiesto.batch_id] == [
+        "003E01", "003E02",
+    ]
+    assert all(estado.estado == LISTO for estado in estados)
+    assert all(
+        trabajo.manifiesto.intentos_identificacion == 0
+        and not trabajo.manifiesto.espera_reenvio_desde
+        for trabajo in (primero, segundo)
+    )
+
+
+def test_no_indexa_si_airvault_no_confirma_el_nombre_del_empty_batch(tmp_path):
     class ClienteSinRename(ClienteFalso):
         def renombrar_lote(self, _batch_id, _nombre):
             return False
@@ -302,11 +703,11 @@ def test_si_airvault_no_confirma_el_nombre_lo_reintenta_sin_indexar(tmp_path):
     cliente = ClienteSinRename(lotes=[
         lote("003VIEJO", "DP | ANTERIOR", 9),
         lote("003VACIO", "Empty-Batch", 2),
-    ])
+    ], paginas_por_lote={"003VACIO": paginas_ocr(trabajo)})
 
     parte, = comprobar_partes([trabajo], cliente)
 
-    assert parte.estado == BUSCANDO
+    assert parte.estado == PROCESANDO
     assert trabajo.manifiesto.batch_id is None
     assert not trabajo.manifiesto.etapa_hecha("descubrir")
 
@@ -332,7 +733,7 @@ def test_un_id_cuyo_titulo_no_coincide_se_elimina(tmp_path):
 
     parte, = comprobar_partes([trabajo], cliente)
 
-    assert parte.estado == BUSCANDO
+    assert parte.estado == PROCESANDO
     assert parte.batch_id == ""
     assert trabajo.manifiesto.batch_id is None
     assert not trabajo.manifiesto.etapa_hecha("descubrir")
@@ -390,7 +791,7 @@ def test_revisar_no_se_asigna_a_las_divisiones_sin_titulo(tmp_path):
 
     assert [t.manifiesto.batch_id for t in trabajos] == [None, None, "003REV"]
     assert [parte.estado for parte in estados] == [
-        BUSCANDO, BUSCANDO, SOLO_REVISAR
+        PROCESANDO, PROCESANDO, SOLO_REVISAR
     ]
 
 
@@ -509,61 +910,6 @@ def test_un_empty_batch_tardio_no_reabre_ni_resube_un_lote_completado(
     assert trabajo.manifiesto.etapa_hecha("completar")
 
 
-def test_reenvia_automaticamente_un_batch_ausente_tras_media_hora(
-    tmp_path, monkeypatch
-):
-    trabajo, cliente = trabajo_subido(tmp_path)
-    trabajo.manifiesto.etapa("subir").actualizada = "2020-01-01T00:00:00"
-    trabajo.guardar()
-    cliente.lotes = [lote("003VIEJO", "DP | ANTERIOR", 9)]
-    subidos = []
-
-    def subir(self, sesion, pdf="", avisar=None, cliente=None):
-        subidos.append(self.manifiesto.nombre_batch)
-        self.manifiesto.lotes_previos = [
-            actual.batch_id for actual in cliente.listar_lotes()
-        ]
-        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "reenviado")
-        cliente.lotes.append(
-            lote("003REENV", self.manifiesto.nombre_batch, 2)
-        )
-        self.guardar()
-
-    monkeypatch.setattr(Trabajo, "subir", subir)
-
-    fallos = subir_partes(
-        [trabajo], SesionFalsa(), cliente=cliente,
-        dormir=lambda _s: None, reintentar_estancados=True,
-    )
-
-    assert fallos == []
-    assert subidos == [trabajo.manifiesto.nombre_batch]
-    assert trabajo.manifiesto.batch_id == "003REENV"
-    assert trabajo.manifiesto.reenvios_automaticos == 1
-
-
-def test_no_reenvia_dos_veces_un_batch_que_sigue_ausente(
-    tmp_path, monkeypatch
-):
-    trabajo, cliente = trabajo_subido(tmp_path)
-    trabajo.manifiesto.reenvios_automaticos = 1
-    trabajo.manifiesto.etapa("subir").actualizada = "2020-01-01T00:00:00"
-    trabajo.guardar()
-    cliente.lotes = []
-    subidos = []
-    monkeypatch.setattr(
-        Trabajo, "subir", lambda *args, **kwargs: subidos.append(True)
-    )
-
-    subir_partes(
-        [trabajo], SesionFalsa(), cliente=cliente,
-        dormir=lambda _s: None, reintentar_estancados=True,
-    )
-
-    assert subidos == []
-    assert trabajo.manifiesto.reenvios_automaticos == 1
-
-
 def test_un_cierre_omitido_no_se_confunde_con_un_batch_completado(tmp_path):
     trabajo, cliente = trabajo_subido(tmp_path)
     trabajo.manifiesto.etapa("verificar").marcar(
@@ -578,13 +924,30 @@ def test_un_cierre_omitido_no_se_confunde_con_un_batch_completado(tmp_path):
     assert parte.estado == INDEXADO
 
 
-def test_comprobar_pide_la_cola_una_sola_vez_para_todas_las_partes(tmp_path):
-    """Es lo que permite preguntar cada pocos minutos sin cargar el servidor."""
-    trabajo, cliente = trabajo_subido(tmp_path)
-    otro, _ = trabajo_subido(tmp_path / "otra")
+def test_comprobar_busca_los_nombres_de_la_tabla_en_orden(tmp_path):
+    """La cola local dirige la búsqueda antes de revisar nombres extraños."""
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    cliente = ClienteFalso(lotes=[
+        lote("003PRI", "DP | BIT", 2),
+        lote("003DOS", "DP | BIT -2", 2),
+        lote("003REV", "DP | BIT REVISAR", 2),
+    ])
     cliente.filtros.clear()
-    comprobar_partes([trabajo, otro], cliente)
-    assert len(cliente.filtros) == 1
+    mensajes = []
+
+    comprobar_partes(
+        trabajos,
+        cliente,
+        avisar=lambda texto, _hechas, _total: mensajes.append(texto),
+    )
+
+    nombres = [trabajo.manifiesto.nombre_batch for trabajo in trabajos]
+    assert cliente.filtros == nombres
+    busquedas = [texto for texto in mensajes if texto.startswith("Buscando ")]
+    assert busquedas == [
+        f"Buscando {numero}/3 en AirVault: «{nombre}»"
+        for numero, nombre in enumerate(nombres, start=1)
+    ]
 
 
 def test_el_estado_local_no_le_pregunta_nada_a_airvault(tmp_path):
@@ -680,6 +1043,29 @@ def test_al_conectar_se_recuperan_manifiestos_subidos_y_pendientes(tmp_path):
     assert [t.manifiesto.batch_id for t in encontrados] == ["003ANT"]
 
 
+def test_al_conectar_recupera_y_prioriza_los_batches_sin_subir(tmp_path):
+    raiz = tmp_path / "output" / "airvault"
+    csv_pendiente = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
+    csv_subido = corrida(tmp_path, "BITS 19 AUG 2026 06 10")
+    pendiente = Trabajo.preparar(
+        AirVaultConfig(), raiz / "pendiente", csv_pendiente,
+        "DP | PENDIENTE",
+    )
+    subido = Trabajo.preparar(
+        AirVaultConfig(), raiz / "subido", csv_subido, "DP | SUBIDO"
+    )
+    subido.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
+    subido.fijar_lote("003SUB")
+
+    encontrados = cargar_trabajos_pendientes(AirVaultConfig(), raiz)
+
+    assert [trabajo.manifiesto.nombre_batch for trabajo in encontrados] == [
+        pendiente.manifiesto.nombre_batch,
+        subido.manifiesto.nombre_batch,
+    ]
+    assert estado_local(encontrados[0]).estado == SIN_SUBIR
+
+
 def test_al_conectar_tambien_se_recupera_un_revisar_pendiente(tmp_path):
     csv = corrida(tmp_path)
     raiz = tmp_path / "output" / "airvault"
@@ -761,6 +1147,56 @@ class SesionFalsa:
     """Se traga la subida sin red."""
 
 
+def test_cada_faltante_se_busca_se_sube_y_el_proceso_continua(
+    tmp_path, monkeypatch,
+):
+    """Un ausente no detiene la cola ni exige otro clic para cargarlo."""
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    primero, segundo, tercero = trabajos
+    eventos: list[tuple[str, str]] = []
+
+    class ClienteConHallazgoTardio(ClienteFalso):
+        def __init__(self):
+            super().__init__()
+            self.consultas: dict[str, int] = {}
+
+        def listar_lotes(self, filtro=""):
+            eventos.append(("buscar", filtro))
+            self.consultas[filtro] = self.consultas.get(filtro, 0) + 1
+            if (
+                filtro == primero.manifiesto.nombre_batch
+                and self.consultas[filtro] >= 2
+            ):
+                return [lote("003TAR", filtro, 2)]
+            return []
+
+    cliente = ClienteConHallazgoTardio()
+    subidas: list[str] = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        nombre = self.manifiesto.nombre_batch
+        eventos.append(("subir", nombre))
+        subidas.append(nombre)
+        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
+        self.manifiesto.batch_id = f"ID-{len(subidas)}"
+        self.guardar()
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    subir_partes(trabajos, SesionFalsa(), cliente=cliente)
+
+    assert primero.manifiesto.batch_id == "003TAR"
+    assert subidas == [
+        segundo.manifiesto.nombre_batch,
+        tercero.manifiesto.nombre_batch,
+    ]
+    for trabajo in (segundo, tercero):
+        carga = eventos.index(("subir", trabajo.manifiesto.nombre_batch))
+        assert eventos[carga - 1] == (
+            "buscar", trabajo.manifiesto.nombre_batch
+        )
+
+
 def test_subir_confirma_todos_y_carga_solo_la_division_pendiente(
     tmp_path, monkeypatch
 ):
@@ -777,19 +1213,31 @@ def test_subir_confirma_todos_y_carga_solo_la_division_pendiente(
         lote("003REV", "DP | BIT REVISAR", 2),
     ])
     subidas = []
+    eventos: list[tuple[str, str]] = []
 
     def subir(self, sesion, pdf="", avisar=None, cliente=None):
         subidas.append(self.manifiesto.nombre_batch)
+        eventos.append(("subir", self.manifiesto.nombre_batch))
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "subido")
         cliente.lotes.append(
             lote("003DOS", self.manifiesto.nombre_batch, 2)
         )
 
+    def encontrado(trabajo, _todos):
+        eventos.append(("encontrado", trabajo.manifiesto.nombre_batch))
+
     monkeypatch.setattr(Trabajo, "subir", subir)
 
-    subir_partes(trabajos, SesionFalsa(), cliente=cliente)
+    subir_partes(
+        trabajos,
+        SesionFalsa(),
+        cliente=cliente,
+        al_encontrar=encontrado,
+    )
 
     assert subidas == ["DP | BIT -2"]
+    assert eventos[0] == ("subir", "DP | BIT -2")
+    assert all(evento[0] == "encontrado" for evento in eventos[1:])
     assert trabajos[0].manifiesto.batch_id == "003PRI"
     assert trabajos[2].manifiesto.batch_id == "003REV"
 
@@ -819,10 +1267,75 @@ def test_no_repite_un_batch_que_quick_upload_ya_confirmo_mientras_procesa(
     assert any("1 sigue procesándose" in texto for texto in avisos)
 
 
-def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
+def test_subir_de_nuevo_reenvia_el_que_no_aparecio_durante_mucho_tiempo(
     tmp_path, monkeypatch
 ):
-    """La confirmacion separa cargas para que AirVault no las agrupe."""
+    """El segundo clic es una recuperación expresa, no un sondeo infinito."""
+    trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
+    subida = trabajo.manifiesto.etapa("subir")
+    subida.marcar(EstadoEtapa.HECHA, "division-02.pdf")
+    subida.actualizada = "2020-01-01T00:00:00"
+    trabajo.manifiesto.intentos_identificacion = 3
+    trabajo.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
+    trabajo.guardar()
+    cliente = ClienteFalso()
+    subidas = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        subidas.append(self.manifiesto.nombre_batch)
+        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "reenviado")
+        cliente.lotes.append(
+            lote("003NUE", self.manifiesto.nombre_batch, 2)
+        )
+        self.guardar()
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    subir_partes(
+        [trabajo],
+        SesionFalsa(),
+        cliente=cliente,
+        reintentar_estancados=True,
+    )
+
+    assert subidas == ["DP | BIT -2"]
+    assert trabajo.manifiesto.batch_id == "003NUE"
+
+
+def test_una_subida_antigua_agota_revisiones_antes_de_empezar_la_espera(
+    tmp_path, monkeypatch,
+):
+    """La edad de Quick Upload no salta la búsqueda de nombres incorrectos."""
+    trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
+    subida = trabajo.manifiesto.etapa("subir")
+    subida.marcar(EstadoEtapa.HECHA, "division-02.pdf")
+    subida.actualizada = "2020-01-01T00:00:00"
+    trabajo.guardar()
+    cliente = ClienteFalso()
+    subidas = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
+    )
+
+    estados = [comprobar_partes([trabajo], cliente)[0] for _ in range(3)]
+
+    assert [estado.estado for estado in estados] == [
+        PROCESANDO, PROCESANDO, BUSCANDO,
+    ]
+    assert trabajo.manifiesto.intentos_identificacion == 3
+    assert trabajo.manifiesto.espera_reenvio_desde
+    assert not subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
+    subir_partes(
+        [trabajo], SesionFalsa(), cliente=cliente,
+        reintentar_estancados=True,
+    )
+    assert subidas == []
+
+
+def test_los_ids_se_publican_solo_despues_de_intentar_todas_las_subidas(
+    tmp_path, monkeypatch
+):
+    """Buscar puede intercalarse; indexar espera la barrera de cargas."""
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     cliente = ClienteFalso()
     eventos: list[tuple[str, str]] = []
@@ -831,7 +1344,9 @@ def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
         eventos.append(("subir", self.manifiesto.nombre_batch))
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
 
-    def descubrir(self, cliente, esperar=True, dormir=None, avisar=None):
+    def descubrir(
+        self, cliente, esperar=True, dormir=None, avisar=None, cache=None
+    ):
         eventos.append(("confirmar", self.manifiesto.nombre_batch))
         self.manifiesto.batch_id = f"ID-{len(eventos)}"
         return self.manifiesto.batch_id
@@ -850,12 +1365,12 @@ def test_cada_batch_se_confirma_antes_de_subir_el_siguiente(
     assert eventos == [
         ("subir", "DP | BIT"),
         ("actualizar", "3"),
-        ("confirmar", "DP | BIT"),
         ("subir", "DP | BIT -2"),
         ("actualizar", "3"),
-        ("confirmar", "DP | BIT -2"),
         ("subir", "DP | BIT REVISAR"),
         ("actualizar", "3"),
+        ("confirmar", "DP | BIT"),
+        ("confirmar", "DP | BIT -2"),
         ("confirmar", "DP | BIT REVISAR"),
     ]
 
@@ -875,7 +1390,11 @@ def test_varios_empty_batch_del_mismo_tamano_conservan_su_id(
             actual.batch_id for actual in cliente.listar_lotes()
         ]
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
-        cliente.lotes.append(lote(next(ids), "Empty-Batch", 2))
+        batch_id = next(ids)
+        cliente.lotes.append(lote(batch_id, "Empty-Batch", 2))
+        cliente.paginas_por_lote[batch_id] = paginas_ocr(
+            self, self.manifiesto.nombre_batch
+        )
         self.guardar()
 
     monkeypatch.setattr(Trabajo, "subir", subir)
@@ -887,46 +1406,17 @@ def test_varios_empty_batch_del_mismo_tamano_conservan_su_id(
     assert [trabajo.manifiesto.batch_id for trabajo in trabajos] == [
         "003UNO", "003DOS", "003TRE",
     ]
-
-
-def test_un_nombre_no_confirmado_detiene_las_siguientes_subidas(
-    tmp_path, monkeypatch
-):
-    trabajos = _trabajos_principal_division_y_revisar(tmp_path)[:2]
-
-    class ClienteSinRename(ClienteFalso):
-        def renombrar_lote(self, _batch_id, _nombre):
-            return False
-
-    cliente = ClienteSinRename(lotes=[
-        lote("003VIEJO", "DP | ANTERIOR", 9),
-    ])
-    subidos = []
-
-    def subir(self, sesion, pdf="", avisar=None, cliente=None):
-        self.manifiesto.lotes_previos = [
-            actual.batch_id for actual in cliente.listar_lotes()
-        ]
-        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
-        subidos.append(self.manifiesto.nombre_batch)
-        cliente.lotes.append(lote("003VACIO", "Empty-Batch", 2))
-        self.guardar()
-
-    monkeypatch.setattr(Trabajo, "subir", subir)
-
-    fallos = subir_partes(
-        trabajos, SesionFalsa(), cliente=cliente, dormir=lambda _s: None
+    assert all(
+        trabajo.manifiesto.etapa_hecha("descubrir")
+        for trabajo in trabajos
     )
-
-    assert len(fallos) == 1
-    assert subidos == [trabajos[0].manifiesto.nombre_batch]
-    assert not trabajos[1].manifiesto.etapa_hecha("subir")
+    assert cliente.lecturas == [1, 1, 1]
 
 
-def test_el_id_se_publica_antes_de_empezar_la_siguiente_carga(
+def test_los_hallazgos_solo_se_publican_despues_de_todas_las_cargas(
     tmp_path, monkeypatch
 ):
-    """La UI puede asignar e indexar uno mientras sigue el recorrido."""
+    """Un callback de hallazgo puede indexar, por eso respeta la barrera."""
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     cliente = ClienteFalso()
     eventos: list[tuple[str, str]] = []
@@ -935,7 +1425,9 @@ def test_el_id_se_publica_antes_de_empezar_la_siguiente_carga(
         eventos.append(("subir", self.manifiesto.nombre_batch))
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
 
-    def descubrir(self, cliente, esperar=True, dormir=None, avisar=None):
+    def descubrir(
+        self, cliente, esperar=True, dormir=None, avisar=None, cache=None
+    ):
         self.manifiesto.batch_id = f"ID-{self.manifiesto.parte}"
         return self.manifiesto.batch_id
 
@@ -951,9 +1443,11 @@ def test_el_id_se_publica_antes_de_empezar_la_siguiente_carga(
     )
 
     assert eventos == [
-        ("subir", "DP | BIT"), ("id", "DP | BIT"),
-        ("subir", "DP | BIT -2"), ("id", "DP | BIT -2"),
+        ("subir", "DP | BIT"),
+        ("subir", "DP | BIT -2"),
         ("subir", "DP | BIT REVISAR"),
+        ("id", "DP | BIT"),
+        ("id", "DP | BIT -2"),
         ("id", "DP | BIT REVISAR"),
     ]
 
@@ -982,10 +1476,10 @@ def test_un_batch_que_falla_no_impide_subir_los_otros(tmp_path, monkeypatch):
     ]
 
 
-def test_el_indexado_arranca_mientras_se_busca_el_siguiente_batch(
+def test_el_indexado_arranca_solo_despues_de_todas_las_subidas(
     tmp_path, monkeypatch
 ):
-    """La escritura tiene un carril distinto al de subida y descubrimiento."""
+    """Puede solaparse con las busquedas, pero nunca con Quick Upload."""
     from app.airvault.flujo import EstadoParte
     from app.gui.airvault_window import TrabajoAirVaultWorker
 
@@ -1011,6 +1505,8 @@ def test_el_indexado_arranca_mientras_se_busca_el_siguiente_batch(
 
     def subir_falso(lotes, _sesion, al_encontrar=None, **_kwargs):
         primero, segundo = lotes
+        eventos.append(("subir", primero.manifiesto.nombre_batch))
+        eventos.append(("subir", segundo.manifiesto.nombre_batch))
         primero.manifiesto.batch_id = "ID-1"
         eventos.append(("encontrar", primero.manifiesto.nombre_batch))
         al_encontrar(primero, lotes)
@@ -1040,9 +1536,63 @@ def test_el_indexado_arranca_mientras_se_busca_el_siguiente_batch(
 
     worker._subir()
 
+    primer_indexado = eventos.index(
+        ("indexar", trabajos[0].manifiesto.nombre_batch)
+    )
+    assert all(
+        eventos.index(("subir", trabajo.manifiesto.nombre_batch))
+        < primer_indexado
+        for trabajo in trabajos
+    )
     assert eventos.index(("indexar", trabajos[0].manifiesto.nombre_batch)) < (
         eventos.index(("encontrar", trabajos[1].manifiesto.nombre_batch))
     )
+
+
+def test_el_worker_sube_tambien_los_pendientes_de_otras_ejecuciones(
+    tmp_path, monkeypatch,
+):
+    """La conexión amplía la tabla y esa lista ampliada dirige la carga."""
+    from app.gui.airvault_window import TrabajoAirVaultWorker
+
+    seleccionado, otro = _trabajos_principal_division_y_revisar(tmp_path)[:2]
+    estado = {
+        "config": AirVaultConfig(),
+        "csv": Path(seleccionado.manifiesto.csv_origen),
+        "raiz": tmp_path,
+        "carpeta_job": tmp_path / "job",
+        "nombre_lote": "DP | BIT",
+        "paginas_por_batch": 100,
+        "compresion": False,
+        "sesion": SesionFalsa(),
+    }
+    recibidos = []
+    monkeypatch.setattr(
+        "app.airvault.flujo.comprobar_entrega",
+        lambda _csv: [SimpleNamespace(paginas=[1, 2])],
+    )
+    monkeypatch.setattr(
+        "app.airvault.flujo.preparar_partes",
+        lambda *args, **kwargs: [seleccionado],
+    )
+
+    def subir_todos(trabajos, *_args, **_kwargs):
+        recibidos.extend(trabajos)
+        return []
+
+    monkeypatch.setattr("app.airvault.flujo.subir_partes", subir_todos)
+    worker = TrabajoAirVaultWorker("subir", estado)
+
+    def conectar():
+        estado["trabajos"] = [seleccionado, otro]
+        return ClienteFalso()
+
+    monkeypatch.setattr(worker, "_conectar", conectar)
+    monkeypatch.setattr(worker, "_cliente_paralelo", lambda cliente: cliente)
+
+    worker._subir()
+
+    assert recibidos == [seleccionado, otro]
 
 
 def test_un_automatico_con_titulo_revisar_no_se_sube(tmp_path, monkeypatch):

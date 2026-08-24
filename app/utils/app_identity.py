@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,33 @@ GCLP_HICON = -14
 GCLP_HICONSM = -34
 
 
+def set_windows_process_taskbar_identity() -> str | None:
+    """Da a esta instancia de la GUI un grupo propio en la barra de tareas.
+
+    Windows agrupa por ``AppUserModelID`` las ventanas de procesos que nacen
+    del mismo ejecutable. El PID hace distinta cada GUI principal que esté
+    abierta a la vez; las ventanas secundarias del proceso heredan el mismo
+    identificador y permanecen agrupadas con su ventana principal.
+
+    Debe llamarse antes de crear ``QApplication``.
+    """
+    if sys.platform != "win32":
+        return None
+    app_id = f"BITS.LogbookClassification.Instance.{os.getpid()}"
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        setter = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        setter.argtypes = (wintypes.LPCWSTR,)
+        setter.restype = ctypes.c_long
+        if setter(app_id) < 0:
+            return None
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    return app_id
+
+
 def set_windows_taskbar_icon(
     window: Any,
     icon_path: Path | str,
@@ -28,9 +56,9 @@ def set_windows_taskbar_icon(
 
     ``QApplication.setWindowIcon`` sigue siendo el mecanismo portable. Este
     refuerzo se ejecuta después de ``show()`` y envía ``WM_SETICON`` con ambos
-    tamaños al HWND real. No se fija un AppUserModelID personalizado: Windows
-    exige registrar un acceso directo para esos IDs y, si no existe, puede
-    sustituir el icono de la ventana por uno genérico.
+    tamaños al HWND real. La identidad del grupo se fija por separado, antes
+    de crear ``QApplication``; reafirmar aquí el icono evita que el grupo use
+    el icono genérico del intérprete portable.
     """
     path = Path(icon_path)
     if sys.platform != "win32" or path.suffix.lower() != ".ico":

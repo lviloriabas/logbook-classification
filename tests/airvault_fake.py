@@ -23,6 +23,7 @@ class ClienteFalso:
         mapa: Optional[List[PaginaDelLote]] = None,
         no_se_pueden_borrar: Optional[set[int]] = None,
         estados_tras_validar: Optional[Dict[int, int]] = None,
+        paginas_por_lote: Optional[Dict[str, Dict[int, PaginaIndexada]]] = None,
     ):
         self.paginas = paginas or {}
         self.lotes = lotes or []
@@ -37,6 +38,10 @@ class ClienteFalso:
         # permiso «Delete Batch Image».
         self.no_se_pueden_borrar = no_se_pueden_borrar or set()
         self.estados_tras_validar = estados_tras_validar or {}
+        self.paginas_por_lote = {
+            str(batch_id).strip().upper(): dict(paginas)
+            for batch_id, paginas in (paginas_por_lote or {}).items()
+        }
         self.borradas: List[int] = []
         self.validaciones_batch: List[tuple[str, List[int]]] = []
         self.escrituras: List[tuple[int, Dict[int, str], int]] = []
@@ -65,6 +70,7 @@ class ClienteFalso:
         return {"ok": True}
 
     def renombrar_lote(self, batch_id: str, nombre: str) -> bool:
+        """Imita Rename y hace visible el título en la siguiente consulta."""
         encontrado = False
         nuevos = []
         for lote in self.lotes:
@@ -80,7 +86,10 @@ class ClienteFalso:
 
     def leer_pagina(self, batch_id: str, pagina: int) -> PaginaIndexada:
         self.lecturas.append(pagina)
-        return self.paginas.get(
+        propias = self.paginas_por_lote.get(
+            str(batch_id).strip().upper(), self.paginas
+        )
+        return propias.get(
             pagina,
             PaginaIndexada(pagina=pagina, estado=3, valores={}, columnas={}),
         )

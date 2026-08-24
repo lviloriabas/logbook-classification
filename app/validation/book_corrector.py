@@ -29,6 +29,8 @@ coinciden allí donde importa y el dígito correcto gana.
 from __future__ import annotations
 
 from collections import defaultdict
+import json
+from pathlib import Path
 import re
 from typing import Dict, List, Optional, Tuple
 
@@ -40,13 +42,14 @@ from app.utils.postprocess import (
     WEAK_MATRICULA_NOTE,
     apply_postprocess,
 )
-from app.validation.grouping import group_books, log_number
+from app.validation.grouping import book_key, group_books, log_number
 from app.validation.page_status import (
     AUTO_INDEX_MIN_VOTES,
     recompute_page_status,
 )
 
 MATRICULA_FIELD_ID = "matricula"
+BOOK_MATRICULAS_FILENAME = "book_matriculas.json"
 
 # Peso de la evidencia según cómo se obtuvo el número: una tirada limpia de
 # cuatro dígitos vale más que una reconstruida con caracteres confundibles,
@@ -62,7 +65,11 @@ _EVIDENCE_QUALITY = {
 # Piso de peso: una lectura sin confianza sigue siendo evidencia, pero mínima.
 _MIN_WEIGHT = 0.05
 # Valores que ya son resultado de una inferencia: no pueden votarse a sí mismos.
-_DERIVED_SOURCES = frozenset({"book_correction", "inferred"})
+_DERIVED_SOURCES = frozenset({
+    "book_correction",
+    "book_registry",
+    "inferred",
+})
 # Valores resueltos por una segunda pasada (Tesseract restringido o VLM):
 # valen más que el texto crudo de la pasada principal, que ya falló.
 _VERIFIED_SOURCES = frozenset({"ocr_fallback", "vlm", "fleet_validation"})
@@ -73,6 +80,53 @@ _CANONICAL_MATRICULA_RE = re.compile(r"^HP-(\d{4})(CMP|WWP)$")
 # usa la configuración por defecto; el número de votos y los conflictos son
 # las guardas adicionales que deciden si la inferencia puede ir automática.
 _MIN_BOOK_AUTO_CONFIDENCE = 0.50
+_BOOK_STORAGE_KEY_RE = re.compile(r"^\d{5}[AB]$")
+
+
+def _storage_key(book: List[PageResult]) -> Optional[str]:
+    """Clave compacta de seis caracteres para un libro conocido."""
+    keys = {key for page in book if (key := book_key(page)) is not None}
+    if len(keys) != 1:
+        return None
+    series, half = keys.pop()
+    return f"{series}{half}"
+
+
+def _load_book_matriculas(path: Path) -> Dict[str, str]:
+    """Lee el mapa compacto; un archivo dañado no detiene el procesamiento."""
+    path = Path(path)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning(f"No se pudo leer el mapa de libros {path}: {exc}")
+        return {}
+    if not isinstance(data, dict):
+        logger.warning(f"Mapa de libros inválido: {path}")
+        return {}
+    return {
+        key: value
+        for key, value in data.items()
+        if isinstance(key, str)
+        and _BOOK_STORAGE_KEY_RE.fullmatch(key)
+        and isinstance(value, str)
+        and _CANONICAL_MATRICULA_RE.fullmatch(value)
+    }
+
+
+def _save_book_matriculas(path: Path, values: Dict[str, str]) -> None:
+    """Escribe solo ``clave: matrícula`` en JSON compacto y atómico."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp")
+    payload = json.dumps(
+        dict(sorted(values.items())),
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    temporary.write_text(f"{payload}\n", encoding="utf-8")
+    temporary.replace(path)
 
 
 def _matricula_field(page: PageResult):
@@ -279,6 +333,7 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
             )
             if canonical_original:
                 field.comment += "; conflicting registration requires review"
+                page.airvault_discrepancy = True
             flagged += 1
         else:
             field.comment = (
@@ -295,6 +350,71 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
         f"discrepantes sobrescritas: {flagged}"
     )
     return corrected, flagged
+
+
+def _apply_stored_matricula(
+    book: List[PageResult], matricula: str
+) -> Tuple[int, int]:
+    """Aplica una asociación confirmada en otra ejecución.
+
+    Una lectura canónica distinta no se oculta: se conserva como alternativa
+    y la página queda en WARNING. Los valores vacíos, inválidos o coincidentes
+    sí quedan confirmados porque el mapa solo aprende consensos fuertes.
+    """
+    corrected = 0
+    flagged = 0
+    for page in book:
+        field = _matricula_field(page)
+        if field is None:
+            continue
+        original = (field.value or "").strip()
+        canonical_conflict = bool(
+            original
+            and original != matricula
+            and _CANONICAL_MATRICULA_RE.fullmatch(original)
+        )
+        if original and original != matricula \
+                and original not in field.alternatives:
+            field.alternatives.append(original)
+        if original != matricula:
+            field.value = matricula
+            corrected += 1
+        field.confidence = max(field.confidence, _MIN_BOOK_AUTO_CONFIDENCE)
+        field.status = Status.WARNING if canonical_conflict else Status.OK
+        field.source = "book_registry"
+        field.inference_method = "stored_book_matricula"
+        field.votes = AUTO_INDEX_MIN_VOTES
+        if canonical_conflict:
+            field.comment = (
+                f"Stored book registration {matricula} conflicts with "
+                f"direct reading {original}; requires review"
+            )
+            page.airvault_discrepancy = True
+            flagged += 1
+        else:
+            field.comment = f"Confirmed from stored book registration: {matricula}"
+        _recompute_page_status(page)
+    return corrected, flagged
+
+
+def _mark_stored_conflict(
+    book: List[PageResult], stored: str, observed: str
+) -> int:
+    """Bloquea un libro cuando dos consensos fuertes se contradicen."""
+    marked = 0
+    for page in book:
+        field = _matricula_field(page)
+        if field is None:
+            continue
+        field.status = Status.WARNING
+        field.comment = (
+            f"{field.comment} | Stored book registration {stored} conflicts "
+            f"with current consensus {observed}; requires review"
+        ).strip(" |")
+        page.airvault_discrepancy = True
+        _recompute_page_status(page)
+        marked += 1
+    return marked
 
 
 def _recompute_page_status(page: PageResult) -> None:
@@ -333,22 +453,116 @@ def _recompute_summary(report: ValidationReport) -> None:
 
 def correct_matricula_by_book(
     reports: List[ValidationReport],
+    book_matriculas_path: Optional[Path] = None,
 ) -> Dict[str, int]:
     """Corrector global de matrículas (un avión por libro).
 
     Args:
         reports: Reportes ya validados (uno por PDF procesado).
+        book_matriculas_path: Mapa compacto aprendido en otras ejecuciones.
+            Si se omite, el corrector conserva el comportamiento aislado.
 
     Returns:
         Estadísticas: libros, corregidas, marcadas.
     """
     books = group_books(reports)
-    stats = {"books": len(books), "corrected": 0, "flagged": 0}
+    stored = (
+        _load_book_matriculas(Path(book_matriculas_path))
+        if book_matriculas_path is not None
+        else {}
+    )
+    stats = {
+        "books": len(books),
+        "corrected": 0,
+        "flagged": 0,
+        "reused": 0,
+        "registry_conflicts": 0,
+    }
     for book in books:
-        corrected, flagged = _correct_book(book)
+        key = _storage_key(book)
+        remembered = stored.get(key, "") if key is not None else ""
+        entries = [(page, _matricula_field(page)) for page in book]
+        entries = [(page, field) for page, field in entries if field is not None]
+        winner_info = _book_winner(entries) if entries else None
+        strong_current = bool(
+            winner_info
+            and winner_info[1] >= AUTO_INDEX_MIN_VOTES
+            and winner_info[2] >= _MIN_BOOK_AUTO_CONFIDENCE
+        )
+        if remembered and winner_info and winner_info[0] != remembered \
+                and strong_current:
+            corrected, flagged = _correct_book(book)
+            conflict_count = _mark_stored_conflict(
+                book, remembered, winner_info[0]
+            )
+            flagged += conflict_count
+            stats["registry_conflicts"] += 1
+        elif remembered:
+            corrected, flagged = _apply_stored_matricula(book, remembered)
+            stats["reused"] += 1
+        else:
+            corrected, flagged = _correct_book(book)
         stats["corrected"] += corrected
         stats["flagged"] += flagged
     for report in reports:
         _recompute_summary(report)
     logger.info(f"Corrector de matrículas: {stats}")
     return stats
+
+
+def learn_book_matriculas(
+    reports: List[ValidationReport], path: Path
+) -> int:
+    """Guarda asociaciones fuertes libro→matrícula para otras ejecuciones.
+
+    Solo aprende cuando dos páginas físicas independientes respaldan la
+    lectura con la confianza normal del corrector y el resultado final no
+    quedó en WARNING. Nunca reemplaza una asociación previa contradictoria:
+    ese caso requiere revisión humana.
+
+    El archivo contiene exclusivamente pares como ``"21473A":"HP-1534CMP"``.
+    Incluso diez mil libros ocupan solo unos cientos de kilobytes.
+    """
+    path = Path(path)
+    stored = _load_book_matriculas(path)
+    learned = 0
+    for book in group_books(reports):
+        key = _storage_key(book)
+        if key is None:
+            continue
+        entries = [(page, _matricula_field(page)) for page in book]
+        entries = [(page, field) for page, field in entries if field is not None]
+        winner_info = _book_winner(entries) if entries else None
+        if winner_info is None:
+            continue
+        winner, count, confidence = winner_info
+        if (
+            count < AUTO_INDEX_MIN_VOTES
+            or confidence < _MIN_BOOK_AUTO_CONFIDENCE
+            or not any(
+                field.value == winner and field.status is Status.OK
+                for _page, field in entries
+            )
+        ):
+            continue
+        previous = stored.get(key)
+        if previous is not None and previous != winner:
+            logger.warning(
+                f"No se reemplaza {key}={previous}: la ejecución actual "
+                f"propone {winner}"
+            )
+            continue
+        if previous is None:
+            stored[key] = winner
+            learned += 1
+    if learned:
+        try:
+            _save_book_matriculas(path, stored)
+        except OSError as exc:
+            logger.warning(f"No se pudo guardar el mapa de libros {path}: {exc}")
+            return 0
+        logger.info(
+            f"Mapa de libros: {learned} asociación(es) nueva(s), "
+            f"{len(stored)} total, {path.stat().st_size} bytes"
+        )
+    return learned

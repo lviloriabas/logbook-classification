@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence
 
 from app.airvault.config import (
+    CAMPOS_OBLIGATORIOS,
     CAMPO_AUDIT_STATUS,
     CAMPO_BATCH_NAME,
     CAMPO_DESCRIPCION,
@@ -23,6 +24,7 @@ from app.airvault.config import (
     CAMPO_LESSOR,
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
+    nombre_campo,
 )
 from app.airvault.fechas import fechas_inferidas
 from app.airvault.model import Registro
@@ -146,6 +148,46 @@ def leer_csv_corrida(path: Path | str) -> List[dict]:
     ruta = Path(path)
     with ruta.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def obligatorios_vacios_por_pagina(
+    filas: Iterable[Mapping[str, str]],
+    resolutor: ResolutorFlota | None = None,
+) -> Dict[tuple[str, int], tuple[str, ...]]:
+    """Campos que dejarían amarilla cada página usando solo el CSV local.
+
+    Recorre también las filas completamente vacías, que
+    :func:`registros_desde_csv` omite al preparar un batch antiguo. La
+    división de la entrega necesita conservarlas en ``REVISAR`` y saber que
+    no son páginas completas solo porque AirVault todavía no tenga índices.
+
+    Las fechas se infieren con el CSV entero por la misma ruta usada al
+    construir el manifiesto. Por eso una fecha deducible no manda la página
+    a revisión, pero una ``End Date`` que realmente quedaría vacía sí.
+    """
+    filas = list(filas)
+    inferidas = fechas_inferidas(filas)
+    resolutor = resolutor or ResolutorFlota()
+    faltantes: Dict[tuple[str, int], tuple[str, ...]] = {}
+    for seq, fila in enumerate(filas, start=1):
+        archivo = str(fila.get("file", "")).strip()
+        try:
+            pagina = int(str(fila.get("page", "")).strip())
+        except (TypeError, ValueError):
+            continue
+        registro = _registro_de_fila(seq, fila, resolutor, inferidas)
+        # Doc Type y Audit Status son constantes no vacías aquí. Los demás
+        # valores salen de la fila y del resolutor local, igual que durante
+        # la preparación real del manifiesto.
+        valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+        vacios = tuple(
+            nombre_campo(campo)
+            for campo in CAMPOS_OBLIGATORIOS
+            if not str(valores.get(campo, "")).strip()
+        )
+        if vacios:
+            faltantes[(archivo, pagina)] = vacios
+    return faltantes
 
 
 def registros_desde_csv(

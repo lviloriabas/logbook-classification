@@ -255,6 +255,10 @@ class SesionAirVault:
         self._tokens: Dict[str, str] = {}
         # Para no volver a entrar dentro de la propia renovacion.
         self._renovando = False
+        # El aviso de la apertura inicial tambien sirve si AirVault obliga a
+        # entrar otra vez a mitad del trabajo. Sin conservarlo, Edge aparecia
+        # de repente y la bitacora seguia mostrando la peticion anterior.
+        self._avisar_sesion: Optional[Callable[[str], None]] = None
         # Inyectable para que las pruebas no esperen de verdad.
         self.dormir = time.sleep
 
@@ -284,6 +288,7 @@ class SesionAirVault:
         paralela._origen = self._origen
         paralela._perfil = self._perfil
         paralela._tokens = dict(self._tokens)
+        paralela._avisar_sesion = self._avisar_sesion
         paralela.dormir = self.dormir
         return paralela
 
@@ -340,6 +345,8 @@ class SesionAirVault:
         """Toma la sesion del navegador que abre el propio programa."""
         from app.airvault import navegador
 
+        if avisar is not None:
+            self._avisar_sesion = avisar
         if forzar_login:
             # Las cookies viejas siguen en el tarro y taparian a las nuevas:
             # ``requests`` manda las dos y AirVault se queda con la primera.
@@ -397,7 +404,9 @@ class SesionAirVault:
         alguien copiara una cookie a mano.
         """
         return self.usar_navegador(
-            getattr(self, "_perfil", None), avisar, forzar_login=True
+            getattr(self, "_perfil", None),
+            avisar or self._avisar_sesion,
+            forzar_login=True,
         )
 
     def iniciar_sesion(self, credenciales: Credenciales) -> "SesionAirVault":
@@ -555,9 +564,14 @@ class SesionAirVault:
         intentos = max(1, self.config.reintentos)
         escribe = metodo.upper() != "GET"
         propias = dict(extra.pop("headers", None) or {})
-        renovada = False
+        # Renovar la autenticacion no consume uno de los reintentos de red.
+        # Con ``reintentos=1`` la version anterior renovaba las cookies y
+        # terminaba el bucle sin llegar a repetir la peticion que habia
+        # descubierto la caducidad.
+        renovaciones = 0
         ultimo = ""
-        for intento in range(1, intentos + 1):
+        intento = 1
+        while intento <= intentos:
             cabeceras = dict(propias)
             if escribe:
                 # Solo lo que escribe necesita el token; pedirlo para cada
@@ -581,15 +595,21 @@ class SesionAirVault:
             except requests.RequestException as exc:
                 ultimo = f"no se pudo conectar ({exc})"
             else:
-                if (not renovada and self._caduco(respuesta)
-                        and self._renovar_en_silencio()):
-                    # La sesion se cayo a mitad del trabajo. El perfil de
-                    # Edge la renueva sin ventana —vuelve a pasar por el
-                    # enlace federado y Microsoft la reconoce—, asi que se
-                    # rehace y se repite la peticion en vez de tirar un batch
-                    # de cuatrocientas paginas por una espera larga.
-                    renovada = True
-                    continue
+                if self._caduco(respuesta):
+                    if renovaciones == 0 and self._renovar_en_silencio():
+                        # Primero se deja que el perfil rehaga el acceso sin
+                        # intervencion. Se repite esta misma peticion, no el
+                        # batch entero ni el paso de la interfaz.
+                        renovaciones = 1
+                        continue
+                    if renovaciones == 1:
+                        # Si AirVault vuelve a pedir acceso aun con las
+                        # cookies renovadas, se descarta la sesion guardada y
+                        # se abre Edge para entrar. Al terminar, la operacion
+                        # sigue desde la peticion que quedo pendiente.
+                        self.renovar_en_navegador()
+                        renovaciones = 2
+                        continue
                 if respuesta.status_code not in ESTADOS_TRANSITORIOS:
                     return respuesta
                 ultimo = (
@@ -607,6 +627,7 @@ class SesionAirVault:
             )
             if intento < intentos:
                 self.dormir(self.config.espera_reintento_s * intento)
+            intento += 1
         raise ErrorDeConexion(
             f"No se pudo completar {ruta} tras {intentos} intentos: "
             f"{ultimo}.{_pista_de(ruta)}"
@@ -696,7 +717,7 @@ class SesionAirVault:
                 "AirVault pidio acceso a mitad del trabajo; se vuelve a "
                 "tomar la sesion del perfil de Edge"
             )
-            self.usar_navegador(self._perfil)
+            self.usar_navegador(self._perfil, self._avisar_sesion)
         except Exception as exc:  # noqa: BLE001 - se sigue con lo que habia
             logger.info("No se pudo renovar la sesion sola: {}", exc)
             return False

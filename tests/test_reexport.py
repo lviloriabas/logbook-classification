@@ -4,6 +4,7 @@ anterior)."""
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,7 +21,9 @@ TEMPLATE = (
 
 
 def _page(pn: int, log, mat) -> PageResult:
-    page = PageResult(page_number=pn)
+    # Estas pruebas ejercitan el re-export, no la ruta de datos incompletos:
+    # la fila debe tener todos los obligatorios de AirVault.
+    page = PageResult(page_number=pn, date="2026/08/23")
     if log is not None:
         page.add_field(FieldResult(page_number=pn, field_id="log_number",
                                    field_type="ocr", value=log,
@@ -37,6 +40,17 @@ def _reporte(name: str, *pages: PageResult) -> ValidationReport:
                             pages=list(pages))
 
 
+def _firma(page: PageResult, field_id: str, value: str, confidence: float) -> None:
+    page.add_field(FieldResult(
+        page_number=page.page_number,
+        field_id=field_id,
+        field_type="signature",
+        value=value,
+        confidence=confidence,
+        status="OK",
+    ))
+
+
 class TestReexport(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -48,7 +62,9 @@ class TestReexport(unittest.TestCase):
                      _page(3, "2271665", "HP-1538CMP")),
         ]
 
-    def _options(self, root: Path, separar_por=(), run_dir=None) -> OutputOptions:
+    def _options(
+        self, root: Path, separar_por=(), run_dir=None, skip_pdfs=False
+    ) -> OutputOptions:
         return OutputOptions(
             template=self.template,
             output_root=root,
@@ -56,6 +72,7 @@ class TestReexport(unittest.TestCase):
             crop_padding=0.01,
             separar_por=tuple(separar_por),
             run_dir=run_dir,
+            skip_pdfs=skip_pdfs,
         )
 
     def test_reexport_misma_carpeta(self):
@@ -162,6 +179,79 @@ class TestReexport(unittest.TestCase):
             csv_segundo = (segundo / "datos" / f"{nombre}.CSV").read_bytes()
             self.assertEqual(segundo, primer)
             self.assertEqual(csv_primero, csv_segundo)
+
+    def test_la_division_manda_a_revisar_lo_que_quedaria_amarillo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            incompleta = _page(1, "2147337", "HP-1534CMP")
+            incompleta.date = None
+            run = write_outputs(
+                [_reporte("test.pdf", incompleta)],
+                self._options(Path(tmp)),
+            )
+
+            indice = json.loads(
+                (
+                    run / "datos" / f"{run.name}_paginas.json"
+                ).read_text(encoding="utf-8")
+            )
+            assert len(indice["partes"]) == 1
+            assert indice["partes"][0]["revisar"] is True
+
+    def test_una_fecha_inferible_no_sale_del_batch_automatico(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = [
+                _page(1, "2287310", "HP-1534CMP"),
+                _page(2, "2287311", "HP-1534CMP"),
+                _page(3, "2287312", "HP-1534CMP"),
+            ]
+            pages[0].date = "2026/08/03"
+            pages[1].date = None
+            pages[2].date = "2026/08/28"
+            run = write_outputs(
+                [_reporte("test.pdf", *pages)],
+                self._options(Path(tmp)),
+            )
+
+            indice = json.loads(
+                (
+                    run / "datos" / f"{run.name}_paginas.json"
+                ).read_text(encoding="utf-8")
+            )
+            assert [parte["revisar"] for parte in indice["partes"]] == [False]
+
+    def test_una_advertencia_con_indices_completos_va_al_batch_normal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            page = _page(1, "2147337", "HP-1534CMP")
+            matricula = next(
+                field for field in page.fields
+                if field.field_id == "matricula"
+            )
+            from app.models.schemas import Status
+
+            matricula.status = Status.WARNING
+            matricula.confidence = 0.49
+
+            write_outputs(
+                [_reporte("test.pdf", page)],
+                self._options(Path(tmp), skip_pdfs=True),
+            )
+
+            assert page.airvault_review is False
+
+    def test_una_discrepancia_confirmada_va_al_batch_revisar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            page = _page(1, "2147337", "HP-1534CMP")
+            _firma(page, "technician_license", "false", 0.99)
+            _firma(page, "pilot_signature", "true", 0.99)
+            _firma(page, "captain_signature", "false", 0.99)
+            _firma(page, "captain_license", "true", 0.99)
+
+            write_outputs(
+                [_reporte("test.pdf", page)],
+                self._options(Path(tmp), skip_pdfs=True),
+            )
+
+            assert page.airvault_review is True
 
 
 if __name__ == "__main__":

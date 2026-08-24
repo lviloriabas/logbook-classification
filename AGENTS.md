@@ -4,7 +4,7 @@
 
 ## Git
 
-- Cierra cada trabajo con `git commit` y `git push` en la rama activa; la autorización es permanente. Si estás en `main`, crea antes otra rama.
+- Haz `git commit` y `git push` solo para cambios grandes o funcionalidades completas; no los hagas por cada corrección mínima. Si estás en `main`, crea antes otra rama.
 - Usa la identidad del usuario. No agregues firmas, coautorías ni marcas como `Co-Authored-By` o `Generated with`.
 - Imita el historial: español sin acentos; asunto presente, en tercera persona y descriptivo, por ejemplo `Cuenta paginas terminadas del batch, no la ultima que entrega el pool`; cuerpo sobre motivo y consecuencias, no sobre archivos.
 - Múltiples agentes pueden trabajar simultáneamente: antes de commitear, verifica que tu rama esté al día (`git pull`), que no haya conflictos con el trabajo de otros, y que hayas aislado tus cambios sin tocar archivos que otros estén editando. Si dos agentes editaron lo mismo, coordina un merge manual sin perder trabajo de ninguno.
