@@ -1,7 +1,7 @@
 """Supr quita de la ejecución las páginas seleccionadas en el visor.
 
-Una bitácora que no debía entrar —una hoja repetida, una página en blanco
-que el escáner metió de más— se quita de la ejecución sin repetir el OCR: se
+Una bitácora que no debía entrar (una hoja repetida, una página en blanco
+que el escáner metió de más) se quita de la ejecución sin repetir el OCR: se
 reescriben el CSV, el CSV completo, el JSON y las estadísticas sin ella. Los
 PDF ya entregados no se tocan aquí; se rehacen al exportar.
 """

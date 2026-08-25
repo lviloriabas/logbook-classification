@@ -520,8 +520,8 @@ class EntradaPdf:
     """Una página del PDF de entrega: una bitácora o un separador.
 
     El PDF no es solo las bitácoras: entre ellas van páginas divisorias que
-    el CSV no tiene. Quien después empareje ese PDF con el CSV —el indexado
-    en AirVault— necesita saber en qué posiciones están, porque si las
+    el CSV no tiene. Quien después empareje ese PDF con el CSV (el indexado
+    en AirVault) necesita saber en qué posiciones están, porque si las
     cuenta como bitácoras escribe cada dato una página más allá de donde va.
     """
 
@@ -791,7 +791,7 @@ def escribir_entrega(
     batch de cuatrocientas quedan bloqueadas donde nadie las encuentra.
 
     Devuelve el nombre definitivo de cada archivo porque solo se conoce
-    después de escribir —uno que ya existía obliga a añadir sufijo— y el
+    después de escribir (uno que ya existía obliga a añadir sufijo) y el
     índice de páginas tiene que nombrar el archivo real.
     """
     del dpi  # las páginas se copian sin rasterizar

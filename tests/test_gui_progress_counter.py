@@ -31,11 +31,11 @@ def test_the_bar_and_the_text_count_the_pages_of_the_batch():
         window._total_global = 300
         window._last_done = 0
         # Lo que emite el pipeline del segundo archivo: 52 de sus 100.
-        window._on_progress(152, 100, f"Archivo 2/3: b.pdf — {PAGES_STAGE}")
+        window._on_progress(152, 100, f"Archivo 2/3: b.pdf - {PAGES_STAGE}")
         assert window.progress.maximum() == 300
         assert window.progress.value() == 152
         assert window.status_label.text() == (
-            f"Archivo 2/3: b.pdf — {PAGES_STAGE} 152/300"
+            f"Archivo 2/3: b.pdf - {PAGES_STAGE} 152/300"
         )
     finally:
         window._teardown()

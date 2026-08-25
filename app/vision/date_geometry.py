@@ -2,8 +2,8 @@
 
 La plantilla define las casillas day/month/year en coordenadas de la página
 de referencia. La alineación global (similitud) deja residuos locales de
-unos pocos píxeles —escaneos con deformación no uniforme, encuadernación,
-márgenes distintos— que bastan para partir un dígito contra un separador
+unos pocos píxeles (escaneos con deformación no uniforme, encuadernación,
+márgenes distintos) que bastan para partir un dígito contra un separador
 impreso o para que el OCR lea el separador como un '1'.
 
 Este módulo ajusta la geometría por página: detecta las líneas impresas de

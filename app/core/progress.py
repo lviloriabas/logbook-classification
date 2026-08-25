@@ -6,7 +6,7 @@ quién pone las cifras.
 El total era el del documento abierto, no el del batch: en una ejecución de tres
 bitácoras de 100 páginas, la página 52 de la segunda se anunciaba como "52 de
 100" cuando el usuario está mirando la 152 de 300. El Pipeline no puede
-arreglarlo por su cuenta —solo ve el PDF que tiene abierto—, así que la etapa
+arreglarlo por su cuenta (solo ve el PDF que tiene abierto), así que la etapa
 de lectura de páginas viaja sin cifras (``PAGES_STAGE``) y el contador lo pone
 quien conoce el par global, que es la misma capa que dibuja la barra. Así el
 texto y la barra no pueden contar cosas distintas.

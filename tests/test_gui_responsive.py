@@ -4,8 +4,8 @@ La carpeta se copia a portátiles de 1366x768 y a monitores 1080p con el
 escalado de Windows al 125% o al 150%, que dejan un escritorio lógico de
 1536x864 o de 1280x720. La ventana principal pedía 1280x800 y su mínimo real
 era 1447x886: en todas esas pantallas menos en un 1080p sin escalar se abría
-más grande que el escritorio y la franja de abajo —la consola y el panel de
-avance— quedaba fuera, sin forma de alcanzarla.
+más grande que el escritorio y la franja de abajo (la consola y el panel de
+avance) quedaba fuera, sin forma de alcanzarla.
 
 Estas pruebas fijan las dos condiciones que lo arreglan: que ninguna ventana
 se abra más grande que el área de trabajo, y que con ese tamaño no le sobre
@@ -67,8 +67,8 @@ def _app() -> QApplication:
 
     Los anchos mínimos de la ventana salen de medir texto. La plataforma sin
     pantalla no resuelve ninguna familia real y devuelve medidas que no son
-    las del equipo del usuario, así que se carga Segoe UI —la que declara la
-    hoja de estilo— desde la carpeta de fuentes del sistema.
+    las del equipo del usuario, así que se carga Segoe UI (la que declara la
+    hoja de estilo) desde la carpeta de fuentes del sistema.
     """
     app = QApplication.instance() or QApplication([])
     if getattr(app, "_fuente_real", False):
@@ -269,7 +269,7 @@ def test_un_mensaje_largo_no_ensancha_la_ventana():
             ventana.show()
             antes = ventana.minimumSizeHint().width()
             ventana.status_label.setText(
-                "Archivo 12/40: bitacora-YV1234-enero-2026-revisada.pdf — "
+                "Archivo 12/40: bitacora-YV1234-enero-2026-revisada.pdf - "
                 "reconociendo páginas 1234/5678 con la plantilla activa"
             )
             assert ventana.minimumSizeHint().width() <= antes

@@ -180,10 +180,10 @@ def test_batch_message_counts_the_pages_of_the_whole_run(tmp_path):
     assert counters == sorted(counters)
     assert counters[-1] == 29
     # Cada etapa dice de qué archivo del batch está hablando.
-    assert stages[0][2].startswith("Archivo 1/2: a.pdf — ")
-    assert stages[-1][2].startswith("Archivo 2/2: b.pdf — ")
+    assert stages[0][2].startswith("Archivo 1/2: a.pdf - ")
+    assert stages[-1][2].startswith("Archivo 2/2: b.pdf - ")
     assert with_page_counter(*stages[-1]) == (
-        "Archivo 2/2: b.pdf — Procesando páginas 29/30"
+        "Archivo 2/2: b.pdf - Procesando páginas 29/30"
     )
 
 

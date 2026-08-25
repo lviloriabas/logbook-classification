@@ -3,9 +3,9 @@
 Las dos superficies escriben sus salidas con ``write_outputs``, así que la
 paridad se reduce a una pregunta comprobable: ¿las dos rellenan las mismas
 opciones? Cuando cada una escribía sus archivos por su cuenta, la respuesta
-se fue separando sin que nada avisara —el CSV mínimo de la línea de comandos
+se fue separando sin que nada avisara (el CSV mínimo de la línea de comandos
 salía con todas las columnas, sus stats nombraban PDFs que no existían y la
-lista de aviones no se consultaba nunca—. Esta prueba es la alarma.
+lista de aviones no se consultaba nunca). Esta prueba es la alarma.
 """
 
 from __future__ import annotations

@@ -113,8 +113,8 @@ class ColumnSortController(QObject):
     def restore(self, column: int, descending: bool) -> None:
         """Vuelve a ordenar por ``column`` sin pasar por el ciclo de clics.
 
-        La usa quien rellena la tabla otra vez con los mismos datos —al
-        borrar páginas, por ejemplo— para devolverla al criterio que ya
+        La usa quien rellena la tabla otra vez con los mismos datos (al
+        borrar páginas, por ejemplo) para devolverla al criterio que ya
         estaba puesto. Una columna fuera de rango deja la tabla como está,
         que es lo que corresponde cuando el CSV nuevo no la trae.
         """

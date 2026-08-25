@@ -592,8 +592,8 @@ def run_dir_for_csv(csv_path: Path) -> Path | None:
 def reports_from_companion(csv_path: Path) -> list:
     """Reportes tal como los guardó la ejecución, sin buscar sus PDF.
 
-    Es lo que hace falta para reescribir los datos de la ejecución —CSV, JSON
-    y estadísticas—, que salen del propio reporte y no de las páginas. Buscar
+    Es lo que hace falta para reescribir los datos de la ejecución (CSV, JSON
+    y estadísticas), que salen del propio reporte y no de las páginas. Buscar
     los PDF aquí sería peor que inútil: descartar el reporte cuyo archivo ya
     no está borraría de la ejecución todo lo que se procesó desde él.
     """
@@ -773,7 +773,7 @@ class EmbeddedPdfViewer(QFrame):
         Los mínimos del panel entran en el cálculo del alto de la ventana, y
         cambiarlos con el panel ya montado deja el mínimo anterior guardado en
         el layout hasta el primer dibujado: la ventana se abría con el alto
-        del panel holgado —cien píxeles de más— en una pantalla que ya se
+        del panel holgado (cien píxeles de más) en una pantalla que ya se
         había medido como baja.
         """
         super().__init__(parent)
@@ -1351,8 +1351,8 @@ class CsvViewerWindow(QMainWindow):
         )
         self._row_pdf_paths: list[Path | None] = []
         self._pdf_search_folders: list[Path] = []
-        # El CSV mínimo —el que se abre por primera vez, según el orden de
-        # find_csv_files— no trae columnas ``_status``: se recorta al
+        # El CSV mínimo (el que se abre por primera vez, según el orden de
+        # find_csv_files) no trae columnas ``_status``: se recorta al
         # exportar. El color de las celdas sale entonces de aquí, el JSON
         # compañero, indexado igual que las filas del CSV.
         self._field_statuses: dict[tuple[str, str], dict[str, str]] = {}
@@ -1825,7 +1825,7 @@ class CsvViewerWindow(QMainWindow):
         self.search_context.setText(_SEARCH_HINT)
         self._sync_search_controls()
         self._sync_export_button()
-        self.setWindowTitle(f"Visor de CSV e historial — {path.name}")
+        self.setWindowTitle(f"Visor de CSV e historial - {path.name}")
 
     @staticmethod
     def _load_field_statuses(path: Path) -> dict[tuple[str, str], dict[str, str]]:
@@ -2153,8 +2153,8 @@ class CsvViewerWindow(QMainWindow):
     def _depurar_paginas(self) -> None:
         """Quita de la ejecución las páginas repetidas o en blanco.
 
-        Escribe lo mismo que el borrado por selección —CSV, JSON y
-        estadísticas— y por lo mismo no rehace los PDF: la entrega se compone
+        Escribe lo mismo que el borrado por selección (CSV, JSON y
+        estadísticas) y por lo mismo no rehace los PDF: la entrega se compone
         al exportar, cuando ya no queda nada más que quitar.
         """
         if self._outputs_worker is not None and self._outputs_worker.isRunning():
@@ -2203,8 +2203,8 @@ class CsvViewerWindow(QMainWindow):
     def _delete_selected_pages(self) -> None:
         """Quita de la ejecución las páginas seleccionadas en la tabla.
 
-        Se reescriben los datos de la ejecución —CSV mínimo, CSV completo, JSON
-        y estadísticas— sin esas páginas, que es lo que consulta el visor y
+        Se reescriben los datos de la ejecución (CSV mínimo, CSV completo, JSON
+        y estadísticas) sin esas páginas, que es lo que consulta el visor y
         de donde sale cualquier exportación posterior. Los PDF ya entregados
         no se tocan: rehacerlos aquí dejaría dos entregas distintas de la
         misma ejecución en la carpeta, así que se rehacen al exportar.
@@ -2356,7 +2356,7 @@ class CsvViewerWindow(QMainWindow):
         """Escribe las salidas en su propio hilo, venga de donde venga.
 
         Exportar y eliminar páginas escriben la misma ejecución con la misma
-        función; solo cambian las opciones —la eliminación no rehace PDFs— y
+        función; solo cambian las opciones (la eliminación no rehace PDFs) y
         el aviso que queda en la franja de estado.
         """
         from app.gui.worker import OutputsWorker
@@ -2489,7 +2489,7 @@ class CsvViewerWindow(QMainWindow):
         """Columnas donde busca el texto: las que la tabla está mostrando.
 
         Así lo que se busca es lo que se ve. En la vista resumida eso son los
-        campos de la bitácora —número, matrícula, fecha, archivo, página— y
+        campos de la bitácora (número, matrícula, fecha, archivo, página) y
         al pasar al CSV completo entran también la confianza, el estado y el
         comentario de cada campo, que es cuando se quiere buscar por ellos.
         """

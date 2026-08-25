@@ -4,7 +4,7 @@ Los controles anteriores ("primeros N archivos" y "primeras N páginas de
 cada archivo") obligaban a razonar en dos ejes a la vez: para ver 40 páginas
 había que adivinar cuántos archivos y cuántas páginas de cada uno, y el
 resultado dependía del tamaño de cada bitácora. Aquí el batch se numera de
-corrido —igual que ya lo navega el visor de la ventana principal— y un solo
+corrido (igual que ya lo navega el visor de la ventana principal) y un solo
 rango 1-based decide qué páginas entran, sin importar en cuántos archivos
 caigan.
 

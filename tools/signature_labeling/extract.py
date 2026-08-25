@@ -3,8 +3,8 @@
 
 Los recortes tienen que ser *los mismos* que ve el detector, o la calibración
 mediría otra cosa: por eso este script no reimplementa la geometría, sino que
-repite la del pipeline —render al DPI del documento, corrección de
-inclinación, alineación con las anclas estabilizadas del batch— y luego recorta
+repite la del pipeline (render al DPI del documento, corrección de
+inclinación, alineación con las anclas estabilizadas del batch) y luego recorta
 con un margen más ancho que el del detector, dejando anotado en el manifiesto
 dónde queda el campo exacto dentro del PNG.
 

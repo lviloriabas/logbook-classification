@@ -98,8 +98,8 @@ def verify_reports_against_fleet(
     ``alternatives`` y la página sigue en WARNING para que la reclasificación
     sea auditable.
 
-    Cuando no hay un avión más parecido —dos quedan a la misma distancia, o
-    la lectura ni siquiera tiene formato de matrícula— la página se queda sin
+    Cuando no hay un avión más parecido (dos quedan a la misma distancia, o
+    la lectura ni siquiera tiene formato de matrícula) la página se queda sin
     matrícula. Antes conservaba la lectura, y esa lectura terminaba abriendo
     en el PDF y en las estadísticas una bitácora de un avión que no existe;
     ahora cae en «Revisar», que es donde una persona decide de qué avión era.

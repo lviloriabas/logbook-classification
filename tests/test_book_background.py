@@ -3,7 +3,7 @@
 El fondo del libro es la mediana de un campo a lo largo de las páginas de la
 bitácora: el formulario vacío. Lo que se comprueba aquí es que esa mediana
 ignora la escritura de cada página, que la franja de duda se aprende de las
-páginas ya resueltas, y —lo más importante— que la segunda opinión **solo se
+páginas ya resueltas, y (lo más importante) que la segunda opinión **solo se
 pronuncia cuando tiene evidencia**: una firma incierta que se convierte en un
 veredicto equivocado es el único cambio que empeoraría el sistema.
 """
@@ -353,8 +353,8 @@ class TestRevisionEnElPipeline(unittest.TestCase):
     def test_no_renderiza_nada_tras_una_cancelacion(self):
         """Cancelar tiene que notarse en el acto.
 
-        La revisión renderiza la muestra del libro entera —medido: 93 ms por
-        página a 200 DPI, 3 s solo la muestra— y corre después del bucle de
+        La revisión renderiza la muestra del libro entera (medido: 93 ms por
+        página a 200 DPI, 3 s solo la muestra) y corre después del bucle de
         páginas, así que sin esta guarda el botón Cancelar se quedaba varios
         segundos sin efecto aparente en cada archivo en vuelo.
         """

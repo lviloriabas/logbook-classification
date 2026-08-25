@@ -123,7 +123,7 @@ PERF_CACHE = SCRIPT_DIR / "output" / ".performance.json"
 _DEFAULT_MS_PER_PAGE = 2500.0  # costo nominal antes de la primera ejecución
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-# Celdas —no filas— por tick del QTimer. El costo de llenar la tabla es por
+# Celdas (no filas) por tick del QTimer. El costo de llenar la tabla es por
 # celda (medido: ~16 µs cada una), así que un presupuesto en filas escala con
 # el número de columnas: 400 filas del CSV completo son 34.000 celdas, medio
 # segundo de interfaz bloqueada por tick. Con un presupuesto en celdas cada
@@ -566,8 +566,8 @@ class MainWindow(QMainWindow):
         más de lo que el cuadro ya tenía. Así la ventana grande se dibuja
         exactamente igual que antes de que existiera todo esto.
 
-        ``stacked`` distingue los cuadros que apilan filas —a los que hay que
-        apretarles también la separación vertical— de los que llevan sus
+        ``stacked`` distingue los cuadros que apilan filas (a los que hay que
+        apretarles también la separación vertical) de los que llevan sus
         controles en una sola línea.
         """
         entry = (
@@ -785,8 +785,8 @@ class MainWindow(QMainWindow):
 
         Apilados ocupan más de la mitad del alto que da un portátil de
         1366x768 y no dejan sitio para la vista previa ni para la tabla.
-        Cuando el alto escasea y el ancho sobra —que es exactamente lo que
-        pasa en esas pantallas— «Entrada» y «Salidas» se ponen una al lado de
+        Cuando el alto escasea y el ancho sobra (que es exactamente lo que
+        pasa en esas pantallas) «Entrada» y «Salidas» se ponen una al lado de
         la otra y el bloque pasa a medir lo que mide el más alto de los dos.
 
         «Procesamiento» cruza entero por debajo en vez de ir en una columna:
@@ -1832,8 +1832,8 @@ class MainWindow(QMainWindow):
                 seen.add(key)
                 self._pdf_paths.append(p)
         self._refresh_input_summary()
-        # Leer la entrada se va a un hilo. Es una pasada sola —el DPI y el
-        # recuento de páginas salen del mismo handle— pero abre cada PDF, y
+        # Leer la entrada se va a un hilo. Es una pasada sola (el DPI y el
+        # recuento de páginas salen del mismo handle) pero abre cada PDF, y
         # hacerlo aquí era lo que dejaba la ventana en «no responde» nada más
         # aparecer y otra vez al elegir archivos. Mientras llega, la ventana
         # ya está en pie: se ven los nombres y la vista previa se pide igual,
@@ -2175,8 +2175,8 @@ class MainWindow(QMainWindow):
         """Bloquea hasta que la entrada esté leída y aplicada.
 
         La lectura es asíncrona a propósito: la ventana no espera por ella.
-        Quien sí necesita los números ya puestos —las pruebas, y cualquier
-        recorrido sin interfaz— llama aquí, que espera al hilo y deja que la
+        Quien sí necesita los números ya puestos (las pruebas, y cualquier
+        recorrido sin interfaz) llama aquí, que espera al hilo y deja que la
         señal se entregue antes de volver.
         """
         worker = self._input_scan_worker
@@ -2312,7 +2312,7 @@ class MainWindow(QMainWindow):
         if self._input_scanning:
             # Todavía no se sabe cuántas páginas trae cada archivo, así que
             # no hay tiempo que estimar. Se dice, en vez de dejar el hueco
-            # vacío o —peor— anunciar cero páginas.
+            # vacío o (peor) anunciar cero páginas.
             self.estimate_label.setText(
                 f"Leyendo {len(self._pdf_paths)} archivo(s) de la entrada…"
             )
@@ -3173,7 +3173,7 @@ class MainWindow(QMainWindow):
             # procesar los archivos restantes.
             self._clear_results_display()
             self.status_label.setText(
-                "Procesamiento cancelado — guardando resultados parciales…"
+                "Procesamiento cancelado: guardando resultados parciales…"
             )
             # El rango de páginas no se toca: para seguir donde se cortó hay
             # que ajustarlo a mano antes de volver a procesar.
@@ -3280,7 +3280,7 @@ class MainWindow(QMainWindow):
             logger.info(f"Ejecución depurada en: {output_dir}")
         elif self._last_run_cancelled:
             self.status_label.setText(
-                "Procesamiento cancelado — resultados parciales guardados "
+                "Procesamiento cancelado: resultados parciales guardados "
                 f"en {output_dir.name} (sin PDF)."
             )
             logger.info(f"Ejecución cancelada guardada (datos sin PDF) en: {output_dir}")
@@ -3474,7 +3474,7 @@ class MainWindow(QMainWindow):
     def _depurar_paginas(self) -> None:
         """Quita de la ejecución las páginas repetidas o en blanco.
 
-        Se reescriben los datos de la ejecución —CSV, JSON y estadísticas— sin
+        Se reescriben los datos de la ejecución (CSV, JSON y estadísticas) sin
         ellas, igual que en el visor de CSV. Los PDF no se rehacen aquí: son
         la entrega y se componen al exportar, cuando ya no queda nada más que
         quitar.
