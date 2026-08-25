@@ -1,6 +1,11 @@
 # Reglas del repositorio
 
 - **CSV:** no cambies la salida del reporte sin solicitud o autorización del usuario.
+- **Raya prohibida:** no escribas el guion largo (`—`, em dash) en ninguna parte:
+  ni comentarios, ni docstrings, ni textos de la interfaz, ni mensajes de commit,
+  ni documentación. Para un inciso usa paréntesis o comas; para introducir una
+  explicación, dos puntos; para separar dos datos en una línea de estado, un
+  guion normal.
 
 ## Git
 
