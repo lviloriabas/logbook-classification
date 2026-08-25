@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from PySide6.QtCore import Qt, QSignalBlocker, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListView,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -978,9 +979,159 @@ class AirVaultWindow(QDialog):
         )
         cabecera.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         tabla.setColumnWidth(1, ANCHO_MINIMO_NOMBRE_BATCH)
+        # La tabla es la cola de trabajo: cada fila se puede reintentar,
+        # indexar, cerrar o sacar de la cola sin tocar a las demas.
+        tabla.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        tabla.customContextMenuRequested.connect(self._menu_de_la_cola)
         self._ajustar_tabla(tabla)
         self.lotes = tabla
         return tabla
+
+    # ── la cola: cada fila por separado ────────────────────────────
+
+    def _menu_de_la_cola(self, punto) -> None:
+        """Abre el menú del batch sobre el que se hizo clic derecho."""
+        fila = self.lotes.rowAt(punto.y())
+        if fila < 0 or fila >= len(self._estados):
+            return
+        menu = self._acciones_de_la_cola(self._estados[fila])
+        menu.exec(self.lotes.viewport().mapToGlobal(punto))
+
+    def _acciones_de_la_cola(self, parte) -> QMenu:
+        """Lo que se puede hacer con un batch, y lo que no.
+
+        Cada acción es la misma que ya hace la ventana entera, acotada a
+        una fila: lo que no se puede hacer ahora sale desactivado en vez de
+        desaparecer, para que la fila diga siempre de qué es capaz.
+        """
+        from app.airvault.flujo import BUSCANDO, INDEXADO, SIN_SUBIR
+
+        trabajo = parte.trabajo
+        manifiesto = trabajo.manifiesto
+        libre = self.hilo() is None
+        cancelado = bool(getattr(manifiesto, "cancelado", False))
+        menu = QMenu(self)
+
+        subir = menu.addAction("Subir a AirVault ahora")
+        subir.setEnabled(
+            libre and not cancelado
+            and parte.estado in (SIN_SUBIR, BUSCANDO)
+        )
+        subir.triggered.connect(lambda: self._subir_una(parte))
+
+        comprobar = menu.addAction("Comprobar en AirVault")
+        comprobar.setEnabled(libre and not cancelado)
+        comprobar.triggered.connect(self._comprobar)
+
+        indexar = menu.addAction("Indexar ahora")
+        indexar.setEnabled(
+            libre and not cancelado and parte.se_puede_indexar
+            and str(trabajo.carpeta) in (self._estado.get("planes") or {})
+        )
+        indexar.triggered.connect(lambda: self._indexar_una(parte))
+
+        completar = menu.addAction("Completar el batch")
+        completar.setEnabled(
+            libre and not cancelado
+            and parte.estado == INDEXADO and not manifiesto.solo_subir
+        )
+        completar.triggered.connect(lambda: self._completar_una(parte))
+
+        menu.addSeparator()
+        if cancelado:
+            reanudar = menu.addAction("Reanudar en la cola")
+            reanudar.setEnabled(libre)
+            reanudar.triggered.connect(lambda: self._cancelar_una(parte, False))
+        else:
+            cancelar = menu.addAction("Cancelar en la cola")
+            cancelar.setEnabled(libre and not parte.se_acabo)
+            cancelar.triggered.connect(lambda: self._cancelar_una(parte, True))
+
+        menu.addSeparator()
+        copiar_nombre = menu.addAction("Copiar el nombre del batch")
+        copiar_nombre.setEnabled(bool(parte.nombre))
+        copiar_nombre.triggered.connect(
+            lambda: self._copiar_al_portapapeles(parte.nombre)
+        )
+        copiar_id = menu.addAction("Copiar el ID del batch")
+        copiar_id.setEnabled(bool(parte.batch_id))
+        copiar_id.triggered.connect(
+            lambda: self._copiar_al_portapapeles(parte.batch_id)
+        )
+        return menu
+
+    def _copiar_al_portapapeles(self, texto: str) -> None:
+        if not texto:
+            return
+        QGuiApplication.clipboard().setText(texto)
+        self._anotar(f"Copiado: {texto}")
+
+    def _subir_una(self, parte) -> None:
+        """Manda este batch a Quick Upload, esté como esté la espera.
+
+        Es una orden expresa, así que no pasa por la regla que decide sola
+        si una carga se dio por perdida: se olvida lo que el programa creía
+        haber subido y el archivo vuelve a la cola. Si el batch estaba
+        publicado de verdad, la búsqueda previa a la carga lo encuentra y
+        recupera su ID en vez de duplicarlo.
+        """
+        from app.airvault.flujo import BUSCANDO, reiniciar_subida
+
+        estado = self._base_del_estado()
+        if estado is None:
+            return
+        if parte.estado == BUSCANDO:
+            reiniciar_subida(parte.trabajo)
+        self._reenvios_del_ciclo.clear()
+        estado["pendientes_subida"] = [parte.trabajo]
+        estado["indexar_al_encontrar"] = self.auto_indexar_check.isChecked()
+        estado["completar"] = self.completar_check.isChecked()
+        self._anotar(f"Se vuelve a subir {parte.nombre}")
+        self._lanzar("subir_pendientes", estado)
+
+    def _indexar_una(self, parte) -> None:
+        """Escribe solo este batch, con el plan que ya se calculó."""
+        estado = self._base_del_estado()
+        if estado is None:
+            return
+        estado["listos"] = [parte.trabajo]
+        estado["completar"] = self.completar_check.isChecked()
+        self._anotar(f"Se indexa {parte.nombre}")
+        self._lanzar("indexar", estado)
+
+    def _completar_una(self, parte) -> None:
+        """Cierra solo este batch, sin volver a escribir sus páginas."""
+        estado = self._base_del_estado()
+        if estado is None:
+            return
+        estado["por_completar"] = [parte.trabajo]
+        self._anotar(f"Se cierra {parte.nombre}")
+        self._lanzar("completar", estado)
+
+    def _cancelar_una(self, parte, cancelar: bool) -> None:
+        """Saca este batch de la cola, o lo devuelve a ella.
+
+        No deshace nada de lo hecho: un batch cancelado conserva su ID y lo
+        que ya se le escribió. Solo deja de subirse, de buscarse y de
+        indexarse hasta que alguien lo reanude.
+        """
+        from app.airvault.flujo import estado_local
+
+        trabajo = parte.trabajo
+        trabajo.manifiesto.cancelado = bool(cancelar)
+        trabajo.guardar()
+        self._estados = [
+            estado_local(otra.trabajo) if otra.trabajo is trabajo else otra
+            for otra in self._estados
+        ]
+        self._pintar_lotes()
+        self._ajustar_vigilancia()
+        self._anotar(
+            f"{parte.nombre}: {'cancelado en' if cancelar else 'reanudado en'} "
+            "la cola"
+        )
 
     @staticmethod
     def _ajustar_tabla(tabla: QTableWidget) -> None:
@@ -1577,7 +1728,7 @@ class AirVaultWindow(QDialog):
     def _pintar_lotes(self) -> None:
         """Vuelca en la tabla en qué va cada batch."""
         from app.airvault.flujo import (
-            AUTOCOMPLETADO, COMPLETADO, INDEXADO, SIN_SUBIR,
+            AUTOCOMPLETADO, CANCELADO, COMPLETADO, INDEXADO, SIN_SUBIR,
         )
 
         tabla = self.lotes
@@ -1607,10 +1758,11 @@ class AirVaultWindow(QDialog):
                     )
                 if ya_indexado:
                     item.setForeground(QColor(COLOR_INDEXADO))
-                elif parte.estado == SIN_SUBIR:
-                    # Gris significa una sola cosa: el archivo aun no fue
-                    # aceptado por Quick Upload. Desde que se sube queda en
-                    # blanco, incluso mientras AirVault lo procesa.
+                elif parte.estado in (SIN_SUBIR, CANCELADO):
+                    # Gris es lo que la cola no va a mover por su cuenta:
+                    # el archivo que Quick Upload aun no acepto y el batch
+                    # que alguien saco de la cola. Desde que se sube queda
+                    # en blanco, incluso mientras AirVault lo procesa.
                     item.setForeground(Qt.GlobalColor.gray)
                 tabla.setItem(fila, columna, item)
         ancho_nombre = min(

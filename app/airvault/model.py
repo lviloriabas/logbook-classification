@@ -145,6 +145,9 @@ class Manifiesto(BaseModel):
     # esta carga. Una sola basta para darla por no publicada: ya no queda
     # nombre bajo el que pueda estar.
     busquedas_amplias_sin_hallar: int = 0
+    # Se saco de la cola a mano. No se sube, no se busca y no se indexa
+    # hasta que alguien lo reanude; lo que ya este hecho se conserva.
+    cancelado: bool = False
     # El propio programa cerro el batch al terminar de indexarlo. Distingue
     # lo que quedo terminado sin que nadie interviniera de lo que ya estaba
     # cerrado en AirVault cuando se encontro.
