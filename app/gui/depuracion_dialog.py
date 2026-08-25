@@ -25,6 +25,14 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.responsive import fit_to_screen
+from app.gui.widgets import (
+    TABLE_BASE_BG,
+    TABLE_GRID,
+    TABLE_HEADER_BG,
+    TABLE_RADIUS,
+    TABLE_SELECTION_BG,
+    TABLE_TEXT,
+)
 from app.validation.depuracion import (
     PaginaDepurable,
     ResumenDepuracion,
@@ -42,6 +50,27 @@ DEPURAR_TOOLTIP = (
 # La clave de cada página viaja en el propio elemento del árbol: es lo que
 # después se le pasa a ``depurar_claves`` y no depende de en qué fila quedó.
 _CLAVE = Qt.ItemDataRole.UserRole
+
+# Las listas del cuadro son tablas de datos como las de las dos ventanas, y
+# tienen que verse igual: los mismos grises y el mismo radio de 6 px. La hoja
+# compartida solo nombra QTableView y QTableWidget, así que el árbol se queda
+# con el estilo nativo (esquinas en pico y colores del sistema) si no se le
+# repiten aquí los mismos valores.
+_ARBOL_QSS = (
+    "QTreeWidget {"
+    f" background-color: {TABLE_BASE_BG};"
+    f" color: {TABLE_TEXT};"
+    f" selection-background-color: {TABLE_SELECTION_BG};"
+    f" selection-color: {TABLE_TEXT};"
+    f" border: 1px solid {TABLE_HEADER_BG};"
+    f" border-radius: {TABLE_RADIUS}px; }}"
+    "QTreeWidget::item { padding: 3px 2px; }"
+    f"QTreeWidget::item:selected {{ background-color: {TABLE_SELECTION_BG}; }}"
+    f"QTreeWidget::branch {{ background-color: {TABLE_BASE_BG}; }}"
+    f"QTreeWidget QHeaderView::section {{ background-color: {TABLE_HEADER_BG};"
+    f" color: {TABLE_TEXT}; border: 0;"
+    f" border-right: 1px solid {TABLE_GRID}; }}"
+)
 
 
 def _texto_conteo(cantidad: int) -> str:
@@ -151,6 +180,8 @@ class DepurarPaginasDialog(QDialog):
         arbol.setToolTip(ayuda)
         arbol.setUniformRowHeights(True)
         arbol.setRootIsDecorated(True)
+        arbol.setAlternatingRowColors(False)
+        arbol.setStyleSheet(_ARBOL_QSS)
         arbol.itemChanged.connect(self._al_cambiar_marca)
         return arbol
 

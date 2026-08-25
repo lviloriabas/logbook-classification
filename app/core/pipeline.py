@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 import pickle
 import tempfile
+import threading
 import time
 import weakref
 from concurrent.futures import (
@@ -229,6 +230,11 @@ def _calibrate_page_worker(
 # por aqui. Es una WeakSet para que un pool olvidado no sobreviva por estar
 # apuntado desde el registro.
 _POOLS_VIVOS: "weakref.WeakSet[OcrProcessPool]" = weakref.WeakSet()
+# El registro lo escriben los hilos de trabajo, al abrir y cerrar su pool, y
+# lo lee el hilo de la interfaz al cortar. Sin cerrojo, recorrerlo mientras
+# otro hilo lo modifica levanta RuntimeError justo en el momento en que hace
+# falta que el corte funcione.
+_POOLS_CERROJO = threading.Lock()
 
 
 def abortar_pools() -> int:
@@ -241,7 +247,8 @@ def abortar_pools() -> int:
     forzar un cierre o una cancelacion, y no debe llamarse en un
     procesamiento que se quiera terminar.
     """
-    pools = list(_POOLS_VIVOS)
+    with _POOLS_CERROJO:
+        pools = list(_POOLS_VIVOS)
     for pool in pools:
         pool.abortar()
     if pools:
@@ -274,7 +281,8 @@ class OcrProcessPool:
         )
         self._job_index = 0
         self._closed = False
-        _POOLS_VIVOS.add(self)
+        with _POOLS_CERROJO:
+            _POOLS_VIVOS.add(self)
 
     def prepare(self, state: dict) -> Path:
         self._job_index += 1
@@ -295,7 +303,8 @@ class OcrProcessPool:
         if self._closed:
             return
         self._closed = True
-        _POOLS_VIVOS.discard(self)
+        with _POOLS_CERROJO:
+            _POOLS_VIVOS.discard(self)
         self.executor.shutdown(
             wait=True, cancel_futures=cancel_futures
         )
@@ -314,7 +323,8 @@ class OcrProcessPool:
         if self._closed:
             return
         self._closed = True
-        _POOLS_VIVOS.discard(self)
+        with _POOLS_CERROJO:
+            _POOLS_VIVOS.discard(self)
         for proceso in list(getattr(self.executor, "_processes", {}).values()):
             try:
                 proceso.terminate()
