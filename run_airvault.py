@@ -370,7 +370,7 @@ def _soltar(cliente, batch_id: str) -> None:
 
     `LockAndGetBatchInfo` deja el batch tomado a nombre de quien lo abrio y
     AirVault solo admite un dueno: si no se suelta, la proxima apertura
-    —la del programa o la de la persona que entra por el navegador— se
+    (la del programa o la de la persona que entra por el navegador) se
     queda esperando sin contestar.
     """
     if not batch_id:
@@ -429,7 +429,7 @@ def etapa_indexar(args, config: AirVaultConfig) -> int:
             detener_en_error=not getattr(args, "continuar_con_errores", False),
         )
     finally:
-        # Salga como salga —cancelado, a medias o completo— el batch se
+        # Salga como salga (cancelado, a medias o completo) el batch se
         # suelta: AirVault admite un solo dueno y el que queda tomado
         # cuelga la siguiente apertura sin decir por que.
         _soltar(cliente, manifiesto.batch_id)
@@ -471,7 +471,7 @@ def _completar(
     """Da el batch por terminado, si AirVault lo va a aceptar.
 
     Solo cierra un batch con todas las paginas en verde: basta una a
-    la que le falte un campo obligatorio —casi siempre la fecha—
+    la que le falte un campo obligatorio (casi siempre la fecha)
     para que lo rechace. Asi que se mira antes y, si alguna bloquea,
     se dice cual y el batch se queda en la cola, que es justo donde
     tiene que quedarse.
