@@ -325,7 +325,7 @@ El índice de páginas `<corrida>_paginas.json` representa cada hoja del PDF, in
 
 El flujo es:
 
-1. repartir para Quick Upload los PDF que excedan el máximo elegido en la ventana; la copia portable trae 200 páginas inicialmente y luego persiste la última cantidad elegida en `airvault.json` para los controles **Repartir en** y **Máximo por batch**;
+1. repartir para Quick Upload los PDF que excedan la cantidad elegida en la ventana, en tramos de ese tamaño exacto —solo el último lleva el resto— y repitiendo el separador cuando una aeronave queda partida; la copia portable trae 200 páginas inicialmente y luego persiste la última cantidad elegida en `airvault.json` para los controles **Repartir en** y **Máximo por batch**;
 2. cargar cada PDF mediante Quick Upload;
 3. detectar el batch nuevo y asignarle nombre;
 4. leer páginas y construir un plan sin escribir;
