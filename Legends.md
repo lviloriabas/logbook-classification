@@ -2,6 +2,46 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-25 - Las dos bitácoras que chocan se marcan como duplicadas
+
+La columna `dup` y el color de la tabla señalaban solo la aparición posterior de un `log_number` repetido. La primera salía limpia, así que al ver una fila marcada había que recorrer el CSV buscando con cuál chocaba, y en una ejecución larga eso es media entrega. Ahora se marcan todas las apariciones del grupo: las dos filas del choque se ven a la vez.
+
+Estar repetida y sobrar dejan de ser lo mismo, porque para borrar hacen falta las dos ideas por separado. Depurar duplicados sigue conservando la primera aparición de cada grupo, igual que antes; si el descarte hubiera seguido a la marca, la bitácora repetida habría desaparecido entera de la ejecución. El detalle del contador dice ahora cuál es la que se conserva, que con todas marcadas ya no se deducía de la lista.
+
+## 2026-08-25 - Depurar deja elegir qué aparición se va, y la tabla del visor conserva su orden
+
+El cuadro de depurar daba dos casillas y un número: se borraba la segunda aparición de cada bitácora sin enseñar cuál era ni permitir quedarse con otra. Cuando la buena era la segunda no había forma de decirlo. Ahora cada criterio trae su lista, los duplicados agrupados por bitácora con todas sus apariciones y las páginas en blanco una a una. Se marca la sobrante por omisión y se puede cambiar cuál se va, página por página. El borrado pasa a hacerse por las páginas marcadas y no por el criterio entero, que era lo que perdía esa elección al recontar.
+
+En el visor de CSV, la tabla volvía siempre al orden del archivo después de quitar páginas, porque la ejecución se reescribe y el CSV se vuelve a leer entero. Ahora conserva el criterio de orden que estuviera puesto; cambiar de archivo sí lo descarta, porque el criterio era de la ejecución anterior. El cuadro de confirmación nombra además las bitácoras que se van, no solo cuántas páginas son: el número solo no dice cuáles, y una selección hecha sobre la tabla ordenada abarca filas que quedaron fuera de la vista.
+
+Las casillas de la primera columna permiten juntar páginas sueltas sin sostener Ctrl mientras se recorre media ejecución. Mientras haya alguna marcada, son esas las que se eliminan.
+
+Abrir un CSV grande deja de calcular el campo lógico de cada columna una vez por celda. Ese cálculo armaba un conjunto con todas las columnas cada vez, y en una ejecución de dos mil páginas por sesenta columnas era el coste dominante de la carga: veintitrés veces más lento que consultarlo en un mapa hecho una sola vez por archivo.
+
+## 2026-08-25 - Cancelar y cerrar se pueden cortar sin esperar a las páginas en vuelo
+
+Cancelar y cerrar pedían la parada y esperaban a que terminaran las páginas que ya se estaban leyendo. Con páginas grandes esa espera son minutos, y como la ventana no ofrecía ninguna salida parecía colgada. Ahora la segunda pulsación de Cancelar, y el segundo intento de cerrar, ofrecen cortar sin esperarlas, avisando de que se pierden las que estaban en curso y de que las ya leídas se conservan.
+
+El corte no destruye ningún hilo. Matar un `QThread` en marcha aborta el proceso entero, que es el fallo `0xC0000409` que el cierre ordenado venía a evitar. Lo que se rompe son los pools de OCR, que es lo que tiene esperando a los hilos, y entonces terminan solos en milisegundos. Los procesos hijos se matan antes de soltar el pool para que no sigan gastando CPU leyendo una página cuyo resultado ya no va a recoger nadie.
+
+La ventana principal gana el buscador de bitácoras que solo tenía el visor de CSV: mismo campo, mismos botones y el mismo criterio de que la coincidencia exacta va delante de la mención de paso, buscando solo en las columnas que la tabla está mostrando. Los dos visores de PDF comparten ya los atajos, flechas para pasar de página y Ctrl con más y menos para acercar, que hasta ahora solo valían en la vista previa principal.
+
+Las tablas dejan además de ser texto que solo se puede leer: Ctrl+C y el menú contextual copian las celdas elegidas con tabuladores y saltos de línea, para pegarlas enteras en una hoja de cálculo. Vale en toda superficie donde aparezca el CSV, y una tabla que ya define su propio menú de clic derecho conserva el suyo.
+
+## 2026-08-25 - La ventana de AirVault se queda dentro de la pantalla y adelanta el reparto
+
+La ventana se abría con 780 px de ancho, pero su contenido exigía un mínimo de 1269. Qt aplica ese mínimo por encima del tamaño con el que se abrió, así que crecía sola: en una pantalla de 1366 quedaba pegada a los bordes y por debajo se salía, con los botones fuera del alcance del ratón. La culpa no era de las tablas, cuyo mínimo se queda en 66 px con o sin contenido, sino de los controles puestos en fila: la hilera de botones de abajo pide 1247 px ella sola, y la frase de arriba pedía 481 por no ajustar la línea. Ahora esa frase ajusta y el mínimo se acota a lo que da el escritorio, recortando lo que no quepa antes que mandar media ventana a donde no se llega. Comprobado a 1920, 1366, 1280 y 1024.
+
+La columna «Entrega» del historial contaba los PDF exportados, que no es lo que se sube: un archivo de entrega se parte en varios batches según el máximo elegido. Ahora dice también en cuántos queda repartido, y se rehace al cambiar ese máximo. El número sale del mismo reparto que después se ejecuta y no de dividir páginas entre el límite, porque un batch que empieza a mitad de una aeronave repite el separador de su sección y esa página repetida ocupa sitio: con doce páginas y máximo dos salen ocho batches, no seis.
+
+## 2026-08-25 - La raya queda prohibida en todo el proyecto
+
+El guion largo aparecía en comentarios, docstrings, mensajes de estado, documentación y pruebas. Se eliminaron las 312 que había en el código y los textos del programa, y la prohibición queda escrita en `AGENTS.md` con la equivalencia de cada uso, para que no vuelva a entrar en el primer comentario que alguien redacte: paréntesis o comas para un inciso, dos puntos para introducir una explicación, y un guion normal para separar dos datos en una línea de estado.
+
+Quedan fuera las definiciones de herramientas de `.agents` y `.claude`, cuyo texto puede formar parte de cómo se disparan, y la propia regla de `AGENTS.md`, que nombra el carácter que prohíbe.
+
+Las cadenas de progreso cambian de forma visible, que ahora se leen «Archivo 1/3: a.pdf - Procesando páginas 29/30».
+
 ## 2026-08-25 - La orden de subir a mano se obedece, y las paginas amarillas se avisan en vez de prohibirse
 
 Mandar subir un batch desde la tabla era una orden que el programa discutia. La accion solo se ofrecia sobre dos estados, y cuando se ofrecia pasaba por la comprobacion larga: recorrer la cola entera de AirVault, abrir cada batch candidato, leer sus paginas y contrastar los Log Page Number. Eso tarda minutos, y bastantes veces terminaba sin subir nada, porque la propia comprobacion vetaba la carga si el estado no era exactamente «sin subir». Visto desde fuera, el programa se ponia a revisar mucho y el archivo no salia nunca.
