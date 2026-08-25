@@ -140,11 +140,18 @@ class Manifiesto(BaseModel):
     # acepto pero AirVault nunca publico. Se cuenta para no seguir enviando
     # el mismo archivo indefinidamente y acabar con batches duplicados.
     reenvios: int = 0
-    # Veces que se recorrio la cola entera de AirVault —por nombre visible,
-    # nombre embebido, cantidad de paginas y Log Page Number— sin encontrar
+    # Veces que se recorrio la cola entera de AirVault (por nombre visible,
+    # nombre embebido, cantidad de paginas y Log Page Number) sin encontrar
     # esta carga. Una sola basta para darla por no publicada: ya no queda
     # nombre bajo el que pueda estar.
     busquedas_amplias_sin_hallar: int = 0
+    # Alguien autorizo expresamente subir este batch aunque deje paginas
+    # amarillas (sin algun campo obligatorio) en AirVault. Lo normal es
+    # evitarlas repartiendo esas bitacoras al batch REVISAR, pero cuando el
+    # archivo ya esta hecho rehacerlo cuesta mas que terminar de indexar a
+    # mano esas paginas, asi que la decision es de quien sube. Se guarda en
+    # el manifiesto para que un reintento no vuelva a preguntar.
+    amarillas_permitidas: bool = False
     # Se saco de la cola a mano. No se sube, no se busca y no se indexa
     # hasta que alguien lo reanude; lo que ya este hecho se conserva.
     cancelado: bool = False

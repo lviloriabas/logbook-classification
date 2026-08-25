@@ -417,10 +417,67 @@ def test_antes_de_subir_rechaza_paginas_amarillas_en_batch_automatico(
     )[0]
     trabajo.manifiesto.bitacoras()[0].log_number = ""
 
-    with pytest.raises(ErrorDeCorrida, match="páginas amarillas"):
+    from app.airvault.flujo import PaginasAmarillas
+
+    with pytest.raises(PaginasAmarillas, match="páginas amarillas") as fallo:
         trabajo.subir(object())
 
     assert not trabajo.manifiesto.etapa_hecha("subir")
+    # El error lleva las paginas, no solo un texto: quien pregunta las
+    # enseña sin volver a calcularlas.
+    assert fallo.value.paginas == ["página 2: Log Page Number"]
+    # Y dice como autorizarlo, que es lo que hay que hacer si el archivo
+    # ya esta hecho y rehacerlo cuesta mas que indexarlas a mano.
+    assert "Subir a AirVault ahora" in str(fallo.value)
+
+
+def test_autorizadas_las_amarillas_el_batch_se_sube(tmp_path, monkeypatch):
+    """Rehacer la exportación cuesta más que indexar esas páginas a mano.
+
+    Evitarlas sigue siendo lo correcto (para eso está el batch REVISAR),
+    pero con el archivo ya hecho la decisión es de quien sube.
+    """
+    from app.airvault.flujo import autorizar_amarillas
+    from app.airvault.uploader import ResultadoSubida
+
+    subidas = []
+
+    class SubidorQueAcepta:
+        def __init__(self, *_args):
+            pass
+
+        def subir(self, ruta, _valores, avisar=None):
+            subidas.append(str(ruta))
+            return ResultadoSubida(str(ruta), True)
+
+    monkeypatch.setattr(
+        "app.airvault.uploader.SubidorQuickUpload", SubidorQueAcepta
+    )
+    csv_path, _partes = corrida(tmp_path)
+    trabajo = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path
+    )[0]
+    trabajo.manifiesto.bitacoras()[0].log_number = ""
+
+    autorizar_amarillas(trabajo)
+    trabajo.subir(object())
+
+    assert subidas
+    assert trabajo.manifiesto.etapa_hecha("subir")
+
+
+def test_el_batch_revisar_nunca_avisa_de_amarillas(tmp_path):
+    """REVISAR existe para recoger lo dudoso: se sabe que se indexa a mano."""
+    from app.airvault.flujo import paginas_amarillas
+
+    csv_path, _partes = corrida(tmp_path)
+    trabajo = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path
+    )[0]
+    trabajo.manifiesto.bitacoras()[0].log_number = ""
+    trabajo.manifiesto.solo_subir = True
+
+    assert paginas_amarillas(trabajo) == []
 
 
 def test_antes_de_subir_respeta_el_limite_de_2048_mb(tmp_path, monkeypatch):
@@ -917,7 +974,7 @@ def test_dos_ejecuciones_distintas_no_se_estorban_al_subir(tmp_path):
 
     La ventana retoma los pendientes de dias anteriores junto a los de hoy,
     asi que en la misma tabla conviven batches de entregas distintas. Sus
-    bitacoras se llaman igual —``Image_001.pdf`` pagina 1 existe en todas—
+    bitacoras se llaman igual (``Image_001.pdf`` pagina 1 existe en todas)
     sin que eso signifique que se repitan: son documentos distintos. Al no
     mirar de que entrega venia cada una, la guarda daba por repetida la
     ejecucion entera y abortaba la subida completa, de modo que ningun

@@ -104,11 +104,93 @@ class ErrorDeCorrida(RuntimeError):
     """La ejecución no trae lo que hace falta para indexarla."""
 
 
+class PaginasAmarillas(ErrorDeCorrida):
+    """El batch subiria paginas sin algun campo obligatorio.
+
+    No es un fallo del programa ni un dato corrupto: es una decision. Lo
+    mejor es que esas bitacoras vayan al batch REVISAR, y para eso hay que
+    volver a exportar la ejecución. Pero cuando el archivo ya esta hecho,
+    rehacerlo cuesta mas que terminar de indexar esas paginas a mano en
+    AirVault, asi que quien sube puede autorizarlo y seguir.
+
+    Lleva la lista de paginas y lo que le falta a cada una para que quien
+    pregunte pueda enseñarlo sin volver a calcularlo ni leer el texto del
+    error.
+    """
+
+    def __init__(self, nombre_batch: str, paginas: Sequence[str]):
+        self.nombre_batch = nombre_batch
+        self.paginas = list(paginas)
+        super().__init__(
+            f"El batch automático «{nombre_batch}» dejaría "
+            f"{len(self.paginas)} páginas amarillas ({resumen_amarillas(self.paginas)}). "
+            "No se subió porque nadie lo ha autorizado todavía. Lo limpio es "
+            "volver a exportar para que esas páginas queden en el batch "
+            "REVISAR; si prefiere subirlo así e indexarlas a mano en "
+            "AirVault, haga clic derecho sobre su fila y elija «Subir a "
+            "AirVault ahora»: se le preguntará y podrá autorizarlo."
+        )
+
+
+def resumen_amarillas(paginas: Sequence[str], cuantas: int = 5) -> str:
+    """Las primeras paginas amarillas y cuantas quedan detras."""
+    muestra = "; ".join(paginas[:cuantas])
+    resto = len(paginas) - cuantas
+    if resto > 0:
+        muestra += f"; y {resto} más"
+    return muestra
+
+
+def paginas_amarillas(trabajo: "Trabajo") -> List[str]:
+    """Paginas que quedarian sin indexar si este batch se subiera ahora.
+
+    Amarillo es como AirVault pinta una pagina a la que le falta un campo
+    obligatorio. Se sabe sin preguntarle nada al servidor: basta con el
+    manifiesto, asi que la ventana puede consultarlo antes de arrancar el
+    hilo y preguntar a tiempo.
+
+    El batch REVISAR existe justamente para recoger lo dudoso, asi que en el
+    no hay nada que avisar: se sube sabiendo que se indexa a mano.
+    """
+    manifiesto = trabajo.manifiesto
+    if manifiesto.solo_subir:
+        return []
+    incompletas: List[str] = []
+    for registro in manifiesto.bitacoras():
+        valores = valores_de_indice(
+            registro,
+            manifiesto.doc_type,
+            manifiesto.audit_status,
+            manifiesto.nombre_batch,
+        )
+        faltantes = [
+            nombre_campo(campo)
+            for campo in CAMPOS_OBLIGATORIOS
+            if not str(valores.get(campo, "") or "").strip()
+        ]
+        if faltantes:
+            incompletas.append(
+                f"página {registro.seq}: {', '.join(faltantes)}"
+            )
+    return incompletas
+
+
+def autorizar_amarillas(trabajo: "Trabajo", permitir: bool = True) -> None:
+    """Deja dicho que este batch se puede subir con paginas amarillas.
+
+    Queda en el manifiesto y no en la llamada: la subida puede fallar por
+    otra cosa y reintentarse sola, y volver a preguntar lo mismo seria
+    pedirle a alguien que autorice dos veces la misma decision.
+    """
+    trabajo.manifiesto.amarillas_permitidas = bool(permitir)
+    trabajo.guardar()
+
+
 def paginas_de_lote(info) -> int:
     """Cuantas paginas dice AirVault que tiene el batch recien abierto.
 
     Devuelve 0 cuando la respuesta no lo trae, que es una situacion real
-    —batch a medio procesar, batch borrado— y la guarda de cantidad explica
+    (batch a medio procesar, batch borrado) y la guarda de cantidad explica
     mejor que un error de atributo a mitad de camino.
     """
     if not isinstance(info, Mapping):
@@ -337,7 +419,7 @@ def _partir_paginas_por_seccion(
 
     Cortar por cantidad puede dejar una aeronave repartida entre dos
     batches. Cuando eso pasa, el batch siguiente abre con una copia de su
-    separador —que ocupa una de sus páginas— para que ninguno empiece con
+    separador (que ocupa una de sus páginas) para que ninguno empiece con
     bitácoras huérfanas.
 
     ``seleccion`` acota qué páginas del PDF entran en el reparto, en el
@@ -617,6 +699,30 @@ class EstadoParte:
         )
 
     @property
+    def se_puede_subir(self) -> bool:
+        """Si se le puede *ordenar* a este archivo que vaya a Quick Upload.
+
+        Ojo con confundirla con :func:`partes_por_subir`, que responde otra
+        pregunta: que manda el programa por su cuenta. Esa sigue siendo la
+        unica regla de la automatizacion y no se toca. Esta dice hasta donde
+        llega la mano de quien mira la tabla, y por eso es mas ancha: no
+        pregunta si conviene, pregunta si es seguro.
+
+        Vale mientras AirVault no haya devuelto un batch para esta parte, y
+        da igual por que motivo no lo devolvio: que la carga no llegara, que
+        lleve dos revisiones de tres, que aparezca con las paginas
+        descuadradas o que el reloj de espera no haya vencido. Sin batch
+        confirmado no hay nada que duplicar.
+
+        Con un batch confirmado la accion se apaga: volver a subirlo dejaria
+        dos copias del mismo PDF en la cola de Web Index, y eso si cuesta
+        trabajo deshacerlo.
+        """
+        return self.lote is None and self.estado not in (
+            INDEXADO, COMPLETADO, AUTOCOMPLETADO, CANCELADO,
+        )
+
+    @property
     def se_acabo(self) -> bool:
         """Ya no hay nada que esperar de esta parte."""
         return self.estado in (
@@ -838,35 +944,16 @@ class Trabajo:
                 f"el maximo elegido de {limite}; no se sube. Reinicie el "
                 "registro local para volver a repartir la ejecucion."
             )
-        if not self.manifiesto.solo_subir:
-            incompletas: List[str] = []
-            for registro in self.manifiesto.bitacoras():
-                valores = valores_de_indice(
-                    registro,
-                    self.manifiesto.doc_type,
-                    self.manifiesto.audit_status,
-                    self.manifiesto.nombre_batch,
-                )
-                faltantes = [
-                    nombre_campo(campo)
-                    for campo in CAMPOS_OBLIGATORIOS
-                    if not str(valores.get(campo, "") or "").strip()
-                ]
-                if faltantes:
-                    incompletas.append(
-                        f"página {registro.seq}: {', '.join(faltantes)}"
-                    )
-            if incompletas:
-                muestra = "; ".join(incompletas[:5])
-                resto = len(incompletas) - 5
-                if resto > 0:
-                    muestra += f"; y {resto} más"
-                raise ErrorDeCorrida(
-                    f"El batch automático «{self.manifiesto.nombre_batch}» "
-                    f"dejaría {len(incompletas)} páginas amarillas ({muestra}). "
-                    "No se sube: vuelva a exportar para que esas páginas "
-                    "queden en el batch REVISAR."
-                )
+        incompletas = paginas_amarillas(self)
+        if incompletas and not self.manifiesto.amarillas_permitidas:
+            raise PaginasAmarillas(self.manifiesto.nombre_batch, incompletas)
+        if incompletas:
+            logger.warning(
+                "Se sube «{}» con {} paginas amarillas: lo autorizaron "
+                "expresamente",
+                self.manifiesto.nombre_batch,
+                len(incompletas),
+            )
         if archivo.stat().st_size > MAXIMO_QUICK_UPLOAD_BYTES:
             raise ErrorDeCorrida(
                 f"El PDF {archivo.name} pesa mas de 2048 MB, que es el "
@@ -1187,7 +1274,7 @@ class Trabajo:
                 f"El batch {self.manifiesto.nombre_batch} esta abierto por "
                 f"{dueno} y AirVault no lo entrega a nadie mas: la peticion "
                 f"se queda esperando sin contestar. Hay que cerrarlo en "
-                f"AirVault —abrirlo y salir con Close— y volver a intentar."
+                f"AirVault (abrirlo y salir con Close) y volver a intentar."
             ) from exc
         self._tomado = True
         return info
@@ -1297,7 +1384,7 @@ class Trabajo:
         """Da el batch por terminado y lo saca de la cola del Web Index.
 
         AirVault solo lo acepta con **todas** las paginas en verde: basta
-        una a la que le falte un campo obligatorio —casi siempre la fecha—
+        una a la que le falte un campo obligatorio (casi siempre la fecha)
         para que no deje cerrar el batch. Asi que primero se miran las
         paginas y, si alguna bloquea, no se intenta: se dice cuales son y
         el batch se queda en la cola, que es justo donde tiene que quedarse
@@ -1307,8 +1394,8 @@ class Trabajo:
         boton «Complete»: cuenta la pagina que encabeza cada documento,
         salvo las borradas.
 
-        Las paginas separadoras del PDF —la matricula de cada grupo,
-        «REVISAR», «POSIBLES DISCREPANCIAS»— tambien cuentan, y nunca van a
+        Las paginas separadoras del PDF (la matricula de cada grupo,
+        «REVISAR», «POSIBLES DISCREPANCIAS») tambien cuentan, y nunca van a
         estar en verde: no son bitacoras, no tienen fecha ni avion que
         escribirles. Como no son documentos, se quitan del batch antes de
         cerrarlo, que es lo mismo que hace a mano quien indexa. Se quitan
@@ -1591,8 +1678,8 @@ def preparar_partes(
     manifiesto y sus guardas. Repartirlas asi es lo que deja que una parte
     se caiga o se retome sin arrastrar a las demas.
 
-    Si la ejecución ya tenia batches y el reparto cambio —otro maximo de
-    paginas, otra compresion, u otra forma de cortar—, lo que ya esta en
+    Si la ejecución ya tenia batches y el reparto cambio (otro maximo de
+    paginas, otra compresion, u otra forma de cortar), lo que ya esta en
     AirVault se conserva intacto y solo se reparten las bitacoras que
     ningun batch se llevo. Rehacer el reparto entero subiria dos veces lo
     ya subido; ignorar el cambio dejaria fuera lo que falta.
@@ -1792,8 +1879,8 @@ def _prefijo(trabajo: "Trabajo") -> str:
 def _entrega_de(trabajo: "Trabajo") -> str:
     """A que entrega pertenece un batch, normalizado para comparar.
 
-    Hace falta porque la identidad de una bitacora —el archivo del que
-    salio y su pagina— solo es unica dentro de su entrega. El escaner
+    Hace falta porque la identidad de una bitacora (el archivo del que
+    salio y su pagina) solo es unica dentro de su entrega. El escaner
     nombra igual sus archivos en cada ejecucion, asi que ``Image_001.pdf``
     pagina 1 existe en todas: sin la entrega delante, dos ejecuciones
     distintas parecen repetirse entera la una a la otra.
@@ -1821,8 +1908,8 @@ def _validar_sin_bitacoras_repetidas(
     van a mandar ahora.
 
     Cada entrega se mira por separado. La ventana puede tener delante
-    batches de varias ejecuciones —los pendientes de dias anteriores se
-    retoman junto a los de hoy— y entre ellas los nombres de archivo se
+    batches de varias ejecuciones (los pendientes de dias anteriores se
+    retoman junto a los de hoy) y entre ellas los nombres de archivo se
     repiten sin que eso signifique nada.
     """
     entregas: Dict[str, List["Trabajo"]] = {}
@@ -1921,6 +2008,7 @@ def subir_partes(
     al_encontrar: Optional[Callable[["Trabajo", Sequence["Trabajo"]], None]] = None,
     reintentar_estancados: bool = False,
     en_la_ejecucion: Sequence["Trabajo"] = (),
+    forzados: Collection[str] = (),
 ) -> List[Tuple["Trabajo", str]]:
     """Confirma todos los batches y sube solamente los que falten.
 
@@ -1942,43 +2030,92 @@ def subir_partes(
     ``en_la_ejecucion`` son todas las partes de la entrega cuando ``trabajos``
     es solo el subconjunto que falta por subir. Sirve para comprobar que
     ninguna bitacora que se va a mandar viaja ya en un batch subido.
+
+    ``forzados`` son las carpetas que alguien mando subir a mano. Esas se
+    saltan la comprobacion completa (que es la que tarda, por abrir cada
+    batch y contrastar su contenido) y hacen en su lugar una sola lectura
+    de la cola (:func:`ya_esta_en_airvault`). La persona ya miro AirVault y
+    dijo que el batch no esta; lo unico que el programa sabe y ella no es
+    si su carga esta publicada sin nombre, que es lo que esa lectura
+    responde. Con cualquier otra respuesta se sube. Las demas partes siguen
+    el camino automatico entero.
     """
     _validar_nombres_de_batches(trabajos)
     ejecucion = list(en_la_ejecucion or trabajos)
     _validar_sin_bitacoras_repetidas(trabajos, ejecucion)
+    claves_forzadas = {str(clave) for clave in forzados or ()}
     por_subir = list(trabajos)
+    claves_estancadas: set[str] = set()
     if cliente is not None:
-        estados = comprobar_partes(trabajos, cliente, avisar=avisar)
-        estados = detectar_indexados(estados, cliente, avisar=avisar)
+        # Lo que se mando subir a mano ni se consulta: se sube. Preguntar
+        # otra vez por un batch que la persona acaba de buscar en AirVault
+        # es lo que hacia que una orden tardara minutos en convertirse en
+        # una carga, y a veces en ninguna.
+        a_confirmar = [
+            trabajo for trabajo in trabajos
+            if str(trabajo.carpeta) not in claves_forzadas
+        ]
+        estados = (
+            detectar_indexados(
+                comprobar_partes(a_confirmar, cliente, avisar=avisar),
+                cliente,
+                avisar=avisar,
+            )
+            if a_confirmar
+            else []
+        )
         estancados = [
             parte.trabajo
             for parte in estados
             if reintentar_estancados and reenvio_pendiente(parte, ejecucion)
         ]
         claves_estancadas = {str(trabajo.carpeta) for trabajo in estancados}
-        por_subir = [
-            parte.trabajo
+        claves_por_subir = claves_forzadas | claves_estancadas | {
+            str(parte.trabajo.carpeta)
             for parte in estados
             if parte.estado == SIN_SUBIR
-            or str(parte.trabajo.carpeta) in claves_estancadas
+        }
+        # Se filtra la lista recibida en vez de rehacerla con los estados:
+        # asi las cargas forzadas conservan el orden de la tabla.
+        por_subir = [
+            trabajo for trabajo in trabajos
+            if str(trabajo.carpeta) in claves_por_subir
         ]
         procesandose = sum(
             parte.estado in (BUSCANDO, PROCESANDO)
             and parte.trabajo not in estancados
             for parte in estados
         )
-        encontrados = len(trabajos) - len(por_subir) - procesandose
-        if avisar is not None:
-            unidad = "batch" if len(trabajos) == 1 else "batches"
+        encontrados = len(a_confirmar) - len(estancados) - procesandose - sum(
+            parte.estado == SIN_SUBIR for parte in estados
+        )
+        if avisar is not None and a_confirmar:
+            unidad = "batch" if len(a_confirmar) == 1 else "batches"
             espera = (
                 f"; {procesandose} "
                 f"{'sigue' if procesandose == 1 else 'siguen'} procesándose"
                 if procesandose
                 else ""
             )
+            faltantes = sum(
+                1 for trabajo in por_subir
+                if str(trabajo.carpeta) not in claves_forzadas
+            )
             avisar(
-                f"AirVault confirmó {encontrados} de {len(trabajos)} "
-                f"{unidad}{espera}; se subirán {len(por_subir)} faltantes",
+                f"AirVault confirmó {encontrados} de {len(a_confirmar)} "
+                f"{unidad}{espera}; se subirán {faltantes} faltantes",
+                0,
+                0,
+            )
+        cuantos = sum(
+            1 for trabajo in por_subir
+            if str(trabajo.carpeta) in claves_forzadas
+        )
+        if avisar is not None and cuantos:
+            unidad = "batch" if cuantos == 1 else "batches"
+            avisar(
+                f"Se sube {cuantos} {unidad} por orden expresa; solo se "
+                "mira la cola una vez, sin abrir ningún batch",
                 0,
                 0,
             )
@@ -1992,8 +2129,49 @@ def subir_partes(
     subidos: List["Trabajo"] = []
     for trabajo in por_subir:
         cabeza = _prefijo(trabajo)
+        clave = str(trabajo.carpeta)
+        forzado = clave in claves_forzadas
+        permite_reenvio = clave in claves_estancadas
 
-        if cliente is not None:
+        if forzado and cliente is not None:
+            # Una sola lectura de la cola. Es lo unico que separa obedecer
+            # de duplicar: si AirVault ya publico esta carga (con su titulo
+            # o, lo que es mas frecuente, como Empty-Batch sin nombre),
+            # mandarla otra vez dejaria la misma bitacora publicada dos
+            # veces, y eso se deshace a mano. Ojo con el orden: se mira
+            # antes de reiniciar el manifiesto, porque la foto de la cola
+            # anterior a la carga es justo lo que identifica un
+            # Empty-Batch, y reiniciar la borra.
+            try:
+                publicado = ya_esta_en_airvault(trabajo, cliente)
+            except LoteAmbiguo as exc:
+                fallos.append((trabajo, str(exc)))
+                if avisar is not None:
+                    avisar(
+                        f"{cabeza}Hay varios batches que podrían ser esta "
+                        "carga; no se sube otra vez",
+                        0,
+                        0,
+                    )
+                continue
+            if publicado is not None:
+                trabajo.anotar_lote(cliente, publicado)
+                if trabajo not in encontrados_antes:
+                    encontrados_antes.append(trabajo)
+                if avisar is not None:
+                    avisar(
+                        f"{cabeza}AirVault ya lo tiene publicado "
+                        f"({publicado.batch_id}); no se sube otra vez",
+                        0,
+                        0,
+                    )
+                continue
+
+        # La consulta previa a cada archivo se mantiene en el camino
+        # automatico: es la que descubre un batch que AirVault publico entre
+        # una consulta y la siguiente, y sin ella la carga se duplicaria.
+        # La orden expresa hace arriba su version corta.
+        if cliente is not None and not forzado:
             if avisar is not None:
                 avisar(
                     f"{cabeza}Confirmando el nombre antes de subir",
@@ -2006,10 +2184,8 @@ def subir_partes(
             estado_actual = detectar_indexados(
                 [estado_actual], cliente, avisar=avisar
             )[0]
-            clave = str(trabajo.carpeta)
-            permite_reenvio = (
-                clave in claves_estancadas
-                and reenvio_pendiente(estado_actual, ejecucion)
+            permite_reenvio = permite_reenvio and reenvio_pendiente(
+                estado_actual, ejecucion
             )
             if estado_actual.estado != SIN_SUBIR and not permite_reenvio:
                 if estado_actual.batch_id and trabajo not in encontrados_antes:
@@ -2021,14 +2197,18 @@ def subir_partes(
                         0,
                     )
                 continue
-            if permite_reenvio:
-                # Se da por perdida una carga que Quick Upload si acepto. Se
-                # cuenta antes de reenviarla para que el tope valga aunque el
-                # envio se corte a mitad.
-                trabajo.manifiesto.reenvios = (
-                    int(trabajo.manifiesto.reenvios or 0) + 1
-                )
-                trabajo.guardar()
+        if permite_reenvio:
+            # Se da por perdida una carga que Quick Upload si acepto. Se
+            # cuenta antes de reenviarla para que el tope valga aunque el
+            # envio se corte a mitad.
+            trabajo.manifiesto.reenvios = (
+                int(trabajo.manifiesto.reenvios or 0) + 1
+            )
+            trabajo.guardar()
+        if cliente is not None or forzado:
+            # Tambien en las forzadas: el manifiesto puede seguir creyendo
+            # que el archivo ya se subio, y sin borrar esa creencia la
+            # subida se saltaria sola.
             _reiniciar_subida_ausente(trabajo)
 
         def propio(texto: str, hechas: int, total: int, cabeza: str = cabeza) -> None:
@@ -2130,11 +2310,119 @@ def subir_partes(
     return fallos
 
 
+def ya_esta_en_airvault(trabajo: "Trabajo", cliente):
+    """El batch de este trabajo, si AirVault ya lo tiene publicado.
+
+    Es lo unico que precede a una subida ordenada a mano, y cuesta **una
+    lectura de la cola**: todo lo demas se decide en memoria, sin abrir
+    ningun batch, sin leer paginas y sin comparar Log Page Number. Lo caro
+    de la comprobacion completa nunca fue el listado, sino ese contraste
+    por batch; por eso esta version corta responde en el acto y aquella
+    tarda minutos.
+
+    Mira dos cosas sobre la misma lista:
+
+    1. Un lote cuyo **nombre visible** corresponda al esperado.
+    2. Un **``Empty-Batch``** que no estuviera en la cola antes de nuestra
+       carga y que tenga una cantidad de paginas compatible.
+
+    La segunda no es una rareza: AirVault publica lo cargado como
+    ``Empty-Batch`` aunque Quick Upload reciba ``C_BatchName``, y por eso
+    existe la foto de la cola en ``lotes_previos``. Sin esta comprobacion,
+    quien mira Web Index tampoco ve su batch (no tiene nombre) y la orden
+    manual crearia la segunda copia justo en el caso mas frecuente.
+
+    Devuelve ``None`` cuando no hay nada que pueda ser esta carga, que es
+    cuando la orden se cumple. Levanta :class:`LoteAmbiguo` si hay varios
+    candidatos sin nombre: elegir mal seria peor que preguntar.
+    """
+    if cliente is None:
+        return None
+    manifiesto = trabajo.manifiesto
+    lotes = list(_listar_cola(cliente))
+    try:
+        return buscar_lote(
+            lotes,
+            manifiesto.nombre_batch,
+            manifiesto.repo_id,
+            len(manifiesto.registros),
+        )
+    except LoteNoEncontrado:
+        pass
+
+    if not _subida_rastreable(trabajo):
+        # Nunca se subio: no hay ninguna carga nuestra que AirVault pueda
+        # estar mostrando sin nombre. Cualquier Empty-Batch de la cola es
+        # de otro trabajo.
+        return None
+    candidatos = _empty_batches_que_podrian_ser(trabajo, lotes)
+    if len(candidatos) > 1:
+        raise LoteAmbiguo(
+            f"AirVault tiene {len(candidatos)} batches sin nombre que "
+            f"podrían ser «{manifiesto.nombre_batch}»: "
+            + "; ".join(
+                f"{candidato.batch_id} con {candidato.paginas} páginas"
+                for candidato in candidatos
+            )
+            + ". No se subió otra vez para "
+            "no dejar la misma bitácora publicada por duplicado. Mírelos en "
+            "Web Index: si ninguno es esta carga, bórrelos o renómbrelos y "
+            "vuelva a dar la orden."
+        )
+    return candidatos[0] if candidatos else None
+
+
+def _empty_batches_que_podrian_ser(
+    trabajo: "Trabajo", lotes: Sequence[ResumenLote]
+) -> List[ResumenLote]:
+    """Lotes sin nombre que aparecieron despues de subir y encajan en paginas.
+
+    Los tres filtros son los que se pueden aplicar sin pedirle nada mas al
+    servidor: que el nombre sea provisional, que no estuviera en la foto de
+    la cola tomada antes de la carga, y que la cantidad de paginas sea una
+    de las que puede tener esta parte.
+
+    Sobre ese ultimo: ``cantidades_paginas_compatibles`` devuelve un solo
+    numero salvo que el indexado ya hubiera confirmado separadores
+    borrados, y entonces dos. Un batch asi siempre tiene lote confirmado,
+    de modo que :attr:`EstadoParte.se_puede_subir` apaga la accion y por
+    aqui no se llega. Si alguna vez se llegara, un batch ajeno tendria dos
+    cifras con las que colar en vez de una.
+    """
+    manifiesto = trabajo.manifiesto
+    previos = {
+        str(batch_id).strip().upper()
+        for batch_id in manifiesto.lotes_previos or ()
+    }
+    compatibles = manifiesto.cantidades_paginas_compatibles()
+    return [
+        lote
+        for lote in lotes
+        if _es_nombre_temporal(lote.nombre)
+        and lote.batch_id.strip().upper() not in previos
+        and lote.paginas in compatibles
+        and (not lote.repo_id or lote.repo_id == manifiesto.repo_id)
+    ]
+
+
+def _listar_cola(cliente) -> Sequence[ResumenLote]:
+    """La cola entera, en una sola peticion.
+
+    Sin filtro a proposito: un ``Empty-Batch`` no responde a ningun nombre,
+    asi que filtrar del lado del servidor lo dejaria fuera justo cuando es
+    lo que hay que encontrar.
+    """
+    try:
+        return list(cliente.listar_lotes(""))
+    except TypeError:
+        return list(cliente.listar_lotes())
+
+
 def reiniciar_subida(trabajo: "Trabajo") -> None:
     """Olvida lo que el programa creia haber subido de este batch.
 
-    Deja el trabajo como recien preparado —sin ID, sin etapas de subida en
-    adelante y con sus registros pendientes— para que vuelva a Quick
+    Deja el trabajo como recien preparado (sin ID, sin etapas de subida en
+    adelante y con sus registros pendientes) para que vuelva a Quick
     Upload. No toca AirVault: si el batch estaba publicado de verdad, la
     proxima busqueda lo encuentra y recupera su ID en vez de duplicarlo.
     """
@@ -3324,7 +3612,7 @@ def espera_de_reenvio(trabajo: "Trabajo") -> float:
 
     La primera vez es la espera configurada; con cada reenvio ya hecho, un
     multiplo mas. Es lo que sustituye al tope de reenvios: en vez de dejar
-    de intentarlo —lo que dejaba el batch fuera de AirVault para siempre—,
+    de intentarlo (lo que dejaba el batch fuera de AirVault para siempre),
     se intenta cada vez mas espaciado.
     """
     base = max(0.0, float(trabajo.config.espera_reenvio_s))
@@ -3425,8 +3713,9 @@ def _estado_de(
                 DESCUADRADO,
                 f"batch encontrado con páginas incorrectas "
                 f"({detalle}); se esperaban {cantidades}. No se renombra, "
-                "indexa ni vuelve a subir automáticamente; AirVault junto "
-                "dos cargas o el PDF no corresponde al índice",
+                "indexa ni vuelve a subir por su cuenta; AirVault junto "
+                "dos cargas o el PDF no corresponde al índice. Si ese batch "
+                "no es esta carga, mándela otra vez desde la tabla",
             )
         parciales = _candidatos_con_paginas_parciales(trabajo, lotes)
         if parciales:
@@ -3451,7 +3740,8 @@ def _estado_de(
                 DESCUADRADO,
                 f"el nombre y las páginas coinciden, pero el contenido no "
                 f"corresponde ({detalle}). No se renombra, indexa ni vuelve "
-                "a subir automáticamente",
+                "a subir por su cuenta; si esta carga no está, mándela otra "
+                "vez desde la tabla",
             )
         if _hay_candidato_provisional(trabajo, cliente, lotes, cache):
             return EstadoParte(
