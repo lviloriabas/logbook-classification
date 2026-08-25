@@ -2,6 +2,16 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-24 — Los batches se reparten con la cantidad exacta de páginas y lo que no llegó a AirVault se reenvía solo
+
+El **Máximo por batch** de la ventana de AirVault no era la cantidad que se subía. El reparto cortaba entre aeronaves y nunca partía una: una sección que no cabía entera cerraba el batch antes de tiempo, así que con el mismo número elegido salían batches de tamaños distintos y bastante por debajo de él. Con 200 páginas por batch y aviones de 30, un batch se cerraba en 180 y el siguiente en 150; el reparto que se había pedido y el que se subía no se parecían, y las cuentas que dependen de esa cantidad dejaban de cuadrar.
+
+Ahora el número es exacto. Todos los batches llevan las páginas elegidas y solo el último se queda con el resto. Cortar por cantidad puede dejar una aeronave repartida entre dos batches: cuando pasa, el siguiente abre con una copia del separador de esa aeronave —que ocupa una de sus páginas— para que ninguno empiece con bitácoras sueltas. Es la misma regla que ya se aplicaba a una sección que por sí sola superaba el límite, ahora aplicada en todos los cortes. La entrega exportada y el CSV siguen intactos: el reparto solo produce los PDF internos que van a Quick Upload.
+
+El otro cambio es el de las cargas que se quedaban paradas. La comprobación periódica solo preguntaba: un archivo que no había llegado a subirse —porque la subida falló, porque venía pendiente de otra ejecución— se quedaba en la lista mientras el reloj seguía consultando al servidor por él, cada tantos minutos, indefinidamente. Y una carga que Quick Upload aceptó pero AirVault nunca publicó terminaba su espera pidiendo que alguien pulsara **Subir a AirVault**, con la comprobación automática ya apagada.
+
+Ahora, con **Comprobar cada** marcado, cada vuelta del reloj vuelve a enviar lo que falte y continúa la cadena hasta el indexado, sin que nadie pulse nada. La regla de qué falta por subir vive en un solo sitio, así que el botón y el reloj deciden lo mismo. Una carga dada por perdida se reenvía como máximo dos veces: insistir siempre contra una cola atascada acabaría publicando el mismo archivo varias veces. Agotadas, el programa deja de insistir, lo dice en el resumen y pide revisar el batch en AirVault. Antes de cada envío se vuelve a buscar el nombre en la cola, de modo que un batch que apareció entre medias recupera su ID en vez de subirse dos veces. Una subida que falla no se reintenta hasta la vuelta siguiente del reloj: comprobar y subir se llamarían el uno al otro sin parar.
+
 ## 2026-08-20 — La bitácora sin fecha legible ya no bloquea el batch de AirVault
 
 `End Date` es obligatorio en AirVault. Una bitácora cuya fecha no se dejó leer llegaba al indexado con ese campo vacío, la guarda de obligatorios bloqueaba su página y el batch se quedaba sin poder cerrarse: alguien tenía que abrirlo en el Web Index y teclear esa fecha a mano, en medio de cuatrocientas páginas que sí se habían escrito solas. Y bastaba una.
