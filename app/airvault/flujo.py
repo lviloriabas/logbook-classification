@@ -316,55 +316,47 @@ def _partir_paginas_por_seccion(
     paginas: Sequence[dict],
     limite: int,
 ) -> List[List[int]]:
-    """Índices de páginas para batches que conservan sus separadores.
+    """Índices de páginas para batches del tamaño exacto que se pidió.
 
-    Se corta entre aeronaves siempre que sea posible. Si una sola aeronave
-    supera el límite, cada continuación repite su separador y reserva una
-    página para él. Así ninguna parte comienza con bitácoras huérfanas.
+    Todos los batches llevan ``limite`` páginas y solo el último se queda
+    con el resto. Antes se cortaba entre aeronaves, y como una sección que
+    no cabía entera cerraba el batch antes de tiempo, con el mismo límite
+    salían batches de tamaños distintos y muy por debajo de lo pedido.
+
+    Cortar por cantidad puede dejar una aeronave repartida entre dos
+    batches. Cuando eso pasa, el batch siguiente abre con una copia de su
+    separador —que ocupa una de sus páginas— para que ninguno empiece con
+    bitácoras huérfanas.
     """
-    indices = list(range(len(paginas)))
-    if limite <= 0 or len(indices) <= limite:
-        return [indices]
+    total = len(paginas)
+    if limite <= 0 or total <= limite:
+        return [list(range(total))]
 
-    secciones: List[List[int]] = []
-    actual: List[int] = []
-    for indice in indices:
-        if paginas[indice].get("separador") and actual:
-            secciones.append(actual)
-            actual = []
-        actual.append(indice)
-    if actual:
-        secciones.append(actual)
+    # Separador que encabeza la sección de cada página. Una página que es
+    # separador se encabeza a sí misma, así que empezar justo en ella no
+    # repite nada.
+    cabeceras: List[Optional[int]] = []
+    vigente: Optional[int] = None
+    for indice, pagina in enumerate(paginas):
+        if pagina.get("separador"):
+            vigente = indice
+        cabeceras.append(vigente)
 
     partes: List[List[int]] = []
-    actual = []
-    for seccion in secciones:
-        if len(seccion) > limite:
-            if actual:
-                partes.append(actual)
-                actual = []
-            cabecera = seccion[0] if paginas[seccion[0]].get("separador") else None
-            if cabecera is not None and limite < 2:
-                raise ErrorDeCorrida(
-                    "El límite de una página no permite repetir el separador "
-                    "junto con una bitácora; elija al menos 2 páginas por batch"
-                )
-            cuerpo = seccion[1:] if cabecera is not None else seccion
-            paso = limite - 1 if cabecera is not None else limite
-            trozos = [
-                ([cabecera] if cabecera is not None else [])
-                + cuerpo[inicio : inicio + paso]
-                for inicio in range(0, len(cuerpo), paso)
-            ]
-            partes.extend(trozos[:-1])
-            actual = trozos[-1]
-            continue
-        if actual and len(actual) + len(seccion) > limite:
-            partes.append(actual)
-            actual = []
-        actual.extend(seccion)
-    if actual:
+    cursor = 0
+    while cursor < total:
+        cabecera = cabeceras[cursor]
+        repetir = cabecera is not None and cabecera != cursor
+        if repetir and limite < 2:
+            raise ErrorDeCorrida(
+                "El límite de una página no permite repetir el separador "
+                "junto con una bitácora; elija al menos 2 páginas por batch"
+            )
+        actual = [cabecera] if repetir else []
+        fin = min(total, cursor + limite - len(actual))
+        actual.extend(range(cursor, fin))
         partes.append(actual)
+        cursor = fin
     return partes
 
 
