@@ -32,6 +32,7 @@ from app.airvault.flujo import (
     COMPLETADO,
     DESCUADRADO,
     ErrorDeCorrida,
+    EstadoParte,
     INCOMPLETO,
     INDEXADO,
     LISTO,
@@ -52,6 +53,8 @@ from app.airvault.flujo import (
     _reconciliar_batches,
     reiniciar_trabajos_incompletos,
     ruta_indice_paginas,
+    partes_por_subir,
+    reenvio_pendiente,
     subida_estancada,
     subir_partes,
 )
@@ -1300,6 +1303,74 @@ def test_subir_de_nuevo_reenvia_el_que_no_aparecio_durante_mucho_tiempo(
 
     assert subidas == ["DP | BIT -2"]
     assert trabajo.manifiesto.batch_id == "003NUE"
+
+
+def test_cada_reenvio_automatico_se_cuenta_y_se_agota(tmp_path, monkeypatch):
+    """Sin tope, una cola atascada recibiria el mismo archivo cada vuelta."""
+    from app.airvault.flujo import MAXIMO_REENVIOS_AUTOMATICOS
+
+    trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
+    subida = trabajo.manifiesto.etapa("subir")
+    subida.marcar(EstadoEtapa.HECHA, "division-02.pdf")
+    subida.actualizada = "2020-01-01T00:00:00"
+    trabajo.manifiesto.intentos_identificacion = 3
+    trabajo.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
+    trabajo.guardar()
+    cliente = ClienteFalso()
+    subidas = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        subidas.append(self.manifiesto.nombre_batch)
+        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "reenviado")
+        cliente.lotes.append(lote("003NUE", self.manifiesto.nombre_batch, 2))
+        self.guardar()
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+    subir_partes(
+        [trabajo], SesionFalsa(), cliente=cliente,
+        reintentar_estancados=True,
+    )
+
+    assert subidas == ["DP | BIT -2"]
+    # Encontrarlo cierra el asunto: el contador vuelve a cero para la
+    # proxima vez que este manifiesto tenga que subir algo.
+    assert trabajo.manifiesto.batch_id == "003NUE"
+    assert trabajo.manifiesto.reenvios == 0
+
+    # Con el tope gastado, la misma carga perdida ya no se reenvia sola.
+    perdida = _trabajos_principal_division_y_revisar(tmp_path / "otra")[1]
+    perdida.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "x.pdf")
+    perdida.manifiesto.intentos_identificacion = 3
+    perdida.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
+    perdida.manifiesto.reenvios = MAXIMO_REENVIOS_AUTOMATICOS
+    perdida.guardar()
+    estado = EstadoParte(perdida, BUSCANDO, "no aparecio")
+    assert subida_estancada(perdida, perdida.config.espera_reenvio_s)
+    assert not reenvio_pendiente(estado)
+    assert partes_por_subir([estado]) == []
+
+
+def test_lo_que_falta_por_subir_sale_de_una_sola_regla(tmp_path):
+    """La ventana y el boton tienen que decidir exactamente lo mismo."""
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    sin_subir, estancado, listo = trabajos
+    subida = estancado.manifiesto.etapa("subir")
+    subida.marcar(EstadoEtapa.HECHA, "division-02.pdf")
+    estancado.manifiesto.intentos_identificacion = 3
+    estancado.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
+    estancado.guardar()
+    listo.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "revisar.pdf")
+    listo.guardar()
+    cliente = ClienteFalso()
+    cliente.lotes.append(
+        lote("003LIS", listo.manifiesto.nombre_batch, 2)
+    )
+
+    estados = comprobar_partes(trabajos, cliente)
+
+    assert [t.carpeta for t in partes_por_subir(estados)] == [
+        sin_subir.carpeta, estancado.carpeta,
+    ]
 
 
 def test_una_subida_antigua_agota_revisiones_antes_de_empezar_la_espera(

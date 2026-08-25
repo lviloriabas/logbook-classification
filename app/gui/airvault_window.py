@@ -325,11 +325,7 @@ class TrabajoAirVaultWorker(QThread):
     # ── subir ──────────────────────────────────────────────────────
 
     def _subir(self) -> None:
-        from app.airvault.flujo import (
-            comprobar_entrega,
-            preparar_partes,
-            subir_partes,
-        )
+        from app.airvault.flujo import comprobar_entrega, preparar_partes
         from app.airvault.mapping import FLOTA_CACHE_FILENAME, ResolutorFlota
 
         estado = self.estado
@@ -365,6 +361,21 @@ class TrabajoAirVaultWorker(QThread):
         # seleccionada y por eso esas filas se mostraban pero no se subían.
         trabajos = list(estado.get("trabajos") or trabajos)
         estado["trabajos"] = trabajos
+        self._enviar(trabajos, cliente)
+
+    def _enviar(self, por_subir, cliente) -> None:
+        """Manda a Quick Upload lo que falte y encadena lo que se encuentre.
+
+        Es el mismo camino para la subida inicial y para la reanudación
+        automática: la lista de archivos cambia, pero no lo que se hace con
+        ellos ni el carril paralelo que indexa cada batch en cuanto AirVault
+        le asigna un ID.
+        """
+        from app.airvault.flujo import subir_partes
+
+        estado = self.estado
+        raiz = Path(estado["raiz"])
+        trabajos = list(estado.get("trabajos") or por_subir)
         self._notificar_subidas(trabajos)
         futuros: list[Future] = []
         en_cola: set[str] = set()
@@ -373,15 +384,20 @@ class TrabajoAirVaultWorker(QThread):
         )
         cliente_indice = self._cliente_paralelo(cliente)
 
-        def al_encontrar(trabajo, todos) -> None:
-            """Publica el ID y pone el batch listo en el carril de escritura."""
+        def al_encontrar(trabajo, _todos) -> None:
+            """Publica el ID y pone el batch listo en el carril de escritura.
+
+            La tabla se repinta con la ejecucion entera, no con la lista
+            reducida que se acaba de enviar: al reanudar solo lo pendiente,
+            las filas ya subidas desaparecerian de la ventana.
+            """
             from app.airvault.flujo import comprobar_partes
 
             remoto = comprobar_partes(
                 [trabajo], cliente, avisar=self._avisar
             )[0]
             self.batch_encontrado.emit({
-                "trabajos": list(todos), "estado": remoto,
+                "trabajos": list(trabajos), "estado": remoto,
             })
             clave = str(trabajo.carpeta)
             if (
@@ -398,7 +414,7 @@ class TrabajoAirVaultWorker(QThread):
 
         try:
             subir_partes(
-                trabajos, estado["sesion"], avisar=self._avisar,
+                list(por_subir), estado["sesion"], avisar=self._avisar,
                 cliente=cliente, dormir=self._dormir,
                 al_finalizar_subidas=self._notificar_subidas,
                 al_encontrar=al_encontrar,
@@ -460,20 +476,15 @@ class TrabajoAirVaultWorker(QThread):
         return datos
 
     def _subir_pendientes(self) -> None:
-        """Reanuda cargas locales sin volver a preparar la ejecución actual."""
-        from app.airvault.flujo import subir_partes
+        """Reanuda cargas locales sin volver a preparar la ejecución actual.
 
+        Es por donde entra la reanudación de la comprobación periódica: los
+        archivos que nunca llegaron a subirse y los que se dieron por
+        perdidos vuelven a Quick Upload sin que nadie pulse nada.
+        """
         estado = self.estado
         cliente = self._conectar()
-        subir_partes(
-            estado["pendientes_subida"], estado["sesion"],
-            avisar=self._avisar, cliente=cliente, dormir=self._dormir,
-            al_finalizar_subidas=self._notificar_subidas,
-        )
-        self.subido.emit({
-            "trabajos": estado["trabajos"], "cliente": cliente,
-            "sesion": estado.get("sesion"),
-        })
+        self._enviar(estado["pendientes_subida"], cliente)
 
     # ── comprobar ──────────────────────────────────────────────────
 
@@ -729,7 +740,13 @@ class AirVaultWindow(QDialog):
         # Encadena una comprobacion en cuanto termine lo que esta en vuelo:
         # subir e indexar dejan la lista desactualizada.
         self._comprobar_al_terminar = False
+        self._subir_al_terminar = False
         self._indexar_al_terminar = False
+        # Batches que la cadena automática ya mandó a Quick Upload en este
+        # ciclo. Una subida que falla deja la fila otra vez en «sin subir», y
+        # sin esta marca comprobar y subir se llamarían el uno al otro sin
+        # parar. Se vacía en cada vuelta del reloj y en cada acción manual.
+        self._reenvios_del_ciclo: set[str] = set()
         self._indexado_incompleto = False
         # Cerrar con trabajo en vuelo no bloquea: se pide la cancelación y
         # la ventana se va en cuanto el hilo suelta lo que tenía tomado.
@@ -879,9 +896,12 @@ class AirVaultWindow(QDialog):
             self.lote_edit.sizeHint().height()
         )
         self.limite_batch_spin.setToolTip(
-            "Cantidad máxima de páginas que se envía en cada batch de "
-            "Quick Upload, contando los separadores. Los PDF más grandes "
-            "se reparten automáticamente sin modificar la entrega original."
+            "Cantidad de páginas que lleva cada batch de Quick Upload, "
+            "contando los separadores. Todos se envían con esa cantidad "
+            "exacta y solo el último se queda con el resto; los PDF más "
+            "grandes se reparten sin modificar la entrega original. Si una "
+            "aeronave queda partida, el batch siguiente abre con una copia "
+            "de su separador."
         )
         self.limite_batch_spin.valueChanged.connect(
             self._guardar_limite_batch
@@ -1599,18 +1619,21 @@ class AirVaultWindow(QDialog):
         ]
 
     def _falta_esperar(self) -> bool:
-        """Si queda algún batch que AirVault todavía no ha terminado."""
-        from app.airvault.flujo import BUSCANDO
+        """Si queda algún batch que AirVault todavía no ha terminado.
 
-        return (
-            self._indexado_incompleto
-            and self.auto_indexar_check.isChecked()
-        ) or any(
+        Una carga que se dio por perdida sigue contando mientras la
+        automatización pueda reenviarla sola: parar el reloj ahí la dejaba
+        esperando a que alguien pulsara un botón. Cuando ya no quedan
+        reenvíos sí se deja de preguntar y se pide esa intervención.
+        """
+        from app.airvault.flujo import reenvio_pendiente
+
+        if self._indexado_incompleto and self.auto_indexar_check.isChecked():
+            return True
+        estancadas = self._subidas_estancadas()
+        return any(
             not parte.se_acabo and not parte.se_puede_indexar
-            and not (
-                parte.estado == BUSCANDO
-                and parte in self._subidas_estancadas()
-            )
+            and (parte not in estancadas or reenvio_pendiente(parte))
             for parte in self._estados
         )
 
@@ -1625,19 +1648,46 @@ class AirVaultWindow(QDialog):
             and subida_estancada(parte.trabajo, limite)
         ]
 
+    def _por_reenviar(self) -> list:
+        """Batches que la comprobación periódica va a mandar sola."""
+        from app.airvault.flujo import partes_por_subir
+
+        if not self.auto_check.isChecked():
+            return []
+        return [
+            trabajo for trabajo in partes_por_subir(self._estados)
+            if str(trabajo.carpeta) not in self._reenvios_del_ciclo
+        ]
+
     def _aviso_para_volver_a_subir(self) -> str:
+        from app.airvault.flujo import reenvio_pendiente
+
         estancadas = self._subidas_estancadas()
         if not estancadas:
             return ""
         nombres = ", ".join(parte.nombre for parte in estancadas)
         cuantos = "ese batch" if len(estancadas) == 1 else "esos batches"
         minutos = max(1, round(self._config_actual().espera_reenvio_s / 60))
-        return (
+        cabeza = (
             f" AirVault no publicó en Web Index: {nombres}. Ya pasó el "
             f"tiempo de espera de {minutos} minutos y es probable que la "
-            f"carga no vaya a aparecer. Pulse «Subir a AirVault» para "
-            f"comprobar la cola una "
-            f"vez más y volver a enviar solamente {cuantos}."
+            f"carga no vaya a aparecer."
+        )
+        if any(reenvio_pendiente(parte) for parte in estancadas):
+            if self.auto_check.isChecked():
+                return (
+                    f"{cabeza} Se comprueba la cola una vez más y se vuelve "
+                    f"a enviar solamente {cuantos}, sin pulsar nada."
+                )
+            return (
+                f"{cabeza} Pulse «Subir a AirVault» para comprobar la cola "
+                f"una vez más y volver a enviar solamente {cuantos}."
+            )
+        return (
+            f"{cabeza} Ya se reenvió el máximo de veces sin que apareciera, "
+            f"así que no se vuelve a enviar solo: revise {cuantos} en "
+            f"AirVault y use «Reiniciar paso incompleto» si hay que "
+            f"cargarlo otra vez."
         )
 
     # ── la comprobación periódica ──────────────────────────────────
@@ -1668,6 +1718,9 @@ class AirVaultWindow(QDialog):
         """Lo que dispara el reloj. Se salta el turno si hay algo en vuelo."""
         if self.hilo() is not None:
             return
+        # Cada vuelta del reloj vuelve a dar permiso de reenvío: lo que no
+        # se pudo subir hace cinco minutos se intenta otra vez ahora.
+        self._reenvios_del_ciclo.clear()
         self._comprobar()
 
     # ── acciones ───────────────────────────────────────────────────
@@ -1726,6 +1779,7 @@ class AirVaultWindow(QDialog):
         estado = self._base_del_estado()
         if estado is None:
             return
+        self._reenvios_del_ciclo.clear()
         self._lanzar("subir", estado)
 
     def _comprobar(self) -> None:
@@ -1766,6 +1820,7 @@ class AirVaultWindow(QDialog):
         """Retoma el primer paso necesario sin duplicar trabajo terminado."""
         from app.airvault.model import EstadoEtapa
 
+        self._reenvios_del_ciclo.clear()
         estado = self._base_del_estado()
         if estado is None:
             return
@@ -2020,6 +2075,25 @@ class AirVaultWindow(QDialog):
             )
         )
         self.estado_label.setText("Comprobado")
+        # Lo que no llegó a AirVault vuelve a Quick Upload sin esperar a que
+        # nadie pulse nada. Antes la comprobación periódica solo preguntaba,
+        # así que un archivo sin subir se quedaba en la lista para siempre
+        # mientras el reloj seguía consultando el servidor por él.
+        por_reenviar = self._por_reenviar()
+        if por_reenviar:
+            self._estado["pendientes_subida"] = por_reenviar
+            self._estado["indexar_al_encontrar"] = (
+                self.auto_indexar_check.isChecked()
+            )
+            self._estado["completar"] = self.completar_check.isChecked()
+            self._reenvios_del_ciclo.update(
+                str(trabajo.carpeta) for trabajo in por_reenviar
+            )
+            self._subir_al_terminar = True
+            nombres = ", ".join(
+                t.manifiesto.nombre_batch for t in por_reenviar
+            )
+            self._anotar(f"Faltan por subir: {nombres}; se envían ahora")
         if listos:
             self.resumen.setText(
                 self._resumen_de_listos(datos["partes"])
@@ -2207,6 +2281,11 @@ class AirVaultWindow(QDialog):
             self._comprobar_al_terminar = False
             self._comprobar()
             return
+        if getattr(self, "_subir_al_terminar", False):
+            self._subir_al_terminar = False
+            if self._estado.get("pendientes_subida"):
+                self._lanzar("subir_pendientes", self._estado)
+                return
         if getattr(self, "_indexar_al_terminar", False):
             self._indexar_al_terminar = False
             if self._listos() or (
