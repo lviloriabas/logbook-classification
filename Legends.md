@@ -2,6 +2,14 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-25 - Las fechas confirmadas de cada libro se recuerdan entre ejecuciones
+
+De un libro solo se recordaba la matrícula. Las fechas vivían en la ejecución que las leyó: un libro que llega repartido en dos entregas empezaba la segunda sin anclas, y las páginas cuya casilla de fecha no se dejó leer se quedaban sin mes ni año aunque la entrega anterior tuviera ese mismo libro resuelto de punta a punta. Ahora `book_fechas.json`, junto a `book_matriculas.json` y con el mismo espíritu, guarda de cada libro la primera y la última fecha confirmadas por lectura directa: `"23159A":{"00":"2025-05-02","30":"2025-05-24"}`, cincuenta bytes por libro. Diez mil libros no llegan al medio megabyte, y el archivo viaja en el repositorio, así que una copia portable recién instalada ya arranca con lo aprendido.
+
+Con las dos anclas se resuelve el tramo que encierran. La fecha no retrocede dentro de un libro, de modo que toda página intermedia cae entre las dos fechas guardadas; si ambas comparten mes, o al menos año, ese componente queda sin alternativa posible para las páginas intermedias que no se leyeron, y se completa en `WARNING` con su procedencia, igual que cualquier otra inferencia. Fuera del tramo no se toca nada: de una página posterior a la última ancla solo se sabe que su fecha no es anterior, y eso no fija el mes. En una prueba de dos ejecuciones sobre el mismo libro, la segunda entrega resolvió cuatro componentes que antes salían vacíos y dejó intacta la página que caía fuera del tramo.
+
+Lo guardado nunca gana a lo leído. El registro se consulta al final, después del consenso, la interpolación y los extremos, y solo rellena lo que sigue vacío. Una lectura directa del tramo que contradiga las anclas desactiva el registro para ese libro entero y deja el aviso en el log, sin corregirlo por iniciativa propia. Al aprender pasa lo mismo: una entrada se amplía hacia páginas nuevas, pero una fecha distinta para una página ya guardada, o una que obligaría al libro a retroceder, no reemplaza a la anterior. Solo entran lecturas en OK, con la página bien alineada y el `log_number` legible; una fecha inferida no puede volver a guardarse como ancla y darse la razón a sí misma en la ejecución siguiente.
+
 ## 2026-08-25 - Las dos bitácoras que chocan se marcan como duplicadas
 
 La columna `dup` y el color de la tabla señalaban solo la aparición posterior de un `log_number` repetido. La primera salía limpia, así que al ver una fila marcada había que recorrer el CSV buscando con cuál chocaba, y en una ejecución larga eso es media entrega. Ahora se marcan todas las apariciones del grupo: las dos filas del choque se ven a la vez.
