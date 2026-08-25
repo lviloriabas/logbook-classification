@@ -190,16 +190,18 @@ class PipelineWorker(QThread):
             correct_matricula_by_book(
                 reports, self.config.book_matriculas_file
             )
-            correct_dates_by_book(reports)
+            correct_dates_by_book(reports, self.config.book_fechas_file)
             if self.config.verify_fleet:
                 from app.validation.fleet import verify_reports_against_fleet
 
                 verify_reports_against_fleet(reports, self.config.fleet_file)
             from app.validation.book_corrector import learn_book_matriculas
+            from app.validation.date_corrector import learn_book_dates
 
             learn_book_matriculas(
                 reports, self.config.book_matriculas_file
             )
+            learn_book_dates(reports, self.config.book_fechas_file)
             self.reports = reports
             self.succeeded.emit(reports)
         except Exception as exc:  # noqa: BLE001 - la GUI muestra el error

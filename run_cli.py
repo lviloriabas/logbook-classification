@@ -61,6 +61,7 @@ from app.utils.important_fields import (
     default_important_columns,
 )
 from app.utils.logging import setup_logging
+from app.validation.date_corrector import BOOK_DATES_FILENAME
 
 
 def parse_args() -> argparse.Namespace:
@@ -315,6 +316,7 @@ def _run(args: argparse.Namespace) -> int:
             Path(args.lista_flota) if args.lista_flota
             else _ROOT / FLEET_FILENAME
         ),
+        book_fechas_file=_ROOT / BOOK_DATES_FILENAME,
     )
 
     page_range = PageRange()
@@ -460,7 +462,7 @@ def _run(args: argparse.Namespace) -> int:
           f"{stats['corrected']} matrícula(s) corregidas, "
           f"{stats['flagged']} discrepante(s) marcada(s)")
 
-    stats = correct_dates_by_book(reports)
+    stats = correct_dates_by_book(reports, config.book_fechas_file)
     print(f"Corrector de fechas por libro: {stats['books']} libro(s), "
           f"{stats['corrected']} fecha(s) corregidas, "
           f"{stats['flagged']} discrepante(s) marcada(s), "
@@ -474,8 +476,10 @@ def _run(args: argparse.Namespace) -> int:
         print(f"Lista de aviones: {config.fleet_file}")
 
     from app.validation.book_corrector import learn_book_matriculas
+    from app.validation.date_corrector import learn_book_dates
 
     learn_book_matriculas(reports, config.book_matriculas_file)
+    learn_book_dates(reports, config.book_fechas_file)
 
     # ── Salidas de la ejecución ───────────────────────────────────────────
     # Se escriben con la misma función que usa la interfaz. Tenerlas

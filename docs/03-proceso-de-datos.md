@@ -132,10 +132,15 @@ El corrector ordena por `log_number` y aplica, en este orden:
 3. interpolación de mes y año entre lecturas confiables;
 4. inferencia limitada en los extremos del libro;
 5. relleno por consenso cuando no hay conflicto;
-6. recuperación conservadora del día al cierre del mes;
-7. detección de regresiones y fechas no resueltas.
+6. relleno desde el registro de libros;
+7. recuperación conservadora del día al cierre del mes;
+8. detección de regresiones y fechas no resueltas.
 
 Una inferencia queda identificada como tal. Un conflicto no se oculta; el campo se marca para revisión.
+
+Un libro puede llegar repartido entre varias ejecuciones. Para que la entrega siguiente no empiece sin anclas, `book_fechas.json` recuerda de cada libro la primera y la última fecha confirmadas por lectura directa, en la forma `"23159A":{"02":"2025-05-14","40":"2025-06-02"}`: unas decenas de bytes por libro, sin páginas, imágenes ni historial. Una fecha inferida nunca entra en el registro.
+
+Como la fecha no retrocede dentro de un libro, toda página situada entre las dos anclas cae entre sus fechas. Si ambas comparten mes, o al menos año, ese componente se completa en las páginas intermedias que no se dejaron leer, siempre en `WARNING` y con la procedencia escrita. Fuera de ese tramo no se infiere nada. La evidencia de la ejecución actual manda: el registro se consulta al final, y si una lectura directa del tramo lo contradice, no se usa en ese libro y el conflicto queda en el log. Una entrada guardada tampoco se reemplaza sola; solo se amplía hacia páginas que no contradicen lo anterior.
 
 ## 3.9 Verificación de flota
 
