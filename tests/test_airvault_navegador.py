@@ -2,8 +2,8 @@
 
 No se lanza Edge en ninguna prueba: se ejerce el cliente del protocolo
 contra un servidor de mentira en la misma máquina, y el recorrido completo
-contra un navegador falso. Lo que no se puede probar aquí —que Microsoft
-devuelva la sesión— es justamente lo que hace una persona.
+contra un navegador falso. Lo que no se puede probar aquí (que Microsoft
+devuelva la sesión) es justamente lo que hace una persona.
 """
 
 from __future__ import annotations

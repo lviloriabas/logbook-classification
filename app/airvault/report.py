@@ -135,7 +135,7 @@ def escribir_html_de_partes(
             propio = plan.resumen()
             filas.append(
                 f'<tr class="cabecera"><td colspan="{len(columnas)}">'
-                f'{html.escape(nombre or plan.batch_id)} — '
+                f'{html.escape(nombre or plan.batch_id)}: '
                 f'{propio["total"]} paginas, {propio["escribibles"]} se '
                 f'escribirian, {propio["bloqueadas"]} bloqueadas'
                 f'</td></tr>'

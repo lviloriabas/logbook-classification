@@ -24,9 +24,9 @@ from urllib.parse import urlsplit
 # Cookies que **autentican**. ``Critical`` es la de AirVault: la pone el
 # sitio al volver de Entra ID y es la unica que abre la sesion, medido
 # pidiendo el listado de batches con cada cookie por separado. Las otras dos
-# son las formas habituales de ASP.NET —``FedAuth`` se parte en
+# son las formas habituales de ASP.NET (``FedAuth`` se parte en
 # ``FedAuth1``, ``FedAuth2``... cuando el token no cabe en una sola, asi que
-# se compara por prefijo— y se dejan por si otra instalacion las usa.
+# se compara por prefijo) y se dejan por si otra instalacion las usa.
 #
 # Buscar solo las de ASP.NET dejaba al programa esperando cinco minutos con
 # la sesion ya abierta delante: las cookies estaban, ninguna se llamaba como

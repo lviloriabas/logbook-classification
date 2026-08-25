@@ -379,8 +379,8 @@ def test_verificar_cuenta_aparte_la_pagina_que_no_pudo_leerse():
 def test_una_sesion_caducada_se_renueva_sin_ventana_y_sigue(monkeypatch):
     """La sesion se cae a mitad del trabajo y se rehace ahi mismo.
 
-    El perfil de Edge sabe volver a entrar solo —pasa otra vez por el
-    enlace federado y Microsoft lo reconoce sin preguntar nada—, asi que
+    El perfil de Edge sabe volver a entrar solo (pasa otra vez por el
+    enlace federado y Microsoft lo reconoce sin preguntar nada), asi que
     una caducidad no tiene por que tumbar un batch de cuatrocientas
     paginas: se rehace la sesion y se repite la peticion.
     """
@@ -513,7 +513,7 @@ def test_un_500_al_escribir_hace_releer_el_token():
 
 
 def test_un_440_es_que_caduco_la_sesion_y_no_un_rechazo_del_sitio(monkeypatch):
-    """IIS contesta 440 —«Login Timeout»— con su pagina de error generica.
+    """IIS contesta 440 («Login Timeout») con su pagina de error generica.
 
     Sin nombrarlo se leia como un rechazo de AirVault y el trabajo moria en
     medio de una espera larga en vez de volver a entrar.

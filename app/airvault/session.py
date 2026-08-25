@@ -57,7 +57,7 @@ ORIGEN_FORMULARIO = "formulario de AirVault"
 # pagina. La pone cada llamada del sitio, y sin ella el servidor contesta
 # 500 con su pagina de error generica: ni 403 ni mensaje. Eso era lo que
 # dejaba la subida muerta en ``FinishUpload`` **despues** de haber mandado
-# el archivo entero —los trozos si viajaban—, y como un 500 se reintenta,
+# el archivo entero (los trozos si viajaban), y como un 500 se reintenta,
 # el fallo llegaba disfrazado de «la red o AirVault ocupado».
 CABECERA_ANTIFORGERY = "AntiForgery"
 
@@ -83,8 +83,8 @@ class ErrorDeAirVault(RuntimeError):
     """AirVault contesto, y lo que contesto es un rechazo.
 
     Es distinto de :class:`ErrorDeConexion` a proposito: un 404 o un 403
-    hablan de *esa* peticion —una pagina que ya no esta, un batch sin
-    permiso— y no del camino, asi que frenan la pagina y no el batch entero.
+    hablan de *esa* peticion (una pagina que ya no esta, un batch sin
+    permiso) y no del camino, asi que frenan la pagina y no el batch entero.
     """
 
 
@@ -103,15 +103,15 @@ CONSULTA_DE_PRUEBA = {
 ESTADOS_TRANSITORIOS = frozenset({408, 429, 500, 502, 503, 504})
 
 # Lo que contesta AirVault cuando la sesion ya no vale. El 440 es el de IIS
-# —«Login Timeout»—, y llega con la pagina de error generica del servidor,
+# («Login Timeout»), y llega con la pagina de error generica del servidor,
 # asi que sin nombrarlo se leia como un rechazo del sitio y el trabajo moria
 # en medio de una espera larga en vez de volver a entrar.
 ESTADOS_DE_SESION = frozenset({401, 419, 440})
 
 _AYUDA_LOTE_ABIERTO = (
     " AirVault admite un solo dueno por batch y no contesta «ocupado»: deja "
-    "la peticion esperando. Si el batch esta abierto —en el navegador o "
-    "porque un intento anterior no llego a desbloquearlo— hay que "
+    "la peticion esperando. Si el batch esta abierto (en el navegador o "
+    "porque un intento anterior no llego a desbloquearlo) hay que "
     "cerrarlo en AirVault antes de indexarlo desde aqui."
 )
 
@@ -551,9 +551,9 @@ class SesionAirVault:
         Un batch son cientos de peticiones y una subida completa casi dos
         mil: a esa escala un corte de red momentaneo o un servidor ocupado
         dejan de ser raros, y sin reintentos cualquiera de los dos tira el
-        trabajo entero. Se reintenta lo que puede arreglarse solo —un
+        trabajo entero. Se reintenta lo que puede arreglarse solo (un
         tiempo agotado, una conexion cortada, un servidor que responde que
-        esta ocupado— y nada mas: un 404 no mejora por insistir.
+        esta ocupado) y nada mas: un 404 no mejora por insistir.
 
         La espera crece con cada intento; reintentar al instante contra un
         servidor que se esta ahogando solo lo empeora.
@@ -736,7 +736,7 @@ class SesionAirVault:
 
         Depende de donde salio la sesion: mandar a copiar una cookie con
         F12 a quien entro por el navegador es mandarlo por el camino largo
-        justo cuando el corto —volver a entrar— es el que corresponde.
+        justo cuando el corto (volver a entrar) es el que corresponde.
         """
         if self._origen == ORIGEN_EDGE:
             return (

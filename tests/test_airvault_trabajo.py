@@ -448,8 +448,8 @@ def test_el_avance_llega_pagina_a_pagina(tmp_path):
 def test_el_lote_se_suelta_al_terminar_cada_etapa(tmp_path):
     """AirVault admite un solo dueno: quedarselo cuelga la proxima apertura.
 
-    Sin soltarlo, la ejecucion siguiente —o la persona que abre el batch en
-    el navegador— se encuentra con una peticion que nunca contesta, y el
+    Sin soltarlo, la ejecucion siguiente (o la persona que abre el batch en
+    el navegador) se encuentra con una peticion que nunca contesta, y el
     programa culpaba al navegador de un candado que habia dejado el.
 
     Planificar solo lee, asi que suelta en cuanto termina: entre revisar y
