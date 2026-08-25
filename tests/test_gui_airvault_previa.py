@@ -89,9 +89,23 @@ def test_un_aviso_manda_sobre_el_estado(app):
 
     cuadro = BitacorasDelBatch("DP | BITS", registros)
 
-    assert cuadro.tabla.item(0, 6).text() == "Por escribir"
+    assert cuadro.tabla.item(0, 6).text() == "Por indexar"
     assert cuadro.tabla.item(1, 6).text() == "sin matricula"
-    assert cuadro.tabla.item(2, 6).text() == "Escrita"
+    assert cuadro.tabla.item(2, 6).text() == "Indexada"
+
+
+def test_un_batch_completado_dice_que_sus_bitacoras_lo_estan(app):
+    """Cerrado el batch, «indexada» se queda corto: ya no queda nada."""
+    registros = [
+        bitacora(1, estado=EstadoRegistro.ESCRITA),
+        bitacora(2, log="2271621", estado=EstadoRegistro.OMITIDA),
+    ]
+
+    cuadro = BitacorasDelBatch("DP | BITS", registros, completado=True)
+
+    assert cuadro.tabla.item(0, 6).text() == "Completada"
+    # Lo que no se escribió no se completó con el batch.
+    assert cuadro.tabla.item(1, 6).text() == "Omitida"
 
 
 # ── la vista previa de los batches ─────────────────────────────────

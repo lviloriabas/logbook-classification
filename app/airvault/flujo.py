@@ -1789,6 +1789,10 @@ class BatchPrevisto:
     estado: str = ""
     subido: bool = False
     existe: bool = False
+    # AirVault ya dio el batch por terminado: se indexo y se mando a Web
+    # Search. Se guarda aparte de ``estado`` porque ese es texto para leer y
+    # esto es una condicion que la interfaz consulta.
+    completado: bool = False
 
     @property
     def paginas(self) -> int:
@@ -1807,6 +1811,7 @@ class BatchPrevisto:
 def _previsto_de_trabajo(trabajo: "Trabajo") -> BatchPrevisto:
     """Describe un batch que ya tiene manifiesto como uno previsto."""
     manifiesto = trabajo.manifiesto
+    parte = estado_local(trabajo)
     return BatchPrevisto(
         nombre=manifiesto.nombre_batch,
         parte=int(manifiesto.parte or 1),
@@ -1815,9 +1820,10 @@ def _previsto_de_trabajo(trabajo: "Trabajo") -> BatchPrevisto:
         pdf=Path(manifiesto.pdf_origen or ""),
         registros=list(manifiesto.registros),
         batch_id=manifiesto.batch_id or "",
-        estado=str(estado_local(trabajo)),
+        estado=str(parte),
         subido=trabajo_comprometido(trabajo),
         existe=True,
+        completado=parte.estado in (COMPLETADO, AUTOCOMPLETADO),
     )
 
 

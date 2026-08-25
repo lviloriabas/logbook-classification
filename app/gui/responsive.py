@@ -89,7 +89,10 @@ class Density:
     bottom_min_height: int
     log_min_width: int
     name_column_width: int
-    # Vista previa: mínimo por debajo del cual la página ya no se lee.
+    # Vista previa: mínimo por debajo del cual la página ya no se lee. Es un
+    # escaneo vertical de una hoja completa, así que el suelo va por encima
+    # del de un recuadro cualquiera; el reparto habitual lo decide el
+    # separador de la ventana, no este número.
     preview_min_width: int
     preview_min_height: int
     # Visor de CSV y editor de plantillas.
@@ -116,8 +119,8 @@ ROOMY = Density(
     bottom_min_height=150,
     log_min_width=340,
     name_column_width=220,
-    preview_min_width=300,
-    preview_min_height=220,
+    preview_min_width=340,
+    preview_min_height=260,
     pdf_pane_min_width=360,
     pdf_pane_min_height=260,
     editor_view_min_width=600,

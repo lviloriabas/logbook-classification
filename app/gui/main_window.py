@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -136,6 +137,12 @@ _PISTA_BUSQUEDA = "Escriba lo que busca del batch: bitácora, matrícula, archiv
 # pool roto la espera real es de milisegundos; el margen es para el hilo que
 # estuviera escribiendo en disco justo en ese instante.
 _CORTE_ESPERA_MS = 4000
+# Reparto del ancho entre la vista previa y la tabla de resultados. La página
+# de una bitácora es vertical y se lee entera o no se lee: pesa lo mismo que
+# la tabla, que además se puede recorrer de lado.
+_PREVIEW_SHARE = 1
+_RESULTS_SHARE = 1
+
 # Pausa tras el último evento de tamaño antes de reescalar la vista previa.
 # Arrastrar el borde emite un evento por píxel y cada uno reescalaba la página
 # entera con interpolación suave; así se reescala una vez al soltar.
@@ -522,6 +529,7 @@ class MainWindow(QMainWindow):
         self._resize_preview_timer.timeout.connect(self._render_preview_pixmap)
 
         self._bottom_splitter_adjusted = False
+        self._content_splitter_adjusted = False
         self._file_rows: dict[int, dict] = {}
         self._row_ms: dict[int, float] = {}
         self._row_started: dict[int, float] = {}
@@ -1549,9 +1557,34 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(preview_widget)
         splitter.addWidget(table_panel)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(0, _PREVIEW_SHARE)
+        splitter.setStretchFactor(1, _RESULTS_SHARE)
+        splitter.setChildrenCollapsible(False)
+        splitter.splitterMoved.connect(self._on_content_splitter_moved)
+        self.content_splitter = splitter
         return splitter
+
+    def _on_content_splitter_moved(self, _position: int, _index: int) -> None:
+        """Una vez que el usuario reparte el ancho, se respeta su medida."""
+        self._content_splitter_adjusted = True
+
+    def _balance_content_splitter(self) -> None:
+        """Reparte el ancho entre la vista previa y la tabla.
+
+        Los factores de estiramiento solo gobiernan el espacio *sobrante*, y
+        la tabla de resultados pide de ancho lo que sumen sus columnas: se lo
+        quedaba casi todo y la bitácora se quedaba en su mínimo, una franja
+        donde una página vertical no se lee. El reparto se aplica a mano,
+        como en el visor de CSV, hasta que alguien mueva el separador.
+        """
+        if self._content_splitter_adjusted:
+            return
+        available = max(
+            0,
+            self.content_splitter.width() - self.content_splitter.handleWidth(),
+        )
+        pane = available * _PREVIEW_SHARE // (_PREVIEW_SHARE + _RESULTS_SHARE)
+        self.content_splitter.setSizes([pane, available - pane])
 
     def _build_bottom_splitter(self) -> QSplitter:
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -3905,6 +3938,15 @@ class MainWindow(QMainWindow):
         row.addWidget(self.search_next)
         self.search_context = QLabel(_PISTA_BUSQUEDA)
         self.search_context.setStyleSheet("color: #57606a;")
+        # La pista es una frase larga, y un QLabel pide de ancho mínimo la
+        # frase entera: metida en el panel de la tabla, ese mínimo era el que
+        # empujaba el separador y dejaba la bitácora en su franja más
+        # estrecha. Aquí el texto cede: se recorta antes que robarle sitio a
+        # la página, que es lo que de verdad hay que ver.
+        self.search_context.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.search_context.setMinimumWidth(0)
         row.addWidget(self.search_context, 1)
         return row
 
@@ -4286,6 +4328,7 @@ class MainWindow(QMainWindow):
             self._grow_to_fit_content()
         self._update_responsive_layout()
         QTimer.singleShot(0, self._balance_bottom_splitter)
+        QTimer.singleShot(0, self._balance_content_splitter)
         QTimer.singleShot(0, self._resize_preview_placeholder)
 
     def resizeEvent(self, event) -> None:
@@ -4299,6 +4342,7 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._update_responsive_layout()
         QTimer.singleShot(0, self._balance_bottom_splitter)
+        QTimer.singleShot(0, self._balance_content_splitter)
         if self._preview_source_pixmap is not None:
             self._resize_preview_timer.start()
         else:

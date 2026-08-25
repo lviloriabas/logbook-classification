@@ -2,6 +2,30 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-25 - La tabla del visor deja de copiarse celda a celda, y la fila entera se sombrea
+
+El visor de CSV guardaba un `QTableWidgetItem` por celda. Una ejecución de dos mil cuatrocientas páginas por ochenta y seis columnas son doscientas siete mil celdas: abrir el CSV costaba más de cuatro segundos y cada clic en una cabecera movía esas doscientas siete mil celdas de sitio, medio segundo con la ventana muerta en el que el orden parecía no aplicarse. Ahora la tabla no guarda nada: lee del CSV que ya está en memoria y pinta solo lo que se ve. Ordenar es reordenar una lista de índices, así que el mismo clic tarda veinticinco milisegundos, y abrir la ejecución baja de cuatro segundos y medio a menos de uno.
+
+Lo que sobraba en la apertura eran dos cosas más. El JSON de la ejecución se interpretaba cinco veces seguidas (los PDF de cada fila, los documentos, sus páginas, los estados de campo y el botón de exportar piden lo mismo); ahora se interpreta una vez y se recuerda mientras el archivo no cambie de tamaño ni de fecha, de modo que reescribirlo al eliminar páginas lo invalida solo. Y el mapa de estados del JSON, que es el respaldo del color cuando se abre el CSV mínimo, se armaba siempre: el CSV completo trae sus columnas `_status` y no lo consulta nunca.
+
+La casilla con la que se juntan páginas sueltas vivía dentro de la primera columna de datos, compartiendo celda con el nombre del archivo. Ahora es una columna propia, estrecha, sin rótulo y que la vista resumida no oculta: marcar páginas no puede depender de qué columnas se estén mostrando. La fila marcada queda sombreada de azul de un extremo al otro, no solo donde está la casilla, y la barra espaciadora marca de una vez todas las filas resaltadas.
+
+El cursor sombrea también la fila entera. El estilo nativo de Windows resalta la celda que tiene debajo, así que recorrer una tabla ancha dejaba un cuadro azul suelto en vez de la línea que se está leyendo. Vale en todas las tablas de la aplicación. Una celda con color de estado (el verde de lo correcto, el rojo del error) no lo pierde al pasar el cursor: se tiñe, porque ese color es un dato y no un realce.
+
+## 2026-08-25 - La bitácora se ve entera en la ventana principal y en la vista previa de batches
+
+La vista previa de la ventana principal se quedaba con 350 px de ancho de los 1447 de la ventana. El reparto lo decidía el mínimo del panel de la tabla, y ese mínimo no lo ponían las columnas (que se recorren de lado) sino la frase de ayuda del buscador, que pedía de ancho la frase entera. Ahora esa frase se recorta y la página y la tabla se reparten el ancho a medias, que en una ventana normal son unos 720 px para cada una. Mover el separador sigue mandando: desde que alguien lo ajusta, no se le vuelve a tocar.
+
+La lista de bitácoras de un batch se mira ahora como el visor de CSV, en compacto: la hoja escaneada a la izquierda, la tabla a la derecha, un buscador encima y las columnas ordenables con un clic. Elegir una fila abre su hoja en el visor y el doble clic la vuelve a traer, que es lo que hace falta cuando se ha navegado el PDF por otro lado. Comprobar que una bitácora concreta cae donde se espera deja de exigir abrir el PDF por fuera y contar páginas. La lista de batches gana el mismo buscador y el mismo orden por columna.
+
+La columna de estado decía «Escrita» de una bitácora ya indexada y «Por escribir» de la que falta. Escribir no es lo que se hace: se indexa, y así se llama en el resto de la ventana. Ahora dicen «Indexada» y «Por indexar», y cuando el batch ya se completó (se cerró y se mandó a Web Search) sus bitácoras dicen «Completada», que es lo que las distingue de las que siguen en la cola esperando revisión.
+
+## 2026-08-25 - Una ejecución se elimina desde el historial de AirVault
+
+Eliminar el registro local de AirVault era un botón que actuaba siempre sobre la ejecución abierta: para olvidar el de otra había que cargarla primero, con lo que eso arrastra (soltar los batches tomados, parar la vigilancia, releer los manifiestos). Y de la ejecución en sí no había forma de deshacerse desde el programa: la lista crecía con todo lo procesado y limpiarla era ir a `output/` con el explorador.
+
+Ahora el clic derecho sobre una fila del historial ofrece las dos cosas por separado. **Eliminar el registro de AirVault** hace lo mismo que el botón, pero sobre la fila elegida: si no es la ejecución abierta, la ventana ni se mueve. **Eliminar la ejecución…** manda a la Papelera su carpeta de `output/` entera (CSV, JSON, estadísticas y PDF de entrega) junto con su registro local, y la fila desaparece de la lista. Va a la Papelera y no al vacío porque una ejecución son horas de proceso. Los batches que ya estén en AirVault no se tocan en ninguno de los dos casos: eso no vive aquí. No se elimina la ejecución que se esté subiendo o indexando en ese momento, ni un CSV abierto con **Otra ejecución…** que viva fuera de `output/`.
+
 ## 2026-08-25 - La vista previa dice en qué batches queda la ejecución antes de subirla
 
 La tabla de batches solo tenía algo que enseñar después de subir: hasta que se pulsaba **Subir a AirVault** no había manifiestos, porque el reparto se decide al preparar los archivos. Con el máximo por batch delante había que elegir un número a ciegas, subir, y solo entonces ver que la ejecución quedaba en siete batches y no en cinco. Ahora **Vista previa…**, junto al título de la tabla, adelanta ese mismo reparto: el nombre que llevaría cada batch, sus páginas (con los separadores que se repiten al cortar a mitad de una aeronave) y sus bitácoras. Los que ya están en AirVault salen con su estado, así que la lista es a la vez lo que falta por subir y lo que está esperando en la cola.
