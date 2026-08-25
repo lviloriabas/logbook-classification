@@ -1464,16 +1464,28 @@ class AirVaultWindow(QDialog):
         return carpeta
 
     def _rutas_del_registro(self) -> list[Path]:
-        """Manifiestos locales de la ejecución elegida, nunca de otra."""
+        """Memoria local de la ejecución elegida, nunca de otra.
+
+        Son los manifiestos vivos, el registro de batches de la entrega y
+        los manifiestos que se apartaron al rehacer un reparto. Es una sola
+        memoria: se olvida entera o queda un resto que después contradice a
+        lo que quede.
+        """
         from app.airvault.manifest import MANIFIESTO_FILENAME
+        from app.airvault.registro import rutas_del_registro
 
         carpeta = self._carpeta_del_registro()
         if carpeta is None:
             return []
-        return sorted(
+        rutas = {
             ruta for ruta in carpeta.rglob(MANIFIESTO_FILENAME)
             if ruta.is_file() and ruta.resolve().is_relative_to(carpeta)
+        }
+        rutas.update(
+            ruta for ruta in rutas_del_registro(carpeta)
+            if ruta.resolve().is_relative_to(carpeta)
         )
+        return sorted(rutas)
 
     def _eliminar_registro(self) -> None:
         """Reinicia la ejecución borrando solo su memoria local de AirVault."""

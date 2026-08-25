@@ -57,6 +57,7 @@ from app.airvault.mapping import (
     normalizar_matricula,
     valores_de_indice,
 )
+from app.airvault import registro as registro_entrega
 from app.airvault.model import (
     EstadoEtapa,
     EstadoRegistro,
@@ -1004,6 +1005,7 @@ class Trabajo:
             EstadoEtapa.HECHA, f"{lote.batch_id} ({lote.paginas} paginas)"
         )
         self.guardar()
+        registro_entrega.anotar(self.carpeta, [self])
         return lote.batch_id
 
     def _ponerle_nombre(self, cliente, lote, avisar: Optional[Aviso] = None) -> None:
@@ -1430,6 +1432,7 @@ class Trabajo:
         self.manifiesto.completado_automatico = bool(automatico)
         self.manifiesto.etapa("completar").marcar(EstadoEtapa.HECHA, detalle)
         self.guardar()
+        registro_entrega.anotar(self.carpeta, [self])
         logger.info("Batch {} dado por terminado en AirVault", batch_id)
         return ResultadoCompletar(True, [], len(paginas), detalle, quitadas)
 
@@ -1512,6 +1515,7 @@ def revisar_cobertura(
     partes: Sequence[ParteDeEntrega],
     trabajos: Sequence["Trabajo"],
     solo_comprometidos: bool = True,
+    tambien_cubiertas: Collection[Tuple[str, int]] = (),
 ) -> Cobertura:
     """Contrasta la entrega contra los batches que ya existen.
 
@@ -1534,7 +1538,10 @@ def revisar_cobertura(
         nombre = trabajo.manifiesto.nombre_batch or str(trabajo.carpeta)
         for clave in paginas_cubiertas(trabajo.manifiesto):
             duenos.setdefault(clave, []).append(nombre)
-    cubiertas = set(duenos)
+    # El registro de la entrega recuerda bitacoras que ya viajaron aunque su
+    # manifiesto ya no este en disco. No cuentan como repetidas: no hay dos
+    # batches llevandolas, hay uno del que solo queda la anotacion.
+    cubiertas = set(duenos) | set(tambien_cubiertas)
     return Cobertura(
         cubiertas=cubiertas,
         huecos=[clave for clave in de_la_entrega if clave not in cubiertas],
@@ -1602,7 +1609,13 @@ def preparar_partes(
             return existentes
 
     resolutor = resolutor or ResolutorFlota()
-    cobertura = revisar_cobertura(entrega, previos)
+    # El registro de la entrega es la memoria que sobrevive al reparto: sabe
+    # que bitacoras se mandaron aunque el manifiesto que las llevaba se haya
+    # apartado o perdido. Sin el, rehacer el reparto dos veces seguidas
+    # volveria a mandar lo que ya estaba en AirVault.
+    cobertura = revisar_cobertura(
+        entrega, previos, tambien_cubiertas=registro_entrega.comprometidas(carpeta)
+    )
     if cobertura.repetidas:
         detalle = "; ".join(
             f"{archivo} p.{pagina} en {' y '.join(nombres)}"
@@ -1627,6 +1640,10 @@ def preparar_partes(
     # Lo que solo existe en disco se aparta antes de repartir: su carpeta
     # puede volver a usarse, y un manifiesto huerfano se ofreceria despues
     # como un batch pendiente de subir que ya no corresponde a nada.
+    registro_entrega.archivar(
+        carpeta,
+        f"reparto rehecho a {limite_paginas or 'sin limite'} paginas por batch",
+    )
     for trabajo in previos:
         if trabajo not in comprometidos:
             _apartar_manifiesto(trabajo)
@@ -1654,7 +1671,9 @@ def preparar_partes(
         )
         for parte in partes
     ]
-    return _renumerar(_en_orden_de_parte(comprometidos + nuevos))
+    listos = _renumerar(_en_orden_de_parte(comprometidos + nuevos))
+    registro_entrega.anotar(carpeta, listos, csv_origen=str(csv))
+    return listos
 
 
 def _reparto_al_dia(
@@ -2030,6 +2049,10 @@ def subir_partes(
                     0,
                 )
             continue
+        # Quick Upload lo acepto: desde aqui esas bitacoras estan
+        # comprometidas y no se vuelven a repartir aunque cambie la
+        # configuracion o se pierda el manifiesto.
+        registro_entrega.anotar(trabajo.carpeta, [trabajo])
         if al_finalizar_subidas is not None:
             # La UI debe reflejar que Quick Upload ya acepto este archivo
             # incluso si AirVault tarda o falla antes de publicar su ID.
@@ -3790,4 +3813,5 @@ def verificar_partes(
         validas += propias
         total += suyas
         problemas.extend(f"{cabeza}{p}" for p in suyos)
+        registro_entrega.anotar(trabajo.carpeta, [trabajo])
     return validas, total, problemas
