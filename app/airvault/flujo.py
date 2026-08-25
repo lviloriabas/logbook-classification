@@ -1768,6 +1768,181 @@ def preparar_partes(
     return listos
 
 
+@dataclass(frozen=True)
+class BatchPrevisto:
+    """Un batch de la entrega tal como quedaria, sin preparar ni subir nada.
+
+    Es la foto que se puede enseñar antes de mandar nada a AirVault: el
+    nombre que llevaria, cuantas paginas ocuparia y que bitacoras irian
+    dentro. Un batch que ya existe se describe igual, con su ID y su
+    estado, para que la misma lista muestre de una vez lo que falta por
+    subir y lo que ya esta esperando en la cola.
+    """
+
+    nombre: str
+    parte: int
+    partes: int
+    revisar: bool
+    pdf: Path
+    registros: List[Registro] = field(default_factory=list)
+    batch_id: str = ""
+    estado: str = ""
+    subido: bool = False
+    existe: bool = False
+
+    @property
+    def paginas(self) -> int:
+        """Paginas que tendra el batch, separadores incluidos."""
+        return len(self.registros)
+
+    @property
+    def bitacoras(self) -> List[Registro]:
+        return [r for r in self.registros if not r.es_separador]
+
+    @property
+    def separadores(self) -> List[Registro]:
+        return [r for r in self.registros if r.es_separador]
+
+
+def _previsto_de_trabajo(trabajo: "Trabajo") -> BatchPrevisto:
+    """Describe un batch que ya tiene manifiesto como uno previsto."""
+    manifiesto = trabajo.manifiesto
+    return BatchPrevisto(
+        nombre=manifiesto.nombre_batch,
+        parte=int(manifiesto.parte or 1),
+        partes=int(manifiesto.partes or 1),
+        revisar=bool(manifiesto.solo_subir),
+        pdf=Path(manifiesto.pdf_origen or ""),
+        registros=list(manifiesto.registros),
+        batch_id=manifiesto.batch_id or "",
+        estado=str(estado_local(trabajo)),
+        subido=trabajo_comprometido(trabajo),
+        existe=True,
+    )
+
+
+def previsualizar_reparto(
+    config: AirVaultConfig,
+    carpeta: Path | str,
+    csv: Path | str,
+    nombre_lote: str = "",
+    prefijo: str = PREFIJO_POR_DEFECTO,
+    resolutor: Optional[ResolutorFlota] = None,
+    paginas_por_batch: int | None = None,
+    compresion: bool = False,
+) -> List[BatchPrevisto]:
+    """En que batches quedaria repartida la ejecucion, sin tocar nada.
+
+    Responde la misma pregunta que :func:`preparar_partes` y con las mismas
+    reglas, pero no escribe manifiestos, no rasteriza PDF y no aparta nada
+    del reparto anterior: solo lee el indice de paginas y el CSV. Por eso se
+    puede llamar desde la interfaz antes de decidir si se sube, y llamarla
+    dos veces seguidas da lo mismo.
+
+    Los batches que ya estan en AirVault salen tal como estan, con su
+    estado, y detras van los que se crearian para las bitacoras que ninguno
+    se llevo. La compresion no cambia el reparto (solo el archivo que
+    viaja), pero se recibe igual porque decide si el reparto de disco sigue
+    valiendo.
+
+    Lo unico que puede tocar el disco es la reparacion que ya hace cargar
+    la lista: un manifiesto de una carpeta portable que se movio guarda su
+    ruta nueva. No crea manifiestos ni archivos de carga.
+    """
+    carpeta = Path(carpeta)
+    limite = int(
+        (
+            config.paginas_por_batch
+            if paginas_por_batch is None
+            else paginas_por_batch
+        )
+        or 0
+    )
+    entrega = comprobar_entrega(csv)
+    previos = trabajos_preparados(config, carpeta, csv)
+    if previos and _reparto_al_dia(previos, entrega, limite, compresion):
+        # El reparto de disco ya es el que se esta pidiendo: lo previsto es
+        # exactamente lo que hay preparado.
+        existentes = cargar_partes(config, carpeta, csv)
+        if existentes:
+            return [_previsto_de_trabajo(t) for t in existentes]
+
+    resolutor = resolutor or ResolutorFlota()
+    cobertura = revisar_cobertura(
+        entrega,
+        previos,
+        tambien_cubiertas=registro_entrega.comprometidas(carpeta),
+    )
+    if cobertura.repetidas:
+        detalle = "; ".join(
+            f"{archivo} p.{pagina} en {' y '.join(nombres)}"
+            for (archivo, pagina), nombres in list(
+                cobertura.repetidas.items()
+            )[:3]
+        )
+        raise ErrorDeCorrida(
+            f"{len(cobertura.repetidas)} bitacoras estan en mas de un batch "
+            f"ya subido ({detalle}). No se puede prever el reparto hasta "
+            "resolver esa duplicidad en AirVault."
+        )
+
+    comprometidos = [t for t in previos if trabajo_comprometido(t)]
+    filas = leer_csv_corrida(csv)
+    base = nombre_lote or nombre_desde_corrida(csv, prefijo)
+
+    crudas: List[Tuple[Path, List[dict], bool]] = []
+    for parte in entrega:
+        seleccion = _seleccion_pendiente(parte.paginas, cobertura.cubiertas)
+        if not seleccion:
+            # Todas sus bitacoras viajaron ya: no queda batch que crear.
+            continue
+        for indices in _partir_paginas_por_seccion(
+            parte.paginas, limite, seleccion
+        ):
+            crudas.append(
+                (
+                    parte.pdf,
+                    [parte.paginas[indice] for indice in indices],
+                    parte.revisar,
+                )
+            )
+
+    ocupada = _numeracion_ocupada(comprometidos)
+    nuevos: List[BatchPrevisto] = []
+    for revisar in (False, True):
+        propias = [cruda for cruda in crudas if cruda[2] is revisar]
+        ya_hechas = max(0, int(ocupada.get(revisar, 0)))
+        total = len(propias) + ya_hechas
+        for indice, (pdf, paginas, _clase) in enumerate(
+            propias, start=ya_hechas + 1
+        ):
+            # El nombre lo decide la misma parte que lo decidiria al
+            # prepararla, para que la vista previa no invente uno propio.
+            molde = ParteDeEntrega(
+                indice=indice,
+                total=total,
+                pdf=pdf,
+                paginas=paginas,
+                revisar=revisar,
+            )
+            nuevos.append(
+                BatchPrevisto(
+                    nombre=molde.nombre_lote(base),
+                    parte=indice,
+                    partes=total,
+                    revisar=revisar,
+                    pdf=pdf,
+                    registros=registros_desde_entrega(
+                        filas, paginas, resolutor
+                    ),
+                )
+            )
+
+    previstos = [_previsto_de_trabajo(t) for t in comprometidos] + nuevos
+    previstos.sort(key=lambda previsto: (previsto.revisar, previsto.parte))
+    return previstos
+
+
 def _reparto_al_dia(
     trabajos: Sequence["Trabajo"],
     entrega: Sequence[ParteDeEntrega],
