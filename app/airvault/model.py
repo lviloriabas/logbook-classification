@@ -136,6 +136,10 @@ class Manifiesto(BaseModel):
     # reloj de espera que eventualmente permite ofrecer una resubida.
     intentos_identificacion: int = 0
     espera_reenvio_desde: str = ""
+    # Reenvios que la automatizacion ya hizo de una carga que Quick Upload
+    # acepto pero AirVault nunca publico. Se cuenta para no seguir enviando
+    # el mismo archivo indefinidamente y acabar con batches duplicados.
+    reenvios: int = 0
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
 

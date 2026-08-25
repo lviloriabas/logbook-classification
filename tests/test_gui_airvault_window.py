@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
 )
 
+from app.airvault.config import AirVaultConfig
 from app.gui.airvault_window import (
     ANCHO_MAXIMO_NOMBRE_BATCH,
     ANCHO_MINIMO_NOMBRE_BATCH,
@@ -496,6 +497,9 @@ class ManifiestoFalso:
         self.batch_id = batch_id
         self.etapas = {}
         self.solo_subir = False
+        self.intentos_identificacion = 0
+        self.espera_reenvio_desde = ""
+        self.reenvios = 0
 
     @staticmethod
     def etapa_hecha(nombre):
@@ -507,6 +511,9 @@ class TrabajoFalso:
                  carpeta="job"):
         self.manifiesto = ManifiestoFalso(nombre, paginas, batch_id)
         self.carpeta = carpeta
+        # La regla de reenvio mira la espera configurada del propio trabajo,
+        # igual que hace con un Trabajo de verdad.
+        self.config = AirVaultConfig()
 
 
 def parte(estado, nombre="DP | BITS", detalle="", carpeta="job", lote=None):
@@ -760,27 +767,98 @@ def test_mientras_falte_un_lote_se_sigue_preguntando_solo(ventana):
     assert ventana._vigilante.interval() == 2 * 60_000
 
 
-def test_una_subida_que_no_aparece_ofrece_volver_a_subir(ventana):
+def estancada(nombre="DP | BITS SIN PUBLICAR", reenvios=0):
+    """Una carga que Quick Upload acepto y AirVault nunca publico."""
     from app.airvault.flujo import BUSCANDO
     from app.airvault.model import EstadoEtapa, Etapa
 
-    estancado = parte(BUSCANDO, "DP | BITS SIN PUBLICAR")
-    estancado.trabajo.manifiesto.etapas["subir"] = Etapa(
+    fila = parte(BUSCANDO, nombre)
+    fila.trabajo.manifiesto.etapas["subir"] = Etapa(
         estado=EstadoEtapa.HECHA,
         actualizada="2020-01-01T00:00:00",
     )
-    estancado.trabajo.manifiesto.intentos_identificacion = 3
-    estancado.trabajo.manifiesto.espera_reenvio_desde = (
-        "2020-01-01T00:00:00"
-    )
+    fila.trabajo.manifiesto.intentos_identificacion = 3
+    fila.trabajo.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
+    fila.trabajo.manifiesto.reenvios = reenvios
+    return fila
+
+
+def test_una_subida_que_no_aparece_se_vuelve_a_enviar_sola(ventana):
+    """Esperar sin fin a que alguien pulse un boton no es esperar."""
     ventana._al_comprobar({
-        "estados": [estancado], "planes": {}, "partes": [],
+        "estados": [estancada()], "planes": {}, "partes": [],
         "reporte": None,
     })
 
     assert "probable que la carga no vaya a aparecer" in ventana.resumen.text()
+    assert "sin pulsar nada" in ventana.resumen.text()
+    assert ventana._subir_al_terminar
+    assert ventana._estado["pendientes_subida"]
+    # Mientras quede un reenvio por hacer, el reloj sigue en marcha.
+    assert ventana._vigilante is not None and ventana._vigilante.isActive()
+
+
+def test_sin_comprobacion_automatica_la_resubida_se_pide_a_mano(ventana):
+    ventana.auto_check.setChecked(False)
+    ventana._al_comprobar({
+        "estados": [estancada()], "planes": {}, "partes": [],
+        "reporte": None,
+    })
+
     assert "Subir a AirVault" in ventana.resumen.text()
+    assert not ventana._subir_al_terminar
+
+
+def test_agotados_los_reenvios_deja_de_insistir(ventana):
+    """Reenviar sin tope acabaria publicando el mismo archivo varias veces."""
+    from app.airvault.flujo import MAXIMO_REENVIOS_AUTOMATICOS
+
+    ventana._al_comprobar({
+        "estados": [estancada(reenvios=MAXIMO_REENVIOS_AUTOMATICOS)],
+        "planes": {}, "partes": [], "reporte": None,
+    })
+
+    assert "no se vuelve a enviar solo" in ventana.resumen.text()
+    assert not ventana._subir_al_terminar
     assert ventana._vigilante is None or not ventana._vigilante.isActive()
+
+
+def test_un_archivo_sin_subir_no_se_queda_esperando(ventana):
+    """El reloj solo preguntaba; la fila sin subir no salia nunca de ahi."""
+    from app.airvault.flujo import SIN_SUBIR
+
+    ventana._al_comprobar({
+        "estados": [parte(SIN_SUBIR, detalle="todavía sin subir")],
+        "planes": {}, "partes": [], "reporte": None,
+    })
+
+    assert ventana._subir_al_terminar
+    assert ventana._estado["pendientes_subida"]
+    assert ventana._vigilante is not None and ventana._vigilante.isActive()
+
+
+def test_una_subida_fallida_no_se_reintenta_hasta_la_vuelta_siguiente(
+    ventana,
+):
+    """Comprobar y subir se llamarian el uno al otro sin parar."""
+    from app.airvault.flujo import SIN_SUBIR
+
+    datos = {
+        "estados": [parte(SIN_SUBIR)], "planes": {}, "partes": [],
+        "reporte": None,
+    }
+    ventana._al_comprobar(datos)
+    assert ventana._subir_al_terminar
+    ventana._subir_al_terminar = False
+
+    # La subida falla y la fila vuelve a aparecer sin subir en la misma vuelta.
+    ventana._al_comprobar(datos)
+    assert not ventana._subir_al_terminar
+
+    # El reloj da permiso otra vez.
+    ventana._reenvios_del_ciclo.clear()
+    ventana._al_comprobar(datos)
+    assert ventana._subir_al_terminar
 
 
 def test_cuando_no_queda_nada_que_esperar_deja_de_preguntar(ventana):

@@ -76,6 +76,11 @@ CARPETA_TRABAJOS = Path("output") / "airvault"
 # reenvíos: en todos se vuelve a leer la cola de AirVault.
 INTENTOS_IDENTIFICACION_ANTES_DE_ESPERA = 3
 
+# Veces que la automatizacion puede volver a enviar por su cuenta una carga
+# que Quick Upload acepto y AirVault nunca publico. Sin tope, una cola atascada
+# acabaria recibiendo el mismo archivo cada intervalo de comprobacion.
+MAXIMO_REENVIOS_AUTOMATICOS = 2
+
 # La pantalla de Quick Upload declara 2048 MB por archivo. La compresion
 # conserva margen respecto de ese techo y usa una calidad JPEG moderada:
 # bajar de 300/600 DPI a 200 aporta la mayor parte del ahorro sin castigar
@@ -922,6 +927,9 @@ class Trabajo:
         self.manifiesto.batch_id = lote.batch_id
         self.manifiesto.intentos_identificacion = 0
         self.manifiesto.espera_reenvio_desde = ""
+        # AirVault lo publico: la carga no se perdio y el tope de reenvios
+        # vuelve a cero para el proximo trabajo que use este manifiesto.
+        self.manifiesto.reenvios = 0
         self.manifiesto.etapa("descubrir").marcar(
             EstadoEtapa.HECHA, f"{lote.batch_id} ({lote.paginas} paginas)"
         )
@@ -1516,12 +1524,7 @@ def subir_partes(
         estancados = [
             parte.trabajo
             for parte in estados
-            if reintentar_estancados
-            and parte.estado == BUSCANDO
-            and subida_estancada(
-                parte.trabajo,
-                parte.trabajo.config.espera_reenvio_s,
-            )
+            if reintentar_estancados and reenvio_pendiente(parte)
         ]
         claves_estancadas = {str(trabajo.carpeta) for trabajo in estancados}
         por_subir = [
@@ -1577,10 +1580,7 @@ def subir_partes(
             clave = str(trabajo.carpeta)
             permite_reenvio = (
                 clave in claves_estancadas
-                and estado_actual.estado == BUSCANDO
-                and subida_estancada(
-                    trabajo, trabajo.config.espera_reenvio_s
-                )
+                and reenvio_pendiente(estado_actual)
             )
             if estado_actual.estado != SIN_SUBIR and not permite_reenvio:
                 if estado_actual.batch_id and trabajo not in encontrados_antes:
@@ -1592,6 +1592,14 @@ def subir_partes(
                         0,
                     )
                 continue
+            if permite_reenvio:
+                # Se da por perdida una carga que Quick Upload si acepto. Se
+                # cuenta antes de reenviarla para que el tope valga aunque el
+                # envio se corte a mitad.
+                trabajo.manifiesto.reenvios = (
+                    int(trabajo.manifiesto.reenvios or 0) + 1
+                )
+                trabajo.guardar()
             _reiniciar_subida_ausente(trabajo)
 
         def propio(texto: str, hechas: int, total: int, cabeza: str = cabeza) -> None:
@@ -1733,6 +1741,38 @@ def subida_estancada(
         return (presente - inicio).total_seconds() >= max(0.0, float(limite_s))
     except (TypeError, ValueError, OverflowError):
         return False
+
+
+def reenvio_pendiente(parte: EstadoParte) -> bool:
+    """Si esta carga ya se puede volver a enviar sin pedirlo a mano.
+
+    Quick Upload la acepto, agotaron las revisiones de identidad y vencio la
+    espera, asi que lo mas probable es que AirVault la haya perdido. Solo se
+    permite mientras queden reenvios: insistir siempre con una cola atascada
+    terminaria publicando el mismo archivo varias veces.
+    """
+    if parte.estado != BUSCANDO:
+        return False
+    trabajo = parte.trabajo
+    if int(trabajo.manifiesto.reenvios or 0) >= MAXIMO_REENVIOS_AUTOMATICOS:
+        return False
+    return subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
+
+
+def partes_por_subir(estados: Sequence[EstadoParte]) -> List["Trabajo"]:
+    """Trabajos que hay que mandar a Quick Upload, ahora o de nuevo.
+
+    Son los que nunca llegaron a subirse y los que se dieron por perdidos
+    tras la espera. Vive aqui, y no en la ventana, porque la comprobacion
+    periodica y el boton tienen que decidir exactamente lo mismo: si la
+    lista se calculara en dos sitios, uno de los dos acabaria dejando
+    archivos parados para siempre.
+    """
+    return [
+        parte.trabajo
+        for parte in estados
+        if parte.estado == SIN_SUBIR or reenvio_pendiente(parte)
+    ]
 
 
 def subir_y_descubrir_partes(
@@ -1998,6 +2038,9 @@ def reiniciar_trabajos_incompletos(
         )
         if not subida_hecha:
             manifiesto.batch_id = None
+            # Reiniciar es una orden expresa: devuelve los reenvios que la
+            # automatizacion hubiera gastado sobre este mismo archivo.
+            manifiesto.reenvios = 0
             manifiesto.etapas["subir"] = Etapa()
             manifiesto.etapas["descubrir"] = Etapa()
             manifiesto.etapas["indexar"] = Etapa()
