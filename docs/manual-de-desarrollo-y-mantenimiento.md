@@ -354,7 +354,16 @@ una ejecución retomada días después estrena esa marca al abrirla y volvía a
 esperar media hora por una carga perdida hacía días (`subida_estancada`).
 `partes_por_subir` reúne ambos motivos con las partes que nunca llegaron a
 subirse, y es la única regla que consultan el botón y la comprobación
-periódica. Un nuevo clic en
+periódica. No hay tope de reenvíos: rendirse dejaba el batch fuera de AirVault
+para siempre. Lo que crece es el margen entre intentos, `espera_de_reenvio`,
+que multiplica la espera configurada por los reenvíos ya hechos.
+
+`app/airvault/registro.py` guarda el registro durable de cada entrega en
+`registro-de-batches.json`, junto a los manifiestos. Anota qué bitácoras lleva
+cada batch y cuáles llegaron a AirVault, de modo que `preparar_partes` sepa qué
+falta por subir aunque cambie el reparto o desaparezca un manifiesto. Conserva
+hasta `MAXIMO_HISTORIAL` repartos anteriores y se borra junto con el resto de
+la memoria local de la ejecución. Un nuevo clic en
 **Subir a AirVault** vuelve a consultar Web Index, reenvía solo las ausentes y
 ejecuta su descubrimiento hasta obtener el ID. Cada ventana mantiene un
 `TrabajoAirVaultWorker` independiente, por lo que varias ejecuciones pueden
