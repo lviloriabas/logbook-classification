@@ -97,6 +97,12 @@ INTENTOS_INDEXADO = 3
 # toda una tarde, sin tope crecería sin fin.
 LIMITE_BITACORA = 300
 
+# Alto mínimo de la bitácora. Con 110 px fijos cabían tres líneas, y un
+# mensaje largo (el motivo por el que una carga no salió, las páginas que
+# faltan para completar un batch) había que leerlo a trozos moviendo la
+# barra. Ahora crece con la ventana y nunca baja de esto.
+ALTO_MINIMO_BITACORA = 160
+
 # El nombre distingue las divisiones y REVISAR, así que no puede quedar
 # reducido a unas pocas letras. A partir de este ancho se conserva espacio
 # para Páginas y Estado; el texto completo sigue disponible en la ayuda.
@@ -833,7 +839,9 @@ class AirVaultWindow(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint, True)
         # Como el resto de las ventanas: el tamaño lo pone la pantalla, que
         # en un portátil bajo dejaría los botones fuera del borde.
-        densidad = fit_to_screen(self, 780, 720)
+        # El alto pedido deja sitio a la bitácora, que es lo que se lee
+        # mientras trabaja; lo que no quepa lo recorta la pantalla.
+        densidad = fit_to_screen(self, 780, 800)
         self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS + densidad.qss)
         self._build_ui()
 
@@ -851,12 +859,15 @@ class AirVaultWindow(QDialog):
 
         cuerpo.addWidget(self._historial(), 1)
         cuerpo.addLayout(self._campos())
-        cuerpo.addWidget(self._titulo("Batches en AirVault"))
+        cuerpo.addLayout(self._cabecera_de_lotes())
         cuerpo.addWidget(self._lotes(), 1)
         cuerpo.addLayout(self._fila_vigilancia())
         cuerpo.addWidget(self._menu_automatizacion())
         cuerpo.addLayout(self._fila_avance())
-        cuerpo.addWidget(self._bitacora())
+        # La bitácora se queda con el alto que sobre: las dos tablas
+        # tienen tope y ella es la que necesita sitio para los mensajes
+        # largos.
+        cuerpo.addWidget(self._bitacora(), 2)
 
         self.resumen = QLabel(TEXTO_SIN_SUBIR)
         self.resumen.setWordWrap(True)
@@ -1009,6 +1020,70 @@ class AirVaultWindow(QDialog):
         )
         grid.addWidget(self.cookie_edit, 3, 1, 1, 2)
         return grid
+
+    def _cabecera_de_lotes(self) -> QHBoxLayout:
+        """El título de la tabla de batches, con la vista previa al lado."""
+        fila = QHBoxLayout()
+        fila.addWidget(self._titulo("Batches en AirVault"))
+        fila.addStretch()
+        self.boton_previa = QPushButton("Vista previa…")
+        self.boton_previa.setEnabled(False)
+        self.boton_previa.setToolTip(
+            "Enseña en cuántos batches quedaría repartida la ejecución con "
+            "el máximo de páginas elegido, cuáles faltan por subir y qué "
+            "bitácoras lleva cada uno. Mirarlo no prepara ni sube nada."
+        )
+        self.boton_previa.clicked.connect(self._vista_previa)
+        fila.addWidget(self.boton_previa)
+        return fila
+
+    def _vista_previa(self) -> None:
+        """Calcula el reparto sin tocar nada y lo enseña.
+
+        Hasta que se sube no hay ningún batch que mirar, y el reparto solo
+        se sabía después de haberlo hecho. Esto responde antes la misma
+        pregunta: con qué nombre y con cuántas páginas saldría cada batch,
+        y qué bitácoras van dentro.
+        """
+        from app.airvault.flujo import (
+            ErrorDeCorrida,
+            carpeta_de_corrida,
+            carpeta_de_trabajo,
+            previsualizar_reparto,
+        )
+        from app.airvault.mapping import FLOTA_CACHE_FILENAME, ResolutorFlota
+        from app.gui.airvault_previa import VistaPreviaBatches
+
+        csv = self.corrida_edit.text().strip()
+        if not csv:
+            return
+        carpeta = self._raiz / carpeta_de_trabajo(
+            carpeta_de_corrida(csv).name
+        )
+        try:
+            previstos = previsualizar_reparto(
+                self._config_actual(),
+                carpeta,
+                Path(csv),
+                self.lote_edit.text().strip(),
+                resolutor=ResolutorFlota.load(
+                    self._raiz / FLOTA_CACHE_FILENAME
+                ),
+                paginas_por_batch=self.limite_batch_spin.value(),
+                compresion=self.compresion_check.isChecked(),
+            )
+        except (ErrorDeCorrida, OSError, ValueError) as error:
+            QMessageBox.warning(self, "Vista previa", str(error))
+            return
+        if not previstos:
+            QMessageBox.information(
+                self,
+                "Vista previa",
+                "Esta ejecución no deja ningún batch: todas sus bitácoras "
+                "viajaron ya a AirVault.",
+            )
+            return
+        VistaPreviaBatches(previstos, self).exec()
 
     def _lotes(self) -> QTableWidget:
         """En qué va cada batch de esta ejecución dentro de AirVault.
@@ -1169,6 +1244,19 @@ class AirVaultWindow(QDialog):
             )
 
         menu.addSeparator()
+        # Mirar lo que lleva dentro es de un batch a la vez: son listas
+        # distintas y no hay una sola que enseñar por varios.
+        con_bitacoras = (
+            list(partes)
+            if len(partes) == 1 and partes[0].trabajo.manifiesto.registros
+            else []
+        )
+        self._accion(
+            menu, "Ver las bitácoras del batch", con_bitacoras,
+            lambda: self._ver_bitacoras(con_bitacoras[0]),
+        )
+
+        menu.addSeparator()
         con_nombre = [parte for parte in partes if parte.nombre]
         self._accion(
             menu, "Copiar el nombre del batch", con_nombre,
@@ -1194,6 +1282,15 @@ class AirVaultWindow(QDialog):
         accion.setEnabled(bool(sobre))
         accion.triggered.connect(hacer)
         return accion
+
+    def _ver_bitacoras(self, parte) -> None:
+        """Abre la lista de las bitácoras que lleva dentro un batch."""
+        from app.gui.airvault_previa import BitacorasDelBatch
+
+        manifiesto = parte.trabajo.manifiesto
+        BitacorasDelBatch(
+            manifiesto.nombre_batch, manifiesto.registros, self
+        ).exec()
 
     def _copiar_al_portapapeles(self, texto: str) -> None:
         if not texto:
@@ -1578,7 +1675,9 @@ class AirVaultWindow(QDialog):
         """
         lista = CopyableListWidget()
         lista.setToolTip("Lo que el indexado va haciendo, con la hora de cada paso")
-        lista.setMaximumHeight(110)
+        # Sin tope y con suelo: un mensaje largo se envuelve en varias
+        # líneas y con 110 px fijos solo se veía el principio.
+        lista.setMinimumHeight(ALTO_MINIMO_BITACORA)
         lista.setWordWrap(True)
         lista.setTextElideMode(Qt.TextElideMode.ElideNone)
         lista.setResizeMode(QListView.ResizeMode.Adjust)
@@ -1927,6 +2026,7 @@ class AirVaultWindow(QDialog):
         self._estados = [estado_local(t) for t in self._trabajos]
         self._pintar_lotes()
         self.boton_indexar.setEnabled(bool(self.corrida_edit.text().strip()))
+        self.boton_previa.setEnabled(bool(self.corrida_edit.text().strip()))
         self.boton_revisar.setEnabled(bool(self._trabajos))
         self.boton_eliminar_registro.setEnabled(
             bool(self._rutas_del_registro())
@@ -2523,6 +2623,11 @@ class AirVaultWindow(QDialog):
         self.limite_batch_spin.setEnabled(activo)
         self.compresion_check.setEnabled(activo)
         self.boton_comprobar.setEnabled(activo and bool(self._trabajos))
+        # La vista previa solo lee el disco, pero mientras el hilo reparte
+        # los manifiestos están a medio escribir y enseñarlos engaña.
+        self.boton_previa.setEnabled(
+            activo and bool(self.corrida_edit.text().strip())
+        )
         self.boton_automatizacion.setEnabled(activo)
         self.boton_continuar.setEnabled(activo)
         self.boton_reiniciar.setEnabled(activo and bool(self._trabajos))

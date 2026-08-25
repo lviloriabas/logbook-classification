@@ -1697,3 +1697,81 @@ def test_cancelar_saca_tambien_lo_que_esperaba_turno(ventana):
     assert ventana._cola_de_acciones == []
     ventana.hilo = lambda: None
     assert not ventana._siguiente_de_la_cola()
+
+
+# ── la bitácora y la lista de bitácoras del batch ──────────────────
+
+def test_la_bitacora_crece_con_la_ventana_y_no_se_queda_en_tres_lineas(ventana):
+    """Un mensaje largo se envuelve; con el tope de 110 px se leía a trozos."""
+    from app.gui.airvault_window import ALTO_MINIMO_BITACORA
+
+    assert ventana.bitacora.minimumHeight() == ALTO_MINIMO_BITACORA
+    assert ventana.bitacora.maximumHeight() > ALTO_MINIMO_BITACORA * 2
+    assert ventana.bitacora.wordWrap()
+
+
+def test_la_cola_deja_ver_las_bitacoras_de_un_batch(ventana):
+    """Es una lista por batch: con varios elegidos no hay cuál enseñar."""
+    from app.airvault.flujo import SIN_SUBIR
+
+    ventana._estados = [
+        parte(SIN_SUBIR, "DP | BITS -1", carpeta="job-1"),
+        parte(SIN_SUBIR, "DP | BITS -2", carpeta="job-2"),
+    ]
+    ventana._pintar_lotes()
+
+    assert _acciones(ventana, 0)["Ver las bitácoras del batch"].isEnabled()
+    assert not _acciones(
+        ventana, 0, 1
+    )["Ver las bitácoras del batch"].isEnabled()
+
+
+def test_la_vista_previa_esta_apagada_hasta_elegir_una_ejecucion(ventana):
+    assert not ventana.boton_previa.isEnabled()
+
+
+def test_la_vista_previa_abre_los_batches_de_la_ejecucion(app, tmp_path):
+    """El botón calcula el reparto y se lo pasa al cuadro, sin subir nada."""
+    from app.gui import airvault_previa
+    from tests.test_airvault_entrega import corrida as corrida_exportada
+
+    salida = tmp_path / "output"
+    salida.mkdir()
+    csv_path, _partes = corrida_exportada(salida)
+    ventana = AirVaultWindow(tmp_path)
+    ventana.limite_batch_spin.setValue(6)
+    ventana.fijar_corrida(csv_path)
+    assert ventana.boton_previa.isEnabled()
+
+    abiertos = []
+    with patch.object(
+        airvault_previa.VistaPreviaBatches, "exec",
+        lambda self: abiertos.append(self),
+    ):
+        ventana._vista_previa()
+
+    assert len(abiertos) == 1
+    cuadro = abiertos[0]
+    assert cuadro.tabla.rowCount() > 1, "12 paginas con tope de 6 son varios"
+    assert all(
+        cuadro.tabla.item(fila, 3).text() == "Por subir"
+        for fila in range(cuadro.tabla.rowCount())
+    )
+    # Mirar no prepara: la carpeta de trabajo sigue sin existir.
+    assert not (tmp_path / "output" / "airvault").exists()
+
+
+def test_la_vista_previa_avisa_de_la_ejecucion_sin_exportar(app, tmp_path, monkeypatch):
+    """Sin PDF de entrega no hay reparto, y se dice en vez de fallar."""
+    csv_path = corrida(tmp_path, exportada=False)
+    ventana = AirVaultWindow(tmp_path)
+    ventana.corrida_edit.setText(str(csv_path))
+
+    avisos = []
+    monkeypatch.setattr(
+        QMessageBox, "warning",
+        lambda *args, **kwargs: avisos.append(args[2]),
+    )
+    ventana._vista_previa()
+
+    assert avisos and "exportar" in avisos[0]
