@@ -24,18 +24,25 @@ nunca se presenta como una lectura OCR directa en estado OK.
 
 from __future__ import annotations
 
+import json
 import re
 from calendar import monthrange
 from collections import Counter
 from datetime import date
 from itertools import product
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.utils.postprocess import MESES, _parse_month, combine_date
-from app.validation.book_corrector import _recompute_page_status, _recompute_summary
+from app.validation.book_corrector import (
+    _BOOK_STORAGE_KEY_RE,
+    _recompute_page_status,
+    _recompute_summary,
+    _storage_key,
+)
 from app.validation.grouping import group_books, log_number
 
 DATE_FIELD_IDS = ("day", "month", "year")
@@ -805,10 +812,330 @@ def _flag_unresolved(book: Sequence[PageResult]) -> int:
     return unresolved
 
 
+# ── Registro de fechas por libro, persistente entre ejecuciones ─────────
+#
+# Un libro puede llegar repartido en varias ejecuciones: las primeras
+# páginas hoy y el resto la semana que viene. La inferencia de arriba solo
+# ve las páginas de la ejecución actual, así que un libro cuyas fechas
+# legibles se quedaron en la entrega anterior vuelve a empezar sin anclas.
+# El registro guarda de cada libro la primera y la última fecha confirmadas
+# por lectura directa, y nada más: dos pares "logpage: fecha" por libro
+# ocupan unas decenas de bytes, de modo que el archivo sigue siendo del
+# tamaño de una lista y no de un historial.
+#
+# Con las dos anclas basta para resolver el tramo que hay entre ellas: la
+# fecha no retrocede dentro del libro, así que toda página intermedia cae
+# entre las dos. Si ambas comparten mes (o al menos año), no queda otro
+# valor posible para las páginas intermedias que no se dejaron leer. Fuera
+# de ese tramo no se infiere nada: una página posterior a la última ancla
+# solo tiene garantizado que su fecha no es anterior, y eso no fija el mes.
+BOOK_DATES_FILENAME = "book_fechas.json"
+
+# Una entrada del registro es "logpage": "AAAA-MM-DD".
+_REGISTRY_LOGPAGE_RE = re.compile(r"^\d{2}$")
+_REGISTRY_DATE_RE = re.compile(r"^(20\d{2})-(\d{2})-(\d{2})$")
+# Un libro nunca aporta más de dos anclas al registro: sus extremos.
+_MAX_REGISTRY_ANCHORS = 2
+
+RegistryAnchor = Tuple[int, date]
+
+
+def _registry_anchor(
+    key: str, logpage_text: str, iso: object
+) -> Optional[RegistryAnchor]:
+    """Convierte una entrada del archivo en ancla, o la descarta."""
+    if not _REGISTRY_LOGPAGE_RE.fullmatch(logpage_text):
+        return None
+    logpage = int(logpage_text)
+    if ("A" if logpage < 50 else "B") != key[5]:
+        return None
+    matched = _REGISTRY_DATE_RE.fullmatch(iso) if isinstance(iso, str) else None
+    if matched is None:
+        return None
+    try:
+        parsed = date(
+            int(matched.group(1)), int(matched.group(2)),
+            int(matched.group(3)),
+        )
+    except ValueError:
+        return None
+    return (logpage, parsed)
+
+
+def _load_book_dates(path: Path) -> Dict[str, List[RegistryAnchor]]:
+    """Lee el registro; un archivo dañado no detiene el procesamiento."""
+    path = Path(path)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning(f"No se pudo leer el registro de fechas {path}: {exc}")
+        return {}
+    if not isinstance(data, dict):
+        logger.warning(f"Registro de fechas inválido: {path}")
+        return {}
+    stored: Dict[str, List[RegistryAnchor]] = {}
+    for key, value in data.items():
+        if not isinstance(key, str) or not _BOOK_STORAGE_KEY_RE.fullmatch(key):
+            continue
+        if (
+            not isinstance(value, dict)
+            or not 1 <= len(value) <= _MAX_REGISTRY_ANCHORS
+        ):
+            continue
+        anchors: List[RegistryAnchor] = []
+        for logpage_text, iso in value.items():
+            anchor = (
+                _registry_anchor(key, logpage_text, iso)
+                if isinstance(logpage_text, str) else None
+            )
+            if anchor is None:
+                anchors = []
+                break
+            anchors.append(anchor)
+        if not anchors:
+            continue
+        anchors.sort()
+        if len(anchors) == _MAX_REGISTRY_ANCHORS and anchors[0][1] > anchors[1][1]:
+            # La fecha no retrocede dentro de un libro: el par no es de fiar.
+            logger.warning(f"Registro de fechas: se ignora {key}, retrocede")
+            continue
+        stored[key] = anchors
+    return stored
+
+
+def _save_book_dates(
+    path: Path, stored: Dict[str, List[RegistryAnchor]]
+) -> None:
+    """Escribe solo clave y extremos en JSON compacto y atómico."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(
+        {
+            key: {
+                f"{logpage:02d}": value.isoformat()
+                for logpage, value in sorted(anchors)
+            }
+            for key, anchors in sorted(stored.items())
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(f"{payload}\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _confirmed_date(page: PageResult) -> Optional[date]:
+    """Fecha de la página cuando sus tres componentes son lectura directa.
+
+    Al registro solo entra lo que se leyó y se validó en la página. Una
+    fecha inferida no puede guardarse como ancla: sería la propia
+    inferencia dándose la razón en la ejecución siguiente.
+    """
+    if page.blank or page.alignment_quality != "ok":
+        return None
+    day_field = _field(page, "day")
+    month_field = _field(page, "month")
+    year_field = _field(page, YEAR_FIELD_ID)
+    day = _day_normalize(day_field.value if day_field else None)
+    month = _month_number(month_field.value if month_field else None)
+    year = _year_normalize(year_field.value if year_field else None)
+    if not (
+        _is_direct_anchor(day_field, day)
+        and _is_direct_anchor(
+            month_field, f"{month:02d}" if month is not None else None
+        )
+        and _is_direct_anchor(year_field, year)
+    ):
+        return None
+    try:
+        return date(2000 + int(year), int(month), int(day))  # type: ignore[arg-type]
+    except ValueError:
+        return None
+
+
+def _registry_numbers(key: str, anchors: Sequence[RegistryAnchor]) -> List[int]:
+    """log_number completo de cada ancla guardada."""
+    return [int(f"{key[:5]}{logpage:02d}") for logpage, _value in anchors]
+
+
+def _fill_component_from_registry(
+    page: PageResult,
+    field_id: str,
+    value: str,
+    key: str,
+    anchors: Sequence[RegistryAnchor],
+) -> bool:
+    """Escribe el componente que el registro deja sin alternativa."""
+    field = _field(page, field_id)
+    if field is None:
+        return False
+    if not _set_inferred_component(
+        page, field_id, value, "book_dates_registry",
+        _registry_numbers(key, anchors),
+    ):
+        return False
+    span = " a ".join(anchor[1].isoformat() for anchor in anchors)
+    _append_comment(field, f"Registro del libro {key}: {span}")
+    return True
+
+
+def _fill_from_registry(
+    book: Sequence[PageResult], key: str, anchors: Sequence[RegistryAnchor]
+) -> int:
+    """Completa mes y año del tramo que las anclas guardadas encierran."""
+    if len(anchors) < _MAX_REGISTRY_ANCHORS:
+        return 0
+    (first_page, first_date), (last_page, last_date) = anchors[0], anchors[-1]
+    in_span = [
+        page for page in book
+        if (number := log_number(page)) is not None
+        and first_page <= number % 100 <= last_page
+    ]
+    for page in in_span:
+        confirmed = _confirmed_date(page)
+        if confirmed is not None and not first_date <= confirmed <= last_date:
+            # La ejecución actual contradice lo guardado. Ni se corrige el
+            # registro por iniciativa propia ni se usa para inferir: el
+            # conflicto lo resuelve quien revise.
+            logger.warning(
+                f"Registro del libro {key} ({first_date.isoformat()} a "
+                f"{last_date.isoformat()}) contra la lectura "
+                f"{confirmed.isoformat()}: no se usa en esta ejecución"
+            )
+            return 0
+    same_year = first_date.year == last_date.year
+    same_month = same_year and first_date.month == last_date.month
+    if not same_year:
+        return 0
+    filled = 0
+    for page in in_span:
+        if page.blank:
+            continue
+        year_field = _field(page, YEAR_FIELD_ID)
+        if year_field is not None and _year_normalize(year_field.value) is None:
+            filled += int(_fill_component_from_registry(
+                page, YEAR_FIELD_ID, f"{first_date.year % 100:02d}",
+                key, anchors,
+            ))
+        month_field = _field(page, "month")
+        if (
+            same_month
+            and month_field is not None
+            and _month_number(month_field.value) is None
+        ):
+            filled += int(_fill_component_from_registry(
+                page, "month", str(first_date.month), key, anchors,
+            ))
+    return filled
+
+
+def _merge_registry_anchors(
+    key: str,
+    previous: Sequence[RegistryAnchor],
+    observed: Sequence[RegistryAnchor],
+) -> Optional[List[RegistryAnchor]]:
+    """Extiende las anclas guardadas con las de esta ejecución.
+
+    Devuelve ``None`` cuando lo observado contradice lo guardado: la misma
+    página con otra fecha, o una fecha que obligaría al libro a retroceder.
+    Igual que con las matrículas, una contradicción no se resuelve sola.
+    """
+    merged: Dict[int, date] = dict(previous)
+    for logpage, value in observed:
+        known = merged.get(logpage)
+        if known is not None and known != value:
+            logger.warning(
+                f"Registro del libro {key}: la página {logpage:02d} pasa de "
+                f"{known.isoformat()} a {value.isoformat()}, no se reemplaza"
+            )
+            return None
+        merged[logpage] = value
+    ordered = sorted(merged.items())
+    if any(
+        later < earlier
+        for (_a, earlier), (_b, later) in zip(ordered, ordered[1:])
+    ):
+        logger.warning(
+            f"Registro del libro {key}: la fecha retrocede, se descarta"
+        )
+        return None
+    return [ordered[0], ordered[-1]] if len(ordered) > 1 else [ordered[0]]
+
+
+def learn_book_dates(reports: List[ValidationReport], path: Path) -> int:
+    """Guarda los extremos de fecha confirmados de cada libro.
+
+    Solo aprende de lecturas directas en OK, con la página bien alineada y
+    el ``log_number`` legible. El archivo guarda por libro un par de
+    entradas como ``"23159B":{"52":"2025-05-14","97":"2025-06-02"}``: ni
+    páginas, ni imágenes, ni historial de ejecuciones.
+
+    Returns:
+        Cuántos libros dejaron una entrada nueva o ampliada.
+    """
+    path = Path(path)
+    stored = _load_book_dates(path)
+    learned = 0
+    for book in group_books(reports):
+        key = _storage_key(book)
+        if key is None:
+            continue
+        observed: List[RegistryAnchor] = []
+        for page in book:
+            number = log_number(page)
+            confirmed = _confirmed_date(page) if number is not None else None
+            if number is None or confirmed is None:
+                continue
+            observed.append((number % 100, confirmed))
+        if not observed:
+            continue
+        observed.sort()
+        if any(
+            later < earlier
+            for (_a, earlier), (_b, later) in zip(observed, observed[1:])
+        ):
+            logger.warning(
+                f"Libro {key}: las fechas leídas retroceden, no se aprenden"
+            )
+            continue
+        candidate = (
+            [observed[0], observed[-1]] if len(observed) > 1 else [observed[0]]
+        )
+        previous = stored.get(key, [])
+        merged = _merge_registry_anchors(key, previous, candidate)
+        if merged is None or merged == previous:
+            continue
+        stored[key] = merged
+        learned += 1
+    if learned:
+        try:
+            _save_book_dates(path, stored)
+        except OSError as exc:
+            logger.warning(
+                f"No se pudo guardar el registro de fechas {path}: {exc}"
+            )
+            return 0
+        logger.info(
+            f"Registro de fechas: {learned} libro(s) nuevo(s) o ampliado(s), "
+            f"{len(stored)} total, {path.stat().st_size} bytes"
+        )
+    return learned
+
+
 def correct_dates_by_book(
     reports: List[ValidationReport],
+    book_dates_path: Optional[Path] = None,
 ) -> Dict[str, int]:
     """Completa mes y año por ``log_number`` sin alterar el día OCR.
+
+    Args:
+        reports: Reportes ya validados (uno por PDF procesado).
+        book_dates_path: Registro de extremos de fecha aprendidos en otras
+            ejecuciones. Si se omite, el corrector solo ve la ejecución
+            actual, que es el comportamiento aislado de siempre.
 
     El resultado ``corrected`` cuenta componentes inferidos o corregidos,
     no paginas.
@@ -816,6 +1143,11 @@ def correct_dates_by_book(
     la secuencia del libro.
     """
     books = group_books(reports)
+    stored = (
+        _load_book_dates(Path(book_dates_path))
+        if book_dates_path is not None
+        else {}
+    )
     stats: Dict[str, int] = {
         "books": len(books),
         "corrected": 0,
@@ -826,6 +1158,7 @@ def correct_dates_by_book(
         "months_filled": 0,
         "years_filled": 0,
         "days_filled": 0,
+        "registry_filled": 0,
         "unresolved": 0,
     }
 
@@ -859,6 +1192,17 @@ def correct_dates_by_book(
             book, "month", _month_number, month_anchors
         )
 
+        # Lo último que se consulta es el registro de otras ejecuciones: la
+        # evidencia de las páginas que están aquí siempre manda sobre lo
+        # guardado.
+        registry_key = _storage_key(book)
+        registry_filled = (
+            _fill_from_registry(book, registry_key, stored[registry_key])
+            if registry_key is not None and registry_key in stored
+            else 0
+        )
+        stats["registry_filled"] += registry_filled
+
         for page in book:
             _recombine(page)
         days = _fill_days_to_month_end(book)
@@ -872,6 +1216,7 @@ def correct_dates_by_book(
         stats["days_filled"] += days
         stats["corrected"] += (
             years + months + days + year_consensus + sequence_candidates
+            + registry_filled
         )
         stats["flagged"] += year_flags + month_flags
         stats["regressions"] += regressions
