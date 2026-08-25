@@ -99,7 +99,7 @@ class TestLearnBookDates(unittest.TestCase):
                 data, {"23159A": {"02": "2025-05-14", "45": "2025-06-02"}}
             )
 
-    def test_does_not_replace_a_contradicting_entry(self):
+    def test_one_reading_does_not_replace_a_contradicting_entry(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "book_fechas.json"
             learn_book_dates(
@@ -112,6 +112,79 @@ class TestLearnBookDates(unittest.TestCase):
             self.assertEqual(learned, 0)
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data, {"23159A": {"02": "2025-05-14"}})
+
+    def test_two_readings_correct_the_same_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "book_fechas.json"
+            learn_book_dates([_report(
+                _page(1, "2315902", "14", "MAY", "25"),
+                _page(2, "2315940", "02", "JUN", "25"),
+            )], path)
+            # La página 02 se relee, y otra página del libro respalda que
+            # aquella fecha guardada no era la de esa página.
+            learned = learn_book_dates([_report(
+                _page(1, "2315902", "19", "MAY", "25"),
+                _page(2, "2315910", "23", "MAY", "25"),
+            )], path)
+
+            self.assertEqual(learned, 1)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                data, {"23159A": {"02": "2025-05-19", "10": "2025-05-23"}}
+            )
+
+    def test_two_readings_correct_an_impossible_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "book_fechas.json"
+            path.write_text(
+                json.dumps({"23159A": {"02": "2025-11-14", "40": "2025-11-29"}}),
+                encoding="utf-8",
+            )
+            # Ninguna página choca con las guardadas, pero las dos lecturas
+            # obligarían al libro a retroceder de noviembre a mayo.
+            learned = learn_book_dates([_report(
+                _page(1, "2315920", "03", "MAY", "25"),
+                _page(2, "2315930", "07", "MAY", "25"),
+            )], path)
+
+            self.assertEqual(learned, 1)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                data, {"23159A": {"20": "2025-05-03", "30": "2025-05-07"}}
+            )
+
+    def test_a_corrected_entry_is_the_one_that_infers_next_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "book_fechas.json"
+            path.write_text(
+                json.dumps({"23159A": {"02": "2025-11-14", "40": "2025-11-29"}}),
+                encoding="utf-8",
+            )
+            learn_book_dates([_report(
+                _page(1, "2315902", "03", "MAY", "25"),
+                _page(2, "2315940", "07", "MAY", "25"),
+            )], path)
+
+            page = _page(1, "2315920", "05", None, None)
+            correct_dates_by_book([_report(page)], path)
+
+            self.assertEqual(_field_of(page, "month").value, "MAY")
+            self.assertEqual(_field_of(page, "year").value, "25")
+
+    def test_a_conflict_without_support_leaves_the_entry_intact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "book_fechas.json"
+            stored = {"23159A": {"02": "2025-05-14", "40": "2025-06-02"}}
+            path.write_text(json.dumps(stored), encoding="utf-8")
+            # Las dos lecturas se contradicen entre sí, así que el libro no
+            # aporta una versión coherente que pueda ganarle a la guardada.
+            learned = learn_book_dates([_report(
+                _page(1, "2315910", "20", "AGO", "25"),
+                _page(2, "2315920", "20", "ENE", "25"),
+            )], path)
+
+            self.assertEqual(learned, 0)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), stored)
 
     def test_ignores_readings_that_are_not_direct(self):
         with tempfile.TemporaryDirectory() as tmp:
