@@ -3709,8 +3709,12 @@ class MainWindow(QMainWindow):
             f"{count} página(s) duplicada(s) en {len(groups)} log_number:",
         ]
         for number, items in sorted(groups.items()):
+            # Ahora que se marcan todas las apariciones, la lista sola no
+            # dice cuál se queda al depurar. Se señala la primera, que es la
+            # que el descarte automático conserva.
             locations = ", ".join(
                 f"{Path(item.pdf_path).name} PDF p. {item.page_number}"
+                + (" (se conserva)" if item.primera else "")
                 for item in items
             )
             lines.append(
@@ -3729,11 +3733,17 @@ class MainWindow(QMainWindow):
         if duplicate.log_number is None:
             return "dup=false: log_number ausente o inválido."
         if duplicate.duplicate:
-            return (
-                "dup=true: este log_number ya apareció antes en el batch "
-                "procesado."
+            cual = (
+                "es la primera de ellas"
+                if duplicate.primera
+                else "no es la primera"
             )
-        return "dup=false: primera aparición de este log_number en el batch."
+            return (
+                "dup=true: este log_number aparece más de una vez en el "
+                f"batch procesado, y esta página {cual}. Al depurar se "
+                "conserva la primera."
+            )
+        return "dup=false: este log_number no se repite en el batch."
 
     def _apply_csv_table_view(self, _checked: bool | None = None) -> None:
         """Alterna la tabla entre valores principales y todas las columnas."""

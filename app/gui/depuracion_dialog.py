@@ -116,10 +116,11 @@ class DepurarPaginasDialog(QDialog):
             f"Duplicados: {_texto_conteo(self._disponibles.duplicadas)}"
         )
         self.check_duplicados.setToolTip(
-            "Apariciones repetidas de un mismo log_number. Se marca la "
-            "segunda y las siguientes; abajo puede conservar otra en su "
-            "lugar. Las páginas sin log_number legible no se consideran "
-            "repetidas."
+            "Bitácoras que aparecen más de una vez. La tabla las señala "
+            "todas, pero aquí solo se marca la segunda y las siguientes: "
+            "borrar el grupo entero dejaría la ejecución sin esa bitácora. "
+            "Abajo puede conservar otra en su lugar. Las páginas sin "
+            "log_number legible no se consideran repetidas."
         )
         self.check_duplicados.setEnabled(bool(self._disponibles.duplicadas))
         self.check_duplicados.toggled.connect(self._marcar_duplicados)

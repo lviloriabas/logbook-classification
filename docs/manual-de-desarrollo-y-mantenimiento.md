@@ -358,6 +358,24 @@ periódica. No hay tope de reenvíos: rendirse dejaba el batch fuera de AirVault
 para siempre. Lo que crece es el margen entre intentos, `espera_de_reenvio`,
 que multiplica la espera configurada por los reenvíos ya hechos.
 
+La orden manual de subir no pasa por ese camino. `EstadoParte.se_puede_subir`
+la habilita sobre cualquier fila sin batch confirmado (`lote is None` y no
+terminada), que es una pregunta distinta de la que responde `partes_por_subir`:
+esta ultima sigue siendo la unica regla de la automatizacion, y aquella dice
+hasta donde llega la mano de quien mira la tabla. Antes de enviar,
+`ya_esta_en_airvault` hace una sola lectura de la cola y decide en memoria: un
+lote con el nombre visible esperado, o un `Empty-Batch` que no estuviera en
+`lotes_previos`, con las paginas compatibles y sobre un trabajo cuya subida sea
+rastreable. Varios candidatos no eligen ninguno. No abre batches ni contrasta
+Log Page Number: lo caro de la comprobacion completa era ese contraste, no el
+listado.
+
+`Trabajo.subir` levanta `PaginasAmarillas` (subclase de `ErrorDeCorrida`, con la
+lista de paginas) cuando el batch dejaria alguna sin un campo obligatorio, y
+`Manifiesto.amarillas_permitidas` la autoriza por batch. La automatizacion no
+puede contestarla; solo la ventana, preguntando antes de arrancar el hilo. El
+batch REVISAR no la levanta nunca.
+
 `app/airvault/registro.py` guarda el registro durable de cada entrega en
 `registro-de-batches.json`, junto a los manifiestos. Anota qué bitácoras lleva
 cada batch y cuáles llegaron a AirVault, de modo que `preparar_partes` sepa qué

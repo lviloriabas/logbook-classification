@@ -219,7 +219,9 @@ class TestCsvGates(unittest.TestCase):
             "dup",
             "disc",
         ])
-        self.assertEqual([row["dup"] for row in rows], ["false", "true"])
+        # Las dos apariciones de 2147300 se marcan: quien lee el CSV tiene
+        # que ver las dos filas del choque, no solo la posterior.
+        self.assertEqual([row["dup"] for row in rows], ["true", "true"])
 
     def test_disc_marks_the_pages_flagged_as_discrepancy(self):
         limpia = PageResult(page_number=1)
