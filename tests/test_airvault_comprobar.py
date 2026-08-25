@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,6 +29,7 @@ from app.airvault.config import (
 )
 from app.airvault.discovery import LoteNoEncontrado
 from app.airvault.flujo import (
+    AUTOCOMPLETADO,
     BUSCANDO,
     COMPLETADO,
     DESCUADRADO,
@@ -56,6 +58,7 @@ from app.airvault.flujo import (
     partes_por_subir,
     reenvio_pendiente,
     subida_estancada,
+    subida_rebasada,
     subir_partes,
 )
 from app.airvault.model import EstadoEtapa, EstadoRegistro
@@ -1380,10 +1383,15 @@ def test_lo_que_falta_por_subir_sale_de_una_sola_regla(tmp_path):
     ]
 
 
-def test_una_subida_antigua_agota_revisiones_antes_de_empezar_la_espera(
+def test_una_subida_antigua_agota_revisiones_y_despues_se_reenvia(
     tmp_path, monkeypatch,
 ):
-    """La edad de Quick Upload no salta la búsqueda de nombres incorrectos."""
+    """La edad de Quick Upload no salta la búsqueda de nombres incorrectos.
+
+    Agotadas las revisiones sí manda la fecha del batch: un archivo subido
+    hace años que nunca apareció en Web Index no llegó, y no tiene sentido
+    hacerle esperar media hora más antes de volver a enviarlo.
+    """
     trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
     subida = trabajo.manifiesto.etapa("subir")
     subida.marcar(EstadoEtapa.HECHA, "division-02.pdf")
@@ -1394,6 +1402,11 @@ def test_una_subida_antigua_agota_revisiones_antes_de_empezar_la_espera(
     monkeypatch.setattr(
         Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
     )
+    monkeypatch.setattr(
+        Trabajo,
+        "descubrir",
+        lambda self, *a, **k: setattr(self.manifiesto, "batch_id", "003NUE"),
+    )
 
     estados = [comprobar_partes([trabajo], cliente)[0] for _ in range(3)]
 
@@ -1402,12 +1415,13 @@ def test_una_subida_antigua_agota_revisiones_antes_de_empezar_la_espera(
     ]
     assert trabajo.manifiesto.intentos_identificacion == 3
     assert trabajo.manifiesto.espera_reenvio_desde
-    assert not subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
+    assert subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
     subir_partes(
         [trabajo], SesionFalsa(), cliente=cliente,
         reintentar_estancados=True,
     )
-    assert subidas == []
+    assert subidas == [True]
+    assert trabajo.manifiesto.reenvios == 1
 
 
 def test_los_ids_se_publican_solo_despues_de_intentar_todas_las_subidas(
@@ -1942,3 +1956,145 @@ def test_un_lote_que_no_se_deja_cerrar_no_corta_a_los_demas(tmp_path):
     hechos = completar_partes([primero, segundo], cliente)
     assert [r.completado for _t, r in hechos] == [False, True]
     assert llamadas == ["003SRO", "003SRP"]
+
+
+def _subida_en(trabajo, momento: datetime) -> None:
+    """Deja el manifiesto diciendo cuando Quick Upload acepto el archivo."""
+    etapa = trabajo.manifiesto.etapa("subir")
+    etapa.marcar(EstadoEtapa.HECHA, "entrega.pdf")
+    etapa.actualizada = momento.isoformat(timespec="seconds")
+    trabajo.guardar()
+
+
+def test_una_carga_que_rebasaron_las_siguientes_se_reenvia_sin_esperar(
+    tmp_path,
+):
+    """Si las partes posteriores ya se indexaron, la cola paso de largo.
+
+    Es la senal que no depende del reloj: la carga no se perdio de camino a
+    Quick Upload, se perdio en AirVault, y esperar mas no la va a publicar.
+    """
+    ahora = datetime.now()
+    primera, segunda, tercera = _trabajos_principal_division_y_revisar(tmp_path)
+    _subida_en(primera, ahora - timedelta(minutes=2))
+    _subida_en(segunda, ahora - timedelta(minutes=1))
+    _subida_en(tercera, ahora)
+    primera.manifiesto.intentos_identificacion = 3
+    primera.manifiesto.espera_reenvio_desde = ahora.isoformat(
+        timespec="seconds"
+    )
+    primera.guardar()
+    for trabajo in (segunda, tercera):
+        trabajo.manifiesto.etapa("verificar").marcar(
+            EstadoEtapa.HECHA, "2/2 en Valid"
+        )
+        trabajo.guardar()
+    estados = [
+        EstadoParte(primera, BUSCANDO, "no aparecio"),
+        EstadoParte(segunda, INDEXADO, "2/2 en Valid"),
+        EstadoParte(tercera, INDEXADO, "2/2 en Valid"),
+    ]
+    ejecucion = [primera, segunda, tercera]
+
+    # Dos minutos no agotan la espera de media hora. Lo que la da por
+    # perdida es que las dos que se enviaron despues ya esten indexadas.
+    assert not subida_estancada(primera, primera.config.espera_reenvio_s)
+    assert subida_rebasada(primera, ejecucion)
+    assert reenvio_pendiente(estados[0], ejecucion)
+    assert [t.carpeta for t in partes_por_subir(estados)] == [primera.carpeta]
+
+
+def test_la_carga_mas_reciente_no_se_pierde_por_las_anteriores(tmp_path):
+    """Que las partes previas esten indexadas no dice nada de la ultima.
+
+    La cola solo demuestra haber pasado de largo hacia delante: lo que se
+    subio despues de esta carga. Al reves, la ultima todavía puede estar
+    esperando su turno.
+    """
+    ahora = datetime.now()
+    primera, segunda, tercera = _trabajos_principal_division_y_revisar(tmp_path)
+    _subida_en(primera, ahora - timedelta(minutes=2))
+    _subida_en(segunda, ahora - timedelta(minutes=1))
+    _subida_en(tercera, ahora)
+    for trabajo in (primera, segunda):
+        trabajo.manifiesto.etapa("verificar").marcar(
+            EstadoEtapa.HECHA, "2/2 en Valid"
+        )
+        trabajo.guardar()
+    tercera.manifiesto.intentos_identificacion = 3
+    tercera.manifiesto.espera_reenvio_desde = ahora.isoformat(
+        timespec="seconds"
+    )
+    tercera.guardar()
+    estados = [
+        EstadoParte(primera, INDEXADO, "2/2 en Valid"),
+        EstadoParte(segunda, INDEXADO, "2/2 en Valid"),
+        EstadoParte(tercera, BUSCANDO, "no aparecio"),
+    ]
+
+    assert not subida_rebasada(tercera, [primera, segunda, tercera])
+    assert partes_por_subir(estados) == []
+
+
+def test_la_espera_se_cuenta_desde_que_se_subio_el_archivo(tmp_path):
+    """Una ejecucion retomada dias despues no vuelve a esperar de cero.
+
+    La marca de espera se estrena cuando el programa se da cuenta, que en
+    una ejecucion retomada es ahora mismo. La fecha del batch es la que
+    dice cuanto lleva sin publicarse de verdad.
+    """
+    trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
+    ahora = datetime.now()
+    _subida_en(trabajo, ahora - timedelta(days=3))
+    trabajo.manifiesto.intentos_identificacion = 3
+    trabajo.manifiesto.espera_reenvio_desde = ahora.isoformat(
+        timespec="seconds"
+    )
+    trabajo.guardar()
+
+    assert subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
+    assert reenvio_pendiente(EstadoParte(trabajo, BUSCANDO, "no aparecio"))
+
+
+def test_una_subida_reciente_sigue_esperando_su_turno(tmp_path):
+    """AirVault tarda: media hora de cola no es una carga perdida."""
+    trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
+    ahora = datetime.now()
+    _subida_en(trabajo, ahora - timedelta(minutes=3))
+    trabajo.manifiesto.intentos_identificacion = 3
+    trabajo.manifiesto.espera_reenvio_desde = ahora.isoformat(
+        timespec="seconds"
+    )
+    trabajo.guardar()
+
+    assert not subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
+    assert not reenvio_pendiente(EstadoParte(trabajo, BUSCANDO, "no aparecio"))
+
+
+def test_el_batch_que_cierra_el_programa_queda_como_autocompletado(tmp_path):
+    """La tabla distingue lo que cerro el programa de lo que ya estaba cerrado."""
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.fijar_lote("003SRO")
+    cliente.mapa = mapa(0, 0)
+
+    hechos = completar_partes([trabajo], cliente, automatico=True)
+
+    assert [r.completado for _t, r in hechos] == [True]
+    assert trabajo.manifiesto.completado_automatico
+    parte = estado_local(trabajo)
+    assert parte.estado == AUTOCOMPLETADO
+    assert parte.se_acabo
+
+
+def test_un_batch_cerrado_por_fuera_no_se_da_por_autocompletado(tmp_path):
+    """Lo cerro otra persona o una version anterior: se dice tal cual."""
+    trabajo = _trabajos_principal_division_y_revisar(tmp_path)[0]
+    trabajo.manifiesto.etapa("completar").marcar(
+        EstadoEtapa.HECHA, "2 paginas en verde"
+    )
+    trabajo.guardar()
+
+    parte = estado_local(trabajo)
+
+    assert parte.estado == COMPLETADO
+    assert parte.se_acabo

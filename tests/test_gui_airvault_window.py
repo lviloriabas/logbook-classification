@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -500,9 +501,15 @@ class ManifiestoFalso:
         self.intentos_identificacion = 0
         self.espera_reenvio_desde = ""
         self.reenvios = 0
+        self.completado_automatico = False
+        # Que una parte este verificada es lo que demuestra que AirVault
+        # publico lo que se subio despues de otra, asi que la regla de
+        # reenvio lo pregunta.
+        self.verificado = False
 
-    @staticmethod
-    def etapa_hecha(nombre):
+    def etapa_hecha(self, nombre):
+        if nombre == "verificar":
+            return self.verificado
         return nombre == "subir"
 
 
@@ -767,19 +774,38 @@ def test_mientras_falte_un_lote_se_sigue_preguntando_solo(ventana):
     assert ventana._vigilante.interval() == 2 * 60_000
 
 
-def estancada(nombre="DP | BITS SIN PUBLICAR", reenvios=0):
+def estancada(
+    nombre="DP | BITS SIN PUBLICAR",
+    reenvios=0,
+    carpeta="job",
+    subida="2020-01-01T00:00:00",
+    espera="2020-01-01T00:00:00",
+):
     """Una carga que Quick Upload acepto y AirVault nunca publico."""
     from app.airvault.flujo import BUSCANDO
     from app.airvault.model import EstadoEtapa, Etapa
 
-    fila = parte(BUSCANDO, nombre)
+    fila = parte(BUSCANDO, nombre, carpeta=carpeta)
     fila.trabajo.manifiesto.etapas["subir"] = Etapa(
         estado=EstadoEtapa.HECHA,
-        actualizada="2020-01-01T00:00:00",
+        actualizada=subida,
     )
     fila.trabajo.manifiesto.intentos_identificacion = 3
-    fila.trabajo.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
+    fila.trabajo.manifiesto.espera_reenvio_desde = espera
     fila.trabajo.manifiesto.reenvios = reenvios
+    return fila
+
+
+def indexada(nombre, carpeta, subida):
+    """Una parte que AirVault si publico y el programa ya verifico."""
+    from app.airvault.flujo import INDEXADO
+    from app.airvault.model import EstadoEtapa, Etapa
+
+    fila = parte(INDEXADO, nombre, carpeta=carpeta)
+    fila.trabajo.manifiesto.etapas["subir"] = Etapa(
+        estado=EstadoEtapa.HECHA, actualizada=subida,
+    )
+    fila.trabajo.manifiesto.verificado = True
     return fila
 
 
@@ -1250,3 +1276,49 @@ def test_una_cancelacion_no_se_confunde_con_el_fallo_de_una_pagina(app):
     from app.gui.airvault_window import TrabajoCancelado
 
     assert not issubclass(TrabajoCancelado, Exception)
+
+
+def test_una_carga_que_rebasaron_las_siguientes_se_reenvia_sola(ventana):
+    """Lo que se subio despues ya esta indexado: no hay nada que esperar.
+
+    Sin esta regla la fila se quedaba en «Subido pendiente confirmación»
+    hasta que alguien la mirara: la espera del reloj empieza cuando el
+    programa se da cuenta, y en una ejecución recién abierta eso es ahora.
+    """
+    ahora = datetime.now()
+    perdida = estancada(
+        "DP | BITS -2",
+        carpeta="job-2",
+        subida=(ahora - timedelta(minutes=2)).isoformat(timespec="seconds"),
+        espera=ahora.isoformat(timespec="seconds"),
+    )
+    siguiente = indexada(
+        "DP | BITS -3", "job-3", ahora.isoformat(timespec="seconds")
+    )
+
+    ventana._al_comprobar({
+        "estados": [perdida, siguiente], "planes": {}, "partes": [],
+        "reporte": None,
+    })
+
+    assert "ya están indexadas" in ventana.resumen.text()
+    assert ventana._subir_al_terminar
+    assert [
+        trabajo.manifiesto.nombre_batch
+        for trabajo in ventana._estado["pendientes_subida"]
+    ] == ["DP | BITS -2"]
+
+
+def test_un_batch_que_cerro_el_programa_se_pinta_como_terminado(ventana):
+    """El autocompletado es un final, no algo que quede por hacer."""
+    from app.airvault.flujo import AUTOCOMPLETADO
+
+    fila = parte(AUTOCOMPLETADO, "DP | BITS", "lo cerro el programa")
+
+    ventana._estados = [fila]
+    ventana._pintar_lotes()
+
+    assert fila.se_acabo
+    assert not ventana._falta_esperar()
+    assert ventana.lotes.item(0, 3).text().startswith("Terminado por el programa")
+    assert ventana.lotes.item(0, 0).foreground().color() == QColor(COLOR_INDEXADO)

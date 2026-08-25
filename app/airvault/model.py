@@ -140,6 +140,10 @@ class Manifiesto(BaseModel):
     # acepto pero AirVault nunca publico. Se cuenta para no seguir enviando
     # el mismo archivo indefinidamente y acabar con batches duplicados.
     reenvios: int = 0
+    # El propio programa cerro el batch al terminar de indexarlo. Distingue
+    # lo que quedo terminado sin que nadie interviniera de lo que ya estaba
+    # cerrado en AirVault cuando se encontro.
+    completado_automatico: bool = False
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
 

@@ -645,7 +645,7 @@ class TrabajoAirVaultWorker(QThread):
                         ] = plan
             if completar and validas == total:
                 cierres = completar_partes(
-                    trabajos, cliente, avisar=self._avisar
+                    trabajos, cliente, avisar=self._avisar, automatico=True
                 )
         finally:
             # Escribir toma el batch y lo suelta al terminar; esto es la red
@@ -669,7 +669,7 @@ class TrabajoAirVaultWorker(QThread):
         trabajos = list(estado["por_completar"])
         try:
             cierres = completar_partes(
-                trabajos, cliente, avisar=self._avisar
+                trabajos, cliente, avisar=self._avisar, automatico=True
             )
         finally:
             cerrar_partes(trabajos, cliente)
@@ -1564,7 +1564,9 @@ class AirVaultWindow(QDialog):
 
     def _pintar_lotes(self) -> None:
         """Vuelca en la tabla en qué va cada batch."""
-        from app.airvault.flujo import COMPLETADO, INDEXADO, SIN_SUBIR
+        from app.airvault.flujo import (
+            AUTOCOMPLETADO, COMPLETADO, INDEXADO, SIN_SUBIR,
+        )
 
         tabla = self.lotes
         tabla.setRowCount(0)
@@ -1579,7 +1581,9 @@ class AirVaultWindow(QDialog):
             # Verde significa una sola cosa: la verificación remota confirmó
             # todas las bitácoras. Una escritura parcial o fallida conserva el
             # color normal y dice «Indexado incompleto» en Estado.
-            ya_indexado = parte.estado in (INDEXADO, COMPLETADO)
+            ya_indexado = parte.estado in (
+                INDEXADO, COMPLETADO, AUTOCOMPLETADO,
+            )
             for columna, texto in enumerate(celdas):
                 item = QTableWidgetItem(texto)
                 if columna == 1:
@@ -1623,6 +1627,15 @@ class AirVaultWindow(QDialog):
             if parte.estado == INDEXADO and not parte.trabajo.manifiesto.solo_subir
         ]
 
+    def _ejecucion(self) -> list:
+        """Todas las partes de la ejecución, tal como están en la tabla.
+
+        Dar una carga por perdida depende de las demás: son las partes
+        siguientes, ya indexadas, las que demuestran que AirVault pasó de
+        largo. Ninguna regla puede decidirlo mirando una sola fila.
+        """
+        return [parte.trabajo for parte in self._estados]
+
     def _falta_esperar(self) -> bool:
         """Si queda algún batch que AirVault todavía no ha terminado.
 
@@ -1635,22 +1648,29 @@ class AirVaultWindow(QDialog):
 
         if self._indexado_incompleto and self.auto_indexar_check.isChecked():
             return True
-        estancadas = self._subidas_estancadas()
+        ejecucion = self._ejecucion()
+        perdidas = self._subidas_perdidas()
         return any(
             not parte.se_acabo and not parte.se_puede_indexar
-            and (parte not in estancadas or reenvio_pendiente(parte))
+            and (
+                parte not in perdidas
+                or reenvio_pendiente(parte, ejecucion)
+            )
             for parte in self._estados
         )
 
-    def _subidas_estancadas(self) -> list:
-        """Cargas que superaron la espera máxima sin aparecer en Index."""
-        from app.airvault.flujo import BUSCANDO, subida_estancada
+    def _subidas_perdidas(self) -> list:
+        """Cargas que AirVault aceptó y ya se pueden dar por no publicadas.
 
-        limite = self._config_actual().espera_reenvio_s
+        O bien las partes siguientes ya se indexaron, o bien el archivo
+        lleva subido más tiempo del que AirVault tarda en publicar.
+        """
+        from app.airvault.flujo import subida_perdida
+
+        ejecucion = self._ejecucion()
         return [
             parte for parte in self._estados
-            if parte.estado == BUSCANDO
-            and subida_estancada(parte.trabajo, limite)
+            if subida_perdida(parte, ejecucion)
         ]
 
     def _por_reenviar(self) -> list:
@@ -1665,20 +1685,36 @@ class AirVaultWindow(QDialog):
         ]
 
     def _aviso_para_volver_a_subir(self) -> str:
-        from app.airvault.flujo import reenvio_pendiente
+        from app.airvault.flujo import reenvio_pendiente, subida_rebasada
 
-        estancadas = self._subidas_estancadas()
-        if not estancadas:
+        perdidas = self._subidas_perdidas()
+        if not perdidas:
             return ""
-        nombres = ", ".join(parte.nombre for parte in estancadas)
-        cuantos = "ese batch" if len(estancadas) == 1 else "esos batches"
+        ejecucion = self._ejecucion()
+        nombres = ", ".join(parte.nombre for parte in perdidas)
+        cuantos = "ese batch" if len(perdidas) == 1 else "esos batches"
         minutos = max(1, round(self._config_actual().espera_reenvio_s / 60))
-        cabeza = (
-            f" AirVault no publicó en Web Index: {nombres}. Ya pasó el "
-            f"tiempo de espera de {minutos} minutos y es probable que la "
-            f"carga no vaya a aparecer."
-        )
-        if any(reenvio_pendiente(parte) for parte in estancadas):
+        rebasadas = [
+            parte for parte in perdidas
+            if subida_rebasada(parte.trabajo, ejecucion)
+        ]
+        if len(rebasadas) == len(perdidas):
+            razon = (
+                "Las partes que se enviaron después ya están indexadas, "
+                "así que la cola pasó de largo."
+            )
+        elif rebasadas:
+            razon = (
+                "De unas ya se indexaron las partes siguientes y de otras "
+                f"pasó el tiempo de espera de {minutos} minutos."
+            )
+        else:
+            razon = (
+                f"Ya pasó el tiempo de espera de {minutos} minutos y es "
+                "probable que la carga no vaya a aparecer."
+            )
+        cabeza = f" AirVault no publicó en Web Index: {nombres}. {razon}"
+        if any(reenvio_pendiente(parte, ejecucion) for parte in perdidas):
             if self.auto_check.isChecked():
                 return (
                     f"{cabeza} Se comprueba la cola una vez más y se vuelve "
@@ -2102,7 +2138,7 @@ class AirVaultWindow(QDialog):
                 self._resumen_de_listos(datos["partes"])
                 + self._aviso_para_volver_a_subir()
             )
-        elif self._subidas_estancadas():
+        elif self._subidas_perdidas():
             self.resumen.setText(
                 self._aviso_para_volver_a_subir().lstrip()
             )

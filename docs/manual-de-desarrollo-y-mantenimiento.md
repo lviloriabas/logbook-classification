@@ -336,8 +336,17 @@ El flujo es:
 9. liberar el batch al terminar, cancelar o abandonar.
 
 La recuperación de Quick Upload agota primero tres ciclos de identificación
-por nombre, páginas y contenido. Solo entonces guarda el inicio de una espera
-de 1800 segundos antes de considerar la carga estancada. Un nuevo clic en
+por nombre, páginas y contenido. Solo entonces se pregunta si la carga se
+perdió, y basta con uno de dos motivos. El primero no depende de ningún reloj:
+las partes que se enviaron **después** ya aparecieron en Web Index y quedaron
+indexadas, así que la cola pasó de largo (`subida_rebasada`). El segundo son
+1800 segundos sin publicarse, contados desde la fecha del batch —el momento en
+que Quick Upload aceptó el archivo— y no desde que el programa se dio cuenta:
+una ejecución retomada días después estrena esa marca al abrirla y volvía a
+esperar media hora por una carga perdida hacía días (`subida_estancada`).
+`partes_por_subir` reúne ambos motivos con las partes que nunca llegaron a
+subirse, y es la única regla que consultan el botón y la comprobación
+periódica. Un nuevo clic en
 **Subir a AirVault** vuelve a consultar Web Index, reenvía solo las ausentes y
 ejecuta su descubrimiento hasta obtener el ID. Cada ventana mantiene un
 `TrabajoAirVaultWorker` independiente, por lo que varias ejecuciones pueden
