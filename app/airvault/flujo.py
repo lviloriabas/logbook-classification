@@ -1765,6 +1765,24 @@ def _prefijo(trabajo: "Trabajo") -> str:
     return f"Batch «{nombre}»: " if nombre else "Batch: "
 
 
+def _entrega_de(trabajo: "Trabajo") -> str:
+    """A que entrega pertenece un batch, normalizado para comparar.
+
+    Hace falta porque la identidad de una bitacora —el archivo del que
+    salio y su pagina— solo es unica dentro de su entrega. El escaner
+    nombra igual sus archivos en cada ejecucion, asi que ``Image_001.pdf``
+    pagina 1 existe en todas: sin la entrega delante, dos ejecuciones
+    distintas parecen repetirse entera la una a la otra.
+    """
+    csv = str(trabajo.manifiesto.csv_origen or "").strip()
+    if not csv:
+        return ""
+    try:
+        return str(Path(csv).resolve()).casefold()
+    except OSError:
+        return csv.casefold()
+
+
 def _validar_sin_bitacoras_repetidas(
     por_subir: Sequence["Trabajo"],
     contexto: Sequence["Trabajo"] = (),
@@ -1777,7 +1795,27 @@ def _validar_sin_bitacoras_repetidas(
     sobre una entrega que ya tenia batches subidos, asi que se comprueba
     contra todas las partes de la ejecucion y no solo contra las que se
     van a mandar ahora.
+
+    Cada entrega se mira por separado. La ventana puede tener delante
+    batches de varias ejecuciones —los pendientes de dias anteriores se
+    retoman junto a los de hoy— y entre ellas los nombres de archivo se
+    repiten sin que eso signifique nada.
     """
+    entregas: Dict[str, List["Trabajo"]] = {}
+    for trabajo in por_subir:
+        entregas.setdefault(_entrega_de(trabajo), []).append(trabajo)
+    for entrega, trabajos in entregas.items():
+        _validar_entrega_sin_repetidas(
+            trabajos,
+            [otro for otro in contexto if _entrega_de(otro) == entrega],
+        )
+
+
+def _validar_entrega_sin_repetidas(
+    por_subir: Sequence["Trabajo"],
+    contexto: Sequence["Trabajo"] = (),
+) -> None:
+    """La comprobacion anterior dentro de una sola entrega."""
     duenos: Dict[Tuple[str, int], str] = {}
     claves = {str(trabajo.carpeta) for trabajo in por_subir}
     # Primero lo que ya esta en AirVault: es lo que manda si algo choca.

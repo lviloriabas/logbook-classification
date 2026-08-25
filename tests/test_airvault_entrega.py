@@ -910,3 +910,52 @@ def test_reorganizar_una_entrega_repartida_en_varios_archivos(tmp_path):
     assert len(todas) == len(set(todas))
     assert set(todas) == esperadas
     assert despues[0].manifiesto.batch_id == "003PRI"
+
+
+def test_dos_ejecuciones_distintas_no_se_estorban_al_subir(tmp_path):
+    """El escaner nombra igual sus archivos en cada ejecucion.
+
+    La ventana retoma los pendientes de dias anteriores junto a los de hoy,
+    asi que en la misma tabla conviven batches de entregas distintas. Sus
+    bitacoras se llaman igual —``Image_001.pdf`` pagina 1 existe en todas—
+    sin que eso signifique que se repitan: son documentos distintos. Al no
+    mirar de que entrega venia cada una, la guarda daba por repetida la
+    ejecucion entera y abortaba la subida completa, de modo que ningun
+    batch llegaba nunca a Quick Upload.
+    """
+    from app.airvault.flujo import subir_partes
+
+    csv_uno, _ = corrida(tmp_path / "lunes")
+    csv_dos, _ = corrida(tmp_path / "martes")
+    de_lunes = preparar_partes(
+        AirVaultConfig(), tmp_path / "job-lunes", csv_uno, paginas_por_batch=5,
+    )
+    de_martes = preparar_partes(
+        AirVaultConfig(), tmp_path / "job-martes", csv_dos, paginas_por_batch=5,
+    )
+    for trabajo in de_martes:
+        # Cada entrega lleva su fecha en el nombre; el ayudante de pruebas
+        # usa la misma para las dos, y dos batches no pueden llamarse igual.
+        trabajo.manifiesto.nombre_batch = trabajo.manifiesto.nombre_batch.replace(
+            "19 AUG", "18 AUG"
+        )
+        trabajo.guardar()
+    # Las mismas paginas de origen en las dos entregas, como en la realidad.
+    assert set(_bitacoras_de(de_lunes)) == set(_bitacoras_de(de_martes))
+    juntos = de_lunes + de_martes
+    enviados = []
+
+    class _Subidor:
+        def subir(self, *_a, **_k):
+            raise AssertionError("no se usa: se sustituye Trabajo.subir")
+
+    for trabajo in juntos:
+        trabajo.subir = (  # type: ignore[method-assign]
+            lambda *_a, _t=trabajo, **_k: enviados.append(
+                _t.manifiesto.nombre_batch
+            )
+        )
+
+    subir_partes(juntos, object(), en_la_ejecucion=juntos)
+
+    assert enviados == [t.manifiesto.nombre_batch for t in juntos]
