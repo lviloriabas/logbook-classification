@@ -1851,7 +1851,7 @@ class AirVaultWindow(QDialog):
     def _aviso_para_volver_a_subir(self) -> str:
         from app.airvault.flujo import (
             busqueda_amplia_sin_hallar,
-            reenvio_pendiente,
+            espera_de_reenvio,
             subida_rebasada,
         )
 
@@ -1861,7 +1861,12 @@ class AirVaultWindow(QDialog):
         ejecucion = self._ejecucion()
         nombres = ", ".join(parte.nombre for parte in perdidas)
         cuantos = "ese batch" if len(perdidas) == 1 else "esos batches"
-        minutos = max(1, round(self._config_actual().espera_reenvio_s / 60))
+        minutos = max(
+            1,
+            round(
+                max(espera_de_reenvio(parte.trabajo) for parte in perdidas) / 60
+            ),
+        )
         sin_hallar = [
             parte for parte in perdidas
             if busqueda_amplia_sin_hallar(parte.trabajo)
@@ -1893,21 +1898,15 @@ class AirVaultWindow(QDialog):
                 "probable que la carga no vaya a aparecer."
             )
         cabeza = f" AirVault no publicó en Web Index: {nombres}. {razon}"
-        if any(reenvio_pendiente(parte, ejecucion) for parte in perdidas):
-            if self.auto_check.isChecked():
-                return (
-                    f"{cabeza} Se comprueba la cola una vez más y se vuelve "
-                    f"a enviar solamente {cuantos}, sin pulsar nada."
-                )
+        if self.auto_check.isChecked():
             return (
-                f"{cabeza} Pulse «Subir a AirVault» para comprobar la cola "
-                f"una vez más y volver a enviar solamente {cuantos}."
+                f"{cabeza} Se comprueba la cola una vez más y se vuelve "
+                f"a enviar solamente {cuantos}, sin pulsar nada. Cada "
+                f"reenvío que tampoco aparezca espera más que el anterior."
             )
         return (
-            f"{cabeza} Ya se reenvió el máximo de veces sin que apareciera, "
-            f"así que no se vuelve a enviar solo: revise {cuantos} en "
-            f"AirVault y use «Reiniciar paso incompleto» si hay que "
-            f"cargarlo otra vez."
+            f"{cabeza} Pulse «Subir a AirVault» para comprobar la cola "
+            f"una vez más y volver a enviar solamente {cuantos}."
         )
 
     # ── la comprobación periódica ──────────────────────────────────

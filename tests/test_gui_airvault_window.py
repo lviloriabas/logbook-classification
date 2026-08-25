@@ -842,18 +842,24 @@ def test_sin_comprobacion_automatica_la_resubida_se_pide_a_mano(ventana):
     assert not ventana._subir_al_terminar
 
 
-def test_agotados_los_reenvios_deja_de_insistir(ventana):
-    """Reenviar sin tope acabaria publicando el mismo archivo varias veces."""
-    from app.airvault.flujo import MAXIMO_REENVIOS_AUTOMATICOS
+def test_cada_reenvio_espera_mas_pero_no_se_deja_de_insistir(ventana):
+    """Rendirse dejaba el batch fuera de AirVault para siempre.
 
+    Un archivo que no llegó no se arregla por dejar de mandarlo. Lo que
+    crece es el margen entre un intento y el siguiente, así que una cola
+    que solo va lenta no recibe el mismo archivo cada vuelta del reloj.
+    """
     ventana._al_comprobar({
-        "estados": [estancada(reenvios=MAXIMO_REENVIOS_AUTOMATICOS)],
+        "estados": [estancada(reenvios=5)],
         "planes": {}, "partes": [], "reporte": None,
     })
 
-    assert "no se vuelve a enviar solo" in ventana.resumen.text()
-    assert not ventana._subir_al_terminar
-    assert ventana._vigilante is None or not ventana._vigilante.isActive()
+    assert "sin pulsar nada" in ventana.resumen.text()
+    assert "espera más que el anterior" in ventana.resumen.text()
+    assert ventana._subir_al_terminar
+    # Seis veces la espera configurada, en minutos, en el propio aviso.
+    assert "180 minutos" in ventana.resumen.text()
+    assert ventana._vigilante is not None and ventana._vigilante.isActive()
 
 
 def test_un_archivo_sin_subir_no_se_queda_esperando(ventana):

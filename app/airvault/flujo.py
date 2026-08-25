@@ -79,10 +79,13 @@ CARPETA_TRABAJOS = Path("output") / "airvault"
 # reenvíos: en todos se vuelve a leer la cola de AirVault.
 INTENTOS_IDENTIFICACION_ANTES_DE_ESPERA = 3
 
-# Veces que la automatizacion puede volver a enviar por su cuenta una carga
-# que Quick Upload acepto y AirVault nunca publico. Sin tope, una cola atascada
-# acabaria recibiendo el mismo archivo cada intervalo de comprobacion.
-MAXIMO_REENVIOS_AUTOMATICOS = 2
+# El programa no deja de reintentar una carga que no llego: quedarse
+# esperando no la arregla, y lo que hay que conseguir es que el batch acabe
+# en AirVault. Lo que crece es el margen entre un intento y el siguiente,
+# multiplicando la espera configurada por los reenvios ya hechos: media
+# hora, una hora, hora y media. Asi una cola que solo va lenta no recibe el
+# mismo archivo cada vuelta del reloj, y una carga realmente perdida acaba
+# subiendo igual.
 
 # La pantalla de Quick Upload declara 2048 MB por archivo. La compresion
 # conserva margen respecto de ese techo y usa una calidad JPEG moderada:
@@ -2294,7 +2297,7 @@ def subida_perdida(
         return True
     if subida_rebasada(trabajo, ejecucion):
         return True
-    return subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
+    return subida_estancada(trabajo, espera_de_reenvio(trabajo))
 
 
 def reenvio_pendiente(
@@ -2302,13 +2305,13 @@ def reenvio_pendiente(
 ) -> bool:
     """Si esta carga ya se puede volver a enviar sin pedirlo a mano.
 
-    Se da por perdida y quedan reenvios: insistir siempre con una cola
-    atascada terminaria publicando el mismo archivo varias veces.
+    Basta con darla por perdida. No hay un numero de intentos tras el cual
+    el programa se rinda: un batch que no llego a AirVault no se arregla
+    por dejar de mandarlo. Lo que evita insistir contra una cola lenta es
+    que cada reenvio exige mas espera que el anterior
+    (:func:`espera_de_reenvio`).
     """
-    if not subida_perdida(parte, ejecucion):
-        return False
-    reenvios = int(parte.trabajo.manifiesto.reenvios or 0)
-    return reenvios < MAXIMO_REENVIOS_AUTOMATICOS
+    return subida_perdida(parte, ejecucion)
 
 
 def partes_por_subir(estados: Sequence[EstadoParte]) -> List["Trabajo"]:
@@ -3316,6 +3319,18 @@ def edad_de_la_carga(
         return None
 
 
+def espera_de_reenvio(trabajo: "Trabajo") -> float:
+    """Cuanto tiene que llevar sin publicarse antes de volver a mandarla.
+
+    La primera vez es la espera configurada; con cada reenvio ya hecho, un
+    multiplo mas. Es lo que sustituye al tope de reenvios: en vez de dejar
+    de intentarlo —lo que dejaba el batch fuera de AirVault para siempre—,
+    se intenta cada vez mas espaciado.
+    """
+    base = max(0.0, float(trabajo.config.espera_reenvio_s))
+    return base * (1 + max(0, int(trabajo.manifiesto.reenvios or 0)))
+
+
 def _carga_vieja_sin_publicar(trabajo: "Trabajo") -> bool:
     """Si esta carga es lo bastante antigua como para no estar en camino.
 
@@ -3327,7 +3342,7 @@ def _carga_vieja_sin_publicar(trabajo: "Trabajo") -> bool:
     edad = edad_de_la_carga(trabajo)
     if edad is None:
         return False
-    return edad >= max(0.0, float(trabajo.config.espera_reenvio_s))
+    return edad >= espera_de_reenvio(trabajo)
 
 
 def _registrar_busqueda_amplia_fallida(trabajo: "Trabajo") -> EstadoParte:

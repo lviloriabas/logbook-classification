@@ -1315,9 +1315,9 @@ def test_subir_de_nuevo_reenvia_el_que_no_aparecio_durante_mucho_tiempo(
     assert trabajo.manifiesto.batch_id == "003NUE"
 
 
-def test_cada_reenvio_automatico_se_cuenta_y_se_agota(tmp_path, monkeypatch):
-    """Sin tope, una cola atascada recibiria el mismo archivo cada vuelta."""
-    from app.airvault.flujo import MAXIMO_REENVIOS_AUTOMATICOS
+def test_cada_reenvio_automatico_se_cuenta_y_espera_mas(tmp_path, monkeypatch):
+    """No se deja de insistir; lo que crece es el margen entre intentos."""
+    from app.airvault.flujo import espera_de_reenvio
 
     trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
     subida = trabajo.manifiesto.etapa("subir")
@@ -1347,17 +1347,23 @@ def test_cada_reenvio_automatico_se_cuenta_y_se_agota(tmp_path, monkeypatch):
     assert trabajo.manifiesto.batch_id == "003NUE"
     assert trabajo.manifiesto.reenvios == 0
 
-    # Con el tope gastado, la misma carga perdida ya no se reenvia sola.
+    # Cada reenvio ya hecho pide un multiplo mas de la espera configurada.
     perdida = _trabajos_principal_division_y_revisar(tmp_path / "otra")[1]
     perdida.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "x.pdf")
     perdida.manifiesto.intentos_identificacion = 3
     perdida.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
-    perdida.manifiesto.reenvios = MAXIMO_REENVIOS_AUTOMATICOS
     perdida.guardar()
+    base = perdida.config.espera_reenvio_s
+    assert espera_de_reenvio(perdida) == base
+    perdida.manifiesto.reenvios = 3
+    assert espera_de_reenvio(perdida) == base * 4
+
+    # Y por muchos que lleve, una carga de 2020 sigue mereciendo otro envio:
+    # rendirse la dejaria fuera de AirVault para siempre.
     estado = EstadoParte(perdida, BUSCANDO, "no aparecio")
-    assert subida_estancada(perdida, perdida.config.espera_reenvio_s)
-    assert not reenvio_pendiente(estado)
-    assert partes_por_subir([estado]) == []
+    assert subida_estancada(perdida, espera_de_reenvio(perdida))
+    assert reenvio_pendiente(estado)
+    assert [t.carpeta for t in partes_por_subir([estado])] == [perdida.carpeta]
 
 
 def test_lo_que_falta_por_subir_sale_de_una_sola_regla(tmp_path):
