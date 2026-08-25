@@ -503,6 +503,7 @@ class ManifiestoFalso:
         self.reenvios = 0
         self.busquedas_amplias_sin_hallar = 0
         self.completado_automatico = False
+        self.cancelado = False
         # Que una parte este verificada es lo que demuestra que AirVault
         # publico lo que se subio despues de otra, asi que la regla de
         # reenvio lo pregunta.
@@ -522,6 +523,11 @@ class TrabajoFalso:
         # La regla de reenvio mira la espera configurada del propio trabajo,
         # igual que hace con un Trabajo de verdad.
         self.config = AirVaultConfig()
+        self.guardados = 0
+
+    def guardar(self):
+        """Sacar un batch de la cola se anota en su manifiesto."""
+        self.guardados += 1
 
 
 def parte(estado, nombre="DP | BITS", detalle="", carpeta="job", lote=None):
@@ -1323,3 +1329,93 @@ def test_un_batch_que_cerro_el_programa_se_pinta_como_terminado(ventana):
     assert not ventana._falta_esperar()
     assert ventana.lotes.item(0, 3).text().startswith("Terminado por el programa")
     assert ventana.lotes.item(0, 0).foreground().color() == QColor(COLOR_INDEXADO)
+
+
+def _acciones(ventana, fila=0):
+    """El menú de esa fila de la cola, por acción."""
+    menu = ventana._acciones_de_la_cola(ventana._estados[fila])
+    return {
+        accion.text(): accion for accion in menu.actions()
+        if not accion.isSeparator()
+    }
+
+
+def test_la_cola_ofrece_subir_solo_el_batch_que_falta(ventana):
+    """Clic derecho sobre una fila: la acción es de esa fila, no de todas."""
+    from app.airvault.flujo import INDEXADO, SIN_SUBIR
+
+    ventana._estados = [
+        parte(SIN_SUBIR, "DP | BITS -1", carpeta="job-1"),
+        parte(INDEXADO, "DP | BITS -2", carpeta="job-2"),
+    ]
+    ventana._pintar_lotes()
+
+    acciones = _acciones(ventana, fila=0)
+
+    assert acciones["Subir a AirVault ahora"].isEnabled()
+    assert not acciones["Completar el batch"].isEnabled()
+    assert not acciones["Indexar ahora"].isEnabled()
+    assert "Cancelar en la cola" in acciones
+
+
+def test_la_cola_ofrece_completar_el_que_ya_esta_indexado(ventana):
+    from app.airvault.flujo import INDEXADO
+
+    ventana._estados = [parte(INDEXADO, "DP | BITS", carpeta="job-1")]
+    ventana._pintar_lotes()
+
+    acciones = _acciones(ventana)
+
+    assert acciones["Completar el batch"].isEnabled()
+    assert not acciones["Subir a AirVault ahora"].isEnabled()
+
+
+def test_cancelar_saca_el_batch_de_la_cola_sin_deshacer_nada(ventana):
+    """Cancelar es dejar de trabajar en él, no borrar lo hecho."""
+    from app.airvault.flujo import CANCELADO, SIN_SUBIR
+
+    fila = parte(SIN_SUBIR, "DP | BITS", carpeta="job-1")
+    fila.trabajo.manifiesto.batch_id = "003SRO"
+    ventana._estados = [fila]
+    ventana._pintar_lotes()
+
+    ventana._cancelar_una(fila, True)
+
+    assert fila.trabajo.manifiesto.cancelado
+    assert fila.trabajo.manifiesto.batch_id == "003SRO"
+    assert ventana._estados[0].estado == CANCELADO
+    assert ventana._estados[0].se_acabo
+    # Cancelado deja de contar como algo que esperar: el reloj se para.
+    assert not ventana._falta_esperar()
+    # Y el menú pasa a ofrecer lo contrario.
+    acciones = _acciones(ventana)
+    assert "Reanudar en la cola" in acciones
+    assert not acciones["Subir a AirVault ahora"].isEnabled()
+
+
+def test_reanudar_devuelve_el_batch_a_la_cola(ventana):
+    from app.airvault.flujo import CANCELADO, SIN_SUBIR
+
+    fila = parte(SIN_SUBIR, "DP | BITS", carpeta="job-1")
+    ventana._estados = [fila]
+    ventana._cancelar_una(fila, True)
+
+    ventana._cancelar_una(ventana._estados[0], False)
+
+    assert not fila.trabajo.manifiesto.cancelado
+    assert ventana._estados[0].estado != CANCELADO
+    assert not ventana._estados[0].se_acabo
+    # Vuelve a ser algo que esperar, así que el reloj puede reanudarse.
+    assert ventana._falta_esperar()
+
+
+def test_copiar_el_nombre_del_batch_lo_deja_en_el_portapapeles(ventana):
+    from PySide6.QtGui import QGuiApplication
+    from app.airvault.flujo import LISTO
+
+    fila = parte(LISTO, "DP | BITS -4", carpeta="job-1")
+    ventana._estados = [fila]
+
+    ventana._copiar_al_portapapeles(fila.nombre)
+
+    assert QGuiApplication.clipboard().text() == "DP | BITS -4"

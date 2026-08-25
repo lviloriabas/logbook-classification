@@ -568,6 +568,7 @@ SOLO_REVISAR = "solo_revisar"
 INDEXADO = "indexado"
 COMPLETADO = "completado"
 AUTOCOMPLETADO = "autocompletado"
+CANCELADO = "cancelado"
 
 NOMBRE_ESTADO_PARTE = {
     SIN_SUBIR: "Sin subir",
@@ -581,6 +582,7 @@ NOMBRE_ESTADO_PARTE = {
     INDEXADO: "Indexado",
     COMPLETADO: "Terminado",
     AUTOCOMPLETADO: "Terminado por el programa",
+    CANCELADO: "Cancelado en la cola",
 }
 
 
@@ -615,7 +617,7 @@ class EstadoParte:
     def se_acabo(self) -> bool:
         """Ya no hay nada que esperar de esta parte."""
         return self.estado in (
-            DESCUADRADO, INDEXADO, COMPLETADO, AUTOCOMPLETADO,
+            DESCUADRADO, INDEXADO, COMPLETADO, AUTOCOMPLETADO, CANCELADO,
         )
 
     def __str__(self) -> str:
@@ -2125,6 +2127,17 @@ def subir_partes(
     return fallos
 
 
+def reiniciar_subida(trabajo: "Trabajo") -> None:
+    """Olvida lo que el programa creia haber subido de este batch.
+
+    Deja el trabajo como recien preparado —sin ID, sin etapas de subida en
+    adelante y con sus registros pendientes— para que vuelva a Quick
+    Upload. No toca AirVault: si el batch estaba publicado de verdad, la
+    proxima busqueda lo encuentra y recupera su ID en vez de duplicarlo.
+    """
+    _reiniciar_subida_ausente(trabajo)
+
+
 def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:
     """Quita la suposicion local de un batch que AirVault no devolvio."""
     manifiesto = trabajo.manifiesto
@@ -2632,6 +2645,20 @@ def reiniciar_trabajos_incompletos(
     return reiniciados
 
 
+def _cancelado_de(trabajo: "Trabajo") -> EstadoParte:
+    """Un batch que alguien saco de la cola a mano.
+
+    No se sube, no se busca en AirVault y no se indexa. Lo que ya estuviera
+    hecho se conserva tal cual: cancelar es dejar de trabajar en el, no
+    deshacer nada.
+    """
+    return EstadoParte(
+        trabajo,
+        CANCELADO,
+        "fuera de la cola hasta que se reanude",
+    )
+
+
 def _cierre_de(trabajo: "Trabajo") -> EstadoParte:
     """Como quedo un batch ya cerrado, y por mano de quien.
 
@@ -2659,6 +2686,8 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
     completar = manifiesto.etapas.get("completar")
     if completar and completar.estado is EstadoEtapa.HECHA:
         return _cierre_de(trabajo)
+    if manifiesto.cancelado:
+        return _cancelado_de(trabajo)
     if not manifiesto.etapa_hecha("subir"):
         subir = manifiesto.etapas.get("subir")
         detalle = (
@@ -3342,6 +3371,8 @@ def _estado_de(
         # la cola ni volver a buscar su nombre solo para pintar la fila de la
         # tabla; si se pide completar, se usa directamente el ID guardado.
         return EstadoParte(trabajo, INDEXADO, verificar.detalle)
+    if manifiesto.cancelado:
+        return _cancelado_de(trabajo)
     if identidad_fallida:
         return EstadoParte(
             trabajo,
@@ -3488,7 +3519,7 @@ def _estado_de(
 def _pendiente_de_busqueda(trabajo: "Trabajo") -> bool:
     """Si la fila local aun necesita localizar algo en AirVault."""
     manifiesto = trabajo.manifiesto
-    if manifiesto.etapa_hecha("completar"):
+    if manifiesto.cancelado or manifiesto.etapa_hecha("completar"):
         return False
     return not manifiesto.etapa_hecha("verificar")
 
