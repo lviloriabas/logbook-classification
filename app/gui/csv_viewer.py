@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from loguru import logger
 from PySide6.QtCore import (
@@ -90,7 +90,7 @@ from app.utils.io import PROCESSED_DIRNAME
 # El mismo recuento que dejan los correctores al tocar un reporte: quitarle
 # páginas cambia los totales y el JSON no puede quedar diciendo los de antes.
 from app.validation.book_corrector import _recompute_summary
-from app.validation.depuracion import depurar
+from app.validation.depuracion import depurar_claves
 
 
 _STATUS_COLORS = {
@@ -172,6 +172,39 @@ def _join_names(names: Iterable[str], limit: int = 3) -> str:
     name_list = list(names)
     shown = ", ".join(name_list[:limit])
     return shown if len(name_list) <= limit else f"{shown}…"
+
+
+def _numeros_de_bitacora(rows: Iterable[dict[str, str]]) -> list[str]:
+    """Bitácoras distintas que aparecen en esas filas, en orden de lectura.
+
+    Se conserva el texto tal cual lo trae el CSV: es lo que el usuario ve en
+    la tabla, y una bitácora ilegible tiene que poder nombrarse igual que
+    una legible para que el recuento cuadre con lo que se va a borrar.
+    """
+    vistos: list[str] = []
+    conocidos: set[str] = set()
+    for row in rows:
+        numero = (row.get("log_number") or "").strip()
+        if not numero or numero in conocidos:
+            continue
+        conocidos.add(numero)
+        vistos.append(numero)
+    return vistos
+
+
+def _lista_de_bitacoras(numeros: Sequence[str], limite: int = 12) -> str:
+    """Enumera bitácoras para el cuadro de confirmación, sin desbordarlo.
+
+    Con muchas se corta la lista y se dice cuántas quedan fuera: el cuadro
+    tiene que caber en pantalla, y quien borra medio centenar de páginas
+    necesita el número total más que los últimos cuarenta códigos.
+    """
+    if not numeros:
+        return "sin número de bitácora legible"
+    mostrados = list(numeros[:limite])
+    resto = len(numeros) - len(mostrados)
+    texto = ", ".join(mostrados)
+    return texto if not resto else f"{texto} y {resto} más"
 
 
 def _archived_base_name(name: str) -> str:
@@ -1323,6 +1356,19 @@ class CsvViewerWindow(QMainWindow):
         self._search_matches: list[tuple[int, str]] = []
         self._search_position = -1
         self._search_query = ""
+        # El criterio de orden se guarda por nombre de columna, no por
+        # índice: al reescribir la ejecución sin unas páginas el CSV se
+        # vuelve a leer entero, y la vista resumida puede dejar otras
+        # columnas a la vista. Sobrevive a un borrado; cambiar de CSV lo
+        # descarta, porque el criterio era de la ejecución anterior.
+        self._sort_state: tuple[str, bool] | None = None
+        self._loaded_csv_path: Path | None = None
+        # ``csv_field_id`` arma un conjunto con todas las columnas en cada
+        # llamada, y la tabla la llamaba una vez por celda: en una ejecución
+        # grande eso es el coste dominante de abrir el CSV. El mapa se
+        # calcula una sola vez por archivo y se consulta por columna.
+        self._field_id_by_column: dict[str, str | None] = {}
+        self._column_set: set[str] = set()
 
         self._splitter_adjusted = False
         self._outputs_worker = None
@@ -1469,7 +1515,9 @@ class CsvViewerWindow(QMainWindow):
         self.table.setToolTip(
             "Cada fila es una página de la ejecución. Al seleccionarla se abre "
             "su página en el visor, y Supr quita de la ejecución las páginas "
-            "seleccionadas."
+            "elegidas. Para juntar páginas sueltas, marque su casilla en la "
+            "primera columna: mientras haya alguna marcada, son esas las que "
+            "se eliminan."
         )
         # Supr solo mientras la tabla tiene el foco: es la que sabe qué
         # páginas hay elegidas, y desde el buscador o el cuadro de salidas la
@@ -1483,6 +1531,7 @@ class CsvViewerWindow(QMainWindow):
         self.table.horizontalHeader().setFixedHeight(30)
         self.table.horizontalHeader().setResizeContentsPrecision(_RESIZE_PRECISION)
         self.table_sort = ColumnSortController(self.table)
+        self.table_sort.sortChanged.connect(self._remember_sort)
         self.table.currentCellChanged.connect(self._on_current_cell_changed)
         # ``currentCellChanged`` cubre teclado y búsquedas, pero no se emite
         # al volver a pulsar la fila que ya estaba activa. El clic debe volver
@@ -1712,7 +1761,19 @@ class CsvViewerWindow(QMainWindow):
             return
 
         self._export_note = ""
+        # Otro CSV es otra ejecución: su orden no es el que alguien puso
+        # aquí. Reescribir el mismo archivo sin unas páginas sí lo conserva,
+        # que es de lo que se trata al borrar.
+        if self._loaded_csv_path != path:
+            self._sort_state = None
+        self._loaded_csv_path = path
         self._columns = columns
+        self._field_id_by_column = {
+            column: csv_field_id(column, columns) for column in columns
+        }
+        # La comprobación de pertenencia también corría por celda sobre una
+        # lista; con el conjunto es constante.
+        self._column_set = set(columns)
         self._rows = rows
         self._field_statuses = self._load_field_statuses(path)
         # Se limpia antes de poblar: la tabla emite selección mientras se
@@ -1800,9 +1861,20 @@ class CsvViewerWindow(QMainWindow):
                 for column_index, column in enumerate(self._columns):
                     item = QTableWidgetItem(row.get(column, ""))
                     item.setData(Qt.ItemDataRole.UserRole, row_index)
+                    if column_index == 0:
+                        # La marca vive en la primera columna, que la vista
+                        # resumida nunca oculta. Sirve para juntar páginas
+                        # que no están seguidas sin sostener Ctrl mientras
+                        # se recorre media ejecución.
+                        item.setFlags(
+                            item.flags()
+                            | Qt.ItemFlag.ItemIsUserCheckable
+                        )
+                        item.setCheckState(Qt.CheckState.Unchecked)
                     status = self._status_for(row, column)
                     if status:
-                        comment = row.get(f"{csv_field_id(column, self._columns)}_comment")
+                        field_id = self._field_id_by_column.get(column)
+                        comment = row.get(f"{field_id}_comment")
                         item.setToolTip(
                             f"Estado: {status}"
                             + (f"\n{comment}" if comment else "")
@@ -1820,11 +1892,36 @@ class CsvViewerWindow(QMainWindow):
             self._table_timer.stop()
             self._finish_table()
 
+    def _remember_sort(self) -> None:
+        """Anota por qué columna quedó ordenada la tabla tras un clic."""
+        column = self.table_sort.sorted_column
+        if 0 <= column < len(self._columns):
+            self._sort_state = (
+                self._columns[column], self.table_sort.descending
+            )
+        else:
+            self._sort_state = None
+
+    def _restore_sort(self) -> None:
+        """Devuelve la tabla recién llenada al orden que ya tenía puesto."""
+        if self._sort_state is None:
+            return
+        name, descending = self._sort_state
+        try:
+            column = self._columns.index(name)
+        except ValueError:
+            # El CSV nuevo no trae esa columna: no hay criterio que aplicar
+            # y tampoco uno que recordar.
+            self._sort_state = None
+            return
+        self.table_sort.restore(column, descending)
+
     def _finish_table(self) -> None:
         """Cierra el llenado: columnas visibles, anchos y orden disponibles."""
         self._apply_column_mode()
         self.table.resizeColumnsToContents()
         self.table_sort.reset()
+        self._restore_sort()
 
     def _load_pdf_paths(self, csv_path: Path) -> None:
         """Publica en el visor los PDF de los que proviene el CSV."""
@@ -1904,13 +2001,33 @@ class CsvViewerWindow(QMainWindow):
             if column in self._selected_important_columns
         ]
 
+    def _checked_source_rows(self) -> list[int]:
+        """Filas marcadas con la casilla de la primera columna."""
+        rows: set[int] = set()
+        for display_row in range(self.table.rowCount()):
+            item = self.table.item(display_row, 0)
+            if item is None or item.checkState() != Qt.CheckState.Checked:
+                continue
+            source_row = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(source_row, int) and 0 <= source_row < len(self._rows):
+                rows.add(source_row)
+        return sorted(rows)
+
     def _selected_source_rows(self) -> list[int]:
-        """Filas del CSV seleccionadas, en el orden en que están en el CSV.
+        """Filas del CSV elegidas, en el orden en que están en el CSV.
 
         La tabla se puede ordenar por cualquier columna, así que la posición
         en pantalla no dice qué fila del CSV es: eso lo lleva cada celda de
         la primera columna, que es la que sobrevive al reordenamiento.
+
+        Manda lo marcado con las casillas en cuanto haya una marcada: es una
+        elección que sobrevive a recorrer la tabla, mientras que el resalte
+        se pierde con el clic siguiente. Sin ninguna marcada valen las filas
+        resaltadas, que es como funcionaba antes de las casillas.
         """
+        marcadas = self._checked_source_rows()
+        if marcadas:
+            return marcadas
         model = self.table.selectionModel()
         if model is None:
             return []
@@ -2029,11 +2146,16 @@ class CsvViewerWindow(QMainWindow):
         dialog = DepurarPaginasDialog(reports, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        remaining, resumen = depurar(
-            reports, dialog.duplicados(), dialog.en_blanco()
-        )
-        if not resumen.total:
-            self._export_note = "no había páginas repetidas ni en blanco"
+        # Se borra lo que quedó marcado página por página, no el criterio
+        # entero: el cuadro deja conservar una aparición distinta de la
+        # primera, y esa elección se perdería al recontar por criterio.
+        remaining, quitadas = depurar_claves(reports, dialog.claves())
+        if not quitadas:
+            self._export_note = (
+                "no se marcó ninguna página"
+                if dialog.hay_depurables()
+                else "no había páginas repetidas ni en blanco"
+            )
             self._refresh_status()
             return
         if not remaining:
@@ -2046,12 +2168,12 @@ class CsvViewerWindow(QMainWindow):
             return
 
         logger.info(
-            f"Depurando {resumen.total} página(s) de la ejecución {run_dir.name}"
+            f"Depurando {quitadas} página(s) de la ejecución {run_dir.name}"
         )
         self._start_outputs(
             remaining,
             self._export_options(csv_path, template, remaining, skip_pdfs=True),
-            note=f"eliminando {resumen.total} página(s)…",
+            note=f"eliminando {quitadas} página(s)…",
             context="eliminar",
         )
 
@@ -2120,10 +2242,24 @@ class CsvViewerWindow(QMainWindow):
             )
             return
 
+        # Se nombran las bitácoras además de contarlas: el número de
+        # páginas no dice cuáles son, y una selección hecha sobre la
+        # tabla ordenada abarca filas que pueden haber quedado fuera
+        # de la vista.
+        numeros = _numeros_de_bitacora(self._rows[row] for row in source_rows)
+        cuantas = (
+            "1 bitácora" if len(numeros) == 1 else f"{len(numeros)} bitácoras"
+        )
+        detalle = (
+            f"Son {cuantas}: {_lista_de_bitacoras(numeros)}.\n\n"
+            if numeros
+            else ""
+        )
         answer = QMessageBox.warning(
             self,
             "Confirmar eliminación",
             f"Se eliminarán {removed} página(s) de «{run_dir.name}».\n\n"
+            f"{detalle}"
             "Se reescriben el CSV, el JSON y las estadísticas de la ejecución "
             "sin ellas. Los PDF ya exportados las conservan hasta que vuelva "
             "a exportar.\n\n¿Desea continuar?",
@@ -2470,13 +2606,13 @@ class CsvViewerWindow(QMainWindow):
     def _status_for(self, row: dict[str, str], column: str) -> str | None:
         if column == "dup":
             return "WARNING" if row.get(column, "").lower() == "true" else None
-        field_id = csv_field_id(column, self._columns)
+        field_id = self._field_id_by_column.get(column)
         if not field_id:
             return None
         status = row.get(f"{field_id}_status", "").upper()
         if status in _STATUS_COLORS:
             return status
-        if f"{field_id}_status" not in self._columns:
+        if f"{field_id}_status" not in self._column_set:
             key = (row.get("file", "").casefold(), row.get("page", ""))
             status = self._field_statuses.get(key, {}).get(field_id, "").upper()
             if status in _STATUS_COLORS:

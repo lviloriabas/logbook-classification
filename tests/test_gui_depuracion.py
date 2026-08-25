@@ -15,6 +15,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox
 
 from app.gui.csv_viewer import CsvViewerWindow
@@ -22,6 +23,7 @@ from app.gui.depuracion_dialog import DepurarPaginasDialog
 from app.gui import main_window
 from app.gui.main_window import MainWindow
 from app.models.schemas import FieldResult, PageResult, ValidationReport
+from app.validation.depuracion import depurar_claves
 
 RAIZ = Path(__file__).resolve().parents[1]
 
@@ -221,3 +223,72 @@ def test_el_visor_de_csv_no_depura_un_csv_suelto(app, tmp_path):
     finally:
         window.close()
         app.processEvents()
+
+
+def test_el_cuadro_lista_las_apariciones_de_cada_bitacora_repetida(app):
+    """El grupo entero, no solo la que sobra: hay que ver cuál se conserva."""
+    dialog = DepurarPaginasDialog(corrida())
+    try:
+        assert dialog.arbol_duplicados.topLevelItemCount() == 1
+        grupo = dialog.arbol_duplicados.topLevelItem(0)
+        assert "2147300" in grupo.text(0)
+        assert grupo.childCount() == 2
+        assert "primero.pdf, página 1 (primera)" == grupo.child(0).text(0)
+        assert "segundo.pdf, página 7" == grupo.child(1).text(0)
+    finally:
+        dialog.deleteLater()
+
+
+def test_al_marcar_duplicados_se_elige_la_aparicion_sobrante(app):
+    dialog = DepurarPaginasDialog(corrida())
+    try:
+        dialog.check_duplicados.setChecked(True)
+        grupo = dialog.arbol_duplicados.topLevelItem(0)
+
+        assert grupo.child(0).checkState(0) == Qt.CheckState.Unchecked
+        assert grupo.child(1).checkState(0) == Qt.CheckState.Checked
+        # (reporte, página): el segundo PDF es el índice 1.
+        assert dialog.claves() == {(1, 7)}
+    finally:
+        dialog.deleteLater()
+
+
+def test_se_puede_conservar_la_segunda_aparicion_en_vez_de_la_primera(app):
+    """Lo que pidió el usuario: elegir cuál de las dos se va."""
+    dialog = DepurarPaginasDialog(corrida())
+    try:
+        dialog.check_duplicados.setChecked(True)
+        grupo = dialog.arbol_duplicados.topLevelItem(0)
+        grupo.child(1).setCheckState(0, Qt.CheckState.Unchecked)
+        grupo.child(0).setCheckState(0, Qt.CheckState.Checked)
+
+        assert dialog.claves() == {(0, 1)}
+        assert dialog.resumen().total == 1
+    finally:
+        dialog.deleteLater()
+
+
+def test_la_pagina_en_blanco_se_puede_desmarcar_una_a_una(app):
+    dialog = DepurarPaginasDialog(corrida())
+    try:
+        dialog.check_blancas.setChecked(True)
+        assert dialog.claves() == {(0, 2)}
+
+        dialog.arbol_blancas.topLevelItem(0).setCheckState(
+            0, Qt.CheckState.Unchecked
+        )
+
+        assert dialog.claves() == set()
+        assert not dialog.boton_eliminar.isEnabled()
+    finally:
+        dialog.deleteLater()
+
+
+def test_depurar_borra_solo_la_aparicion_elegida():
+    """La elección del cuadro llega intacta a los reportes."""
+    reports = corrida()
+    quedan, quitadas = depurar_claves(reports, {(0, 1)})
+
+    assert quitadas == 1
+    assert [p.page_number for p in quedan[0].pages] == [2]
+    assert [p.page_number for p in quedan[1].pages] == [7]
