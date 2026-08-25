@@ -1381,7 +1381,7 @@ class Trabajo:
     def completar(
         self, cliente, automatico: bool = False
     ) -> "ResultadoCompletar":
-        """Da el batch por terminado y lo saca de la cola del Web Index.
+        """Da el batch por terminado: lo indexa y lo manda a Web Search.
 
         AirVault solo lo acepta con **todas** las paginas en verde: basta
         una a la que le falte un campo obligatorio (casi siempre la fecha)
@@ -1515,8 +1515,8 @@ class Trabajo:
         except BaseException:
             self.cerrar(cliente)
             raise
-        # Terminado, el batch sale de la cola del Web Index: soltarlo seria
-        # pedirle a AirVault que suelte algo que ya no esta ahi.
+        # Terminado, el batch ya no esta tomado: soltarlo seria pedirle a
+        # AirVault que suelte algo que ya solto.
         self._tomado = False
         detalle = f"{len(paginas) - len(quitadas)} paginas en verde"
         if quitadas:

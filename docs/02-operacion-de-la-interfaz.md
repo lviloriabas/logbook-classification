@@ -201,8 +201,8 @@ puede seguir procesando en la ventana principal, y esta pregunta sola. Si
 cierra y vuelve mañana, elija la misma ejecución: los batches reaparecen en
 la lista tal como quedaron.
 
-**Completar batch** da el batch por terminado en AirVault y lo saca de la
-cola del Web Index. **Solo lo acepta con todas las páginas en verde**: si a
+**Completar batch** da el batch por terminado en AirVault: lo indexa y lo
+manda a Web Search. **Solo lo acepta con todas las páginas en verde**: si a
 una le falta un campo obligatorio (casi siempre la fecha) el batch se queda
 en la cola y la ventana dice qué páginas lo impiden. Cuente ahí también las
 páginas separadoras del PDF: AirVault las deja en «No Template Match», que

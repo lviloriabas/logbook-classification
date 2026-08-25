@@ -1598,8 +1598,8 @@ class AirVaultWindow(QDialog):
         if self._config.completar_batch is not None:
             self.completar_check.setChecked(self._config.completar_batch)
         self.completar_check.setToolTip(
-            "Al terminar de escribir, da el batch por terminado en AirVault y "
-            "lo saca de la cola del Web Index. AirVault solo lo acepta con "
+            "Al terminar de escribir, da el batch por terminado en AirVault: "
+            "lo indexa y lo manda a Web Search. AirVault solo lo acepta con "
             "todas las páginas en verde: si a alguna le falta un campo "
             "obligatorio, el batch se queda en la cola y se dice cuáles son. "
             "Sin marcar, el batch queda ahí para revisarlo."
@@ -2821,10 +2821,9 @@ class AirVaultWindow(QDialog):
         if cerrados:
             texto = (
                 f" Se completaron {len(cerrados)} batches en AirVault y "
-                "salieron de la cola de Web Index."
+                "se mandaron a Web Search."
                 if len(cerrados) > 1 else
-                " El batch se completó en AirVault y salió de la cola de "
-                "Web Index."
+                " El batch se completó en AirVault y se mandó a Web Search."
             )
             quitadas = sum(len(r.quitadas) for _t, r in cierres if r.completado)
             if quitadas:
