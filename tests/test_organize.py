@@ -16,6 +16,7 @@ from app.reports.organize import (
     _preparar_paginas,
     agrupar_paginas,
     paginas_para_revisar,
+    por_revisar,
     clave_mes,
     escribir_pdf_discrepancias,
     escribir_pdf_unico,
@@ -26,7 +27,7 @@ from app.reports.organize import (
 from app.utils.io import sanitize_filename
 from app.validation.discrepancias import Discrepancia
 
-INPUT = Path(__file__).resolve().parents[1] / "input"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _page(pn: int, log, mat, date=None) -> PageResult:
@@ -69,7 +70,7 @@ class TestAgrupar(unittest.TestCase):
         numeros = [g.page.page_number for g in grupos[("HP-1534CMP",)]]
         self.assertEqual(numeros, [3, 2, 1])
 
-    def test_sin_logpage_va_al_final_en_orden_original(self):
+    def test_sin_logpage_va_a_revisar_y_no_al_batch_automatico(self):
         pages = [
             _page(1, None, "HP-1534CMP"),
             _page(2, "2147300", "HP-1534CMP"),
@@ -78,7 +79,9 @@ class TestAgrupar(unittest.TestCase):
         ]
         grupos = agrupar_paginas([_reporte(*pages)], ["avion"], None)
         numeros = [g.page.page_number for g in grupos[("HP-1534CMP",)]]
-        self.assertEqual(numeros, [2, 3, 1, 4])
+        self.assertEqual(numeros, [2, 3])
+        revisar = paginas_para_revisar([_reporte(*pages)])
+        self.assertEqual([ref.page.page_number for ref in revisar], [1, 4])
 
     def test_por_mes(self):
         pages = [
@@ -105,6 +108,43 @@ class TestAgrupar(unittest.TestCase):
 
         self.assertIn(("2026-07",), grupos)
         self.assertEqual(clave_mes(page), "2026-07")
+        self.assertFalse(por_revisar(page))
+
+    def test_matricula_valida_con_confianza_baja_sigue_en_batch_normal(self):
+        page = _page(1, "2147300", "HP-1534CMP")
+        matricula = next(
+            field for field in page.fields if field.field_id == "matricula"
+        )
+        matricula.confidence = 0.49
+        matricula.status = "WARNING"
+
+        self.assertFalse(por_revisar(page))
+        self.assertEqual(
+            list(agrupar_paginas([_reporte(page)], ["avion"])),
+            [("HP-1534CMP",)],
+        )
+
+    def test_una_discrepancia_confirmada_va_a_revisar(self):
+        page = _page(1, "2147300", "HP-1534CMP")
+        page.airvault_review = True
+
+        self.assertTrue(por_revisar(page))
+        self.assertEqual(agrupar_paginas([_reporte(page)], ["avion"]), {})
+
+    def test_inferencia_de_libro_bien_respaldada_conserva_su_separador(self):
+        page = _page(1, "2147300", "HP-1534CMP")
+        matricula = next(
+            field for field in page.fields if field.field_id == "matricula"
+        )
+        matricula.source = "book_correction"
+        matricula.inference_method = "book_digit_consensus"
+        matricula.votes = 2
+        matricula.confidence = 0.70
+
+        grupos = agrupar_paginas([_reporte(page)], ["avion"])
+
+        self.assertFalse(por_revisar(page))
+        self.assertEqual(list(grupos), [("HP-1534CMP",)])
 
     def test_avion_y_mes_combinados(self):
         pages = [
@@ -156,6 +196,10 @@ class TestAgrupar(unittest.TestCase):
         pagina.blank = True
         grupos = agrupar_paginas([_reporte(pagina)], ["avion"], None)
         self.assertEqual(grupos, {})
+        self.assertEqual(
+            [ref.page for ref in paginas_para_revisar([_reporte(pagina)])],
+            [pagina],
+        )
 
     def test_excluidas_no_se_incluyen(self):
         pages = [
@@ -263,12 +307,12 @@ class TestNombres(unittest.TestCase):
             "HP-15_4_CMP")
 
 
-@unittest.skipUnless(INPUT.joinpath("test.pdf").exists(),
-                     "requiere input/test.pdf")
+@unittest.skipUnless(FIXTURES.joinpath("test.pdf").exists(),
+                     "requiere tests/fixtures/test.pdf")
 class TestPdfsOrdenados(unittest.TestCase):
     def test_genera_pdf_por_avion(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[_page(1, "2147300", "HP-1534CMP")],
         )
         run_dir = Path(tempfile.mkdtemp())
@@ -278,14 +322,14 @@ class TestPdfsOrdenados(unittest.TestCase):
         self.assertGreater(rutas[0].stat().st_size, 0)
         import pymupdf as fitz
 
-        with fitz.open(str(INPUT / "test.pdf")) as source, \
+        with fitz.open(str(FIXTURES / "test.pdf")) as source, \
                 fitz.open(str(rutas[0])) as output:
             self.assertEqual(output[0].rect, source[0].rect)
             self.assertEqual(output[0].get_text(), source[0].get_text())
 
     def test_exportacion_no_renderiza_las_paginas(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[_page(1, "2147300", "HP-1534CMP")],
         )
         run_dir = Path(tempfile.mkdtemp())
@@ -297,7 +341,7 @@ class TestPdfsOrdenados(unittest.TestCase):
 
     def test_combinado_archivo_incluye_matricula_y_mes(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[_page(1, "2147300", "HP-1534CMP", date="2026/07/15")],
         )
         run_dir = Path(tempfile.mkdtemp())
@@ -310,7 +354,7 @@ class TestPdfsOrdenados(unittest.TestCase):
 
     def test_combinado_sin_fecha_es_sf(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[_page(1, "2147300", "HP-1534CMP", date=None)],
         )
         run_dir = Path(tempfile.mkdtemp())
@@ -320,7 +364,7 @@ class TestPdfsOrdenados(unittest.TestCase):
 
     def test_pdf_unico_con_separador_matricula(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[
                 _page(1, "2147300", "HP-1534CMP"),
                 _page(2, "2271665", "HP-1538CMP"),
@@ -344,7 +388,7 @@ class TestPdfsOrdenados(unittest.TestCase):
     def test_pdf_unico_cierra_con_el_separador_revisar(self):
         """La sección «Revisar» sale sin haber pedido nada más."""
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[
                 _page(1, "2147300", "HP-1534CMP"),
                 _page(2, "2147301", None),
@@ -365,7 +409,7 @@ class TestPdfsOrdenados(unittest.TestCase):
 
     def test_pdf_unico_sin_criterios_tambien_separa_revisar(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[
                 _page(1, "2147300", "HP-1534CMP"),
                 _page(2, "2147301", None),
@@ -382,7 +426,7 @@ class TestPdfsOrdenados(unittest.TestCase):
 
     def test_varios_pdf_escriben_revisar_pdf(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[
                 _page(1, "2147300", "HP-1534CMP"),
                 _page(2, "2147301", None),
@@ -395,7 +439,7 @@ class TestPdfsOrdenados(unittest.TestCase):
 
     def test_pdf_unico_plano_sin_divisores(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[_page(1, "2147300", "HP-1534CMP")],
         )
         run_dir = Path(tempfile.mkdtemp())
@@ -421,7 +465,7 @@ class TestPdfsOrdenados(unittest.TestCase):
     def test_pdf_unico_no_pisa_el_anterior(self):
         """Re-exportar deja el PDF previo intacto y numera el nuevo."""
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[_page(1, "2147300", "HP-1534CMP")],
         )
         run_dir = Path(tempfile.mkdtemp())
@@ -433,7 +477,7 @@ class TestPdfsOrdenados(unittest.TestCase):
 
     def test_pdf_unico_separador_mes_dentro_de_matricula(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[
                 _page(1, "2147300", "HP-1534CMP", date="2026/07/15"),
                 _page(2, "2147301", "HP-1534CMP", date="2026/08/02"),
@@ -453,7 +497,7 @@ class TestPdfsOrdenados(unittest.TestCase):
 
     def test_pdf_unico_ambos_criterios_en_cada_divisor(self):
         reporte = ValidationReport(
-            pdf_path=str(INPUT / "test.pdf"), template_name="fixture",
+            pdf_path=str(FIXTURES / "test.pdf"), template_name="fixture",
             pages=[
                 _page(1, "2147300", "HP-1534CMP", date="2026/07/15"),
                 _page(2, "2147301", "HP-1534CMP", date="2026/08/02"),

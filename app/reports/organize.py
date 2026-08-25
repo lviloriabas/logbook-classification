@@ -9,19 +9,20 @@
   en la salida de varios archivos se escriben en ``discrepancias.pdf``. En
   ambos casos se ordenan únicamente por logpage y no se subdividen por avión
   ni mes.
-- **Revisar**: las bitácoras cuya matrícula nadie pudo confirmar (ni el OCR,
-  ni el consenso del libro, ni la lista de flota). Se escriben siempre, con
-  cualquier combinación de opciones: en el PDF único cierran el archivo tras
-  un separador ``REVISAR`` y en la salida de varios archivos forman
-  ``revisar.pdf``. No abren grupo de avión propio, porque una matrícula sin
-  confirmar puesta como título se lee como un avión que existe.
+- **Revisar**: las bitácoras que no son seguras para el indexado automático:
+  matrícula sin confirmar, lectura que contradice al consenso del libro o
+  confianza insuficiente en la matrícula. Se escriben siempre, con cualquier
+  combinación de opciones: en el PDF único cierran el archivo tras un
+  separador ``REVISAR`` y en la salida de varios archivos forman
+  ``revisar.pdf``. No abren grupo de avión propio, porque una matrícula dudosa
+  puesta como título se lee como un avión confirmado.
 - **Recortes de firmas**: volcado de las regiones de firma para auditar
   visualmente los bounding boxes.
 
-Convenciones de nombres (rutas relativas a la carpeta de la corrida):
+Convenciones de nombres (rutas relativas a la carpeta de la ejecución):
 
 - ``<carpeta>.pdf``                  un único PDF: usa el mismo nombre que la
-                                     carpeta de la corrida, sin separadores si
+                                     carpeta de la ejecución, sin separadores si
                                      no se eligen condiciones, o con páginas
                                      en blanco de matrícula/mes en grande como
                                       separadores independientes entre grupos
@@ -30,11 +31,12 @@ Convenciones de nombres (rutas relativas a la carpeta de la corrida):
 - ``HP-XXXXCMP_2026-JUL.pdf``        por avión y mes: ambos valores forman el
                                      nombre (``HP-XXXXCMP_sf.pdf`` sin fecha)
 - ``discrepancias.pdf``              páginas con discrepancias
-- ``revisar.pdf``                    páginas sin avión confirmado
+- ``revisar.pdf``                    páginas que requieren revisión manual
 
-Las páginas sin fecha legible van al grupo ``sin_fecha`` (archivo
-``sf.pdf``) y las que no dicen de qué avión son van a «Revisar», de modo
-que ninguna bitácora queda por fuera de los PDFs generados.
+Las fechas pueden inferirse con el libro y, si el día no se resuelve, con el
+último día del mes. «Revisar» se reserva para las páginas cuya matrícula no
+permite asignarlas con seguridad a un separador, de modo que ninguna bitácora
+queda por fuera de los PDFs generados ni se archiva bajo otro avión.
 
 Exportar de nuevo nunca borra ni sobreescribe los PDFs que ya están en la
 carpeta: cuando el nombre está ocupado, la copia nueva lo repite con un
@@ -66,6 +68,7 @@ from app.validation.discrepancias import (
     Discrepancia,
 )
 from app.validation.grouping import log_number
+from app.validation.page_status import has_log_number
 from app.vision.pdf_loader import PdfDocumentCache, copy_pdf_pages, render_page
 from app.vision.signature import SIGNATURE_PAD_X, SIGNATURE_PAD_Y
 
@@ -99,7 +102,7 @@ class PaginaRef:
 
 
 def iterar_paginas(reports: Sequence[ValidationReport]) -> Iterable[PaginaRef]:
-    """Itera las páginas de todos los reportes en el orden del lote."""
+    """Itera las páginas de todos los reportes en el orden del batch."""
     orden = 0
     for report in reports:
         for page in report.pages:
@@ -118,23 +121,33 @@ def clave_avion(page: PageResult) -> str:
 
 
 def por_revisar(page: PageResult) -> bool:
-    """La página no dice de qué avión es.
+    """La página necesita el batch manual por falta de datos o discrepancia.
 
-    Ni el OCR, ni el consenso de su libro, ni la lista de flota pudieron
-    confirmar la matrícula. No hay avión al que archivarla, así que va a la
-    sección «Revisar» en vez de abrir un grupo propio: un grupo con una
-    matrícula sin confirmar se lee como una bitácora de un avión que existe.
+    ``airvault_review`` se decide con la fila final del CSV: queda activo si
+    algún obligatorio no pudo completarse o si la página tiene una
+    discrepancia confirmada. Las advertencias de confianza no bastan para
+    apartarla cuando matrícula y número ya tienen valores utilizables; el
+    indexador puede escribir esos valores y dejar la página en verde.
+
+    Las comprobaciones directas conservan segura esta función cuando se usa
+    antes de escribir el CSV o con reportes antiguos que no traen la marca.
     """
-    return clave_avion(page) == SIN_MATRICULA
+    return (
+        page.airvault_review
+        or page.airvault_discrepancy
+        or page.blank
+        or clave_avion(page) == SIN_MATRICULA
+        or not has_log_number(page)
+    )
 
 
 def paginas_para_revisar(
     reports: Sequence[ValidationReport],
 ) -> List[PaginaRef]:
-    """Páginas sin avión confirmado, ordenadas por libro y logpage."""
+    """Páginas que requieren revisión, ordenadas por libro y logpage."""
     refs = [
         ref for ref in iterar_paginas(reports)
-        if not ref.page.blank and por_revisar(ref.page)
+        if por_revisar(ref.page)
     ]
     refs.sort(key=lambda ref: clave_orden(ref.page, ref.orden))
     return refs
@@ -189,7 +202,7 @@ def agrupar_paginas(
         excluidas: Conjunto de (nombre del archivo, número de página) que
             NO se incluyen (páginas con discrepancia cuando se genera el
             PDF de discrepancias). Las páginas en blanco y las que no
-            tienen avión confirmado siempre se excluyen: las segundas van
+            son seguras para autoindexar siempre se excluyen: las segundas van
             a la sección «Revisar» (``paginas_para_revisar``).
 
     Returns:
@@ -245,9 +258,9 @@ def ruta_pdf(
     separar_por: Sequence[str],
     run_dir: Optional[Path] = None,
 ) -> Path:
-    """Ruta relativa del PDF de un grupo dentro de la carpeta de la corrida.
+    """Ruta relativa del PDF de un grupo dentro de la carpeta de la ejecución.
 
-    Cada PDF queda suelto en la carpeta de la corrida y su nombre incluye
+    Cada PDF queda suelto en la carpeta de la ejecución y su nombre incluye
     exactamente los criterios que lo identifican.
     """
     if not separar_por:
@@ -303,7 +316,7 @@ def generar_pdfs(
     Los PDFs de una exportación anterior no se pisan: si el nombre del
     grupo ya existe en la carpeta, la copia nueva lleva sufijo numérico.
     Las rutas se devuelven en el orden de ``sorted(grupos)`` y, al final,
-    ``revisar.pdf`` con las bitácoras sin avión confirmado (siempre que
+    ``revisar.pdf`` con las bitácoras que requieren revisión (siempre que
     haya alguna).
     """
     grupos = agrupar_paginas(reports, separar_por, excluidas)
@@ -507,8 +520,8 @@ class EntradaPdf:
     """Una página del PDF de entrega: una bitácora o un separador.
 
     El PDF no es solo las bitácoras: entre ellas van páginas divisorias que
-    el CSV no tiene. Quien después empareje ese PDF con el CSV —el indexado
-    en AirVault— necesita saber en qué posiciones están, porque si las
+    el CSV no tiene. Quien después empareje ese PDF con el CSV (el indexado
+    en AirVault) necesita saber en qué posiciones están, porque si las
     cuenta como bitácoras escribe cada dato una página más allá de donde va.
     """
 
@@ -524,8 +537,8 @@ class EntradaPdf:
 class ArchivoDeEntrega:
     """Un archivo de la entrega con lo que lleva dentro.
 
-    ``revisar`` marca el que recoge las bitácoras sin avión confirmado. Va
-    aparte porque en AirVault cada archivo es un lote, y ese no se indexa:
+    ``revisar`` marca el que recoge las bitácoras que requieren revisión. Va
+    aparte porque en AirVault cada archivo es un batch, y ese no se indexa:
     se sube para que alguien lo resuelva a mano.
     """
 
@@ -537,7 +550,7 @@ class ArchivoDeEntrega:
 def secuencia_de_revisar(
     reports: Sequence[ValidationReport],
 ) -> List[EntradaPdf]:
-    """Bitácoras sin avión confirmado, bajo su separador."""
+    """Bitácoras que requieren revisión, bajo su separador."""
     refs = paginas_para_revisar(reports)
     if not refs:
         return []
@@ -593,11 +606,6 @@ def secuencia_pdf_unico(
 
 
 NOMBRE_INDICE_PAGINAS = "_paginas.json"
-
-# Paginas por parte cuando se pide repartir la entrega y no se dice cuantas.
-# Con los escaneos de siempre —unos 2 MB por pagina— deja partes de medio
-# giga, que suben sin sobresaltos y se revisan de una sentada.
-PAGINAS_POR_PARTE = 200
 
 
 def _secciones(secuencia: Sequence[EntradaPdf]) -> List[List[EntradaPdf]]:
@@ -675,10 +683,10 @@ def partir_secuencia(
 def nombre_de_parte(base: str, indice: int, total: int) -> str:
     """Nombre del archivo de una parte: ``<base> -2``, o ``<base>`` si va sola.
 
-    El sufijo no es decoración. Cada archivo es un lote distinto en AirVault
-    y los lotes se localizan por nombre; dos con el mismo no habría forma de
+    El sufijo no es decoración. Cada archivo es un batch distinto en AirVault
+    y los batches se localizan por nombre; dos con el mismo no habría forma de
     distinguirlos. Tiene que coincidir con el sufijo que
-    ``app.airvault.naming`` le pone al nombre del lote, y hay una prueba que
+    ``app.airvault.naming`` le pone al nombre del batch, y hay una prueba que
     lo comprueba.
     """
     if total <= 1:
@@ -746,10 +754,10 @@ def escribir_pdf_unico(
     - Si ``discrepancias_al_final`` es verdadero, las páginas excluidas de los
       grupos se agregan al final bajo un único separador ``POSIBLES
       DISCREPANCIAS``, ordenadas globalmente por logpage.
-    - Las páginas sin avión confirmado cierran el PDF bajo el separador
+    - Las páginas que no son seguras para autoindexar cierran bajo el separador
       ``REVISAR``, se hayan pedido o no las discrepancias y se haya elegido
-      o no separar por avión: son las únicas bitácoras que nadie puede
-      archivar, así que siempre tienen que quedar juntas y señaladas.
+      o no separar por avión: no se deben archivar automáticamente bajo una
+      matrícula dudosa, así que siempre quedan juntas y señaladas.
     """
     escritas = escribir_entrega(
         reports, run_dir, separar_por, excluidas, dpi,
@@ -774,16 +782,16 @@ def escribir_entrega(
 
     Con ``paginas_por_parte`` en cero sale un solo PDF, como siempre. Con un
     tope, la entrega se reparte en partes de a lo sumo esas páginas, cada
-    una en su archivo: una corrida entera son casi dos gigas y ochocientas
-    páginas, que en AirVault forman un lote incómodo de subir y de revisar.
+    una en su archivo: una ejecución entera son casi dos gigas y ochocientas
+    páginas, que en AirVault forman un batch incómodo de subir y de revisar.
 
-    Con ``revisar_aparte`` las bitácoras sin avión confirmado cierran en su
+    Con ``revisar_aparte`` las bitácoras que requieren revisión cierran en su
     propio archivo en vez de al final del último. En AirVault cada archivo
-    es un lote, y esas páginas no se pueden indexar: sueltas dentro de un
-    lote de cuatrocientas quedan bloqueadas donde nadie las encuentra.
+    es un batch, y esas páginas no se pueden indexar: sueltas dentro de un
+    batch de cuatrocientas quedan bloqueadas donde nadie las encuentra.
 
     Devuelve el nombre definitivo de cada archivo porque solo se conoce
-    después de escribir —uno que ya existía obliga a añadir sufijo— y el
+    después de escribir (uno que ya existía obliga a añadir sufijo) y el
     índice de páginas tiene que nombrar el archivo real.
     """
     del dpi  # las páginas se copian sin rasterizar
@@ -828,7 +836,7 @@ def escribir_entrega(
         logger.info(f"[Organize] PDF único generado: {escritas[0].ruta}")
     if revisar:
         logger.info(
-            f"[Organize] {len(revisar) - 1} bitácoras sin avión confirmado "
+            f"[Organize] {len(revisar) - 1} bitácoras para revisar "
             f"en {escritas[-1].ruta.name}"
         )
     return escritas

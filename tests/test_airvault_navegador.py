@@ -2,8 +2,8 @@
 
 No se lanza Edge en ninguna prueba: se ejerce el cliente del protocolo
 contra un servidor de mentira en la misma máquina, y el recorrido completo
-contra un navegador falso. Lo que no se puede probar aquí —que Microsoft
-devuelva la sesión— es justamente lo que hace una persona.
+contra un navegador falso. Lo que no se puede probar aquí (que Microsoft
+devuelva la sesión) es justamente lo que hace una persona.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ import json
 import socket
 import struct
 import threading
+import types
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +27,22 @@ from app.airvault.navegador import (
     obtener_cookies,
     ruta_de_edge,
 )
+
+class _Respuesta:
+    """Lo justo de una respuesta HTTP para que ``json.load`` la lea."""
+
+    def __init__(self, cuerpo: str):
+        self._cuerpo = cuerpo.encode()
+
+    def read(self, *_a):
+        return self._cuerpo
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_e):
+        return False
+
 
 HOST = "airvault.criticaltech.com"
 FEDAUTH = "77u/PD94bWwgdmVyc2lvbj0iMS4wIiA/Pg=="
@@ -232,7 +250,7 @@ def test_sin_sesion_se_abre_la_ventana_para_entrar(monkeypatch, tmp_path):
     avisos: list = []
     cookies = obtener_cookies(
         f"https://{HOST}", tmp_path, avisar=avisos.append,
-        dormir=lambda _s: None,
+        dormir=lambda _s: None, espera_perfil_s=0,
     )
     assert cookies == {"FedAuth": FEDAUTH}
     # Primero sin ventana; al no haber sesion, con ventana.
@@ -246,7 +264,8 @@ def test_el_numero_de_sesion_solo_no_se_da_por_bueno(monkeypatch, tmp_path):
                                             "FedAuth": FEDAUTH}]
     preparar(monkeypatch, guion)
     cookies = obtener_cookies(
-        f"https://{HOST}", tmp_path, dormir=lambda _s: None
+        f"https://{HOST}", tmp_path, dormir=lambda _s: None,
+        espera_perfil_s=0,
     )
     assert "FedAuth" in cookies
     assert NavegadorFalso.abiertos == [False, True]
@@ -255,11 +274,13 @@ def test_el_numero_de_sesion_solo_no_se_da_por_bueno(monkeypatch, tmp_path):
 def test_si_nadie_entra_se_dice_y_no_se_espera_para_siempre(monkeypatch,
                                                             tmp_path):
     preparar(monkeypatch, [{}])
-    reloj = iter([0.0, 10.0, 400.0, 500.0, 600.0])
+    # Los dos primeros son el intento sin ventana, que no encuentra nada.
+    reloj = iter([0.0, 0.0, 0.0, 10.0, 400.0, 500.0, 600.0])
     with pytest.raises(ErrorDeNavegador) as fallo:
         obtener_cookies(
             f"https://{HOST}", tmp_path, espera_login_s=300.0,
             dormir=lambda _s: None, reloj=lambda: next(reloj),
+            espera_perfil_s=0,
         )
     assert "pegar la cookie" in str(fallo.value)
 
@@ -270,3 +291,99 @@ def test_se_entra_por_el_enlace_federado(monkeypatch, tmp_path):
     sso = f"https://{HOST}/zfp/?whr=https://login.microsoftonline.com/x/wsfed"
     obtener_cookies(f"https://{HOST}", tmp_path, sso, dormir=lambda _s: None)
     assert falso.urls == [sso]
+
+
+def test_forzar_login_no_pregunta_al_perfil(monkeypatch, tmp_path):
+    """Cuando el servidor ya rechazo lo del perfil, releerlo da lo mismo.
+
+    Es la salida del callejon: la cookie guardada tiene la forma correcta,
+    asi que el intento sin ventana la daria por buena una y otra vez.
+    """
+    preparar(monkeypatch, [{"FedAuth": FEDAUTH}])
+    cookies = obtener_cookies(
+        f"https://{HOST}", tmp_path, dormir=lambda _s: None,
+        forzar_login=True,
+    )
+    assert cookies == {"FedAuth": FEDAUTH}
+    # Directo a la ventana: ningun intento silencioso de por medio.
+    assert NavegadorFalso.abiertos == [True]
+
+
+def test_la_espera_agotada_dice_que_llego_y_que_falto(monkeypatch, tmp_path):
+    """Sin ventana no se ve nada; el motivo tiene que decirlo todo."""
+    preparar(monkeypatch, [{"ASP.NET_SessionId": "abc"}])
+    # Los dos primeros son del intento sin ventana.
+    relojes = iter([0.0, 0.0, 0.0, 0.0, 1.0, 999.0])
+    with pytest.raises(ErrorDeNavegador) as fallo:
+        obtener_cookies(
+            f"https://{HOST}", tmp_path, espera_login_s=120.0,
+            dormir=lambda _s: None, reloj=lambda: next(relojes),
+            espera_perfil_s=0,
+        )
+    motivo = str(fallo.value)
+    assert "ASP.NET_SessionId" in motivo
+    assert "pagina de Microsoft" in motivo
+
+
+def test_no_se_toma_la_primera_cookie_que_aparece_sino_la_que_sirve(
+        monkeypatch, tmp_path):
+    """Recien abierto, el navegador todavía va y viene de Microsoft.
+
+    Lo que hay en el perfil en ese instante es la cookie de la vez
+    anterior, caducada si paso el rato, y tomarla dejaba el trabajo
+    muriendo en la primera peticion con la sesion buena a un segundo de
+    distancia. Se espera a una que el servidor acepte, que es ademas lo
+    que la renueva sin que nadie teclee nada.
+    """
+    preparar(monkeypatch, [{"FedAuth": "vieja"}, {"FedAuth": "vieja"},
+                           {"FedAuth": FEDAUTH}])
+    cookies = obtener_cookies(
+        f"https://{HOST}", tmp_path, dormir=lambda _s: None,
+        confirmar=lambda c: c.get("FedAuth") == FEDAUTH,
+    )
+    assert cookies == {"FedAuth": FEDAUTH}
+    # Sin ventana: la sesion estaba, solo habia que dejarla llegar.
+    assert NavegadorFalso.abiertos == [False]
+
+
+def test_si_la_del_perfil_no_sirve_se_abre_la_ventana(monkeypatch, tmp_path):
+    """Una cookie con la forma correcta pero caducada no es una sesion."""
+    preparar(monkeypatch, [{"FedAuth": "caducada"}, {"FedAuth": FEDAUTH}])
+    cookies = obtener_cookies(
+        f"https://{HOST}", tmp_path, dormir=lambda _s: None,
+        espera_perfil_s=0,
+        confirmar=lambda c: c.get("FedAuth") == FEDAUTH,
+    )
+    assert cookies == {"FedAuth": FEDAUTH}
+    assert NavegadorFalso.abiertos == [False, True]
+
+
+def test_la_sesion_se_guarda_al_cerrar_el_navegador():
+    """La cookie de federacion es de sesion y se pierde sin esta bandera.
+
+    Sin ella hay que entrar con segundo factor en cada ejecución, que es lo
+    que el perfil propio viene a evitar. Se fija aqui porque parece una
+    preferencia de pestanas y no lo es.
+    """
+    assert "--restore-last-session" in navegador._ARGUMENTOS
+
+
+def test_el_perfil_va_en_ruta_absoluta():
+    """Edge descarta un ``--user-data-dir`` relativo y no arranca.
+
+    No avisa ni escribe nada: el proceso termina y el programa lo leía como
+    «Edge se cerró antes de abrir la sesión», así que mandaba a pegar la
+    cookie a mano en una máquina donde el navegador funcionaba de sobra.
+    """
+    assert navegador.PERFIL_POR_DEFECTO.is_absolute()
+    assert navegador.PERFIL_POR_DEFECTO.parts[-2:] == (
+        "portable", "edge-airvault"
+    )
+
+
+def test_un_perfil_relativo_de_la_configuracion_se_vuelve_absoluto(monkeypatch):
+    """La ruta también puede venir de ``airvault.json``, y valdría lo mismo."""
+    monkeypatch.setattr(navegador, "ruta_de_edge", lambda: Path("msedge.exe"))
+    sesion = navegador.SesionDeNavegador(Path("perfiles") / "propio")
+    assert sesion.perfil.is_absolute()
+    assert sesion.perfil.parts[-2:] == ("perfiles", "propio")

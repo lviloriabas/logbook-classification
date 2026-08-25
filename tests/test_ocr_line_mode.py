@@ -24,7 +24,7 @@ def _field(field_id: str, mode: OcrMode, **kwargs) -> FieldTemplate:
 
 
 class FakeEngine:
-    """Motor que registra por qué ruta se leyó cada lote."""
+    """Motor que registra por qué ruta se leyó cada batch."""
 
     name = "fake"
 

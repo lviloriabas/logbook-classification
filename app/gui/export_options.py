@@ -1,12 +1,14 @@
 """Opciones de salida compartidas por la ventana principal y el visor de CSV.
 
-Las dos ventanas exportan la misma corrida con los mismos criterios, así que
+Las dos ventanas exportan la misma ejecución con los mismos criterios, así que
 el cuadro «Salidas» se construye una sola vez: el formato del PDF, los
 criterios de separación y la fecha representada en el CSV son exactamente los
 mismos textos y las mismas casillas en ambas.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -21,15 +23,27 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.airvault.config import (
+    AIRVAULT_FILENAME,
+    AirVaultConfig,
+    guardar_paginas_por_batch,
+)
 from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
-from app.reports.organize import PAGINAS_POR_PARTE
+from app.gui.widgets import SpinBoxWithButtons
 
 
 class ExportOptionsGroup(QGroupBox):
     """Cuadro «Salidas»: formato, separación y fecha del CSV."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        raiz: Path | str | None = None,
+    ) -> None:
         super().__init__("Salidas", parent)
+        self._ruta_preferencias = (
+            Path(raiz) if raiz is not None else Path.cwd()
+        ) / AIRVAULT_FILENAME
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(4)
@@ -46,13 +60,13 @@ class ExportOptionsGroup(QGroupBox):
         self.radio_unico = QRadioButton("Un solo PDF")
         self.radio_unico.setToolTip(
             "Genera un único PDF con el mismo nombre que la carpeta de la "
-            "corrida, con páginas separadoras de matrícula/mes para los "
+            "ejecución, con páginas separadoras de matrícula/mes para los "
             "criterios marcados"
         )
         self.modo_grupo.addButton(self.radio_varios)
         self.modo_grupo.addButton(self.radio_unico)
         # La entrega habitual es un único PDF separado por matrícula: es lo
-        # que se marcaba a mano en cada corrida. El mes no entra porque
+        # que se marcaba a mano en cada ejecución. El mes no entra porque
         # subdivide de más una entrega que ya va por avión.
         self.radio_unico.setChecked(True)
         formato_row.addWidget(self.radio_varios)
@@ -62,16 +76,20 @@ class ExportOptionsGroup(QGroupBox):
         self.partes_check = QCheckBox("Repartir en")
         self.partes_check.setToolTip(
             "Escribe la entrega en varios PDF en lugar de uno solo. Una "
-            "corrida completa son cientos de páginas y casi dos gigas, que "
-            "en AirVault forman un lote incómodo de subir y de revisar; "
-            "cada parte es un lote aparte. El reparto corta entre secciones "
+            "ejecución completa son cientos de páginas y casi dos gigas, que "
+            "en AirVault forman un batch incómodo de subir y de revisar; "
+            "cada parte es un batch aparte. El reparto corta entre secciones "
             "para no separar las bitácoras de un mismo avión."
         )
         formato_row.addWidget(self.partes_check)
         self.partes_spin = QSpinBox()
         self.partes_spin.setRange(10, 5000)
         self.partes_spin.setSingleStep(50)
-        self.partes_spin.setValue(PAGINAS_POR_PARTE)
+        guardadas = AirVaultConfig.load(
+            self._ruta_preferencias
+        ).paginas_por_batch
+        if guardadas is not None:
+            self.partes_spin.setValue(guardadas)
         self.partes_spin.setSuffix(" pág.")
         self.partes_spin.setEnabled(False)
         # Igualado en alto a los redondeles de al lado: con su alto natural
@@ -82,7 +100,13 @@ class ExportOptionsGroup(QGroupBox):
             "Páginas como máximo en cada parte, contando las separadoras"
         )
         self.partes_check.toggled.connect(self.partes_spin.setEnabled)
-        formato_row.addWidget(self.partes_spin)
+        self.partes_spin.valueChanged.connect(
+            lambda cantidad: guardar_paginas_por_batch(
+                self._ruta_preferencias, cantidad
+            )
+        )
+        self.partes_control = SpinBoxWithButtons(self.partes_spin)
+        formato_row.addWidget(self.partes_control)
 
         # Repartir solo tiene sentido sobre el PDF único: «Varios PDF» ya
         # escribe un archivo por matrícula.

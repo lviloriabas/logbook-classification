@@ -110,8 +110,25 @@ def test_la_cookie_pegada_va_al_tarro_y_no_a_una_cabecera_fija():
     assert sesion.autenticada and sesion.origen == "cookie pegada"
 
 
+def test_la_sesion_paralela_aisla_conexiones_cookies_y_tokens():
+    sesion = SesionAirVault(AirVaultConfig()).usar_cookie("FedAuth=abc")
+    sesion._tokens["index"] = "token-original"
+
+    paralela = sesion.clonar()
+
+    assert paralela is not sesion
+    assert paralela.http is not sesion.http
+    assert paralela.http.cookies is not sesion.http.cookies
+    assert paralela.http.cookies.get("FedAuth") == "abc"
+    assert paralela._tokens == {"index": "token-original"}
+    paralela._tokens["index"] = "token-paralelo"
+    paralela.http.cookies.set("SoloParalela", "1")
+    assert sesion._tokens["index"] == "token-original"
+    assert sesion.http.cookies.get("SoloParalela") is None
+
+
 def test_una_cookie_del_servidor_no_borra_la_pegada():
-    """El fallo que esto evita: perder la sesion a mitad de un lote."""
+    """El fallo que esto evita: perder la sesion a mitad de un batch."""
     config = AirVaultConfig()
     sesion = SesionAirVault(config)
     sesion.usar_cookie(f"FedAuth={FEDAUTH}")

@@ -3,8 +3,8 @@
 
 Los recortes tienen que ser *los mismos* que ve el detector, o la calibración
 mediría otra cosa: por eso este script no reimplementa la geometría, sino que
-repite la del pipeline —render al DPI del documento, corrección de
-inclinación, alineación con las anclas estabilizadas del lote— y luego recorta
+repite la del pipeline (render al DPI del documento, corrección de
+inclinación, alineación con las anclas estabilizadas del batch) y luego recorta
 con un margen más ancho que el del detector, dejando anotado en el manifiesto
 dónde queda el campo exacto dentro del PNG.
 
@@ -64,7 +64,7 @@ def _pdf_list(entries: Sequence[str]) -> List[Path]:
 def _selected_pages(first: int, last: int, every: int, cap: Optional[int]) -> List[int]:
     """Páginas a extraer dentro del tramo, repartidas por todo el documento.
 
-    El muestreo es por paso fijo y no aleatorio: un lote etiquetado tiene que
+    El muestreo es por paso fijo y no aleatorio: un batch etiquetado tiene que
     poder reproducirse, y recorrer el documento de punta a punta trae más
     variedad de escaneo que concentrarse en las primeras páginas.
     """

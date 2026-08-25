@@ -156,9 +156,9 @@ function Test-PythonPortable {
 
 function Test-Dependencias {
     if (-not (Test-Path $PythonExe)) { return $false }
-    # Los tres imports que la aplicacion no puede resolver sola.
+    # Imports representativos, incluido el puente al almacen TLS de Windows.
     return (Invoke-Programa -Ruta $PythonExe -Argumentos @(
-            '-c', 'import paddleocr, fitz, PySide6'))
+            '-c', 'import paddleocr, fitz, PySide6, truststore'))
 }
 
 function Test-Modelos {

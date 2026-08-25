@@ -15,10 +15,14 @@ from PySide6.QtGui import (
     QRegion,
 )
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QAbstractItemView,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QScrollArea,
+    QSizePolicy,
+    QSpinBox,
     QStyle,
     QStyledItemDelegate,
     QToolButton,
@@ -192,6 +196,22 @@ QPushButton {
 }
 QPushButton:disabled { color: #8c959f; }
 QToolButton { padding: 2px 6px; }
+QToolButton#spinStepButton {
+    min-width: 18px; max-width: 18px; min-height: 0;
+    padding: 0;
+    border: 1px solid #c9d1d9;
+    border-radius: 3px;
+    background-color: transparent;
+}
+QToolButton#spinStepButton:hover,
+QToolButton#spinStepButton:pressed {
+    background-color: transparent;
+    border-color: #8c959f;
+}
+QToolButton#spinStepButton:disabled {
+    background-color: transparent;
+    color: #8c959f;
+}
 QGroupBox {
     font-weight: 600;
     border: 1px solid #c9d1d9; border-radius: 6px;
@@ -209,6 +229,72 @@ QSpinBox, QComboBox, QLineEdit { padding: 3px; }
 """ + ZOOM_OVERLAY_QSS
 
 
+class SpinBoxWithButtons(QWidget):
+    """Campo numérico con las flechas fuera del área de texto.
+
+    El ``QSpinBox`` sigue siendo el dato público para no duplicar su API. Este
+    contenedor solo separa sus dos pasos en una columna a la derecha y refleja
+    tanto los límites como el estado habilitado del campo.
+    """
+
+    def __init__(self, spin: QSpinBox, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.spin = spin
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(3)
+        row.addWidget(spin)
+
+        self.up_button = self._button(Qt.ArrowType.UpArrow, "Aumentar valor")
+        self.down_button = self._button(
+            Qt.ArrowType.DownArrow, "Disminuir valor"
+        )
+        # Comparten la fila para conservar exactamente el alto del campo.
+        # Apilarlas duplicaría la altura de los controles compactos.
+        row.addWidget(self.up_button)
+        row.addWidget(self.down_button)
+
+        self.up_button.clicked.connect(spin.stepUp)
+        self.down_button.clicked.connect(spin.stepDown)
+        spin.valueChanged.connect(self.sync_buttons)
+        spin.installEventFilter(self)
+        self.sync_buttons()
+
+    def _button(self, arrow: Qt.ArrowType, accessible_name: str) -> QToolButton:
+        button = QToolButton(self)
+        button.setObjectName("spinStepButton")
+        button.setArrowType(arrow)
+        button.setAccessibleName(accessible_name)
+        button.setToolTip(accessible_name)
+        button.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Ignored
+        )
+        button.setAutoRepeat(True)
+        button.setAutoRepeatDelay(300)
+        button.setAutoRepeatInterval(80)
+        return button
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        if watched is self.spin and event.type() == QEvent.Type.EnabledChange:
+            self.sync_buttons()
+        return super().eventFilter(watched, event)
+
+    def sync_buttons(self, *_args) -> None:
+        """Habilita cada flecha solo cuando ese paso se puede ejecutar."""
+        enabled = self.spin.isEnabled() and not self.spin.isReadOnly()
+        steps = self.spin.stepEnabled()
+        self.up_button.setEnabled(
+            enabled
+            and bool(steps & QAbstractSpinBox.StepEnabledFlag.StepUpEnabled)
+        )
+        self.down_button.setEnabled(
+            enabled
+            and bool(steps & QAbstractSpinBox.StepEnabledFlag.StepDownEnabled)
+        )
+
+
 class FlatSelectionDelegate(QStyledItemDelegate):
     """Pinta la fila seleccionada como una sola banda azul.
 
@@ -219,11 +305,35 @@ class FlatSelectionDelegate(QStyledItemDelegate):
     pasa como fondo del ítem, que el estilo rellena a ras del rectángulo, tal
     como ya rellena los colores de estado de la tabla. La fila queda entonces
     como una banda de un solo color, sin esquinas redondas ni huecos.
+
+    Quien decide si hay que pintar es la selección de la vista, no el estado
+    que llegue en la celda. En una tabla que selecciona por filas las dos
+    cosas deberían coincidir, pero basta que una celda no reciba ese estado
+    (porque no tiene ítem, porque el estilo la trata aparte) para que la
+    banda salga cortada justo ahí.
     """
+
+    def _fila_seleccionada(self, index) -> bool:
+        vista = self.parent()
+        seleccion = getattr(vista, "selectionModel", None)
+        if not callable(seleccion):
+            return False
+        modelo = seleccion()
+        if modelo is None or vista.model() is not index.model():
+            return False
+        if (
+            vista.selectionBehavior()
+            is QAbstractItemView.SelectionBehavior.SelectItems
+        ):
+            return modelo.isSelected(index)
+        return modelo.isRowSelected(index.row(), index.parent())
 
     def initStyleOption(self, option, index) -> None:  # noqa: N802 - API Qt
         super().initStyleOption(option, index)
-        if not (option.state & QStyle.StateFlag.State_Selected):
+        if not (
+            option.state & QStyle.StateFlag.State_Selected
+            or self._fila_seleccionada(index)
+        ):
             return
         option.state &= ~QStyle.StateFlag.State_Selected
         option.backgroundBrush = QBrush(QColor(TABLE_SELECTION_BG))
@@ -305,6 +415,32 @@ def style_data_table(table: QAbstractItemView) -> None:
     viewport.setAutoFillBackground(True)
     table.setItemDelegate(FlatSelectionDelegate(table))
     round_corners(table)
+
+
+class _HeaderScrollbarAligner(QObject):
+    """Mantiene la barra vertical debajo de la cabecera de una tabla."""
+
+    def __init__(self, table: QAbstractItemView) -> None:
+        super().__init__(table)
+        self._table = table
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self._aplicar(watched.height())
+        return False
+
+    def _aplicar(self, alto: int) -> None:
+        self._table.verticalScrollBar().setStyleSheet(
+            f"QScrollBar:vertical {{ margin-top: {max(0, alto)}px; }}"
+        )
+
+
+def align_vertical_scrollbar_to_header(table: QAbstractItemView) -> None:
+    """Hace que la barra vertical empiece donde termina la cabecera."""
+    cabecera = table.horizontalHeader()
+    filtro = _HeaderScrollbarAligner(table)
+    cabecera.installEventFilter(filtro)
+    filtro._aplicar(cabecera.height())
 
 
 def style_dark_pane(pane: QWidget) -> None:
@@ -468,8 +604,8 @@ class ElidedLabel(QLabel):
     """Etiqueta informativa que se recorta con «…» en vez de ensanchar.
 
     Una ``QLabel`` normal pide de ancho mínimo todo su texto, así que cada
-    frase larga —la estimación de tiempo, el reparto de hilos, el estado del
-    procesamiento— se convertía en ancho mínimo de la ventana, y encima uno
+    frase larga (la estimación de tiempo, el reparto de hilos, el estado del
+    procesamiento) se convertía en ancho mínimo de la ventana, y encima uno
     que crecía en marcha en cuanto se escribía un mensaje más largo que el
     anterior. Aquí el texto se pinta recortado a lo que haya de sitio y queda
     entero en el tooltip, igual que ya hacen los nombres de archivo del panel
@@ -506,6 +642,10 @@ class ElidedLabel(QLabel):
         self._apply_elide()
 
     def text(self) -> str:
+        return self._full_text
+
+    def fullTextForCopy(self) -> str:  # noqa: N802 - API Qt
+        """Texto sin el recorte visual, para copiar mensajes completos."""
         return self._full_text
 
     def setToolTip(self, text: str) -> None:  # noqa: N802 - API Qt

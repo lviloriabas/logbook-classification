@@ -1,7 +1,7 @@
-"""Los separadores del PDF ocupan página en el lote y no se indexan.
+"""Los separadores del PDF ocupan página en el batch y no se indexan.
 
 El PDF que se sube lleva páginas divisorias que el CSV no tiene. Cuentan
-para la correspondencia por posición —en AirVault son una página más— pero
+para la correspondencia por posición (en AirVault son una página más) pero
 no son documentos: nadie les escribe matrícula, ni log number, ni fecha.
 """
 
@@ -11,7 +11,9 @@ import json
 
 import pytest
 
-from app.airvault.config import AirVaultConfig, CAMPO_MATRICULA
+from app.airvault.config import (
+    AirVaultConfig, CAMPO_LOG_NUMBER, CAMPO_MATRICULA,
+)
 from app.airvault.flujo import Trabajo, ruta_indice_paginas
 from app.airvault.guards import ErrorDeGuarda, verificar_cantidad
 from app.airvault.indexer import Indexador
@@ -84,7 +86,7 @@ def test_el_indice_se_lee_del_archivo_de_la_corrida(tmp_path):
     ruta = tmp_path / "corrida_paginas.json"
     ruta.write_text(
         json.dumps({"version": 2, "partes": [
-            {"pdf": "corrida.pdf", "paginas": INDICE}
+            {"pdf": "ejecución.pdf", "paginas": INDICE}
         ]}),
         encoding="utf-8",
     )
@@ -93,10 +95,10 @@ def test_el_indice_se_lee_del_archivo_de_la_corrida(tmp_path):
 
 
 def test_un_indice_de_la_primera_version_se_sigue_leyendo(tmp_path):
-    """Corridas exportadas antes de que la entrega pudiera repartirse."""
+    """Ejecuciones exportadas antes de que la entrega pudiera repartirse."""
     ruta = tmp_path / "corrida_paginas.json"
     ruta.write_text(
-        json.dumps({"version": 1, "pdf": "corrida.pdf", "paginas": INDICE}),
+        json.dumps({"version": 1, "pdf": "ejecución.pdf", "paginas": INDICE}),
         encoding="utf-8",
     )
     partes = leer_indice_paginas(ruta)
@@ -110,7 +112,7 @@ def test_sin_indice_no_se_inventa_nada(tmp_path):
     assert leer_indice_paginas(roto) == []
 
 
-# ── la cuenta del lote incluye los separadores ─────────────────────
+# ── la cuenta del batch incluye los separadores ─────────────────────
 
 def test_el_lote_tiene_una_pagina_por_separador():
     verificar_cantidad(registros(), 5)
@@ -122,7 +124,7 @@ def test_contar_solo_las_bitacoras_detiene_el_trabajo():
     assert "separadores" in str(fallo.value)
 
 
-# ── el indexador los salta ─────────────────────────────────────────
+# ── el indexador automatico los borra ──────────────────────────────
 
 def manifiesto_con_separadores(tmp_path):
     from app.airvault.model import Manifiesto
@@ -145,7 +147,10 @@ def test_no_se_escribe_en_las_paginas_divisorias(tmp_path):
 
     escritas = [p for p, _v, _e in cliente.escrituras]
     assert 1 not in escritas and 4 not in escritas
+    # Aunque un manifiesto antiguo mezcle REVISAR con el batch automático,
+    # la página incompleta no se escribe allí.
     assert escritas == [2, 3]
+    assert cliente.borradas == [1, 4]
 
 
 def test_la_divisoria_ni_siquiera_se_lee(tmp_path):
@@ -170,10 +175,46 @@ def test_el_separador_no_cuenta_como_omitido(tmp_path):
     resultado = indexador.aplicar(plan)
 
     assert resultado.escritas == 2
-    # La pagina 5 no tiene matricula y queda bloqueada; los dos separadores
-    # no son ni escritos ni omitidos porque nunca hubo nada que escribir.
+    # La página 5 no tiene matrícula y queda bloqueada: solo el manifiesto
+    # REVISAR puede enviar datos incompletos y dejarla amarilla.
     assert resultado.omitidas == 1
+    assert resultado.separadores_borrados == 2
+    assert resultado.separadores_pendientes == 0
     assert plan.resumen()["separadores"] == 2
+
+
+def test_revisar_conserva_separadores_y_escribe_los_datos_disponibles(tmp_path):
+    cliente = ClienteFalso(page_count=5)
+    manifiesto = manifiesto_con_separadores(tmp_path)
+    manifiesto.solo_subir = True
+    indexador = Indexador(cliente, manifiesto, ["HP-1848CMP"])
+
+    resultado = indexador.aplicar(indexador.planificar(5))
+
+    assert resultado.separadores_borrados == 0
+    assert cliente.borradas == []
+    assert [pagina for pagina, _valores, _estado in cliente.escrituras] == [
+        2,
+        3,
+        5,
+    ]
+
+
+def test_si_airvault_no_deja_borrar_un_separador_se_informa(tmp_path):
+    cliente = ClienteFalso(
+        paginas={n: pagina(n, estado=3) for n in range(1, 6)},
+        picklist=["HP-1848CMP"], page_count=5,
+        no_se_pueden_borrar={4},
+    )
+    indexador = Indexador(cliente, manifiesto_con_separadores(tmp_path),
+                          ["HP-1848CMP"])
+
+    resultado = indexador.aplicar(indexador.planificar(5))
+
+    assert resultado.separadores_borrados == 1
+    assert resultado.separadores_pendientes == 1
+    assert cliente.borradas == [1]
+    assert any("pagina 4" in detalle for detalle in resultado.detalles)
 
 
 def test_la_matricula_vacia_de_un_separador_no_es_un_aviso(tmp_path):
@@ -198,15 +239,24 @@ def test_la_verificacion_no_espera_que_una_divisoria_sea_valida(tmp_path):
         if not registro.es_separador:
             registro.estado = EstadoRegistro.ESCRITA
     cliente = ClienteFalso(paginas={
-        1: pagina(1, estado=2), 2: pagina(2, estado=0), 3: pagina(3, estado=0),
-        4: pagina(4, estado=2), 5: pagina(5, estado=0),
+        1: pagina(1, estado=2),
+        2: pagina(2, estado=0, valores={
+            CAMPO_LOG_NUMBER: "2312238", CAMPO_MATRICULA: "HP-1848CMP",
+        }),
+        3: pagina(3, estado=0, valores={
+            CAMPO_LOG_NUMBER: "2312239", CAMPO_MATRICULA: "HP-1848CMP",
+        }),
+        4: pagina(4, estado=2),
+        5: pagina(5, estado=0, valores={
+            CAMPO_LOG_NUMBER: "2312240", CAMPO_MATRICULA: "",
+        }),
     }, page_count=5)
     validas, total, problemas = verificar_lote(cliente, manifiesto)
     assert (validas, total) == (3, 3)
     assert problemas == []
 
 
-# ── de punta a punta con el indice de la corrida ───────────────────
+# ── de punta a punta con el indice de la ejecución ───────────────────
 
 def test_el_trabajo_toma_el_orden_del_pdf(tmp_path):
     carpeta = tmp_path / "output" / "BITS 18 AUG 2026 05 42"
@@ -235,7 +285,7 @@ def test_el_trabajo_toma_el_orden_del_pdf(tmp_path):
 
 
 def test_sin_indice_se_sigue_el_csv_y_la_guarda_protege(tmp_path):
-    """Corridas viejas: si el PDF traia separadores, no se escribe nada."""
+    """Ejecuciones viejas: si el PDF traia separadores, no se escribe nada."""
     carpeta = tmp_path / "output" / "BITS 18 AUG 2026 05 42"
     (carpeta / "datos").mkdir(parents=True)
     csv = carpeta / "datos" / "BITS 18 AUG 2026 05 42.CSV"

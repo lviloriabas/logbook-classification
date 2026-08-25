@@ -2,7 +2,7 @@
 
 Flujo por página:
     render → blank → deskew → alineación → recorte por región
-    → OCR/firma/checkbox (OCR en lote por página) → postproceso
+    → OCR/firma/checkbox (OCR en batch por página) → postproceso
     → reglas de validación.
 
 El pipeline depende de interfaces (OcrEngine, Template), por lo que se
@@ -21,7 +21,9 @@ from __future__ import annotations
 import re
 import pickle
 import tempfile
+import threading
 import time
+import weakref
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
@@ -151,7 +153,7 @@ def _init_ocr_pool_worker(
     cpu_threads: Optional[int],
     date_engine_name: Optional[str],
 ) -> None:
-    """Carga los motores una sola vez para todo el lote de PDFs."""
+    """Carga los motores una sola vez para todo el batch de PDFs."""
     from app.ocr.engine import create_engine
 
     _WORKER_STATE.clear()
@@ -205,8 +207,8 @@ def _calibrate_page_worker(
 ) -> Tuple[TransformResult, Optional[float]]:
     """Calibra una página dentro de un proceso worker.
 
-    Es la misma secuencia que la ruta en serie —render a DPI de calibración,
-    deskew y estimación de similitud contra la referencia— sin nada del motor
+    Es la misma secuencia que la ruta en serie (render a DPI de calibración,
+    deskew y estimación de similitud contra la referencia) sin nada del motor
     OCR: la calibración no lee texto, solo mide dónde está la página.
     """
     state = _load_calibration_job(state_path)
@@ -222,8 +224,42 @@ def _calibrate_page_worker(
     return transform, angle
 
 
+# Los pools que siguen abiertos ahora mismo. Cerrar la ventana o cancelar
+# solo puede pedir la parada y esperar: las paginas en vuelo terminan una a
+# una, y con paginas grandes eso son minutos. Quien no quiera esperar corta
+# por aqui. Es una WeakSet para que un pool olvidado no sobreviva por estar
+# apuntado desde el registro.
+_POOLS_VIVOS: "weakref.WeakSet[OcrProcessPool]" = weakref.WeakSet()
+# El registro lo escriben los hilos de trabajo, al abrir y cerrar su pool, y
+# lo lee el hilo de la interfaz al cortar. Sin cerrojo, recorrerlo mientras
+# otro hilo lo modifica levanta RuntimeError justo en el momento en que hace
+# falta que el corte funcione.
+_POOLS_CERROJO = threading.Lock()
+
+
+def abortar_pools() -> int:
+    """Corta todos los pools abiertos sin esperar a lo que estan haciendo.
+
+    Devuelve cuantos se cortaron. Las paginas en vuelo se pierden y las
+    llamadas que esperaban su resultado levantan excepcion, que es
+    exactamente lo que hace falta para que el pipeline se desenrede solo en
+    lugar de quedarse esperando. La usa la interfaz cuando alguien pide
+    forzar un cierre o una cancelacion, y no debe llamarse en un
+    procesamiento que se quiera terminar.
+    """
+    with _POOLS_CERROJO:
+        pools = list(_POOLS_VIVOS)
+    for pool in pools:
+        pool.abortar()
+    if pools:
+        logger.warning(
+            f"[Pool] Cortados {len(pools)} pool(s) de OCR por orden expresa"
+        )
+    return len(pools)
+
+
 class OcrProcessPool:
-    """Pool de Paddle/Tesseract reutilizable durante un lote completo."""
+    """Pool de Paddle/Tesseract reutilizable durante un batch completo."""
 
     def __init__(
         self,
@@ -245,6 +281,8 @@ class OcrProcessPool:
         )
         self._job_index = 0
         self._closed = False
+        with _POOLS_CERROJO:
+            _POOLS_VIVOS.add(self)
 
     def prepare(self, state: dict) -> Path:
         self._job_index += 1
@@ -258,17 +296,48 @@ class OcrProcessPool:
         path.unlink(missing_ok=True)
 
     def temporary_path(self, name: str) -> Path:
-        """Ruta privada del pool para señales/estado efímero del lote."""
+        """Ruta privada del pool para señales/estado efímero del batch."""
         return Path(self._temporary.name) / name
 
     def close(self, cancel_futures: bool = False) -> None:
         if self._closed:
             return
         self._closed = True
+        with _POOLS_CERROJO:
+            _POOLS_VIVOS.discard(self)
         self.executor.shutdown(
             wait=True, cancel_futures=cancel_futures
         )
         self._temporary.cleanup()
+
+    def abortar(self) -> None:
+        """Mata los procesos del pool en vez de esperar a que acaben.
+
+        Es el cierre a la fuerza. Se matan los hijos primero para que las
+        paginas en curso no sigan gastando CPU despues de que nadie vaya a
+        recoger su resultado, y solo despues se suelta el executor sin
+        esperarlo. El directorio temporal puede seguir tomado por un hijo que
+        aun no murio: si no se deja borrar, se deja estar, que lo limpia
+        Windows con el resto de la carpeta temporal.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        with _POOLS_CERROJO:
+            _POOLS_VIVOS.discard(self)
+        for proceso in list(getattr(self.executor, "_processes", {}).values()):
+            try:
+                proceso.terminate()
+            except Exception:  # noqa: BLE001 - ya podia estar muerto
+                pass
+        try:
+            self.executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001 - el pool ya esta roto, da igual
+            pass
+        try:
+            self._temporary.cleanup()
+        except OSError:
+            pass
 
     def __enter__(self) -> "OcrProcessPool":
         return self
@@ -449,7 +518,7 @@ def process_page_image(
                 f"[Página {page_number}] Deskew: {deskew_angle:.2f}°"
             )
 
-    # 3) Alineación con la plantilla (ancla estabilizada por lote si existe)
+    # 3) Alineación con la plantilla (ancla estabilizada por batch si existe)
     alignment_transform: Optional[TransformResult] = None
     if config.align and reference is not None:
         if transform is not None:
@@ -594,7 +663,7 @@ def process_page_image(
         for effective in (ocr_overrides.get(field.id, field),)
     }
 
-    # 4-7) Campos: recorte → OCR (en lote)/firma/checkbox → postproceso
+    # 4-7) Campos: recorte → OCR (en batch)/firma/checkbox → postproceso
     ocr_fields = [
         field for field in template.fields
         if field.type not in (FieldType.SIGNATURE, FieldType.CHECKBOX)
@@ -852,7 +921,7 @@ def _accept_line_reading(
 
     Los campos ``ocr_mode='line'`` se leen sin detector porque su recorte ya
     contiene un único valor. Cuando esa lectura rápida no produce un valor
-    canónico —o no cumple la regla del campo— se relee con el pipeline
+    canónico (o no cumple la regla del campo) se relee con el pipeline
     completo, así que la optimización solo puede ahorrar tiempo y nunca
     perder una lectura que el detector sí habría resuelto.
     """
@@ -1471,7 +1540,7 @@ class Pipeline:
             pdf_path: Ruta del PDF escaneado.
             page_range: Tramo de páginas *de este PDF* (1-based, inclusivo).
                 None procesa el archivo entero. El reparto de un rango
-                global del lote entre archivos lo hace
+                global del batch entre archivos lo hace
                 :func:`app.core.page_range.slice_batch`.
             should_cancel: Callable sin argumentos que devuelve True cuando
                 se pidió la cancelación; el pipeline verifica entre páginas
@@ -1600,7 +1669,7 @@ class Pipeline:
             page_number = first + index
             # ``index`` son las páginas ya terminadas de este tramo; el
             # contador que ve el usuario lo compone la pantalla con las
-            # cifras del lote (ver ``app.core.progress``).
+            # cifras del batch (ver ``app.core.progress``).
             self._notify(index, total, PAGES_STAGE)
             image = (
                 renderer.render_page(page_number, self.config.dpi)
@@ -1742,7 +1811,7 @@ class Pipeline:
             )
         return [page for _, page in pages]
 
-    # ── Alineación por lote ─────────────────────────────────────────────
+    # ── Alineación por batch ─────────────────────────────────────────────
 
     def _calibrate(
         self, pdf_path: Path, first: int, total: int, reference: np.ndarray,
@@ -1755,7 +1824,7 @@ class Pipeline:
         indexadas desde ``first``. Con la alineación deshabilitada devuelve
         (None, None).
 
-        Coste: bajo (~75), ≈ 0.2-0.4 s por página — sin OCR ni warp.
+        Coste: bajo (~75), ≈ 0.2-0.4 s por página, sin OCR ni warp.
         """
         t_calib = time.perf_counter()
         try:
@@ -1789,9 +1858,9 @@ class Pipeline:
         # cuando la plantilla declara alguna) y el mapa de ranuras de fecha
         # (``build_slot_maps``, solo con ``date_slot_ocr``). Construirla sin
         # consumidor costaba una imagen en grises por página retenida durante
-        # toda la calibración —0,89 MB cada una, 0,34 GB en un libro de 393
+        # toda la calibración (0,89 MB cada una, 0,34 GB en un libro de 393
         # páginas, fuera del presupuesto de memoria por proceso que calcula
-        # ``app.core.parallelism``— más un warp y una acumulación por página.
+        # ``app.core.parallelism``) más un warp y una acumulación por página.
         collect_background = (
             self.config.remove_printed
             and total >= 3
@@ -1946,8 +2015,8 @@ class Pipeline:
         """Calibra el tramo repartiendo las páginas entre el pool OCR.
 
         La calibración corría en el proceso principal, página a página,
-        mientras los procesos del pool —ya arrancados, con los modelos
-        cargados— esperaban sin hacer nada. Medido: 202 ms por página
+        mientras los procesos del pool (ya arrancados, con los modelos
+        cargados) esperaban sin hacer nada. Medido: 202 ms por página
         (render 70 + deskew 41 + ORB 90), que en un libro de 50 páginas son
         10,1 s de un reloj de unos 65.
 
@@ -2001,7 +2070,7 @@ class Pipeline:
 
         La mediana es robusta a páginas catastróficas (ORB degradado) y
         deja la posición de los campos consistente entre bitácoras de un
-        mismo lote. Si en la ventana no hay páginas fiables, toma la
+        mismo batch. Si en la ventana no hay páginas fiables, toma la
         ventana completa como respaldo.
         """
         return [
@@ -2013,7 +2082,7 @@ class Pipeline:
     def _anchor_at(
         transforms: List[TransformResult], index: int, half_window: int = 7
     ) -> TransformResult:
-        """Ancla de una sola página, con la misma regla que el lote entero.
+        """Ancla de una sola página, con la misma regla que el batch entero.
 
         Separarla permite decidir el ancla de una página en cuanto se ha
         calibrado la última de su ventana, sin esperar al libro completo: es
@@ -2034,10 +2103,10 @@ class Pipeline:
         )
 
     def _printed_mask_has_consumer(self) -> bool:
-        """¿Alguien va a leer la máscara de fondo impreso en esta corrida?
+        """¿Alguien va a leer la máscara de fondo impreso en esta ejecución?
 
-        Sus dos consumidores son las casillas —que solo la aplican si la
-        plantilla declara alguna— y el mapa de ranuras de fecha, que depende
+        Sus dos consumidores son las casillas (que solo la aplican si la
+        plantilla declara alguna) y el mapa de ranuras de fecha, que depende
         de ``date_slot_ocr``. Sin ninguno de los dos, construirla es trabajo
         y memoria que nadie mira.
         """
@@ -2083,7 +2152,7 @@ class Pipeline:
         renderer: Optional[PdfPageRenderer] = None,
         first_page: int = 1,
     ) -> List[PageResult]:
-        """Arbitra con el VLM los campos incitos de la corrida.
+        """Arbitra con el VLM los campos incitos de la ejecución.
 
         Corre una sola vez por PDF, en el proceso principal (el servidor
         llama-server es un subproceso único). Recorta los campos de las
@@ -2263,11 +2332,11 @@ class Pipeline:
         (ver ``app/vision/book_background.py``).
 
         Solo se tocan los campos que quedaron en ``unclear``: los veredictos
-        firmes no se revisan. Y solo se renderizan las páginas necesarias —una
-        muestra para el fondo, más las dudosas—, no el libro entero.
+        firmes no se revisan. Y solo se renderizan las páginas necesarias (una
+        muestra para el fondo, más las dudosas), no el libro entero.
 
         Cualquier fallo aquí deja los resultados como estaban: es una segunda
-        opinión, no un eslabón del que dependa la corrida.
+        opinión, no un eslabón del que dependa la ejecución.
         """
         if not self.config.signature_book_background:
             return pages
@@ -2290,7 +2359,7 @@ class Pipeline:
                 pdf_path, pages, pending, fields, reference, anchors, own,
                 renderer, first_page,
             )
-        except Exception as exc:  # noqa: BLE001 - nunca debe tumbar la corrida
+        except Exception as exc:  # noqa: BLE001 - nunca debe tumbar la ejecución
             logger.warning(
                 f"[Pipeline] No se pudo contrastar las firmas inciertas con "
                 f"el libro: {exc}"
@@ -2337,9 +2406,9 @@ class Pipeline:
             # El recorte se reescala a la escala de calibración, pero
             # interpolar no devuelve el detalle que no se renderizó: los
             # trazos flojos pierden profundidad y se resuelven menos dudas.
-            # No es un error —sigue sin equivocarse—, pero conviene saberlo.
+            # No es un error (sigue sin equivocarse), pero conviene saberlo.
             logger.info(
-                f"[Pipeline] Firmas inciertas: la corrida va a "
+                f"[Pipeline] Firmas inciertas: la ejecución va a "
                 f"{self.config.dpi} DPI y la revisión está calibrada a "
                 f"{BACKGROUND_REFERENCE_DPI}; se resolverán menos dudas"
             )
@@ -2460,7 +2529,7 @@ class Pipeline:
         ``skew_angle`` es el ángulo que el procesado ya dejó en
         ``PageResult.skew_angle``. Reutilizarlo no solo ahorra la detección
         (103-139 ms por página, sobre decenas de páginas y en serie): también
-        garantiza que el recorte que ve el fondo del libro —o el VLM— sea el
+        garantiza que el recorte que ve el fondo del libro (o el VLM) sea el
         mismo que vio el detector, en vez de uno enderezado por una segunda
         medición que puede diferir de la primera.
         """
@@ -2557,8 +2626,8 @@ def _page_counter_writer(path: Path) -> ProgressCallback:
     """Publica el avance del worker en un archivo que el padre puede leer.
 
     Un proceso del pool no puede emitir señales a la GUI, así que deja su
-    contador de páginas en el directorio temporal del pool —el mismo sitio
-    donde ya vive la bandera de cancelación— y el planificador lo consulta
+    contador de páginas en el directorio temporal del pool (el mismo sitio
+    donde ya vive la bandera de cancelación) y el planificador lo consulta
     mientras espera. Es una línea de texto por página: más barato que una
     cola compartida y sin proceso extra de ``Manager``.
     """
@@ -2599,18 +2668,18 @@ def process_pdf_batch(
     on_progress: Optional[ProgressCallback] = None,
     on_file_progress: Optional[Callable[[int, int, int], None]] = None,
 ) -> Tuple[List[ValidationReport], List[dict]]:
-    """Procesa un lote con el perfil C siempre activo y cola acotada.
+    """Procesa un batch con el perfil C siempre activo y cola acotada.
 
     El planificador elige la granularidad sin cambiar el algoritmo OCR: reparte
     PDFs completos cuando hay suficientes archivos para ocupar el pool y, en
-    lotes menores, reparte las páginas para no dejar procesos ociosos. En ambos
+    batches menores, reparte las páginas para no dejar procesos ociosos. En ambos
     casos el pool OCR persiste y las colas permanecen acotadas.
 
     ``on_file_progress`` recibe ``(archivo 1-based, páginas hechas, páginas
     del archivo)`` en las dos estrategias, para que el panel de avance se lea
     igual reparta el planificador páginas o archivos completos.
 
-    ``page_range`` es un rango del lote numerado de corrido: se reparte entre
+    ``page_range`` es un rango del batch numerado de corrido: se reparte entre
     los archivos que lo contienen y los que quedan fuera ni se abren, así que
     los reportes devueltos cubren solo esos archivos.
     """
@@ -2626,7 +2695,7 @@ def process_pdf_batch(
     if not slices:
         logger.warning(
             f"[Perfil C] El rango {(page_range or PageRange()).label()} no "
-            f"cubre ninguna página de los {len(paths)} archivo(s) del lote"
+            f"cubre ninguna página de los {len(paths)} archivo(s) del batch"
         )
         return [], []
     paths = [item.path for item in slices]
@@ -2636,7 +2705,7 @@ def process_pdf_batch(
     done_pages = 0
     total_files = len(paths)
 
-    # Perfil C no es un modo reservado a lotes grandes. Para pocos archivos,
+    # Perfil C no es un modo reservado a batches grandes. Para pocos archivos,
     # paralelizar páginas utiliza mejor el mismo pool; para muchos, cada worker
     # recibe archivos completos y elimina las barreras entre PDFs.
     parallel_by_file = (
@@ -2697,11 +2766,11 @@ def process_pdf_batch(
                 if on_progress is not None:
                     # El nombre del archivo delante, igual que en la ruta
                     # secuencial: sin él la etapa de un solo PDF y el
-                    # contador del lote se leían como si hablaran de lo mismo.
+                    # contador del batch se leían como si hablaran de lo mismo.
                     on_progress(
                         _offset + done,
                         total_pages,
-                        f"Archivo {_index + 1}/{total_files}: {_name} — "
+                        f"Archivo {_index + 1}/{total_files}: {_name} - "
                         f"{message}",
                     )
 
@@ -2808,7 +2877,7 @@ def process_pdf_batch(
             published = max(published, min(done_pages + live, total_pages))
             message = (
                 f"{len(pending)} archivo(s) en paralelo, "
-                f"{ready}/{total_files} listos — {PAGES_STAGE}"
+                f"{ready}/{total_files} listos - {PAGES_STAGE}"
                 if pending
                 else f"Procesados {ready}/{total_files} archivos"
             )

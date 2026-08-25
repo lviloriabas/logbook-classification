@@ -1,15 +1,15 @@
 """Conjunto de recortes de firma etiquetados a mano (suite temporal).
 
 Aquí vive todo lo que comparten las tres herramientas de la suite: dónde se
-guardan los recortes, cómo se nombran, qué etiquetas existen y —lo más
-importante— cómo se reproduce un recorte con un margen distinto sin volver a
+guardan los recortes, cómo se nombran, qué etiquetas existen y (lo más
+importante) cómo se reproduce un recorte con un margen distinto sin volver a
 abrir el PDF.
 
 El recorte se guarda con un margen generoso (``EXTRACT_PAD_*``) y con el
 rectángulo exacto del campo dentro de la imagen. Con esas dos cosas el
 calibrador puede simular cualquier margen menor o igual recortando el PNG, que
 es lo que permite tratar el margen como un parámetro más de la búsqueda en
-lugar de tener que volver a extraer el lote entero por cada valor.
+lugar de tener que volver a extraer el batch entero por cada valor.
 """
 
 from __future__ import annotations

@@ -59,8 +59,8 @@ import os
 from ctypes import wintypes
 from dataclasses import dataclass
 
-# Tope duro de procesos. No es el punto donde la curva se aplana —medido,
-# sigue subiendo hasta un proceso por hilo lógico— sino un seguro contra
+# Tope duro de procesos. No es el punto donde la curva se aplana (medido,
+# sigue subiendo hasta un proceso por hilo lógico) sino un seguro contra
 # equipos con muchísimos hilos, donde cada proceso cuesta una copia de los
 # modelos y el límite real pasa a ser la memoria. Se fija por encima de los
 # equipos previstos (20 hilos) para que quien decida sea la memoria, medida
@@ -69,12 +69,12 @@ _MAX_WORKERS = 32
 # Techo de hilos internos por motor: la inferencia satura en 3 (782 -> 592 ms
 # por recorte; con 6 y 12 hilos mide lo mismo que con 3).
 _MAX_ENGINE_THREADS = 3
-# Memoria residente por proceso worker, medida durante una corrida real y no
+# Memoria residente por proceso worker, medida durante una ejecución real y no
 # en un proceso aislado: los picos por proceso llegan a 842-898 MB y la media
 # ronda 815-823 MB (0001.pdf y test2.pdf, 8 y 12 procesos). Desglose de lo que
 # lo compone: 77 MB de intérprete con numpy y OpenCV, +329 MB al cargar el
-# reconocedor, +107 MB al cargar además el detector —515 MB de modelos, que
-# son el suelo mientras cada proceso necesite su propia copia— y el resto son
+# reconocedor, +107 MB al cargar además el detector (515 MB de modelos, que
+# son el suelo mientras cada proceso necesite su propia copia) y el resto son
 # búferes de página y el arena de Paddle.
 #
 # Medir esto en un proceso suelto engaña: ahí da ~690 MB, y con ese número se
@@ -89,10 +89,10 @@ _WORKER_MEMORY_MB = 850
 # Memoria que se deja libre para el sistema, la GUI y las salidas PDF. Escala
 # con el equipo entre un suelo y un techo: en uno de 16 GB el suelo de 1,5 GB
 # deja el margen demasiado corto en cuanto el usuario abre el visor de CSV o un
-# navegador, y quedarse sin memoria a mitad de un lote cuesta mucho más que un
+# navegador, y quedarse sin memoria a mitad de un batch cuesta mucho más que un
 # proceso menos. El techo evita el error contrario: en un equipo de 32 GB una
 # fracción fija reservaría casi 5 GB y renunciaría a procesos sin motivo, ya
-# que lo que hay que cubrir —sistema, interfaz, salidas— no crece con la RAM.
+# que lo que hay que cubrir (sistema, interfaz, salidas) no crece con la RAM.
 _RESERVED_MEMORY_MB = 1536
 _RESERVED_MEMORY_RATIO = 0.15
 _MAX_RESERVED_MEMORY_MB = 3072
@@ -250,8 +250,8 @@ def reserved_memory_mb() -> int:
     """Memoria que no se reparte: sistema, interfaz y salidas.
 
     Proporcional al equipo, con un suelo. En uno de 16 GB el suelo fijo de
-    1,5 GB dejaba el margen demasiado corto —basta con que el usuario abra el
-    visor de CSV o un navegador— y quedarse sin memoria a mitad de un lote
+    1,5 GB dejaba el margen demasiado corto (basta con que el usuario abra el
+    visor de CSV o un navegador) y quedarse sin memoria a mitad de un batch
     cuesta mucho más que renunciar a un proceso.
     """
     total = total_memory_mb()
@@ -281,8 +281,8 @@ def recommended_parallelism(total_threads: int | None = None) -> tuple[int, int]
     tamaño del equipo se consulta siempre a la máquina.
 
     Confundirlas era un error caro. Al estimar los núcleos como la mitad del
-    presupuesto, pedir 3 hilos daba ``(1 worker x 3 hilos)`` —como si el
-    equipo tuviera un solo núcleo— cuando lo correcto son 3 procesos: medido,
+    presupuesto, pedir 3 hilos daba ``(1 worker x 3 hilos)`` (como si el
+    equipo tuviera un solo núcleo) cuando lo correcto son 3 procesos: medido,
     0.116 frente a 0.239 páginas/s, la mitad de velocidad. Con 2 hilos el
     mismo fallo costaba 1.58x.
 
@@ -293,8 +293,8 @@ def recommended_parallelism(total_threads: int | None = None) -> tuple[int, int]
     34% en el de 4.
 
     Los hilos internos solo se reparten con lo que sobra cuando la memoria
-    impide crear más procesos —ese proceso aprovecha los hilos restantes en
-    vez de desperdiciarlos— y nunca pasan de ``_MAX_ENGINE_THREADS``, porque
+    impide crear más procesos (ese proceso aprovecha los hilos restantes en
+    vez de desperdiciarlos) y nunca pasan de ``_MAX_ENGINE_THREADS``, porque
     la inferencia satura en 3.
     """
     total = max(

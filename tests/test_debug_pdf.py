@@ -12,7 +12,7 @@ from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.reports.debug_pdf import write_debug_pdf
 from app.templates.manager import TemplateManager
 
-INPUT = Path(__file__).resolve().parents[1] / "input"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _make_report(pdf_path: Path, field_ids) -> ValidationReport:
@@ -43,13 +43,13 @@ class TestDebugPdf(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(__file__).resolve().parents[1]
 
-    @unittest.skipUnless(INPUT.joinpath("test.pdf").exists(),
-                         "requiere input/test.pdf")
+    @unittest.skipUnless(FIXTURES.joinpath("test.pdf").exists(),
+                         "requiere tests/fixtures/test.pdf")
     def test_generates_combined_pdf(self):
         template = TemplateManager().load(
             self.root / "template/aircraft_log.json"
         )
-        report = _make_report(INPUT / "test.pdf",
+        report = _make_report(FIXTURES / "test.pdf",
                               [f.id for f in template.fields])
         out = Path(tempfile.mkdtemp()) / "debug.pdf"
 
@@ -58,7 +58,7 @@ class TestDebugPdf(unittest.TestCase):
         self.assertEqual(result, out)
         self.assertTrue(out.exists())
         self.assertGreater(out.stat().st_size, 0)
-        with fitz.open(str(INPUT / "test.pdf")) as source, \
+        with fitz.open(str(FIXTURES / "test.pdf")) as source, \
                 fitz.open(str(out)) as doc:
             self.assertEqual(len(doc), 1)
             self.assertEqual(doc[0].rect, source[0].rect)
@@ -68,13 +68,13 @@ class TestDebugPdf(unittest.TestCase):
                 len(source[0].get_images(full=True)),
             )
 
-    @unittest.skipUnless(INPUT.joinpath("test.pdf").exists(),
-                         "requiere input/test.pdf")
+    @unittest.skipUnless(FIXTURES.joinpath("test.pdf").exists(),
+                         "requiere tests/fixtures/test.pdf")
     def test_blank_page_included(self):
         template = TemplateManager().load(
             self.root / "template/aircraft_log.json"
         )
-        report = _make_report(INPUT / "test.pdf",
+        report = _make_report(FIXTURES / "test.pdf",
                               [f.id for f in template.fields])
         report.pages[0].blank = True
         report.pages[0].fields = []

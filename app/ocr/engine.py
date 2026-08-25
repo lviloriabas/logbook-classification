@@ -76,8 +76,8 @@ class PaddleOcrEngine:
     _HANDWRITTEN_REC_MODEL = "PP-OCRv5_mobile_rec"
     _HANDWRITTEN_DET_MODEL = "PP-OCRv6_medium_det"
 
-    # Recortes por llamada al reconocedor. Medido: 229 ms/recorte con lotes
-    # de 1 frente a 172 ms con lotes de 16 (el resto de la curva es plana).
+    # Recortes por llamada al reconocedor. Medido: 229 ms/recorte con batches
+    # de 1 frente a 172 ms con batches de 16 (el resto de la curva es plana).
     _REC_BATCH_SIZE = 16
 
     def __init__(self, lang: str = "en", cpu_threads: Optional[int] = None,
@@ -241,7 +241,7 @@ class PaddleOcrEngine:
     def recognize_batch(self, images: List[np.ndarray]) -> List[List[OcrResult]]:
         """Reconoce varias imágenes en una sola llamada (API v3.x).
 
-        En API v2.x, o si la llamada en lote falla, se procesa una por una.
+        En API v2.x, o si la llamada en batch falla, se procesa una por una.
         """
         engine = self._ensure_engine()
         images = [self._to_bgr(img) for img in images]
@@ -253,7 +253,7 @@ class PaddleOcrEngine:
             if len(parsed) == len(images):
                 return parsed
         except Exception:  # noqa: BLE001 - fallback robusto
-            logger.debug("OCR en lote falló; se procesa imagen por imagen",
+            logger.debug("OCR en batch falló; se procesa imagen por imagen",
                          exc_info=True)
         return [self.recognize(img) for img in images]
 
@@ -339,7 +339,7 @@ class TesseractOcrEngine:
         images: List[np.ndarray],
         config: Optional[str] = None,
     ) -> List[List[OcrResult]]:
-        """Procesa un lote en un único arranque de Tesseract.
+        """Procesa un batch en un único arranque de Tesseract.
 
         Tesseract admite un ``imagelist`` como entrada y conserva el mismo
         PSM, OEM y whitelist para todas sus páginas. Agrupando recortes con

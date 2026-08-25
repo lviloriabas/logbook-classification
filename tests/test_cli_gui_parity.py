@@ -1,19 +1,21 @@
-"""La línea de comandos y la ventana entregan la misma corrida.
+"""La línea de comandos y la ventana entregan la misma ejecución.
 
 Las dos superficies escriben sus salidas con ``write_outputs``, así que la
 paridad se reduce a una pregunta comprobable: ¿las dos rellenan las mismas
 opciones? Cuando cada una escribía sus archivos por su cuenta, la respuesta
-se fue separando sin que nada avisara —el CSV mínimo de la línea de comandos
+se fue separando sin que nada avisara (el CSV mínimo de la línea de comandos
 salía con todas las columnas, sus stats nombraban PDFs que no existían y la
-lista de aviones no se consultaba nunca—. Esta prueba es la alarma.
+lista de aviones no se consultaba nunca). Esta prueba es la alarma.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import sys
 from pathlib import Path
 
 from app.reports.outputs import OutputOptions
+from run_cli import parse_args
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +29,7 @@ GUI_SOURCE = "\n".join(
 _INTERNAS = {"template", "output_root", "run_dir"}
 # Diferencias con motivo, no descuidos. Si aparece una cuarta, es un descuido.
 _SOLO_VENTANA = {
-    # Solo la ventana puede cancelar un lote a mitad de camino.
+    # Solo la ventana puede cancelar un batch a mitad de camino.
     "skip_pdfs",
 }
 _SOLO_LINEA_DE_COMANDOS = {
@@ -38,6 +40,12 @@ _SOLO_LINEA_DE_COMANDOS = {
 
 def _campos() -> set[str]:
     return {field.name for field in dataclasses.fields(OutputOptions)}
+
+
+def test_la_linea_de_comandos_construye_sus_argumentos(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["run_cli.py", "--pdf", "una.pdf"])
+    args = parse_args()
+    assert args.pdf == "una.pdf"
 
 
 def test_la_linea_de_comandos_rellena_todas_las_opciones_de_salida():

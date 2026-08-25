@@ -1,4 +1,4 @@
-"""Del CSV de la corrida a los valores de indice de AirVault.
+"""Del CSV de la ejecución a los valores de indice de AirVault.
 
 Aqui viven las tres traducciones que hacen falta: el formato de fecha, la
 matricula contra el picklist de AirVault y la flota que AirVault deduce de
@@ -14,15 +14,19 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence
 
 from app.airvault.config import (
+    CAMPOS_OBLIGATORIOS,
     CAMPO_AUDIT_STATUS,
     CAMPO_BATCH_NAME,
+    CAMPO_DESCRIPCION,
     CAMPO_DOC_TYPE,
     CAMPO_END_DATE,
     CAMPO_FLEET,
     CAMPO_LESSOR,
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
+    nombre_campo,
 )
+from app.airvault.fechas import fechas_inferidas
 from app.airvault.model import Registro
 
 FLOTA_CACHE_FILENAME = "airvault_flota.json"
@@ -140,10 +144,50 @@ class ResolutorFlota:
 
 
 def leer_csv_corrida(path: Path | str) -> List[dict]:
-    """Lee el CSV minimo de una corrida respetando el BOM que escribe Excel."""
+    """Lee el CSV minimo de una ejecución respetando el BOM que escribe Excel."""
     ruta = Path(path)
     with ruta.open("r", encoding="utf-8-sig", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def obligatorios_vacios_por_pagina(
+    filas: Iterable[Mapping[str, str]],
+    resolutor: ResolutorFlota | None = None,
+) -> Dict[tuple[str, int], tuple[str, ...]]:
+    """Campos que dejarían amarilla cada página usando solo el CSV local.
+
+    Recorre también las filas completamente vacías, que
+    :func:`registros_desde_csv` omite al preparar un batch antiguo. La
+    división de la entrega necesita conservarlas en ``REVISAR`` y saber que
+    no son páginas completas solo porque AirVault todavía no tenga índices.
+
+    Las fechas se infieren con el CSV entero por la misma ruta usada al
+    construir el manifiesto. Por eso una fecha deducible no manda la página
+    a revisión, pero una ``End Date`` que realmente quedaría vacía sí.
+    """
+    filas = list(filas)
+    inferidas = fechas_inferidas(filas)
+    resolutor = resolutor or ResolutorFlota()
+    faltantes: Dict[tuple[str, int], tuple[str, ...]] = {}
+    for seq, fila in enumerate(filas, start=1):
+        archivo = str(fila.get("file", "")).strip()
+        try:
+            pagina = int(str(fila.get("page", "")).strip())
+        except (TypeError, ValueError):
+            continue
+        registro = _registro_de_fila(seq, fila, resolutor, inferidas)
+        # Doc Type y Audit Status son constantes no vacías aquí. Los demás
+        # valores salen de la fila y del resolutor local, igual que durante
+        # la preparación real del manifiesto.
+        valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+        vacios = tuple(
+            nombre_campo(campo)
+            for campo in CAMPOS_OBLIGATORIOS
+            if not str(valores.get(campo, "")).strip()
+        )
+        if vacios:
+            faltantes[(archivo, pagina)] = vacios
+    return faltantes
 
 
 def registros_desde_csv(
@@ -154,18 +198,20 @@ def registros_desde_csv(
     """Construye los registros del manifiesto a partir del CSV.
 
     Args:
-        filas: filas del CSV de la corrida.
+        filas: filas del CSV de la ejecución.
         resolutor: traductor de matricula a flota.
         orden: pares ``(archivo, pagina)`` en el orden exacto en que las
             paginas quedaron en el PDF que se sube. Sin esta lista se asume
-            que el lote conserva el orden del CSV, que solo es cierto
+            que el batch conserva el orden del CSV, que solo es cierto
             cuando el PDF se genero sin separar ni reordenar.
 
     Las paginas en blanco del CSV (sin log number ni matricula) se
     descartan: no llegan al PDF que se sube, asi que incluirlas descuadraria
-    la correspondencia con las paginas del lote.
+    la correspondencia con las paginas del batch.
     """
     resolutor = resolutor or ResolutorFlota()
+    filas = list(filas)
+    inferidas = fechas_inferidas(filas)
     por_clave: Dict[tuple[str, int], Mapping[str, str]] = {}
     secuencia: List[Mapping[str, str]] = []
     for fila in filas:
@@ -188,7 +234,7 @@ def registros_desde_csv(
         if _en_blanco(fila):
             continue
         seq += 1
-        registros.append(_registro_de_fila(seq, fila, resolutor))
+        registros.append(_registro_de_fila(seq, fila, resolutor, inferidas))
     return registros
 
 
@@ -202,18 +248,36 @@ def _en_blanco(fila: Mapping[str, str]) -> bool:
 
 
 def _registro_de_fila(
-    seq: int, fila: Mapping[str, str], resolutor: ResolutorFlota
+    seq: int,
+    fila: Mapping[str, str],
+    resolutor: ResolutorFlota,
+    inferidas: Mapping[tuple[str, int], tuple[str, str]] | None = None,
 ) -> Registro:
-    """Traduce una fila del CSV al registro que viaja en el manifiesto."""
+    """Traduce una fila del CSV al registro que viaja en el manifiesto.
+
+    ``inferidas`` trae las fechas deducidas para las bitacoras que llegaron
+    sin ella (ver :mod:`app.airvault.fechas`). Solo se usa cuando la fila no
+    trae una fecha propia: una lectura nunca se pisa con una deduccion.
+    """
     matricula = normalizar_matricula(fila.get("matricula", ""))
     fleet, lessor, inferido = resolutor.resolver(matricula)
+    archivo = str(fila.get("file", "")).strip()
+    pagina = int(str(fila.get("page", "0")).strip() or 0)
+    fecha = str(fila.get("date", "")).strip()
+    fecha_inferida = ""
+    if not _FECHA_CSV_RE.match(fecha):
+        fecha, fecha_inferida = (inferidas or {}).get(
+            (archivo, pagina), (fecha, "")
+        )
     return Registro(
         seq=seq,
-        archivo_origen=str(fila.get("file", "")).strip(),
-        pagina_origen=int(str(fila.get("page", "0")).strip() or 0),
+        archivo_origen=archivo,
+        pagina_origen=pagina,
         matricula=matricula,
         log_number=normalizar_log_number(fila.get("log_number", "")),
-        fecha=str(fila.get("date", "")).strip(),
+        flight_number=str(fila.get("flight_number", "")).strip().upper(),
+        fecha=fecha,
+        fecha_inferida=fecha_inferida,
         fleet=fleet if matricula else "",
         lessor=lessor,
         fleet_inferido=inferido and bool(matricula),
@@ -223,11 +287,11 @@ def _registro_de_fila(
 
 
 def leer_indice_paginas(path: Path | str) -> List[dict]:
-    """Lee el indice de la entrega que escribe la corrida.
+    """Lee el indice de la entrega que escribe la ejecución.
 
     Devuelve una entrada por archivo de entrega, ``{"pdf", "paginas"}``, con
     las paginas en el orden en que estan dentro de ese archivo. Cada archivo
-    es un lote distinto en AirVault, asi que el reparto importa tanto como
+    es un batch distinto en AirVault, asi que el reparto importa tanto como
     el orden.
 
     Sin indice devuelve una lista vacia y quien llame decide si puede seguir
@@ -269,13 +333,19 @@ def registros_desde_entrega(
 ) -> List[Registro]:
     """Construye los registros siguiendo el PDF que se sube, no el CSV.
 
-    El lote de AirVault tiene una pagina por cada pagina del PDF, y el PDF
+    El batch de AirVault tiene una pagina por cada pagina del PDF, y el PDF
     lleva separadores que el CSV no tiene. Recorrer el indice en vez del
-    CSV es lo que mantiene ``seq`` igual a la pagina del lote: los
+    CSV es lo que mantiene ``seq`` igual a la pagina del batch: los
     separadores ocupan su sitio y quedan marcados para que nadie les
     escriba nada.
     """
     resolutor = resolutor or ResolutorFlota()
+    filas = list(filas)
+    # Las fechas se deducen con el CSV entero, no con las paginas de esta
+    # parte: una ejecucion repartida en varios batches sigue siendo un solo
+    # juego de libros, y las anclas de un libro pueden haber caido en otra
+    # parte.
+    inferidas = fechas_inferidas(filas)
     por_clave: Dict[tuple[str, int], Mapping[str, str]] = {}
     for fila in filas:
         archivo = str(fila.get("file", "")).strip()
@@ -306,7 +376,7 @@ def registros_desde_entrega(
                 ],
             ))
             continue
-        registros.append(_registro_de_fila(seq, fila, resolutor))
+        registros.append(_registro_de_fila(seq, fila, resolutor, inferidas))
     return registros
 
 
@@ -333,6 +403,11 @@ def valores_de_indice(
     }
     if registro.lessor:
         valores[CAMPO_LESSOR] = registro.lessor
+    if registro.flight_number:
+        # El vuelo de la bitacora, en Description. Solo cuando la lectura
+        # lo trajo: mandarlo vacio borraria lo que alguien haya escrito a
+        # mano, y este campo no es de los que el sistema controla siempre.
+        valores[CAMPO_DESCRIPCION] = registro.flight_number
     if nombre_batch:
         valores[CAMPO_BATCH_NAME] = nombre_batch
     return valores

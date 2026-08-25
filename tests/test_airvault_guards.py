@@ -69,6 +69,14 @@ def test_log_distinto_es_desalineacion():
     assert [a.codigo for a in avisos] == ["desalineado"]
 
 
+def test_una_prueba_controlada_puede_permitir_log_distinto():
+    assert verificar_alineacion(
+        registro(log="7777777"),
+        {CAMPO_LOG_NUMBER: "2287325"},
+        permitir_log_distinto=True,
+    ) == []
+
+
 def test_log_igual_no_avisa():
     assert verificar_alineacion(registro(log="2287325"),
                                 {CAMPO_LOG_NUMBER: "2287325"}) == []
@@ -82,6 +90,26 @@ def test_matricula_distinta_sin_log_remoto_avisa():
     avisos = verificar_alineacion(registro(matricula="HP-1848CMP"),
                                   {CAMPO_MATRICULA: "HP-1852CMP"})
     assert [a.codigo for a in avisos] == ["matricula_distinta"]
+
+
+def test_matricula_inicial_de_quick_upload_no_bloquea_una_amarilla():
+    avisos = verificar_alineacion(
+        registro(matricula="HP-1848CMP"),
+        {CAMPO_MATRICULA: "HP-1852CMP"},
+        estado_pagina=3,
+    )
+
+    assert avisos == []
+
+
+def test_matricula_distinta_si_bloquea_una_pagina_verde():
+    avisos = verificar_alineacion(
+        registro(matricula="HP-1848CMP"),
+        {CAMPO_MATRICULA: "HP-1852CMP"},
+        estado_pagina=0,
+    )
+
+    assert [aviso.codigo for aviso in avisos] == ["matricula_distinta"]
 
 
 def test_pagina_ya_valida_no_se_pisa():

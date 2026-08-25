@@ -8,7 +8,11 @@ casilla suelta de la fecha no decide nada.
 from __future__ import annotations
 
 from app.models.schemas import FieldResult, PageResult, Status
-from app.validation.page_status import page_status, recompute_page_status
+from app.validation.page_status import (
+    page_status,
+    ready_for_auto_index,
+    recompute_page_status,
+)
 
 
 def _field(field_id: str, value, status=Status.OK, field_type="ocr"):
@@ -94,3 +98,91 @@ def test_recompute_escribe_el_estado_en_la_pagina():
     page.status = Status.OK
     recompute_page_status(page)
     assert page.status is Status.WARNING
+
+
+def test_autoindex_rechaza_una_matricula_marcada_por_confianza_baja():
+    page = _page()
+    matricula = next(
+        field for field in page.fields if field.field_id == "matricula"
+    )
+    matricula.confidence = 0.49
+    matricula.status = Status.WARNING
+    assert page_status(page) is Status.WARNING
+    assert not ready_for_auto_index(page)
+
+
+def test_autoindex_admite_una_fecha_inferida_en_warning():
+    page = _page()
+    month = next(
+        field for field in page.fields if field.field_id == "month"
+    )
+    month.status = Status.WARNING
+    month.source = "inferred"
+    month.inference_method = "book_consensus"
+    assert page_status(page) is Status.WARNING
+    assert ready_for_auto_index(page)
+
+
+def test_autoindex_rechaza_un_log_que_no_tiene_siete_digitos():
+    page = _page()
+    log = next(field for field in page.fields if field.field_id == "log_number")
+    log.value = "321955"
+
+    assert not ready_for_auto_index(page)
+
+
+def test_autoindex_admite_alineacion_dudosa_si_los_criticos_son_firmes():
+    page = _page()
+    page.alignment_quality = "low"
+
+    assert ready_for_auto_index(page)
+
+
+def test_autoindex_rechaza_log_dudoso_aunque_tenga_siete_digitos():
+    page = _page()
+    page.alignment_quality = "low"
+    log = next(field for field in page.fields if field.field_id == "log_number")
+    log.status = Status.WARNING
+
+    assert not ready_for_auto_index(page)
+
+
+def test_autoindex_deja_que_la_fecha_se_infiera_con_el_libro_completo():
+    page = _page()
+    page.date = None
+    for field in page.fields:
+        if field.field_id in ("day", "month", "year"):
+            field.value = None
+
+    assert ready_for_auto_index(page)
+
+
+def test_autoindex_admite_consenso_fuerte_del_libro():
+    page = _page()
+    matricula = next(
+        field for field in page.fields if field.field_id == "matricula"
+    )
+    matricula.source = "book_correction"
+    matricula.votes = 3
+    matricula.confidence = 0.70
+    assert ready_for_auto_index(page)
+
+
+def test_autoindex_rechaza_inferencia_con_un_solo_voto():
+    page = _page()
+    matricula = next(
+        field for field in page.fields if field.field_id == "matricula"
+    )
+    matricula.source = "book_correction"
+    matricula.votes = 1
+    assert not ready_for_auto_index(page)
+
+
+def test_autoindex_rechaza_inferencia_antigua_sin_conteo_de_votos():
+    page = _page()
+    matricula = next(
+        field for field in page.fields if field.field_id == "matricula"
+    )
+    matricula.source = "book_correction"
+    matricula.votes = None
+    assert not ready_for_auto_index(page)

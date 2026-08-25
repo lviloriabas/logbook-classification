@@ -15,8 +15,8 @@ por núcleo el parpadeo se multiplicó por el número de procesos.
 No se puede arreglar en el origen (es código de la dependencia, y la carpeta
 portable debe poder reinstalarse), así que se corrige en el único punto que
 los cubre a todos: ``subprocess.Popen``. Los subprocesos propios que ya
-deciden su consola —``llama-server`` con ``CREATE_NO_WINDOW``, Tesseract con
-``STARTUPINFO``— se dejan intactos.
+deciden su consola (``llama-server`` con ``CREATE_NO_WINDOW``, Tesseract con
+``STARTUPINFO``) se dejan intactos.
 """
 
 from __future__ import annotations

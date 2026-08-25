@@ -1,6 +1,6 @@
-"""Estadísticas de la corrida (``stats.json``).
+"""Estadísticas de la ejecución (``stats.json``).
 
-Resume la distribución de las páginas de bitácora de la corrida: totales,
+Resume la distribución de las páginas de bitácora de la ejecución: totales,
 conteo por matrícula y por mes, discrepancias de firma y las páginas que
 no se pudieron determinar por fecha (``sf``) o por matrícula
 (``sin_matricula``).
@@ -98,7 +98,7 @@ def _stats_discrepancias(entradas: Sequence[Discrepancia]) -> dict:
 
 
 def _stats_vlm(vlm_stats: Sequence[dict]) -> dict:
-    """Bloque del verificador VLM: cuántos casos resolvió la corrida."""
+    """Bloque del verificador VLM: cuántos casos resolvió la ejecución."""
     activos = [v for v in vlm_stats if v.get("enabled")]
     modelos = sorted({v["model"] for v in activos if v.get("model")})
     desactivado = next(
@@ -159,8 +159,8 @@ def _stats_separacion(
         distribuidas += paginas
         pdfs.append({"archivo": nombre, "paginas": paginas})
     if revisar:
-        # Las bitácoras sin avión confirmado no se pierden: salen siempre en
-        # su propio PDF, así que cuentan como distribuidas.
+        # Las bitácoras cuya matrícula requiere revisión no se pierden: salen
+        # siempre en su propio PDF, así que cuentan como distribuidas.
         pdfs.append({"archivo": nombres[-1], "paginas": len(revisar)})
         distribuidas += len(revisar)
     excluidas_count = sum(
@@ -170,7 +170,9 @@ def _stats_separacion(
         and not por_revisar(ref.page)
         and (Path(ref.pdf_path).name, ref.page.page_number) in excluidas
     )
-    fuera = total_paginas - paginas_en_blanco - excluidas_count - distribuidas
+    # Las páginas en blanco forman parte de REVISAR y ya están contadas en
+    # ``distribuidas``. Restarlas otra vez produciría un total negativo.
+    fuera = total_paginas - excluidas_count - distribuidas
     return {
         "criterios": list(separar_por),
         "total_pdfs": len(pdfs),
@@ -191,11 +193,11 @@ def construir_stats(
     vlm_stats: Optional[Sequence[dict]] = None,
     pdf_paths: Optional[Sequence[Path]] = None,
 ) -> dict:
-    """Construye el diccionario de estadísticas de la corrida.
+    """Construye el diccionario de estadísticas de la ejecución.
 
     Args:
         reports: Reportes de validación (uno por bitácora procesada).
-        corrida: Nombre de la corrida (stem del CSV).
+        ejecución: Nombre de la ejecución (stem del CSV).
         separar_por: Criterios de separación usados (``avion``/``mes``);
             si se generaron PDFs se añade el bloque ``separacion`` con la
             verificación de que ninguna página queda por fuera.
@@ -250,7 +252,7 @@ def escribir_stats(
     vlm_stats: Optional[Sequence[dict]] = None,
     pdf_paths: Optional[Sequence[Path]] = None,
 ) -> Path:
-    """Escribe ``stats.json`` en la carpeta de la corrida.
+    """Escribe ``stats.json`` en la carpeta de la ejecución.
 
     Returns:
         Ruta del archivo generado (``run_dir/stats.json``).
@@ -269,7 +271,7 @@ def escribir_stats(
     output_path = run_dir / "stats.json"
     with open(output_path, "w", encoding="utf-8") as fh:
         json.dump(stats, fh, indent=2, ensure_ascii=False)
-    logger.info(f"[Stats] Estadísticas de la corrida: {output_path}")
+    logger.info(f"[Stats] Estadísticas de la ejecución: {output_path}")
     separacion = stats.get("separacion")
     if separacion and not separacion["completa"]:
         logger.warning(

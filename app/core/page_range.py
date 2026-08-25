@@ -1,10 +1,10 @@
-"""Rango de páginas aplicado al lote completo, no a cada archivo.
+"""Rango de páginas aplicado al batch completo, no a cada archivo.
 
 Los controles anteriores ("primeros N archivos" y "primeras N páginas de
 cada archivo") obligaban a razonar en dos ejes a la vez: para ver 40 páginas
 había que adivinar cuántos archivos y cuántas páginas de cada uno, y el
-resultado dependía del tamaño de cada bitácora. Aquí el lote se numera de
-corrido —igual que ya lo navega el visor de la ventana principal— y un solo
+resultado dependía del tamaño de cada bitácora. Aquí el batch se numera de
+corrido (igual que ya lo navega el visor de la ventana principal) y un solo
 rango 1-based decide qué páginas entran, sin importar en cuántos archivos
 caigan.
 
@@ -26,7 +26,7 @@ class PageRange:
 
     ``last=None`` significa "hasta la última página disponible", que es lo
     que se necesita tanto para el rango completo como para un "desde la 200
-    en adelante" sin saber cuántas páginas trae el lote.
+    en adelante" sin saber cuántas páginas trae el batch.
     """
 
     first: int = 1
@@ -39,7 +39,7 @@ class PageRange:
 
     @property
     def is_full(self) -> bool:
-        """True cuando el rango no recorta nada del lote."""
+        """True cuando el rango no recorta nada del batch."""
         return self.first <= 1 and self.last is None
 
     @property
@@ -106,9 +106,9 @@ def _positive_int(text: str) -> int:
 
 @dataclass(frozen=True)
 class FileSlice:
-    """Tramo de un PDF del lote que cae dentro del rango global."""
+    """Tramo de un PDF del batch que cae dentro del rango global."""
 
-    index: int  # posición del archivo en el lote original (0-based)
+    index: int  # posición del archivo en el batch original (0-based)
     path: Path
     pages: PageRange
     count: Optional[int] = None  # páginas del tramo, si ya se contaron
@@ -127,9 +127,9 @@ def slice_batch(
     """Reparte un rango global entre los archivos que lo contienen.
 
     Args:
-        paths: Archivos del lote, en el orden en que se numeran.
+        paths: Archivos del batch, en el orden en que se numeran.
         counts: Páginas de cada archivo, alineado con ``paths``.
-        page_range: Rango global; None procesa el lote entero.
+        page_range: Rango global; None procesa el batch entero.
 
     Returns:
         Un ``FileSlice`` por archivo que aporta al menos una página, en
@@ -137,7 +137,7 @@ def slice_batch(
     """
     selection = page_range or PageRange()
     slices: List[FileSlice] = []
-    offset = 0  # páginas del lote que quedan antes del archivo actual
+    offset = 0  # páginas del batch que quedan antes del archivo actual
     for index, (path, count) in enumerate(zip(paths, counts)):
         count = max(0, int(count))
         start = offset + 1
@@ -168,7 +168,7 @@ def slice_paths(
     """Como :func:`slice_batch`, contando las páginas de cada PDF.
 
     Con el rango completo no abre ningún archivo: devuelve tramos abiertos
-    (``last=None``) y deja que cada Pipeline resuelva el final. Así un lote
+    (``last=None``) y deja que cada Pipeline resuelva el final. Así un batch
     sin recorte no paga una pasada extra de apertura de PDFs.
     """
     selection = page_range or PageRange()

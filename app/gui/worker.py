@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # el módulo de salidas se importa dentro del hilo
 class PipelineWorker(QThread):
     """Ejecuta el pipeline de validación en un hilo separado.
 
-    Puede procesar una sola bitácora o un lote. Con un lote, los
+    Puede procesar una sola bitácora o un batch. Con un batch, los
     correctores por libro (matrícula/fecha) se aplican sobre todos los
     reportes antes de emitir ``succeeded``. Al cancelar (requestInterruption)
     se emite ``succeeded`` con los reportes ya procesados (parciales), para
@@ -63,7 +63,7 @@ class PipelineWorker(QThread):
         self._prev_total = 0
         self._progress_file = 0
         self._current_file_index = 0
-        # Archivos que el rango deja dentro; se fija al arrancar la corrida.
+        # Archivos que el rango deja dentro; se fija al arrancar la ejecución.
         self._active_paths: List[Path] = list(self.pdf_paths)
         self.reports: List[ValidationReport] = []
         self.vlm_stats: List[dict] = []
@@ -144,7 +144,7 @@ class PipelineWorker(QThread):
                     logger.info(
                         "[Perfil C] activo | estrategia=secuencial | workers=1"
                     )
-                    # El rango es del lote completo: recorta qué archivos
+                    # El rango es del batch completo: recorta qué archivos
                     # entran y con qué páginas antes de abrir ninguno.
                     slices = slice_paths(self.pdf_paths, self.page_range)
                     self._active_paths = [item.path for item in slices]
@@ -187,12 +187,19 @@ class PipelineWorker(QThread):
                         self.file_finished.emit(index + 1, report)
                         if report.cancelled:
                             break
-            correct_matricula_by_book(reports)
+            correct_matricula_by_book(
+                reports, self.config.book_matriculas_file
+            )
             correct_dates_by_book(reports)
             if self.config.verify_fleet:
                 from app.validation.fleet import verify_reports_against_fleet
 
                 verify_reports_against_fleet(reports, self.config.fleet_file)
+            from app.validation.book_corrector import learn_book_matriculas
+
+            learn_book_matriculas(
+                reports, self.config.book_matriculas_file
+            )
             self.reports = reports
             self.succeeded.emit(reports)
         except Exception as exc:  # noqa: BLE001 - la GUI muestra el error
@@ -208,7 +215,7 @@ class PipelineWorker(QThread):
 
         El total emitido solo cubre los archivos ya vistos: con el rango
         completo los tramos llegan sin recuento y esta ruta no abre los PDFs
-        para contarlos. La ventana usa el total del lote, que ya calculó antes
+        para contarlos. La ventana usa el total del batch, que ya calculó antes
         de arrancar, y este par sirve para el avance por archivo.
         """
         if self._current_file_index != self._progress_file:
@@ -227,7 +234,7 @@ class PipelineWorker(QThread):
         if self._current_file_index and self._active_paths:
             name = self._active_paths[self._current_file_index - 1].name
             prefix = (f"Archivo {self._current_file_index}/"
-                      f"{len(self._active_paths)}: {name} — ")
+                      f"{len(self._active_paths)}: {name} - ")
         self.progress.emit(self._progress_offset + done,
                            self._progress_offset + self._prev_total,
                            prefix + message)
@@ -245,7 +252,7 @@ class PreprocessWorker(QThread):
     """
 
     progress = Signal(int, int, str)
-    # (pdf, número de página, geometría) — ver ``_geometry``.
+    # (pdf, número de página, geometría); ver ``_geometry``.
     page_ready = Signal(str, int, object)
     succeeded = Signal(bool)
     failed = Signal(str)
@@ -344,7 +351,7 @@ class PreprocessWorker(QThread):
 
 
 class OutputsWorker(QThread):
-    """Genera las salidas de una corrida sin bloquear la interfaz."""
+    """Genera las salidas de una ejecución sin bloquear la interfaz."""
 
     succeeded = Signal(object)
     failed = Signal(str)
@@ -380,3 +387,52 @@ class OutputsWorker(QThread):
 
     def _on_stage(self, message: str, percent: int) -> None:
         self.progress.emit(message, percent)
+
+
+class InputScanWorker(QThread):
+    """Lee DPI y numero de paginas de la entrada, fuera del hilo de la GUI.
+
+    Abrir los PDFs de ``input/`` es lo primero que hace la ventana al
+    arrancar, y es lo que la dejaba en «no responde» nada mas aparecer: los
+    escaneos son de cientos de megas y la primera apertura arrastra ademas
+    PyMuPDF, NumPy y OpenCV, que no estan cargados todavía. Medido con ocho
+    archivos de la carpeta de trabajo, un cuarto de segundo largo con la
+    ventana ya dibujada y sin atender un solo clic.
+
+    Las dos lecturas se hacen con el mismo handle porque el rango de paginas
+    necesita el recuento y el DPI ya obligaba a abrir cada archivo.
+
+    ``generacion`` viaja de ida y vuelta en las señales: elegir otros
+    archivos mientras un recorrido esta en marcha deja dos hilos vivos, y la
+    ventana tiene que poder descartar el que ya no corresponde.
+    """
+
+    # (generacion, [(ruta, dpi, paginas)…])
+    scanned = Signal(int, object)
+
+    def __init__(
+        self, pdf_paths: List[Path], generacion: int = 0, parent=None
+    ) -> None:
+        super().__init__(parent)
+        self.pdf_paths = [Path(path) for path in pdf_paths]
+        self.generacion = int(generacion)
+
+    def run(self) -> None:
+        """Recorre la entrada y entrega lo leido de cada archivo."""
+        from app.vision.pdf_loader import PdfPageRenderer
+
+        leido: List[tuple] = []
+        for path in self.pdf_paths:
+            if self.isInterruptionRequested():
+                return
+            try:
+                with PdfPageRenderer(path) as renderer:
+                    leido.append(
+                        (path, renderer.detect_dpi(default=600),
+                         renderer.page_count())
+                    )
+            except Exception:  # noqa: BLE001 - PDF invalido, se sigue
+                logger.warning(f"No se pudo leer la entrada: {path}")
+                leido.append((path, 0, 0))
+        if not self.isInterruptionRequested():
+            self.scanned.emit(self.generacion, leido)

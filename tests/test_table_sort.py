@@ -155,7 +155,7 @@ def test_main_window_table_sorts_by_column_click():
         window._processed_template = template
         window._populate_table(reports)
         window._table_timer.stop()
-        # Mientras la tabla se llena por lotes, los clics no reordenan nada.
+        # Mientras la tabla se llena por batches, los clics no reordenan nada.
         _click(window.table, 1)
         assert window.table_sort.sorted_column == -1
         while window._table_pending:

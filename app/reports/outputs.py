@@ -1,4 +1,4 @@
-"""Generación de todas las salidas de una corrida.
+"""Generación de todas las salidas de una ejecución.
 
 Este módulo no depende de Qt. La función pública puede ejecutarse en un
 hilo de fondo sin leer ni modificar widgets de la interfaz.
@@ -47,8 +47,8 @@ class OutputOptions:
     csv_date_mode: str = CSV_DATE_SPECIFIC
     important_csv_columns: tuple[str, ...] = ()
     # Páginas por parte del PDF único. Cero deja la entrega en un solo
-    # archivo; con un tope se reparte, para que ningún lote de AirVault
-    # cargue con una corrida entera.
+    # archivo; con un tope se reparte, para que ningún batch de AirVault
+    # cargue con una ejecución entera.
     paginas_por_parte: int = 0
 
 
@@ -59,16 +59,16 @@ def complete_csv_path(csv_path: Path) -> Path:
 
 
 def run_csv_name() -> str:
-    """Nombre de corrida en el formato ``BITS <DD MON YYYY> <HH MM>.CSV``."""
+    """Nombre de ejecución en el formato ``BITS <DD MON YYYY> <HH MM>.CSV``."""
     now = datetime.now()
     stamp = now.strftime(f"%d {_MONTHS[now.month - 1]} %Y %H %M").upper()
     return f"BITS {stamp}.CSV"
 
 
 def new_run_dir(output_root: Path) -> Path:
-    """Carpeta de una corrida nueva, sin pisar ninguna anterior.
+    """Carpeta de una ejecución nueva, sin pisar ninguna anterior.
 
-    Dos corridas lanzadas dentro del mismo minuto comparten nombre, así que
+    Dos ejecuciones lanzadas dentro del mismo minuto comparten nombre, así que
     la segunda se desempata con un sufijo. La carpeta se crea aquí porque la
     línea de comandos necesita el sitio de los logs antes de procesar, y
     tiene que ser exactamente la misma carpeta donde luego se escriban las
@@ -92,7 +92,7 @@ def _clean_stale_artifacts(run_dir: Path) -> None:
     Conserva ``datos/`` (se sobreescribe), ``logs/`` y **todos los PDFs ya
     exportados**: un re-export nunca destruye una entrega anterior, sino que
     escribe copias con sufijo numérico junto a ellas. Solo se limpia lo que
-    la corrida vuelve a escribir entero (stats, recortes de auditoría).
+    la ejecución vuelve a escribir entero (stats, recortes de auditoría).
     """
     keep = {"datos", "logs"}
     for child in run_dir.iterdir():
@@ -115,24 +115,24 @@ def write_outputs(
     vlm_stats: Sequence[dict] | None = None,
     on_stage: Optional[Callable[[str, int], None]] = None,
 ) -> Path:
-    """Escribe los reportes y PDFs de una corrida completa.
+    """Escribe los reportes y PDFs de una ejecución completa.
 
     Todas las operaciones son de disco/renderizado y no deben ejecutarse en
     el hilo de la interfaz. ``on_stage`` recibe (mensaje, porcentaje 0-100)
     al avanzar de cada fase.
 
-    Si ``options.run_dir`` viene, la corrida se escribe SOBRE esa carpeta
-    (mismo nombre de CSV y mismo carpeta de corrida): es el modo re-export,
-    usado por la GUI para regenerar las salidas sin crear una corrida nueva.
-    Si no, se crea una carpeta de corrida nueva con timestamp.
+    Si ``options.run_dir`` viene, la ejecución se escribe SOBRE esa carpeta
+    (mismo nombre de CSV y mismo carpeta de ejecución): es el modo re-export,
+    usado por la GUI para regenerar las salidas sin crear una ejecución nueva.
+    Si no, se crea una carpeta de ejecución nueva con timestamp.
 
     Un re-export NO borra los PDFs ya exportados: los conserva y escribe
     los nuevos junto a ellos con sufijo numérico cuando el nombre coincide
     (``HP-1534CMP.pdf`` → ``HP-1534CMP-2.pdf``).
 
-    Con ``options.skip_pdfs`` (corrida cancelada a mitad de camino) se
+    Con ``options.skip_pdfs`` (ejecución cancelada a mitad de camino) se
     guardan solo los datos (CSV, JSON, stats) y NO se generan PDFs, para
-    que la corrida quede guardada exactamente hasta donde se canceló.
+    que la ejecución quede guardada exactamente hasta donde se canceló.
     """
 
     def stage(message: str, percent: int) -> None:
@@ -155,7 +155,7 @@ def write_outputs(
         reexport = (run_dir / "datos").is_dir()
         _clean_stale_artifacts(run_dir)
         if reexport:
-            logger.info(f"Re-export sobre la corrida existente: {run_dir}")
+            logger.info(f"Re-export sobre la ejecución existente: {run_dir}")
     else:
         run_dir = new_run_dir(output_root)
         corrida = run_dir.name
@@ -164,15 +164,13 @@ def write_outputs(
     datos_dir = run_dir / "datos"
     datos_dir.mkdir(parents=True, exist_ok=True)
 
-    from app.validation.discrepancias import clasificar_lote
+    from app.validation.discrepancias import (
+        clasificar_lote,
+        confirmadas_para_revision,
+    )
 
     entradas = clasificar_lote(reports, template)
-    excluidas: set[tuple[str, int]] = set()
-    if options.discrepancias:
-        excluidas = {
-            (Path(entrada.pdf_path).name, entrada.page_number)
-            for entrada in entradas
-        }
+    confirmadas = confirmadas_para_revision(entradas)
 
     stage("Escribiendo CSV mínimo y completo…", 10)
     csv_path = datos_dir / csv_name
@@ -186,6 +184,53 @@ def write_outputs(
     write_minimal_csv(
         full_csv_path, csv_path, options.important_csv_columns
     )
+    from app.airvault.mapping import (
+        leer_csv_corrida,
+        obligatorios_vacios_por_pagina,
+    )
+    from app.reports.organize import paginas_para_revisar
+
+    faltantes_por_pagina = obligatorios_vacios_por_pagina(
+        leer_csv_corrida(csv_path)
+    )
+    discrepancias_confirmadas = {
+        (Path(entrada.pdf_path).name, entrada.page_number)
+        for entrada in confirmadas
+    }
+    for report in reports:
+        archivo = report.source_filename
+        for page in report.pages:
+            clave = (archivo, page.page_number)
+            page.airvault_review = (
+                clave in faltantes_por_pagina
+                or clave in discrepancias_confirmadas
+                or page.airvault_discrepancy
+            )
+    if faltantes_por_pagina or discrepancias_confirmadas:
+        logger.info(
+            "[Organize] {} páginas van a REVISAR por campos obligatorios "
+            "vacíos y {} por discrepancias confirmadas",
+            len(faltantes_por_pagina),
+            len(discrepancias_confirmadas),
+        )
+
+    revisar = {
+        (Path(ref.pdf_path).name, ref.page.page_number)
+        for ref in paginas_para_revisar(reports)
+    }
+    # REVISAR tiene prioridad. Una página con datos críticos sin resolver y
+    # además una falta de firma no debe aparecer dos veces para la persona.
+    confirmadas_para_pdf = [
+        entrada
+        for entrada in confirmadas
+        if (Path(entrada.pdf_path).name, entrada.page_number) not in revisar
+    ]
+    excluidas: set[tuple[str, int]] = set()
+    if options.discrepancias:
+        excluidas = {
+            (Path(entrada.pdf_path).name, entrada.page_number)
+            for entrada in confirmadas_para_pdf
+        }
     stage("Escribiendo JSON…", 20)
     json_path = datos_dir / f"{corrida}.json"
     JsonReporter().write_consolidated(reports, json_path, corrida=corrida)
@@ -220,17 +265,20 @@ def write_outputs(
 
     separar = list(options.separar_por) or None
     pdf_unico = options.un_solo_pdf or not separar
-    if (options.discrepancias and entradas and not skip_pdfs
+    if (options.discrepancias and confirmadas_para_pdf and not skip_pdfs
             and not pdf_unico):
         stage("Generando discrepancias.pdf…", 45)
         from app.reports.organize import escribir_pdf_discrepancias
 
         escribir_pdf_discrepancias(
-            entradas, template, run_dir, dpi=options.dpi
+            confirmadas_para_pdf, template, run_dir, dpi=options.dpi
         )
-    elif (options.discrepancias and not entradas and not skip_pdfs
+    elif (options.discrepancias and not confirmadas_para_pdf and not skip_pdfs
           and not pdf_unico):
-        logger.info("No hay discrepancias; no se genera discrepancias.pdf")
+        logger.info(
+            "No hay ausencias de firma confirmadas; no se genera "
+            "discrepancias.pdf"
+        )
 
     if skip_pdfs:
         pdf_paths: list[Path] = []
@@ -293,7 +341,7 @@ def write_outputs(
         vlm_stats=vlm_stats,
         pdf_paths=pdf_paths,
     )
-    logger.info(f"Stats de la corrida: {stats_path}")
+    logger.info(f"Stats de la ejecución: {stats_path}")
     stage("Finalizando…", 100)
     logger.info(f"Outputs generados en: {run_dir}")
 

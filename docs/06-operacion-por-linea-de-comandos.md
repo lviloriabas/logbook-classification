@@ -10,7 +10,7 @@ portable\python312\tools\python.exe run_cli.py
 
 Sin opciones de entrada, el programa procesa los PDF situados directamente en `input/`, ordenados por nombre. No busca en subcarpetas.
 
-El proceso devuelve código `0` cuando termina correctamente y `1` ante una falla controlada de la corrida. `argparse` devuelve `2` si una opción o un argumento no son válidos.
+El proceso devuelve código `0` cuando termina correctamente y `1` ante una falla controlada de la ejecución. `argparse` devuelve `2` si una opción o un argumento no son válidos.
 
 ## 6.2 Configuración predeterminada
 
@@ -39,7 +39,7 @@ La CLI no mueve los PDF terminados a `input/processed/`.
 | `--template ARCHIVO` | Define la plantilla JSON. |
 | `--output-dir CARPETA` | Define la raíz de resultados. Valor inicial: `output`. |
 | `--dpi N` | Define el DPI máximo de página. Valor inicial: `150`. |
-| `--pages RANGO` | Limita páginas sobre la numeración global del lote. |
+| `--pages RANGO` | Limita páginas sobre la numeración global del batch. |
 | `--debug` | Genera `debug.pdf` con páginas fuente limpias. |
 | `--reference-page N` | Selecciona la página de referencia. Valor inicial: `1`. |
 | `--threads N`, `--cpu-threads N` | Define el presupuesto total de hilos de CPU. |
@@ -114,7 +114,7 @@ Auditar firmas en un tramo pequeño:
 portable\python312\tools\python.exe run_cli.py --pages 1-10 --recortes-firmas
 ```
 
-## 6.6 Información durante la corrida
+## 6.6 Información durante la ejecución
 
 La terminal informa:
 
@@ -127,7 +127,7 @@ La terminal informa:
 - rutas finales de CSV, JSON, estadísticas y PDF;
 - tiempo total.
 
-Use `--verbose` cuando deba diagnosticar una falla. El registro completo se conserva en `logs/` dentro de la carpeta de la corrida.
+Use `--verbose` cuando deba diagnosticar una falla. El registro completo se conserva en `logs/` dentro de la carpeta de la ejecución.
 
 ## 6.7 Diferencias frente a la GUI
 
@@ -139,7 +139,7 @@ Use `--verbose` cuando deba diagnosticar una falla. El registro completo se cons
 | Reserva para interfaz | Un hilo, salvo cambio del operador | No aplica |
 | Cancelación controlada | Sí | No |
 | Preprocesamiento visual | Sí | No |
-| Archivo a `input/processed/` | Solo PDF situados directamente en `input/`, tras una corrida y exportación completas | No |
+| Archivo a `input/processed/` | Solo PDF situados directamente en `input/`, tras una ejecución y exportación completas | No |
 | Recortes de firmas | No | Sí |
 
 Ambas superficies aplican el mismo núcleo, los mismos correctores y el mismo generador de salidas.

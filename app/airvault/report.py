@@ -14,6 +14,7 @@ from typing import Sequence, Tuple
 
 from app.airvault.config import (
     CAMPO_AUDIT_STATUS,
+    CAMPO_DESCRIPCION,
     CAMPO_DOC_TYPE,
     CAMPO_END_DATE,
     CAMPO_FLEET,
@@ -25,10 +26,11 @@ from app.airvault.indexer import Plan
 COLUMNAS = (
     "pagina_lote", "seq", "archivo_origen", "pagina_origen",
     "doc_type", "matricula", "fleet", "fleet_inferido", "log_number",
-    "audit_status", "end_date", "ya_indexada", "accion", "avisos",
+    "vuelo", "audit_status", "end_date", "fecha_inferida", "ya_indexada",
+    "accion", "avisos",
 )
 
-# Con la corrida repartida en varios lotes, saber en cual cae cada pagina
+# Con la ejecución repartida en varios batches, saber en cual cae cada pagina
 # es lo primero que hace falta para ir a mirarla.
 COLUMNAS_CON_LOTE = ("lote",) + COLUMNAS
 
@@ -42,7 +44,8 @@ def _lotes(partes: Sequence[Tuple[str, "Plan"]]) -> str:
 def _resumen_sumado(partes: Sequence[Tuple[str, "Plan"]]) -> dict:
     """Suma los resumenes de todas las partes."""
     total: dict = {"total": 0, "escribibles": 0, "bloqueadas": 0,
-                   "separadores": 0, "avisos_globales": 0}
+                   "separadores": 0, "avisos_globales": 0,
+                   "fechas_inferidas": 0}
     for _nombre, plan in partes:
         for clave, valor in plan.resumen().items():
             total[clave] = total.get(clave, 0) + valor
@@ -62,8 +65,12 @@ def _fila(entrada) -> dict:
         "fleet": valores.get(CAMPO_FLEET, ""),
         "fleet_inferido": "si" if registro.fleet_inferido else "",
         "log_number": valores.get(CAMPO_LOG_NUMBER, ""),
+        "vuelo": valores.get(CAMPO_DESCRIPCION, ""),
         "audit_status": valores.get(CAMPO_AUDIT_STATUS, ""),
         "end_date": valores.get(CAMPO_END_DATE, ""),
+        # Como se dedujo la fecha cuando la bitacora no la trajo leida.
+        # Vacio es lo normal: la fecha salio de la pagina.
+        "fecha_inferida": registro.fecha_inferida,
         "ya_indexada": "si" if entrada.ya_indexada else "",
         "accion": (
             "separador" if registro.es_separador
@@ -84,8 +91,8 @@ def escribir_csv_de_partes(
 ) -> Path:
     """Vuelca a un solo CSV lo que se escribiria en todas las partes.
 
-    Una corrida repartida son varios lotes, pero se aprueba de una vez: el
-    reporte tiene que dejar ver la corrida entera y no obligar a abrir cinco
+    Una ejecución repartida son varios batches, pero se aprueba de una vez: el
+    reporte tiene que dejar ver la ejecución entera y no obligar a abrir cinco
     archivos para saber que se va a escribir.
     """
     ruta = Path(destino)
@@ -128,7 +135,7 @@ def escribir_html_de_partes(
             propio = plan.resumen()
             filas.append(
                 f'<tr class="cabecera"><td colspan="{len(columnas)}">'
-                f'{html.escape(nombre or plan.batch_id)} — '
+                f'{html.escape(nombre or plan.batch_id)}: '
                 f'{propio["total"]} paginas, {propio["escribibles"]} se '
                 f'escribirian, {propio["bloqueadas"]} bloqueadas'
                 f'</td></tr>'
@@ -173,6 +180,7 @@ def escribir_html_de_partes(
  <span>Se escribirian: <b>{resumen['escribibles']}</b></span>
  <span>Bloqueadas: <b>{resumen['bloqueadas']}</b></span>
  <span>Separadores: <b>{resumen['separadores']}</b></span>
+ <span>Fecha deducida: <b>{resumen['fechas_inferidas']}</b></span>
 </div>
 <table><thead><tr>{encabezados}</tr></thead>
 <tbody>{''.join(filas)}</tbody></table>
@@ -188,12 +196,12 @@ def resumen_texto(plan: Plan) -> str:
 
 
 def resumen_texto_de_partes(partes: Sequence[Tuple[str, Plan]]) -> str:
-    """Resumen corto de la corrida entera, parte por parte."""
+    """Resumen corto de la ejecución entera, parte por parte."""
     datos = _resumen_sumado(partes)
     cabeza = (
-        f"{len(partes)} lotes: {datos['total']} paginas"
+        f"{len(partes)} batches: {datos['total']} paginas"
         if len(partes) > 1
-        else f"Lote {_lotes(partes)}: {datos['total']} paginas"
+        else f"Batch {_lotes(partes)}: {datos['total']} paginas"
     )
     lineas = [
         cabeza,
@@ -201,6 +209,8 @@ def resumen_texto_de_partes(partes: Sequence[Tuple[str, Plan]]) -> str:
         f"  bloqueadas:     {datos['bloqueadas']}",
         f"  separadores:    {datos['separadores']}",
     ]
+    if datos["fechas_inferidas"]:
+        lineas.append(f"  fecha deducida: {datos['fechas_inferidas']}")
     motivos: dict[str, int] = {}
     for _nombre, plan in partes:
         for entrada in plan.bloqueadas:

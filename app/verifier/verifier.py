@@ -37,7 +37,7 @@ class VlmVerifier:
         config: app.core.config.AppConfig (vlm_enabled, vlm_max_crops,
             vlm_timeout, vlm_threads).
         available: True si el servidor quedó listo.
-        crops_used: Número de recortes consultados en esta corrida.
+        crops_used: Número de recortes consultados en esta ejecución.
     """
 
     def __init__(self, config: AppConfig) -> None:
@@ -76,7 +76,7 @@ class VlmVerifier:
         return self.available
 
     def shutdown(self) -> None:
-        """Detiene el servidor (entre corridas del GUI)."""
+        """Detiene el servidor (entre ejecuciones del GUI)."""
         if self._server is not None:
             self._server.stop()
         self.available = False

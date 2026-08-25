@@ -1,6 +1,6 @@
 # 3. Proceso de datos
 
-## 3.1 Planificación del lote
+## 3.1 Planificación del batch
 
 El sistema ordena los PDF por nombre y convierte el rango global en tramos por archivo. Cada tramo conserva el número de página real del documento fuente. Los archivos se abren brevemente para contar sus páginas; uno fuera del rango no pasa al OCR.
 
@@ -17,7 +17,7 @@ La calibración prepara una referencia por documento:
 5. prepara la transformación común;
 6. cuando una función activa lo requiere y hay tres páginas o más, estima el fondo impreso repetido.
 
-La alineación usa características ORB y una transformación robusta calculada con RANSAC. AKAZE y correlación de fase sirven como respaldo. Las transformaciones confiables se estabilizan con la mediana de páginas vecinas. Si no se alcanza la calidad mínima, la página continúa sin forzar una transformación dudosa y queda marcada para revisión.
+La alineación usa características ORB y una transformación robusta calculada con RANSAC. AKAZE y correlación de fase sirven como respaldo. Las transformaciones confiables se estabilizan con la mediana de páginas vecinas. Si no se alcanza la calidad mínima, la página continúa sin forzar una transformación dudosa. Esa calidad no la envía por sí sola a revisión: solo se aparta cuando matrícula o `log_number` también quedan sin confirmar.
 
 El fondo impreso puede servir como evidencia para casillas y geometría de fecha. La plantilla y la configuración de producción actuales no lo restan del OCR. El motor conserva el escaneo alineado original para no borrar escritura repetida legítima.
 
@@ -36,7 +36,7 @@ La secuencia de página es la siguiente:
 9. Combinación de día, mes y año.
 10. Aplicación de reglas y cálculo del estado.
 
-Una página en blanco no pasa por la lectura completa. Permanece registrada en CSV, JSON y estadísticas, pero no se incorpora a los PDF organizados.
+Una página en blanco no pasa por la lectura completa. Permanece registrada en CSV, JSON y estadísticas y se incorpora a **REVISAR**, para que la ausencia total de campos quede visible antes de cerrar la ejecución.
 
 ## 3.4 Lectura de texto
 
@@ -119,7 +119,9 @@ Después de leer todos los PDF, el sistema agrupa las páginas por los cinco pri
 
 Cada libro debe corresponder a una sola aeronave. El corrector vota cada posición de la matrícula con las lecturas del libro y pondera confianza y calidad. El bloque de cuatro dígitos debe corresponder a una lectura observada. El sufijo `CMP` o `WWP` se vota por separado, por lo que la combinación final puede no haber aparecido completa en una sola página.
 
-La matrícula ganadora completa o corrige las páginas del libro. El valor anterior permanece en alternativas o comentarios para auditoría. Esta corrección queda aceptada en el estado del campo y se distingue mediante `source=book_correction`. Si el libro no aporta una lectura utilizable, la matrícula queda sin resolver.
+La matrícula ganadora completa o corrige las páginas del libro. El valor anterior permanece en alternativas o comentarios para auditoría y la inferencia se distingue mediante `source=book_correction`. Una página reparada puede seguir al indexado automático cuando la respaldan por lo menos dos lecturas independientes del libro; el mismo consenso puede confirmar una lectura coincidente que estaba marcada por confianza baja, sin cambiar su valor. Si la propia página había producido otra matrícula canónica, la ganadora se conserva como inferencia pero el campo queda en `WARNING`: esa contradicción puede significar que también se leyó mal el `log_number`, por lo que la página va a **REVISAR** y no abre un separador ajeno. Si el libro no aporta una lectura utilizable, la matrícula queda sin resolver.
+
+Los consensos fuertes se recuerdan entre ejecuciones en `book_matriculas.json`. El archivo guarda solamente pares compactos de clave de libro y matrícula, por ejemplo `"21473A":"HP-1534CMP"`; no contiene páginas, imágenes ni historial. Una asociación previa puede resolver una página futura del mismo libro. Nunca se reemplaza automáticamente si un consenso fuerte nuevo la contradice: el conflicto queda en revisión.
 
 ### Fecha
 
@@ -140,26 +142,26 @@ Una inferencia queda identificada como tal. Un conflicto no se oculta; el campo 
 Si la verificación está activa, el sistema compara cada matrícula canónica con `fleet.json`.
 
 - Si la matrícula existe, la conserva.
-- Si no existe y hay un único avión más parecido, la reclasifica y conserva la lectura original como alternativa.
+- Si no existe y hay un único avión más parecido, la reclasifica, conserva la lectura original como alternativa y envía la página a **REVISAR**; el parecido por sí solo no basta para colocarla bajo ese separador.
 - Si hay empate o la lectura no permite comparación, elimina la asignación y envía la página a **REVISAR**.
 
 Si el archivo no existe, está vacío o no aporta matrículas válidas, el sistema registra una advertencia y deja las lecturas sin cambios.
 
-La comparación pondera las confusiones habituales entre dígitos manuscritos y el sufijo. No aplica una distancia máxima: si existe un único candidato, ese candidato gana. Toda reclasificación queda en `WARNING` y registra su origen; por esto es indispensable que el catálogo esté completo.
+La comparación pondera las confusiones habituales entre dígitos manuscritos y el sufijo. No aplica una distancia máxima: si existe un único candidato, ese candidato queda como propuesta. Toda reclasificación queda en `WARNING`, registra su origen y se revisa manualmente; por esto es indispensable que el catálogo esté completo.
 
 ## 3.10 Duplicados y discrepancias
 
-El sistema marca `dup=true` cuando un `log_number` ya apareció antes en el lote.
+El sistema marca `dup=true` cuando un `log_number` ya apareció antes en el batch.
 
 La clasificación de firmas determina el tipo de entrada:
 
 | Tipo | Evidencia | Condición esperada |
 |---|---|---|
 | Vuelo | Licencia de técnico ausente con confianza suficiente. | Piloto, capitán y licencia de capitán presentes. |
-| Mantenimiento | Licencia de técnico presente con confianza suficiente. | Piloto y técnico presentes; capitán y licencia de capitán ausentes. |
+| Mantenimiento | Licencia de técnico presente con confianza suficiente. | Piloto y técnico presentes; los campos de capitán no deciden. |
 | Incierto | Licencia de técnico no concluyente. | Se revisan la licencia y las anomalías comunes a ambos tipos, sin forzar una clasificación. |
 
-Un incumplimiento firme —firma requerida ausente o firma prohibida presente— se registra en la categoría confirmada histórica `missing`. Una lectura débil o `unclear` se clasifica como `uncertain`. La página recibe `disc=true` en ambos casos y conserva la razón exacta.
+Una firma requerida cuya ausencia quedó confirmada se registra en la categoría histórica `missing` y se aparta para revisión. Una lectura débil o `unclear` se clasifica como `uncertain`, conserva el flujo automático y no se presenta como una falta. La página recibe `disc=true` en ambos casos y conserva la razón exacta para auditoría.
 
 ## 3.11 Paralelismo y orden
 
@@ -179,4 +181,4 @@ Cada campo conserva:
 - método de inferencia;
 - alternativas consideradas.
 
-Fuentes habituales: `ocr`, `date_cells`, `book_correction`, `fleet_validation`, `ocr_fallback`, `vlm` e `inferred`. El JSON consolidado conserva estos datos para auditoría.
+Fuentes habituales: `ocr`, `date_cells`, `book_correction`, `book_registry`, `fleet_validation`, `ocr_fallback`, `vlm` e `inferred`. El JSON consolidado conserva estos datos para auditoría.

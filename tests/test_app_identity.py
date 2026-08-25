@@ -8,6 +8,7 @@ from app.utils.app_identity import (
     ICON_BIG,
     ICON_SMALL,
     WM_SETICON,
+    set_windows_process_taskbar_identity,
     set_windows_taskbar_icon,
 )
 
@@ -15,6 +16,34 @@ from app.utils.app_identity import (
 class _Window:
     def winId(self) -> int:
         return 12345
+
+
+def test_each_windows_process_gets_its_own_taskbar_group():
+    with patch("sys.platform", "win32"), patch(
+        "os.getpid", return_value=4321
+    ), patch("ctypes.windll", create=True) as windll:
+        windll.shell32.SetCurrentProcessExplicitAppUserModelID.return_value = 0
+
+        app_id = set_windows_process_taskbar_identity()
+
+    assert app_id == "BITS.LogbookClassification.Instance.4321"
+    windll.shell32.SetCurrentProcessExplicitAppUserModelID.assert_called_once_with(
+        app_id
+    )
+
+
+def test_process_taskbar_identity_is_a_safe_noop_outside_windows():
+    with patch("sys.platform", "linux"):
+        assert set_windows_process_taskbar_identity() is None
+
+
+def test_process_taskbar_identity_reports_native_failure():
+    with patch("sys.platform", "win32"), patch(
+        "ctypes.windll", create=True
+    ) as windll:
+        windll.shell32.SetCurrentProcessExplicitAppUserModelID.return_value = -1
+
+        assert set_windows_process_taskbar_identity() is None
 
 
 def test_installs_big_and_small_icons_on_the_native_window(tmp_path):

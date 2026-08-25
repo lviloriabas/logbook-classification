@@ -40,7 +40,7 @@ def _until(app, condition, timeout: float = 10.0) -> bool:
 
 
 def test_closing_with_work_in_flight_stops_it_instead_of_destroying_the_thread():
-    """Cerrar durante una corrida mataba el programa (0xC0000409).
+    """Cerrar durante una ejecución mataba el programa (0xC0000409).
 
     Qt aborta el proceso si se destruye un ``QThread`` en marcha, y el cierre
     no detenía ni el OCR, ni el preprocesado, ni la generación de salidas.
@@ -107,7 +107,7 @@ def test_the_table_chunk_is_a_budget_of_cells_not_of_rows():
     """Con presupuesto en filas, un CSV ancho bloqueaba medio segundo por tramo.
 
     El costo de llenar la tabla es por celda, así que 400 filas cuestan lo
-    mismo que 34.000 celdas cuando la corrida trae 85 columnas.
+    mismo que 34.000 celdas cuando la ejecución trae 85 columnas.
     """
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
@@ -120,7 +120,7 @@ def test_the_table_chunk_is_a_budget_of_cells_not_of_rows():
     assert narrow * 3 <= _TABLE_CELL_CHUNK
     assert wide * 85 <= _TABLE_CELL_CHUNK
     # Cuantas más columnas, menos filas por tramo: el tiempo de cada uno es el
-    # mismo tenga la corrida tres columnas o noventa.
+    # mismo tenga la ejecución tres columnas o noventa.
     assert narrow > wide >= 1
     window.close()
     app.processEvents()
@@ -129,7 +129,7 @@ def test_the_table_chunk_is_a_budget_of_cells_not_of_rows():
 def test_the_preview_reuses_the_page_counts_of_the_dpi_pass(
     tmp_path: Path, monkeypatch
 ):
-    """Contar las páginas otra vez abría el lote entero por segunda vez."""
+    """Contar las páginas otra vez abría el batch entero por segunda vez."""
     app = QApplication.instance() or QApplication([])
     from app.vision import pdf_loader
 
@@ -147,7 +147,7 @@ def test_the_preview_reuses_the_page_counts_of_the_dpi_pass(
     assert opened == []
 
     # Sin recuento previo sí se cuenta, que es lo que hace el visor de una
-    # corrida ya procesada.
+    # ejecución ya procesada.
     window._set_preview_documents([pdf])
 
     assert window._preview_document_counts == [5]

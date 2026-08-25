@@ -17,15 +17,22 @@ ensure_portable_env()
 os.chdir(_ROOT)
 
 from app.utils.logging import setup_logging
-from app.utils.app_identity import set_windows_taskbar_icon
+from app.utils.app_identity import (
+    set_windows_process_taskbar_identity,
+    set_windows_taskbar_icon,
+)
 
 
 def main() -> int:
+    # Antes de que Qt cree ninguna ventana nativa: cada proceso de la GUI
+    # principal debe ocupar su propio item, aunque Windows combine botones.
+    set_windows_process_taskbar_identity()
     setup_logging(Path("output") / "logs")
     try:
         from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QApplication
         from app.gui.main_window import MainWindow
+        from app.gui.text_copy import install_text_copy_support
     except ImportError as exc:
         print("PySide6 no está instalado. Ejecute:\n"
               "  python -m pip install --user -r requirements.txt",
@@ -42,6 +49,7 @@ def main() -> int:
     app.setApplicationName("Logbook Classification")
     app.setApplicationDisplayName("Logbook Classification")
     app.setOrganizationName("BITS")
+    install_text_copy_support(app)
     app_icon = QIcon(str(icon))
     app.setWindowIcon(app_icon)
     window = MainWindow()
