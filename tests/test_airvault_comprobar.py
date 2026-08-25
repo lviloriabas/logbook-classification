@@ -753,6 +753,13 @@ def _trabajos_principal_division_y_revisar(tmp_path):
         )
         trabajo.manifiesto.solo_subir = nombre.endswith("REVISAR")
         trabajo.manifiesto.lotes_previos = ["003VIEJO"]
+        trabajo.manifiesto.parte = indice
+        # Cada parte se lleva sus propias bitacoras, como en una entrega
+        # repartida de verdad. Compartirlas seria un batch subido dos veces,
+        # que es justo lo que la guarda de reparto no deja mandar.
+        for registro in trabajo.manifiesto.registros:
+            if not registro.es_separador:
+                registro.archivo_origen = f"Image_{indice:03d}.pdf"
         trabajo.guardar()
         trabajos.append(trabajo)
     return trabajos

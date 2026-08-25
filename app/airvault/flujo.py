@@ -20,7 +20,9 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    Callable, Collection, Dict, List, Mapping, Optional, Sequence, Tuple,
+)
 
 from loguru import logger
 
@@ -320,6 +322,7 @@ def _pdf_de_carga(
 def _partir_paginas_por_seccion(
     paginas: Sequence[dict],
     limite: int,
+    seleccion: Optional[Sequence[int]] = None,
 ) -> List[List[int]]:
     """Índices de páginas para batches del tamaño exacto que se pidió.
 
@@ -332,10 +335,18 @@ def _partir_paginas_por_seccion(
     batches. Cuando eso pasa, el batch siguiente abre con una copia de su
     separador —que ocupa una de sus páginas— para que ninguno empiece con
     bitácoras huérfanas.
+
+    ``seleccion`` acota qué páginas del PDF entran en el reparto, en el
+    orden en que van a viajar. Sirve para rellenar los huecos que dejaron
+    batches ya subidos: el separador que encabeza cada tramo se busca en el
+    PDF completo, así que se repite aunque su propia página se quedara en
+    otro batch.
     """
-    total = len(paginas)
-    if limite <= 0 or total <= limite:
-        return [list(range(total))]
+    orden = (
+        list(seleccion) if seleccion is not None else list(range(len(paginas)))
+    )
+    if not orden:
+        return []
 
     # Separador que encabeza la sección de cada página. Una página que es
     # separador se encabeza a sí misma, así que empezar justo en ella no
@@ -347,22 +358,53 @@ def _partir_paginas_por_seccion(
             vigente = indice
         cabeceras.append(vigente)
 
+    # Sin límite va todo en un tramo, que es como se pide «no repartir».
+    tramo = limite if limite > 0 else len(orden) + 1
     partes: List[List[int]] = []
     cursor = 0
-    while cursor < total:
-        cabecera = cabeceras[cursor]
-        repetir = cabecera is not None and cabecera != cursor
-        if repetir and limite < 2:
+    while cursor < len(orden):
+        cabecera = cabeceras[orden[cursor]]
+        repetir = cabecera is not None and cabecera != orden[cursor]
+        if repetir and tramo < 2:
             raise ErrorDeCorrida(
                 "El límite de una página no permite repetir el separador "
                 "junto con una bitácora; elija al menos 2 páginas por batch"
             )
         actual = [cabecera] if repetir else []
-        fin = min(total, cursor + limite - len(actual))
-        actual.extend(range(cursor, fin))
+        fin = min(len(orden), cursor + tramo - len(actual))
+        actual.extend(orden[cursor:fin])
         partes.append(actual)
         cursor = fin
     return partes
+
+
+def _seleccion_pendiente(
+    paginas: Sequence[dict],
+    ya_cubiertas: Collection[Tuple[str, int]],
+) -> List[int]:
+    """Paginas de esta parte que ningun batch comprometido se llevo aun.
+
+    Un separador entra cuando su seccion conserva alguna bitacora pendiente.
+    Si la seccion entera ya viajo, sobra: nadie quedaria detras de el.
+    """
+    if not ya_cubiertas:
+        return list(range(len(paginas)))
+    pendiente_por_seccion: List[bool] = [False] * len(paginas)
+    cabecera: Optional[int] = None
+    for indice, pagina in enumerate(paginas):
+        if pagina.get("separador"):
+            cabecera = indice
+            continue
+        clave = clave_de_pagina(pagina)
+        if clave is not None and clave in ya_cubiertas:
+            continue
+        pendiente_por_seccion[indice] = True
+        if cabecera is not None:
+            pendiente_por_seccion[cabecera] = True
+    return [
+        indice for indice, pendiente in enumerate(pendiente_por_seccion)
+        if pendiente
+    ]
 
 
 def partes_para_airvault(
@@ -371,6 +413,8 @@ def partes_para_airvault(
     paginas_por_batch: int | None = None,
     avisar: Optional[Aviso] = None,
     compresion: bool = False,
+    ya_cubiertas: Collection[Tuple[str, int]] = (),
+    numeracion_desde: Optional[Mapping[bool, int]] = None,
 ) -> List[ParteDeEntrega]:
     """Acota los PDF que recibira Quick Upload sin tocar la entrega original.
 
@@ -381,6 +425,11 @@ def partes_para_airvault(
     tramos se copian desde ese PDF comprimido sin modificar la entrega
     original.
     Automaticos y REVISAR se numeran por separado.
+
+    ``ya_cubiertas`` son las bitacoras que ya viajaron en batches que estan
+    en AirVault: se quedan fuera del reparto para que no suban dos veces.
+    ``numeracion_desde`` dice cuantas partes de cada clase existen ya, de
+    modo que las nuevas sigan la cuenta en vez de repetir sus nombres.
     """
     try:
         # Sin preferencia explícita no se reparte: quien llama solo para
@@ -397,7 +446,17 @@ def partes_para_airvault(
     preparadas = 0
     for numero_origen, parte in enumerate(partes, start=1):
         cantidad = len(parte.paginas)
-        necesita_comprobar = compresion or (limite > 0 and cantidad > limite)
+        completa = list(range(cantidad))
+        seleccion = _seleccion_pendiente(parte.paginas, ya_cubiertas)
+        if not seleccion:
+            # Todas sus bitacoras viajaron ya en batches que estan en
+            # AirVault. Ni se comprime ni se corta: no queda nada que subir.
+            continue
+        necesita_comprobar = (
+            compresion
+            or (limite > 0 and cantidad > limite)
+            or seleccion != completa
+        )
         if necesita_comprobar:
             paginas_pdf = _paginas_del_pdf(parte.pdf)
             if paginas_pdf != cantidad:
@@ -418,17 +477,19 @@ def partes_para_airvault(
                 avisar=avisar,
             )
 
-        indices_por_batch = _partir_paginas_por_seccion(parte.paginas, limite)
+        indices_por_batch = _partir_paginas_por_seccion(
+            parte.paginas, limite, seleccion
+        )
         for indices in indices_por_batch:
             if avisar is not None:
                 avisar(
-                    f"Preparando batches de hasta {limite} páginas",
+                    f"Preparando batches de {limite} páginas",
                     preparadas,
                     total_paginas,
                 )
-            if len(indices) == cantidad and not compresion:
+            if indices == completa and not compresion:
                 pdf = parte.pdf
-            elif len(indices) == cantidad and compresion:
+            elif indices == completa and compresion:
                 pdf = fuente_pdf
             else:
                 pdf = _pdf_de_carga(
@@ -448,14 +509,18 @@ def partes_para_airvault(
             )
             preparadas += len(indices)
 
+    previas = dict(numeracion_desde or {})
     resultado: List[ParteDeEntrega] = []
     for revisar in (False, True):
         propias = [p for p in crudas if p[2] is revisar]
-        for indice, (pdf, paginas, _revisar) in enumerate(propias, start=1):
+        ya_hechas = max(0, int(previas.get(revisar, 0)))
+        for indice, (pdf, paginas, _revisar) in enumerate(
+            propias, start=ya_hechas + 1
+        ):
             resultado.append(
                 ParteDeEntrega(
                     indice=indice,
-                    total=len(propias),
+                    total=len(propias) + ya_hechas,
                     pdf=pdf,
                     paginas=paginas,
                     revisar=revisar,
@@ -1364,6 +1429,115 @@ class Trabajo:
 # ── la ejecución entera, parte por parte ─────────────────────────────
 
 
+# ── que bitacoras cubre ya cada batch ──────────────────────────────
+#
+# Cambiar el reparto de una entrega que ya tiene batches en AirVault es la
+# unica forma de duplicar o perder una bitacora sin que nadie se entere: los
+# batches viejos siguen ahi con sus paginas y el reparto nuevo no sabe de
+# ellos. Todo lo que decide que se conserva y que se vuelve a repartir sale
+# de aqui, de la identidad estable de cada bitacora en la entrega:
+# el archivo del que salio y su pagina dentro de el.
+
+
+def clave_de_pagina(entrada: Mapping[str, object]) -> Optional[Tuple[str, int]]:
+    """Identidad de una pagina del indice, o ``None`` si es un separador."""
+    if str(entrada.get("separador", "") or "").strip():
+        return None
+    archivo = str(entrada.get("archivo", "") or "").strip()
+    try:
+        pagina = int(str(entrada.get("pagina", 0)))
+    except (TypeError, ValueError):
+        return None
+    if not archivo or pagina <= 0:
+        return None
+    return (archivo.casefold(), pagina)
+
+
+def paginas_cubiertas(manifiesto: Manifiesto) -> set[Tuple[str, int]]:
+    """Bitacoras de la entrega que este manifiesto se lleva a su batch."""
+    return {
+        (registro.archivo_origen.casefold(), registro.pagina_origen)
+        for registro in manifiesto.registros
+        if not registro.es_separador
+        and registro.archivo_origen
+        and registro.pagina_origen > 0
+    }
+
+
+def trabajo_comprometido(trabajo: "Trabajo") -> bool:
+    """Si este batch ya llego a AirVault y no se puede volver a repartir.
+
+    ``EN_CURSO`` cuenta como comprometido a proposito: Quick Upload pudo
+    aceptar el archivo y perderse la respuesta, asi que sus paginas se dan
+    por enviadas hasta que alguien lo reinicie expresamente.
+    """
+    manifiesto = trabajo.manifiesto
+    if manifiesto.batch_id:
+        return True
+    subida = manifiesto.etapas.get("subir")
+    return bool(
+        subida
+        and subida.estado
+        in (EstadoEtapa.HECHA, EstadoEtapa.OMITIDA, EstadoEtapa.EN_CURSO)
+    )
+
+
+@dataclass(frozen=True)
+class Cobertura:
+    """Como queda la entrega repartida entre los batches que ya existen."""
+
+    # Bitacoras que ya viajaron en algun batch comprometido.
+    cubiertas: set = field(default_factory=set)
+    # Bitacoras de la entrega que no estan en ningun batch comprometido.
+    # Son los huecos que hay que repartir para no perderlas.
+    huecos: List[Tuple[str, int]] = field(default_factory=list)
+    # Bitacoras que aparecen en mas de un batch comprometido, con los
+    # nombres de esos batches. Se indexarian dos veces en AirVault.
+    repetidas: Dict[Tuple[str, int], List[str]] = field(default_factory=dict)
+
+    @property
+    def completa(self) -> bool:
+        return not self.huecos and not self.repetidas
+
+
+def revisar_cobertura(
+    partes: Sequence[ParteDeEntrega],
+    trabajos: Sequence["Trabajo"],
+    solo_comprometidos: bool = True,
+) -> Cobertura:
+    """Contrasta la entrega contra los batches que ya existen.
+
+    Es la comprobacion que permite cambiar el reparto sin miedo: dice que
+    bitacoras ya estan en AirVault, cuales se quedarian fuera y cuales
+    subirian dos veces. Por defecto solo cuenta lo comprometido, que es lo
+    que ya no se puede deshacer; con ``solo_comprometidos`` en falso mide
+    tambien el reparto que aun esta solo en disco.
+    """
+    de_la_entrega = [
+        clave
+        for parte in partes
+        for clave in (clave_de_pagina(pagina) for pagina in parte.paginas)
+        if clave is not None
+    ]
+    duenos: Dict[Tuple[str, int], List[str]] = {}
+    for trabajo in trabajos:
+        if solo_comprometidos and not trabajo_comprometido(trabajo):
+            continue
+        nombre = trabajo.manifiesto.nombre_batch or str(trabajo.carpeta)
+        for clave in paginas_cubiertas(trabajo.manifiesto):
+            duenos.setdefault(clave, []).append(nombre)
+    cubiertas = set(duenos)
+    return Cobertura(
+        cubiertas=cubiertas,
+        huecos=[clave for clave in de_la_entrega if clave not in cubiertas],
+        repetidas={
+            clave: nombres
+            for clave, nombres in duenos.items()
+            if len(nombres) > 1
+        },
+    )
+
+
 def carpeta_de_parte(carpeta: Path | str, parte: ParteDeEntrega) -> Path:
     """Carpeta del trabajo de una parte dentro del trabajo de la ejecución.
 
@@ -1396,29 +1570,69 @@ def preparar_partes(
     Cada parte es un batch distinto en AirVault, con su nombre, su
     manifiesto y sus guardas. Repartirlas asi es lo que deja que una parte
     se caiga o se retome sin arrastrar a las demas.
+
+    Si la ejecución ya tenia batches y el reparto cambio —otro maximo de
+    paginas, otra compresion, u otra forma de cortar—, lo que ya esta en
+    AirVault se conserva intacto y solo se reparten las bitacoras que
+    ningun batch se llevo. Rehacer el reparto entero subiria dos veces lo
+    ya subido; ignorar el cambio dejaria fuera lo que falta.
     """
-    existentes = cargar_partes(config, carpeta, csv)
-    if existentes:
-        # Un trabajo antiguo puede tener un unico batch sin «-numero» aunque
-        # hoy el limite propuesto lo repartiera. Ese nombre ya existe en
-        # AirVault y se conserva: volver a preparar crearia otra identidad y
-        # haria desaparecer el batch correcto de la lista.
-        return existentes
+    carpeta = Path(carpeta)
     limite_paginas = (
         config.paginas_por_batch
         if paginas_por_batch is None
         else paginas_por_batch
     )
     limite_paginas = int(limite_paginas or 0)
+    entrega = comprobar_entrega(csv)
+    previos = trabajos_preparados(config, carpeta, csv)
+    if previos and _reparto_al_dia(previos, entrega, limite_paginas, compresion):
+        # El reparto de disco sigue valiendo. Se devuelve por el camino que
+        # comprueba que el juego este entero, que es el que sabe presentarlo.
+        existentes = cargar_partes(config, carpeta, csv)
+        if existentes:
+            return existentes
+
+    resolutor = resolutor or ResolutorFlota()
+    cobertura = revisar_cobertura(entrega, previos)
+    if cobertura.repetidas:
+        detalle = "; ".join(
+            f"{archivo} p.{pagina} en {' y '.join(nombres)}"
+            for (archivo, pagina), nombres in list(
+                cobertura.repetidas.items()
+            )[:3]
+        )
+        raise ErrorDeCorrida(
+            f"{len(cobertura.repetidas)} bitacoras estan en mas de un batch "
+            f"ya subido ({detalle}). No se reparte nada: hay que resolver esa "
+            "duplicidad en AirVault antes de seguir."
+        )
+
+    comprometidos = [t for t in previos if trabajo_comprometido(t)]
+    if comprometidos and avisar is not None:
+        avisar(
+            f"{len(comprometidos)} batches ya subidos se conservan; se "
+            f"reparten las {len(cobertura.huecos)} bitácoras que faltan",
+            0,
+            0,
+        )
+    # Lo que solo existe en disco se aparta antes de repartir: su carpeta
+    # puede volver a usarse, y un manifiesto huerfano se ofreceria despues
+    # como un batch pendiente de subir que ya no corresponde a nada.
+    for trabajo in previos:
+        if trabajo not in comprometidos:
+            _apartar_manifiesto(trabajo)
+
     partes = partes_para_airvault(
-        comprobar_entrega(csv),
+        entrega,
         carpeta,
         limite_paginas,
         avisar,
         compresion,
+        ya_cubiertas=cobertura.cubiertas,
+        numeracion_desde=_numeracion_ocupada(comprometidos),
     )
-    resolutor = resolutor or ResolutorFlota()
-    return [
+    nuevos = [
         Trabajo.abrir_o_preparar(
             config,
             carpeta_de_parte(carpeta, parte),
@@ -1432,6 +1646,101 @@ def preparar_partes(
         )
         for parte in partes
     ]
+    return _renumerar(_en_orden_de_parte(comprometidos + nuevos))
+
+
+def _reparto_al_dia(
+    trabajos: Sequence["Trabajo"],
+    entrega: Sequence[ParteDeEntrega],
+    limite: int,
+    compresion: bool,
+) -> bool:
+    """Si los manifiestos de disco ya son el reparto que se esta pidiendo.
+
+    No basta que coincida el maximo de paginas: la forma de cortar tambien
+    cambia entre versiones, y lo que decide es si entre todos cubren la
+    entrega entera exactamente una vez.
+
+    A un batch ya subido no se le exige el limite nuevo. Su reparto es
+    historia y no se puede deshacer, asi que seguir contandolo como
+    desfasado obligaria a reorganizar en cada llamada sin nada que cambiar.
+    """
+    for trabajo in trabajos:
+        manifiesto = trabajo.manifiesto
+        if trabajo_comprometido(trabajo):
+            continue
+        if manifiesto.paginas_por_batch not in (0, limite):
+            return False
+        if bool(manifiesto.compresion) != bool(compresion):
+            return False
+    return revisar_cobertura(entrega, trabajos, solo_comprometidos=False).completa
+
+
+def _numeracion_ocupada(
+    comprometidos: Sequence["Trabajo"],
+) -> Dict[bool, int]:
+    """Hasta que numero de parte llegan los batches que ya estan en AirVault.
+
+    Las partes nuevas siguen la cuenta desde ahi. Se toma el mayor y no la
+    cantidad: un numero que ya viajo con su nombre no se puede reutilizar
+    aunque su hueco haya quedado libre.
+    """
+    ocupada: Dict[bool, int] = {False: 0, True: 0}
+    for trabajo in comprometidos:
+        clase = bool(trabajo.manifiesto.solo_subir)
+        ocupada[clase] = max(
+            ocupada[clase], int(trabajo.manifiesto.parte or 1)
+        )
+    return ocupada
+
+
+def _apartar_manifiesto(trabajo: "Trabajo") -> None:
+    """Saca de en medio el manifiesto de un reparto que se descarta.
+
+    Se renombra en vez de borrarse: nunca llego a AirVault, asi que no hace
+    falta para nada, pero si algo saliera mal el reparto anterior sigue
+    ahi para mirarlo.
+    """
+    ruta = manifiestos.ruta_manifiesto(trabajo.carpeta)
+    if not ruta.is_file():
+        return
+    marca = datetime.now().strftime("%Y%m%d-%H%M%S")
+    destino = ruta.with_name(f"manifiesto-reemplazado-{marca}.json")
+    try:
+        os.replace(ruta, destino)
+    except OSError:
+        logger.warning("No se pudo apartar el manifiesto {}", ruta)
+
+
+def _en_orden_de_parte(trabajos: Sequence["Trabajo"]) -> List["Trabajo"]:
+    """Automaticos por numero de parte y despues los de REVISAR."""
+    return sorted(
+        trabajos,
+        key=lambda t: (
+            bool(t.manifiesto.solo_subir),
+            int(t.manifiesto.parte or 1),
+        ),
+    )
+
+
+def _renumerar(trabajos: Sequence["Trabajo"]) -> List["Trabajo"]:
+    """Deja a cada manifiesto diciendo cuantas partes tiene su clase.
+
+    El batch que ya estaba subido sigue creyendo que la entrega tenia las
+    partes del reparto anterior. Ese numero no viaja en el nombre, pero si
+    decide si el juego de manifiestos se considera completo: sin ponerlo al
+    dia, la ventana dejaria de ver los batches de la ejecucion entera.
+    """
+    for clase in (False, True):
+        suyos = [t for t in trabajos if bool(t.manifiesto.solo_subir) is clase]
+        if not suyos:
+            continue
+        total = max(int(t.manifiesto.parte or 1) for t in suyos)
+        for trabajo in suyos:
+            if trabajo.manifiesto.partes != total:
+                trabajo.manifiesto.partes = total
+                trabajo.guardar()
+    return list(trabajos)
 
 
 def _prefijo(trabajo: "Trabajo") -> str:
@@ -1446,6 +1755,49 @@ def _prefijo(trabajo: "Trabajo") -> str:
         return f"Batch {manifiesto.parte}/{manifiesto.partes}: "
     nombre = str(manifiesto.nombre_batch or "").strip()
     return f"Batch «{nombre}»: " if nombre else "Batch: "
+
+
+def _validar_sin_bitacoras_repetidas(
+    por_subir: Sequence["Trabajo"],
+    contexto: Sequence["Trabajo"] = (),
+) -> None:
+    """Impide subir una bitacora que ya viaja en otro batch.
+
+    Es la ultima red antes de Quick Upload y la unica que cubre lo
+    irreversible: una bitacora en dos batches de AirVault se indexa dos
+    veces y sale dos veces publicada. Pasa cuando el reparto se rehace
+    sobre una entrega que ya tenia batches subidos, asi que se comprueba
+    contra todas las partes de la ejecucion y no solo contra las que se
+    van a mandar ahora.
+    """
+    duenos: Dict[Tuple[str, int], str] = {}
+    claves = {str(trabajo.carpeta) for trabajo in por_subir}
+    # Primero lo que ya esta en AirVault: es lo que manda si algo choca.
+    for trabajo in contexto:
+        if str(trabajo.carpeta) in claves or not trabajo_comprometido(trabajo):
+            continue
+        nombre = trabajo.manifiesto.nombre_batch or str(trabajo.carpeta)
+        for pagina in paginas_cubiertas(trabajo.manifiesto):
+            duenos.setdefault(pagina, nombre)
+    for trabajo in por_subir:
+        nombre = trabajo.manifiesto.nombre_batch or str(trabajo.carpeta)
+        repetidas = sorted(
+            pagina for pagina in paginas_cubiertas(trabajo.manifiesto)
+            if pagina in duenos and duenos[pagina] != nombre
+        )
+        if repetidas:
+            detalle = "; ".join(
+                f"{archivo} p.{pagina} ya va en «{duenos[(archivo, pagina)]}»"
+                for archivo, pagina in repetidas[:3]
+            )
+            raise ErrorDeCorrida(
+                f"El batch «{nombre}» repite {len(repetidas)} bitacoras que "
+                f"ya viajan en otro batch ({detalle}); no se sube porque se "
+                "indexarian dos veces en AirVault. Reinicie el registro "
+                "local de la ejecucion para volver a repartirla."
+            )
+        for pagina in paginas_cubiertas(trabajo.manifiesto):
+            duenos.setdefault(pagina, nombre)
 
 
 def _validar_nombres_de_batches(trabajos: Sequence["Trabajo"]) -> None:
@@ -1498,6 +1850,7 @@ def subir_partes(
     al_finalizar_subidas: Optional[Callable[[Sequence["Trabajo"]], None]] = None,
     al_encontrar: Optional[Callable[["Trabajo", Sequence["Trabajo"]], None]] = None,
     reintentar_estancados: bool = False,
+    en_la_ejecucion: Sequence["Trabajo"] = (),
 ) -> List[Tuple["Trabajo", str]]:
     """Confirma todos los batches y sube solamente los que falten.
 
@@ -1515,8 +1868,13 @@ def subir_partes(
     instantanea de la cola tomada antes de cada subida permite reconocer el
     nombre temporal ``Empty-Batch``. Un fallo queda aislado en su trabajo: no
     impide intentar las demas partes de la ejecucion.
+
+    ``en_la_ejecucion`` son todas las partes de la entrega cuando ``trabajos``
+    es solo el subconjunto que falta por subir. Sirve para comprobar que
+    ninguna bitacora que se va a mandar viaja ya en un batch subido.
     """
     _validar_nombres_de_batches(trabajos)
+    _validar_sin_bitacoras_repetidas(trabajos, en_la_ejecucion or trabajos)
     por_subir = list(trabajos)
     if cliente is not None:
         estados = comprobar_partes(trabajos, cliente, avisar=avisar)
@@ -1858,6 +2216,39 @@ def descubrir_partes(
             al_encontrar(trabajo, trabajos)
 
 
+def trabajos_preparados(
+    config: AirVaultConfig,
+    carpeta: Path | str,
+    csv: Path | str,
+) -> List["Trabajo"]:
+    """Manifiestos de esta ejecucion que hay en la carpeta, tal como estan.
+
+    No exige que formen una entrega completa: es lo que hace falta antes de
+    volver a repartir, cuando justamente lo que se quiere saber es que hay
+    ya subido y que falta. Para presentarlos en la ventana esta
+    :func:`cargar_partes`, que si comprueba que el juego este entero.
+    """
+    carpeta = Path(carpeta)
+    carpetas = [carpeta] if manifiestos.existe(carpeta) else []
+    if carpeta.is_dir():
+        carpetas.extend(
+            hija
+            for hija in sorted(carpeta.iterdir())
+            if hija.is_dir() and manifiestos.existe(hija)
+        )
+    objetivo = Path(csv).resolve()
+    trabajos: List["Trabajo"] = []
+    for propia in carpetas:
+        try:
+            trabajo = Trabajo.cargar(config, propia)
+        except (OSError, ValueError):
+            continue
+        if not _reubicar_trabajo(trabajo, objetivo, carpeta):
+            continue
+        trabajos.append(trabajo)
+    return trabajos
+
+
 def cargar_partes(
     config: AirVaultConfig,
     carpeta: Path | str,
@@ -1877,20 +2268,7 @@ def cargar_partes(
     if not partes_originales:
         return []
     carpeta = Path(carpeta)
-    carpetas = [carpeta] if manifiestos.existe(carpeta) else []
-    if carpeta.is_dir():
-        carpetas.extend(
-            hija
-            for hija in sorted(carpeta.iterdir())
-            if hija.is_dir() and manifiestos.existe(hija)
-        )
-    objetivo = Path(csv).resolve()
-    trabajos: List["Trabajo"] = []
-    for propia in carpetas:
-        trabajo = Trabajo.cargar(config, propia)
-        if not _reubicar_trabajo(trabajo, objetivo, carpeta):
-            continue
-        trabajos.append(trabajo)
+    trabajos = trabajos_preparados(config, carpeta, csv)
     if not trabajos:
         return []
 

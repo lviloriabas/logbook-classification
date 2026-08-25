@@ -419,6 +419,7 @@ class TrabajoAirVaultWorker(QThread):
                 al_finalizar_subidas=self._notificar_subidas,
                 al_encontrar=al_encontrar,
                 reintentar_estancados=True,
+                en_la_ejecucion=trabajos,
             )
             # La escritura puede correr mientras este hilo busca las partes
             # siguientes, pero subir_partes retiene los hallazgos hasta que
@@ -901,7 +902,9 @@ class AirVaultWindow(QDialog):
             "exacta y solo el último se queda con el resto; los PDF más "
             "grandes se reparten sin modificar la entrega original. Si una "
             "aeronave queda partida, el batch siguiente abre con una copia "
-            "de su separador."
+            "de su separador. Cambiarlo en una ejecución que ya tiene "
+            "batches en AirVault conserva esos batches y vuelve a repartir "
+            "solamente las bitácoras que ninguno se llevó."
         )
         self.limite_batch_spin.valueChanged.connect(
             self._guardar_limite_batch
@@ -1417,8 +1420,10 @@ class AirVaultWindow(QDialog):
         compresiones = {t.manifiesto.compresion for t in trabajos_de_corrida}
         if len(compresiones) == 1:
             self.compresion_check.setChecked(compresiones.pop())
-        self.limite_batch_spin.setEnabled(not bool(self._trabajos))
-        self.compresion_check.setEnabled(not bool(self._trabajos))
+        # Se pueden cambiar aunque la ejecucion ya tenga batches: lo que ya
+        # esta en AirVault se conserva y solo se reparte lo que falta.
+        self.limite_batch_spin.setEnabled(self.hilo() is None)
+        self.compresion_check.setEnabled(self.hilo() is None)
         # La conexion sobrevive al cambio de ejecucion: es el mismo
         # servidor, y volver a abrirla es volver a arrancar el navegador.
         self._estado = {
@@ -1917,8 +1922,8 @@ class AirVaultWindow(QDialog):
         )
         self.lote_edit.setEnabled(activo)
         self.cookie_edit.setEnabled(activo)
-        self.limite_batch_spin.setEnabled(activo and not self._trabajos)
-        self.compresion_check.setEnabled(activo and not self._trabajos)
+        self.limite_batch_spin.setEnabled(activo)
+        self.compresion_check.setEnabled(activo)
         self.boton_comprobar.setEnabled(activo and bool(self._trabajos))
         self.boton_automatizacion.setEnabled(activo)
         self.boton_continuar.setEnabled(activo)
@@ -1993,8 +1998,6 @@ class AirVaultWindow(QDialog):
 
     def _al_subir(self, datos: dict) -> None:
         self._al_actualizar_subidas(datos)
-        self.limite_batch_spin.setEnabled(False)
-        self.compresion_check.setEnabled(False)
         cuantos = len(self._trabajos)
         lotes = "el batch" if cuantos == 1 else f"los {cuantos} batches"
         self.resumen.setText(
@@ -2244,8 +2247,6 @@ class AirVaultWindow(QDialog):
             self._trabajos = list(preparados)
             self._estados = [estado_local(t) for t in self._trabajos]
             self._pintar_lotes()
-            self.limite_batch_spin.setEnabled(False)
-            self.compresion_check.setEnabled(False)
         self.resumen.setText(mensaje)
         self.estado_label.setText("El indexado no pudo continuar")
         self._anotar(f"Se detuvo: {mensaje}")

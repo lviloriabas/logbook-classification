@@ -32,6 +32,7 @@ from app.airvault.flujo import (
     preparar_partes,
 )
 from app.airvault.guards import verificar_cantidad
+from app.airvault.mapping import leer_csv_corrida
 from app.airvault.model import EstadoEtapa
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.reports.organize import (
@@ -638,3 +639,274 @@ def test_el_reporte_muestra_los_avisos_sin_bloquear_la_escritura(tmp_path):
 def test_sin_bitacoras_sueltas_no_hay_lote_de_revisar(tmp_path):
     _csv_path, partes = corrida(tmp_path)
     assert not [a for a in partes if a.revisar]
+
+
+# ── cambiar el reparto con batches ya subidos ──────────────────────
+
+
+def _subido(trabajo, batch_id: str = ""):
+    """Deja el trabajo como si Quick Upload ya lo hubiera aceptado."""
+    trabajo.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "enviado")
+    if batch_id:
+        trabajo.manifiesto.batch_id = batch_id
+    trabajo.guardar()
+    return trabajo
+
+
+def _bitacoras_de(trabajos):
+    """Pares (archivo, pagina) de todas las bitacoras, con repeticiones."""
+    return [
+        (r.archivo_origen.casefold(), r.pagina_origen)
+        for t in trabajos for r in t.manifiesto.bitacoras()
+    ]
+
+
+def test_el_reparto_vigente_no_se_rehace(tmp_path):
+    """Volver a preparar con lo mismo devuelve los mismos manifiestos."""
+    csv_path, _partes = corrida(tmp_path)
+    primeros = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    segundos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+
+    assert [t.carpeta for t in segundos] == [t.carpeta for t in primeros]
+    assert [t.manifiesto.nombre_batch for t in segundos] == [
+        t.manifiesto.nombre_batch for t in primeros
+    ]
+
+
+def test_cambiar_el_limite_sin_haber_subido_nada_rehace_el_reparto(tmp_path):
+    """Nada llego a AirVault, asi que el reparto nuevo manda entero."""
+    csv_path, _partes = corrida(tmp_path)
+    preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    rehechos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+
+    assert [len(t.manifiesto.registros) for t in rehechos] == [4, 4, 4, 3]
+    assert all(t.manifiesto.parte == n for n, t in enumerate(rehechos, 1))
+    assert sorted(_bitacoras_de(rehechos)) == sorted(
+        set(_bitacoras_de(rehechos))
+    )
+
+
+def test_cambiar_el_limite_conserva_lo_subido_y_reparte_lo_que_falta(tmp_path):
+    """Ni se resube lo que ya esta en AirVault ni se pierde lo que falta."""
+    csv_path, _partes = corrida(tmp_path)
+    antes = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    _subido(antes[0], "003PRI")
+    cubiertas_antes = set(_bitacoras_de([antes[0]]))
+
+    despues = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+
+    # El batch que ya viajo se conserva tal cual: mismo PDF y mismo nombre.
+    conservado = despues[0]
+    assert conservado.carpeta == antes[0].carpeta
+    assert conservado.manifiesto.batch_id == "003PRI"
+    assert conservado.manifiesto.pdf_origen == antes[0].manifiesto.pdf_origen
+    assert set(_bitacoras_de([conservado])) == cubiertas_antes
+
+    # Los nuevos se reparten con el limite nuevo y no repiten nada suyo.
+    nuevos = despues[1:]
+    assert nuevos
+    assert not set(_bitacoras_de(nuevos)) & cubiertas_antes
+    assert all(len(t.manifiesto.registros) <= 4 for t in nuevos)
+
+
+def test_reorganizar_no_pierde_ni_duplica_ninguna_bitacora(tmp_path):
+    """Es la razon de ser del reparto incremental."""
+    csv_path, _partes = corrida(tmp_path)
+    antes = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    _subido(antes[0], "003PRI")
+
+    despues = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+
+    todas = _bitacoras_de(despues)
+    esperadas = {
+        (fila["file"].casefold(), int(fila["page"]))
+        for fila in leer_csv_corrida(csv_path)
+    }
+    assert len(todas) == len(set(todas)), "una bitacora quedo en dos batches"
+    assert set(todas) == esperadas, "falta o sobra alguna bitacora"
+
+
+def test_las_partes_nuevas_no_reutilizan_un_numero_ya_subido(tmp_path):
+    """Ese nombre ya existe en AirVault; repetirlo haria dos batches iguales."""
+    csv_path, _partes = corrida(tmp_path)
+    antes = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, "DP | BITS PRUEBA",
+        paginas_por_batch=5,
+    )
+    _subido(antes[0], "003PRI")
+    _subido(antes[1], "003DOS")
+
+    despues = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, "DP | BITS PRUEBA",
+        paginas_por_batch=4,
+    )
+
+    numeros = [t.manifiesto.parte for t in despues]
+    assert numeros == sorted(set(numeros))
+    assert numeros[:2] == [1, 2]
+    assert all(n > 2 for n in numeros[2:])
+    nombres = [t.manifiesto.nombre_batch for t in despues]
+    assert len(set(nombres)) == len(nombres)
+
+
+def test_el_manifiesto_descartado_no_reaparece_como_pendiente(tmp_path):
+    """Un reparto viejo en disco se ofreceria como un batch mas que subir."""
+    from app.airvault.flujo import cargar_trabajos_pendientes
+
+    csv_path, _partes = corrida(tmp_path)
+    antes = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    _subido(antes[0], "003PRI")
+    carpetas_viejas = {t.carpeta for t in antes[1:]}
+
+    despues = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+
+    pendientes = cargar_trabajos_pendientes(
+        AirVaultConfig(), tmp_path / "job"
+    )
+    vivas = {t.carpeta for t in despues}
+    assert not (
+        {t.carpeta for t in pendientes} - vivas
+    ), "quedo un manifiesto de un reparto descartado"
+    # Las carpetas que ya no forman parte del reparto conservan el archivo
+    # apartado, por si hubiera que mirarlo.
+    for carpeta in carpetas_viejas - vivas:
+        assert list(Path(carpeta).glob("manifiesto-reemplazado-*.json"))
+
+
+def test_no_se_sube_un_batch_que_repite_bitacoras_de_otro(tmp_path):
+    """Ultima red antes de Quick Upload: en AirVault ya no tiene arreglo."""
+    from app.airvault.flujo import ErrorDeCorrida, subir_partes
+
+    csv_path, _partes = corrida(tmp_path)
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    _subido(trabajos[0], "003PRI")
+    # Un reparto viejo que sigue creyendo que le tocan esas mismas paginas.
+    intruso = trabajos[1]
+    intruso.manifiesto.registros = list(trabajos[0].manifiesto.registros)
+    intruso.guardar()
+
+    with pytest.raises(ErrorDeCorrida) as fallo:
+        subir_partes([intruso], object(), en_la_ejecucion=trabajos)
+
+    assert "repite" in str(fallo.value)
+    assert "dos veces" in str(fallo.value)
+
+
+def test_la_cobertura_dice_que_falta_y_que_esta_repetido(tmp_path):
+    from app.airvault.flujo import revisar_cobertura
+
+    csv_path, _partes = corrida(tmp_path)
+    entrega = comprobar_entrega(csv_path)
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    _subido(trabajos[0], "003PRI")
+
+    cobertura = revisar_cobertura(entrega, trabajos)
+
+    assert cobertura.cubiertas == set(_bitacoras_de([trabajos[0]]))
+    assert cobertura.huecos
+    assert not cobertura.repetidas
+    assert not cobertura.completa
+    # Contados todos, incluidos los que solo estan en disco, no falta nada.
+    entera = revisar_cobertura(entrega, trabajos, solo_comprometidos=False)
+    assert entera.completa
+
+
+def test_reorganizar_deja_la_ejecucion_entera_a_la_vista(tmp_path):
+    """El batch subido conserva su reparto, pero no su cuenta de partes."""
+    csv_path, _partes = corrida(tmp_path)
+    antes = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    _subido(antes[0], "003PRI")
+
+    despues = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+    cargados = cargar_partes(AirVaultConfig(), tmp_path / "job", csv_path)
+
+    assert len({t.manifiesto.partes for t in despues}) == 1
+    assert [t.carpeta for t in cargados] == [t.carpeta for t in despues]
+
+
+def test_reorganizar_no_se_repite_en_cada_llamada(tmp_path):
+    """El limite viejo de un batch subido no vuelve a disparar el reparto."""
+    csv_path, _partes = corrida(tmp_path)
+    antes = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    _subido(antes[0], "003PRI")
+    primera = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+    apartados = len(list((tmp_path / "job").rglob("manifiesto-reemplazado-*")))
+
+    segunda = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+
+    assert [t.carpeta for t in segunda] == [t.carpeta for t in primera]
+    assert len(
+        list((tmp_path / "job").rglob("manifiesto-reemplazado-*"))
+    ) == apartados
+
+
+def test_si_ya_esta_todo_subido_el_limite_nuevo_no_crea_nada(tmp_path):
+    """Cambiar el reparto no puede volver a mandar lo que ya viajo entero."""
+    csv_path, _partes = corrida(tmp_path)
+    antes = preparar_partes(AirVaultConfig(), tmp_path / "job", csv_path)
+    assert len(antes) == 1
+    _subido(antes[0], "003UNO")
+
+    despues = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+
+    assert [t.carpeta for t in despues] == [antes[0].carpeta]
+    assert despues[0].manifiesto.batch_id == "003UNO"
+    assert len(despues[0].manifiesto.registros) == 12
+
+
+def test_reorganizar_una_entrega_repartida_en_varios_archivos(tmp_path):
+    """Cada archivo de entrega aporta sus propios huecos."""
+    csv_path, _partes = corrida(tmp_path, paginas_por_parte=6)
+    antes = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=6,
+    )
+    _subido(antes[0], "003PRI")
+
+    despues = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+
+    todas = _bitacoras_de(despues)
+    esperadas = {
+        (fila["file"].casefold(), int(fila["page"]))
+        for fila in leer_csv_corrida(csv_path)
+    }
+    assert len(todas) == len(set(todas))
+    assert set(todas) == esperadas
+    assert despues[0].manifiesto.batch_id == "003PRI"
