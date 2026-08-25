@@ -8,8 +8,8 @@ módulo, que se prueba sin interfaz.
 Va en ventana aparte y no colgando de la principal. Empotrado, el indexado
 le quitaba alto a la vista previa y descuadraba el reparto: al desplegarse
 cambiaba el mínimo de la ventana, y en pantallas bajas eso la sacaba del
-escritorio. Aparte tiene el sitio que necesita —el historial entero de
-ejecuciones, su propio avance— y la ventana principal vuelve a medirse
+escritorio. Aparte tiene el sitio que necesita (el historial entero de
+ejecuciones, su propio avance) y la ventana principal vuelve a medirse
 sola.
 
 El trabajo va en tres tiempos, separados porque duran cosas muy distintas:
@@ -117,7 +117,7 @@ AIRVAULT_TOOLTIP = (
 def csv_de_corrida(carpeta: Path | str) -> Optional[Path]:
     """CSV mínimo de una ejecución, que es el que va a AirVault.
 
-    El indexado necesita el CSV corto —el de las columnas del Web Index—,
+    El indexado necesita el CSV corto (el de las columnas del Web Index),
     no el ``_completo``, que trae además el detalle de la lectura.
     """
     carpeta = Path(carpeta)
@@ -219,6 +219,7 @@ class TrabajoAirVaultWorker(QThread):
         etapas = {
             "subir": self._subir,
             "subir_pendientes": self._subir_pendientes,
+            "resubir": self._subir_pendientes,
             "comprobar": self._comprobar,
             "indexar": self._indexar,
             "completar": self._completar,
@@ -413,15 +414,19 @@ class TrabajoAirVaultWorker(QThread):
                 trabajo, cliente_indice, raiz,
             ))
 
+        fallos: list[tuple[object, str]] = []
         try:
-            subir_partes(
+            # ``or []``: la suite sustituye subir_partes por dobles que no
+            # devuelven nada, y esto no es motivo para tumbar una subida.
+            fallos = subir_partes(
                 list(por_subir), estado["sesion"], avisar=self._avisar,
                 cliente=cliente, dormir=self._dormir,
                 al_finalizar_subidas=self._notificar_subidas,
                 al_encontrar=al_encontrar,
                 reintentar_estancados=True,
                 en_la_ejecucion=trabajos,
-            )
+                forzados=estado.get("forzados") or (),
+            ) or []
             # La escritura puede correr mientras este hilo busca las partes
             # siguientes, pero subir_partes retiene los hallazgos hasta que
             # hayan terminado todos los intentos de subida.
@@ -432,6 +437,13 @@ class TrabajoAirVaultWorker(QThread):
         self.subido.emit({
             "trabajos": estado["trabajos"], "cliente": cliente,
             "sesion": estado.get("sesion"),
+            # Cada carga que no salio, con su motivo. Sin esto el fallo solo
+            # quedaba en el archivo de registro y la ventana decia «subida
+            # terminada» de un archivo que nunca se envio.
+            "fallos": [
+                (trabajo.manifiesto.nombre_batch, detalle)
+                for trabajo, detalle in fallos
+            ],
         })
 
     def _cliente_paralelo(self, cliente):
@@ -482,7 +494,10 @@ class TrabajoAirVaultWorker(QThread):
 
         Es por donde entra la reanudación de la comprobación periódica: los
         archivos que nunca llegaron a subirse y los que se dieron por
-        perdidos vuelven a Quick Upload sin que nadie pulse nada.
+        perdidos vuelven a Quick Upload sin que nadie pulse nada. Y es
+        también por donde entra la orden dada a mano desde la tabla, que
+        llega con esos batches marcados en ``forzados`` para que se salten
+        la comprobación larga.
         """
         estado = self.estado
         cliente = self._conectar()
@@ -944,7 +959,7 @@ class AirVaultWindow(QDialog):
     def _lotes(self) -> QTableWidget:
         """En qué va cada batch de esta ejecución dentro de AirVault.
 
-        Una entrega puede ser varios batches —las partes, y el de REVISAR—, y
+        Una entrega puede ser varios batches (las partes, y el de REVISAR), y
         no llegan a estar listos a la vez: AirVault los procesa en su cola.
         Aquí se ve cuál ya se puede indexar y cuál sigue esperando, en vez
         de una sola línea de estado que solo puede decir una cosa.
@@ -1036,7 +1051,7 @@ class AirVaultWindow(QDialog):
         Trabajando también se puede elegir: la acción no se pierde, se pone
         en cola y arranca en cuanto termine lo que hay en vuelo.
         """
-        from app.airvault.flujo import BUSCANDO, INDEXADO, SIN_SUBIR
+        from app.airvault.flujo import INDEXADO
 
         planes = self._estado.get("planes") or {}
 
@@ -1045,9 +1060,14 @@ class AirVaultWindow(QDialog):
                 getattr(parte.trabajo.manifiesto, "cancelado", False)
             )
 
+        # Subir se ofrece siempre que AirVault no haya devuelto un batch,
+        # sin importar en qué punto de la comprobación esté la fila. Antes
+        # solo valía para dos estados, así que una carga que se estaba
+        # revisando o que apareció descuadrada no se podía volver a mandar
+        # aunque quien miraba la cola ya supiera que no está.
         subibles = [
             parte for parte in partes
-            if activo(parte) and parte.estado in (SIN_SUBIR, BUSCANDO)
+            if activo(parte) and parte.se_puede_subir
         ]
         indexables = [
             parte for parte in partes
@@ -1157,11 +1177,17 @@ class AirVaultWindow(QDialog):
         estado = self._base_del_estado()
         if estado is None:
             return False
-        if modo == "subir_pendientes":
+        if modo in ("subir_pendientes", "resubir"):
             estado["pendientes_subida"] = list(trabajos)
             estado["indexar_al_encontrar"] = (
                 self.auto_indexar_check.isChecked()
             )
+            if modo == "resubir":
+                # La orden dada a mano sobre filas concretas. El otro modo
+                # es la reanudación automática, que sí comprueba antes.
+                estado["forzados"] = [
+                    str(trabajo.carpeta) for trabajo in trabajos
+                ]
             self._reenvios_del_ciclo.clear()
         elif modo == "indexar":
             planes = estado.get("planes") or {}
@@ -1191,25 +1217,111 @@ class AirVaultWindow(QDialog):
         return False
 
     def _subir_estas(self, partes) -> None:
-        """Manda estos batches a Quick Upload, esté como esté la espera.
+        """Manda estos batches a Quick Upload y no pregunta nada más.
 
-        Es una orden expresa, así que no pasa por la regla que decide sola
-        si una carga se dio por perdida: se olvida lo que el programa creía
-        haber subido y el archivo vuelve a la cola. Si el batch estaba
-        publicado de verdad, la búsqueda previa a la carga lo encuentra y
-        recupera su ID en vez de duplicarlo.
+        Es una orden expresa y se obedece como tal: el archivo sale hacia
+        AirVault sin pasar por la comprobación larga. Solo se antepone una
+        lectura de la cola, que es lo único que impide publicar dos veces la
+        misma bitácora. Quien pulsa esto ya miró Web Index, y la acción solo
+        se ofrece cuando AirVault no ha devuelto ningún batch para esa
+        parte.
+
+        No se reinicia aquí el manifiesto, aunque sea la orden de volver a
+        subir: eso borraría ``lotes_previos``, la foto de la cola anterior a
+        la carga, que es justo lo que permite reconocer un ``Empty-Batch``
+        propio. Lo reinicia ``subir_partes`` cuando toca, después de
+        comprobar y justo antes de enviar.
         """
-        from app.airvault.flujo import BUSCANDO, reiniciar_subida
-
-        for parte in partes:
-            if parte.estado == BUSCANDO:
-                reiniciar_subida(parte.trabajo)
+        trabajos = [parte.trabajo for parte in partes]
+        if not self._preguntar_por_amarillas(trabajos):
+            return
         nombres = ", ".join(parte.nombre for parte in partes)
         self._encolar(
-            "subir_pendientes",
-            [parte.trabajo for parte in partes],
+            "resubir",
+            trabajos,
             f"Se vuelve a subir {nombres}",
         )
+
+    def _preguntar_por_amarillas(self, trabajos) -> bool:
+        """Pregunta si se suben batches que dejarían páginas sin indexar.
+
+        Amarilla es la página a la que le falta un campo obligatorio: entra
+        en AirVault, pero hay que completarla a mano. Lo limpio es que esas
+        bitácoras vayan al batch REVISAR, y para eso hay que volver a
+        exportar la ejecución. Cuando el archivo ya está hecho eso cuesta
+        más que terminarlas a mano, así que la decisión es de quien sube y
+        se pregunta aquí, con la cuenta delante.
+
+        Se calcula leyendo el manifiesto, sin tocar la red, así que se puede
+        preguntar antes de arrancar el hilo. Devuelve ``False`` solo si
+        alguien dijo que no; entonces no se sube nada.
+        """
+        from app.airvault.flujo import autorizar_amarillas, paginas_amarillas
+
+        con_amarillas = [
+            (trabajo, paginas_amarillas(trabajo))
+            for trabajo in trabajos
+            if not trabajo.manifiesto.amarillas_permitidas
+        ]
+        con_amarillas = [
+            (trabajo, paginas) for trabajo, paginas in con_amarillas if paginas
+        ]
+        if not con_amarillas:
+            return True
+
+        cuantas = sum(len(paginas) for _trabajo, paginas in con_amarillas)
+        if not self._confirmar_amarillas(con_amarillas, cuantas):
+            self._anotar(
+                f"No se sube: {cuantas} páginas quedarían amarillas y no se "
+                "autorizó"
+            )
+            return False
+        for trabajo, _paginas in con_amarillas:
+            autorizar_amarillas(trabajo)
+        nombres = ", ".join(
+            trabajo.manifiesto.nombre_batch for trabajo, _p in con_amarillas
+        )
+        self._anotar(
+            f"Autorizado subir con {cuantas} páginas amarillas: {nombres}"
+        )
+        return True
+
+    def _confirmar_amarillas(self, con_amarillas, cuantas: int) -> bool:
+        """El diálogo que lo pregunta, y nada más.
+
+        Aparte de la decisión para que las pruebas puedan responder que sí o
+        que no sin abrir una ventana.
+        """
+        from app.airvault.flujo import resumen_amarillas
+
+        detalle = "\n\n".join(
+            f"«{trabajo.manifiesto.nombre_batch}»: {len(paginas)} páginas\n"
+            + resumen_amarillas(paginas, 3)
+            for trabajo, paginas in con_amarillas
+        )
+        dialogo = QMessageBox(self)
+        dialogo.setIcon(QMessageBox.Icon.Question)
+        dialogo.setWindowTitle("Páginas sin un campo obligatorio")
+        dialogo.setText(
+            f"Esto subiría {cuantas} páginas que quedarían amarillas en "
+            "AirVault: les falta algún campo obligatorio y habría que "
+            "completarlas a mano en Web Index."
+        )
+        dialogo.setInformativeText(
+            f"{detalle}\n\nLo limpio es volver a exportar la ejecución para "
+            "que esas bitácoras vayan al batch REVISAR. Si el archivo ya "
+            "está hecho y prefiere subirlo así, se sube y esas páginas se "
+            "terminan a mano."
+        )
+        # «Subir así» es el botón por omisión a propósito: la pregunta
+        # existe para que se pueda decir que sí, no para desanimar.
+        subir = dialogo.addButton(
+            "Subir así", QMessageBox.ButtonRole.AcceptRole
+        )
+        dialogo.addButton("No subir", QMessageBox.ButtonRole.RejectRole)
+        dialogo.setDefaultButton(subir)
+        dialogo.exec()
+        return dialogo.clickedButton() is subir
 
     def _indexar_estas(self, partes) -> None:
         """Escribe solo estos batches, con el plan que ya se calculó."""
@@ -1405,8 +1517,8 @@ class AirVaultWindow(QDialog):
     def _bitacora(self) -> CopyableListWidget:
         """Lo que va haciendo, paso a paso y con la hora.
 
-        Un batch tarda lo suyo y pasa por etapas muy distintas —subir,
-        esperar a que AirVault lo procese, leer el batch, escribir—. Con una
+        Un batch tarda lo suyo y pasa por etapas muy distintas (subir,
+        esperar a que AirVault lo procese, leer el batch, escribir). Con una
         sola línea de estado no había forma de saber en cuál estaba ni
         cuánto llevaba, y una espera larga no se distinguía de un cuelgue.
         """
@@ -1583,7 +1695,7 @@ class AirVaultWindow(QDialog):
         self._listas.append(listo)
         celdas = (
             carpeta.name,
-            "—" if paginas is None else str(paginas),
+            "(" if paginas is None else str(paginas),
             entrega,
         )
         for columna, texto in enumerate(celdas):
@@ -1645,7 +1757,7 @@ class AirVaultWindow(QDialog):
         self._soltar_lotes()
         self._parar_vigilancia()
         ruta = Path(csv)
-        self.setWindowTitle(f"Indexar en AirVault — {ruta.parent.parent.name}")
+        self.setWindowTitle(f"Indexar en AirVault ) {ruta.parent.parent.name}")
         self.corrida_edit.setText(str(ruta))
         self.lote_edit.setText(nombre_desde_corrida(ruta))
         self.boton_indexar.setEnabled(False)
@@ -1982,6 +2094,36 @@ class AirVaultWindow(QDialog):
             if str(trabajo.carpeta) not in self._reenvios_del_ciclo
         ]
 
+    @staticmethod
+    def _aviso_de_cargas_fallidas(fallos) -> str:
+        """Dice cuáles no salieron, para no cantar victoria por todas."""
+        if not fallos:
+            return ""
+        nombres = ", ".join(nombre for nombre, _detalle in fallos)
+        cuantos = (
+            "1 batch no se subió" if len(fallos) == 1
+            else f"{len(fallos)} batches no se subieron"
+        )
+        return (
+            f" Ojo: {cuantos} ({nombres}); el motivo de cada uno está en la "
+            "bitácora de aquí abajo."
+        )
+
+    def _aviso_para_subir_a_mano(self) -> str:
+        """Recuerda que la espera se puede saltar cuando no hay batch.
+
+        La espera es una suposición del programa; quien tiene Web Index
+        delante sabe más que él. Si ya miró y el batch no está, no tiene por
+        qué esperar a que venza ningún reloj.
+        """
+        if not any(parte.se_puede_subir for parte in self._estados):
+            return ""
+        return (
+            " Si ya miró la cola de AirVault y el batch no está, no espere: "
+            "clic derecho sobre su fila y «Subir a AirVault ahora». Se envía "
+            "en el momento, sin volver a comprobar nada."
+        )
+
     def _aviso_para_volver_a_subir(self) -> str:
         from app.airvault.flujo import (
             busqueda_amplia_sin_hallar,
@@ -2049,8 +2191,8 @@ class AirVaultWindow(QDialog):
         """Arranca o para la comprobación automática según haga falta.
 
         Se pregunta mientras quede algo que esperar. Cuando todos los batches
-        están listos —o ya indexados, o REVISAR está listo para escribir lo
-        disponible— no hay nada que AirVault vaya a cambiar solo, así que
+        están listos (o ya indexados, o REVISAR está listo para escribir lo
+        disponible) no hay nada que AirVault vaya a cambiar solo, así que
         se deja de preguntar en vez
         de golpear el servidor toda la tarde.
         """
@@ -2198,6 +2340,8 @@ class AirVaultWindow(QDialog):
                 self._indexar_al_terminar = True
                 self._comprobar()
                 return
+            if not self._preguntar_por_amarillas(pendientes_subida):
+                return
             estado["pendientes_subida"] = pendientes_subida
             self._lanzar("subir_pendientes", estado)
             return
@@ -2242,6 +2386,11 @@ class AirVaultWindow(QDialog):
     def _lanzar(self, modo: str, estado: dict) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
+        if modo != "resubir":
+            # El estado se reusa de una acción a la siguiente. Sin borrar
+            # esto, una orden expresa dejaría a la reanudación automática
+            # subiendo sin comprobar nada.
+            estado["forzados"] = []
         self._habilitar(False)
         worker = TrabajoAirVaultWorker(modo, estado, self)
         worker.paso.connect(self._mostrar_paso)
@@ -2296,8 +2445,8 @@ class AirVaultWindow(QDialog):
     def _arrancar_reloj(self) -> None:
         """Deja a la vista que el trabajo sigue vivo mientras espera.
 
-        La barra sola no basta: en las etapas sin cuenta —entrar a
-        AirVault, esperar a que el batch salga de la cola— no se mueve, y
+        La barra sola no basta: en las etapas sin cuenta (entrar a
+        AirVault, esperar a que el batch salga de la cola) no se mueve, y
         una espera de diez minutos se lee como un cuelgue.
         """
         self._inicio_paso = time.monotonic()
@@ -2329,8 +2478,8 @@ class AirVaultWindow(QDialog):
             # Sin cuenta, la barra va en marcha continua: parada en cero se
             # lee como que no está pasando nada.
             self.progreso.setRange(0, 0)
-        # Los avisos de una subida llegan por trozo —mil en una entrega
-        # grande—, así que solo se anota cuando cambia el texto: la
+        # Los avisos de una subida llegan por trozo (mil en una entrega
+        # grande), así que solo se anota cuando cambia el texto: la
         # bitácora cuenta por qué etapa va, no cuántas veces avisó.
         if texto != self._ultimo_paso:
             self._ultimo_paso = texto
@@ -2348,14 +2497,21 @@ class AirVaultWindow(QDialog):
         self._al_actualizar_subidas(datos)
         cuantos = len(self._trabajos)
         lotes = "el batch" if cuantos == 1 else f"los {cuantos} batches"
+        fallos = datos.get("fallos") or []
         self.resumen.setText(
             f"Subida terminada. AirVault tiene que procesar {lotes} antes "
             f"de poder indexarlos, y eso tarda: se va preguntando solo."
+            + self._aviso_de_cargas_fallidas(fallos)
         )
         self.estado_label.setText("Subida terminada")
         self._anotar(
             "Subida terminada; se confirma cada batch en AirVault"
         )
+        # El motivo de cada carga que no salió. Antes solo quedaba en el
+        # archivo de registro, así que la ventana decía «subida terminada»
+        # de archivos que nunca se enviaron y nadie sabía por qué.
+        for nombre, detalle in fallos:
+            self._anotar(f"No se subió «{nombre}»: {detalle}")
         # «Subir» no confia en la marca local: en cada clic consulta la cola
         # remota, recupera el ID que falte y solo entonces deja indexar. La
         # opcion de espera automatica decide si se seguira preguntando cuando
@@ -2461,6 +2617,7 @@ class AirVaultWindow(QDialog):
             self.resumen.setText(
                 f"AirVault todavía no ha terminado. {pendientes}. Se vuelve "
                 f"a preguntar solo cada {self.minutos_spin.value()} min."
+                + self._aviso_para_subir_a_mano()
             )
         else:
             self.resumen.setText(
@@ -2734,7 +2891,7 @@ class AirVaultWindow(QDialog):
 
         Con el recorrido normal no queda ninguno: leer el batch lo suelta en
         cuanto termina y escribirlo también. Esto es para lo que se corta
-        por el medio —un cierre, una cancelación, un fallo de red—, porque
+        por el medio (un cierre, una cancelación, un fallo de red), porque
         un batch tomado no da error: deja colgada la próxima vez que alguien
         lo abra.
 

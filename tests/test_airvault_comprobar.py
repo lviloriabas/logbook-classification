@@ -1,7 +1,7 @@
 """Esperar a AirVault y cerrar el batch cuando lo acepta.
 
 Subir no es lo mismo que estar listo. AirVault mete el batch en su cola y
-tarda —minutos, a veces mucho mas— en dejarlo indexable, asi que el
+tarda (minutos, a veces mucho mas) en dejarlo indexable, asi que el
 programa pregunta cada tanto en vez de quedarse esperando delante. Aqui se
 fija que responde esa pregunta en cada momento, y en que condiciones el
 batch se puede dar por terminado.
@@ -27,7 +27,7 @@ from app.airvault.config import (
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
 )
-from app.airvault.discovery import LoteNoEncontrado
+from app.airvault.discovery import LoteAmbiguo, LoteNoEncontrado
 from app.airvault.flujo import (
     AUTOCOMPLETADO,
     BUSCANDO,
@@ -1160,6 +1160,213 @@ class SesionFalsa:
     """Se traga la subida sin red."""
 
 
+# ── la orden de subir dada a mano ──────────────────────────────────
+#
+# La automatizacion es prudente a proposito: ante la duda espera, cuenta
+# revisiones y no manda nada. Quien tiene Web Index delante sabe mas que
+# ella, y cuando dice «sube» el programa obedece en el acto. Lo unico que
+# no cede es lo irreversible: publicar dos veces la misma bitacora.
+
+def test_la_orden_de_subir_a_mano_no_espera_a_la_comprobacion(
+    tmp_path, monkeypatch
+):
+    """La regla automatica dice «espera»; la persona dice «sube». Manda ella."""
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.lotes = []
+    subidas: list[str] = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        subidas.append(self.manifiesto.nombre_batch)
+        self.manifiesto.batch_id = "003NUEVO"
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    # Por su cuenta el programa no lo mandaria: lleva una revision de tres.
+    assert comprobar_partes([trabajo], cliente)[0].estado == PROCESANDO
+
+    subir_partes(
+        [trabajo],
+        SesionFalsa(),
+        cliente=cliente,
+        forzados=[str(trabajo.carpeta)],
+    )
+
+    assert subidas == [trabajo.manifiesto.nombre_batch]
+
+
+def test_la_orden_a_mano_lee_la_cola_una_vez_y_no_abre_ningun_batch(
+    tmp_path, monkeypatch
+):
+    """Rapida no es a ciegas: se mira la cola una vez y se sube.
+
+    Lo caro de la comprobacion completa nunca fue el listado, sino abrir
+    cada batch y contrastar su contenido. Eso es lo que aqui no se hace.
+    """
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.lotes = []
+    monkeypatch.setattr(
+        Trabajo, "subir",
+        lambda self, *a, **k: setattr(self.manifiesto, "batch_id", "003NUEVO"),
+    )
+
+    cliente.filtros.clear()
+    subir_partes(
+        [trabajo],
+        SesionFalsa(),
+        cliente=cliente,
+        forzados=[str(trabajo.carpeta)],
+    )
+
+    # Una sola lectura, y sin filtro: un Empty-Batch no responde a ningun
+    # nombre, asi que filtrar en el servidor lo dejaria fuera.
+    assert cliente.filtros == [""]
+    assert cliente.abiertos == []
+    assert cliente.lecturas == []
+
+
+def test_la_orden_a_mano_reconoce_su_carga_publicada_sin_nombre(tmp_path):
+    """El caso que mas se da, y el que la persona no puede ver.
+
+    AirVault publica lo cargado como ``Empty-Batch`` aunque Quick Upload
+    reciba el nombre. Quien mira Web Index no encuentra su titulo, da la
+    orden, y sin esta comprobacion se crearia la segunda copia.
+    """
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.lotes = [
+        lote("003VIEJO", "DP | LO DE ANTES", 9),
+        lote("003SINNOMBRE", "Empty-Batch", 2),
+    ]
+    subidas: list[str] = []
+
+    class SesionQueCuenta(SesionFalsa):
+        def post(self, *args, **kwargs):
+            subidas.append(args[0] if args else "")
+
+    subir_partes(
+        [trabajo],
+        SesionQueCuenta(),
+        cliente=cliente,
+        forzados=[str(trabajo.carpeta)],
+    )
+
+    assert subidas == []
+    assert trabajo.manifiesto.batch_id == "003SINNOMBRE"
+
+
+def test_un_empty_batch_que_ya_estaba_no_frena_la_orden(tmp_path, monkeypatch):
+    """La foto de la cola distingue el propio del ajeno.
+
+    Sin ella, cualquier batch sin nombre del tamaño justo dejaria la orden
+    bloqueada para siempre, que es lo contrario de obedecer.
+    """
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.manifiesto.lotes_previos = ["003VIEJO", "003AJENO"]
+    trabajo.guardar()
+    cliente.lotes = [
+        lote("003VIEJO", "DP | LO DE ANTES", 9),
+        lote("003AJENO", "Empty-Batch", 2),
+    ]
+    subidas: list[str] = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        subidas.append(self.manifiesto.nombre_batch)
+        self.manifiesto.batch_id = "003NUEVO"
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    subir_partes(
+        [trabajo],
+        SesionFalsa(),
+        cliente=cliente,
+        forzados=[str(trabajo.carpeta)],
+    )
+
+    assert subidas == [trabajo.manifiesto.nombre_batch]
+
+
+def test_varios_empty_batch_posibles_no_eligen_ninguno(tmp_path):
+    """Escribir en el batch equivocado es peor que parar y preguntar."""
+    from app.airvault.flujo import ya_esta_en_airvault
+
+    trabajo, cliente = trabajo_subido(tmp_path)
+    cliente.lotes = [
+        lote("003UNO", "Empty-Batch", 2),
+        lote("003DOS", "Empty-Batch", 2),
+    ]
+
+    with pytest.raises(LoteAmbiguo, match="podrían ser"):
+        ya_esta_en_airvault(trabajo, cliente)
+
+
+def test_sin_haber_subido_nunca_ningun_empty_batch_es_propio(tmp_path):
+    """Una primera carga no puede estar ya publicada sin nombre."""
+    from app.airvault.flujo import ya_esta_en_airvault
+
+    csv = corrida(tmp_path)
+    trabajo = Trabajo.preparar(
+        AirVaultConfig(), tmp_path / "job", csv, "DP | BIT 18 AUG 2026 05 42"
+    )
+    cliente = ClienteFalso(lotes=[lote("003AJENO", "Empty-Batch", 2)])
+
+    assert ya_esta_en_airvault(trabajo, cliente) is None
+
+
+def test_la_orden_a_mano_no_publica_dos_veces_la_misma_bitacora(tmp_path):
+    """Lo unico que no cede ante la orden: AirVault ya lo publico.
+
+    Entre la ultima comprobacion y el clic el servidor pudo sacar el batch
+    de su cola. Mandarlo otra vez dejaria la misma bitacora publicada por
+    duplicado, y eso hay que deshacerlo a mano en AirVault.
+    """
+    trabajo, cliente = trabajo_subido(tmp_path)
+    subidas: list[str] = []
+
+    class SesionQueCuenta(SesionFalsa):
+        def post(self, *args, **kwargs):
+            subidas.append(args[0] if args else "")
+
+    subir_partes(
+        [trabajo],
+        SesionQueCuenta(),
+        cliente=cliente,
+        forzados=[str(trabajo.carpeta)],
+    )
+
+    assert subidas == []
+    # Y el ID que la orden habia olvidado queda recuperado.
+    assert trabajo.manifiesto.batch_id == "003SRO"
+
+
+def test_la_orden_a_mano_de_una_parte_no_arrastra_a_las_demas(
+    tmp_path, monkeypatch
+):
+    """Elegir una fila no convierte la ejecucion entera en una orden."""
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    primero, segundo, _tercero = trabajos
+    cliente = ClienteFalso()
+    subidas: list[str] = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        subidas.append(self.manifiesto.nombre_batch)
+        self.manifiesto.batch_id = f"ID-{len(subidas)}"
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+
+    subir_partes(
+        trabajos,
+        SesionFalsa(),
+        cliente=cliente,
+        forzados=[str(segundo.carpeta)],
+    )
+
+    # Todas acaban subiendo (ninguna estaba en AirVault), pero solo la
+    # elegida se salto la comprobacion completa.
+    assert set(subidas) == {
+        trabajo.manifiesto.nombre_batch for trabajo in trabajos
+    }
+    assert primero.manifiesto.nombre_batch in cliente.filtros
+
+
 def test_cada_faltante_se_busca_se_sube_y_el_proceso_continua(
     tmp_path, monkeypatch,
 ):
@@ -1394,8 +1601,8 @@ def test_una_carga_vieja_que_no_esta_en_la_cola_se_reenvia_enseguida(
 ):
     """La búsqueda amplia se hace igual; lo que no se hace es repetirla.
 
-    Recorrer la cola entera —por nombre visible, por nombre embebido, por
-    páginas y por Log Page Number— y no encontrar nada no deja ningún sitio
+    Recorrer la cola entera (por nombre visible, por nombre embebido, por
+    páginas y por Log Page Number) y no encontrar nada no deja ningún sitio
     donde la carga pueda estar escondida. Si además el archivo se subió hace
     mucho, no viene en camino: se volvió a borrar o nunca entró. Repetir esa
     misma búsqueda dos veces más y esperar después media hora es tiempo
@@ -2115,8 +2322,8 @@ def test_una_carga_recien_subida_no_se_reenvia_por_no_estar_todavia(
     """AirVault tarda: que aun no aparezca es lo normal, no una perdida.
 
     La resubida inmediata es para la carga vieja que ya no esta en la cola.
-    Una recien enviada conserva el camino de siempre —tres revisiones y
-    despues la espera— porque volver a subirla ahora publicaria el mismo
+    Una recien enviada conserva el camino de siempre (tres revisiones y
+    despues la espera) porque volver a subirla ahora publicaria el mismo
     archivo dos veces.
     """
     trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]

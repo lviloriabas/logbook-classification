@@ -491,13 +491,23 @@ class PlanFalso:
                 "separadores": 2, "avisos_globales": 0}
 
 
+class RegistroFalso:
+    """Una pagina del manifiesto: lo justo para contarla y reiniciarla."""
+
+    def __init__(self):
+        self.estado = None
+        self.avisos = []
+
+
 class ManifiestoFalso:
     def __init__(self, nombre, paginas, batch_id):
         self.nombre_batch = nombre
-        self.registros = [None] * paginas
+        self.registros = [RegistroFalso() for _ in range(paginas)]
         self.batch_id = batch_id
         self.etapas = {}
         self.solo_subir = False
+        self.amarillas_permitidas = False
+        self.lotes_previos = []
         self.intentos_identificacion = 0
         self.espera_reenvio_desde = ""
         self.reenvios = 0
@@ -508,6 +518,10 @@ class ManifiestoFalso:
         # publico lo que se subio despues de otra, asi que la regla de
         # reenvio lo pregunta.
         self.verificado = False
+
+    def bitacoras(self):
+        """Las paginas que se indexan. En el doble no falta ningun campo."""
+        return []
 
     def etapa_hecha(self, nombre):
         if nombre == "verificar":
@@ -1451,8 +1465,181 @@ def test_varios_batches_se_mandan_a_la_cola_de_una_vez(ventana):
     acciones["Subir a AirVault ahora (2)"].trigger()
 
     assert lanzados == [
-        ("subir_pendientes", ["DP | BITS -1", "DP | BITS -2"]),
+        ("resubir", ["DP | BITS -1", "DP | BITS -2"]),
     ]
+
+
+# ── subir a mano lo que AirVault no devuelve ───────────────────────
+
+def test_la_cola_deja_subir_lo_que_esta_a_medio_identificar(ventana):
+    """Esperar es una suposición del programa; quien mira la cola sabe más.
+
+    Antes la acción solo valía en dos estados, así que una carga que el
+    programa estaba revisando no se podía volver a mandar aunque quien
+    tenía Web Index delante ya supiera que no está.
+    """
+    from app.airvault.flujo import PROCESANDO
+
+    ventana._estados = [parte(
+        PROCESANDO, "DP | BITS -1", "revisando nombres (1/3)", carpeta="job-1"
+    )]
+    ventana._pintar_lotes()
+
+    assert _acciones(ventana)["Subir a AirVault ahora"].isEnabled()
+
+
+def test_la_cola_deja_subir_el_que_aparecio_descuadrado(ventana):
+    """Sin lote confirmado no hay nada que duplicar."""
+    from app.airvault.flujo import DESCUADRADO
+
+    ventana._estados = [parte(
+        DESCUADRADO, "DP | BITS -1", "páginas incorrectas", carpeta="job-1"
+    )]
+    ventana._pintar_lotes()
+
+    assert _acciones(ventana)["Subir a AirVault ahora"].isEnabled()
+
+
+def test_la_cola_no_deja_subir_lo_que_airvault_ya_devolvio(ventana):
+    """Con el batch confirmado, subirlo otra vez lo publicaría dos veces."""
+    from app.airvault.client import ResumenLote
+    from app.airvault.flujo import PROCESANDO
+
+    confirmado = ResumenLote(
+        batch_id="003SRO", nombre="DP | BITS -1", paginas=3, repo_id=3209,
+        repositorio="MXDocs", paso="Web Index", bloqueado_por="", recibido="",
+    )
+    ventana._estados = [parte(
+        PROCESANDO, "DP | BITS -1", "3 de 5 páginas", carpeta="job-1",
+        lote=confirmado,
+    )]
+    ventana._pintar_lotes()
+
+    assert not _acciones(ventana)["Subir a AirVault ahora"].isEnabled()
+
+
+def test_subir_a_mano_conserva_la_foto_de_la_cola_hasta_comprobar(ventana):
+    """La ventana no reinicia el manifiesto, y es a propósito.
+
+    ``lotes_previos`` es la foto de la cola anterior a la carga, y es lo
+    único que distingue un ``Empty-Batch`` propio de uno ajeno. Borrarla
+    aquí dejaba a la comprobación sin con qué reconocerlo, y la orden
+    acababa publicando la misma bitácora dos veces. La reinicia
+    ``subir_partes``, después de comprobar y justo antes de enviar.
+    """
+    from app.airvault.flujo import PROCESANDO
+
+    fila = parte(PROCESANDO, "DP | BITS -1", carpeta="job-1")
+    fila.trabajo.manifiesto.lotes_previos = ["003VIEJO"]
+    ventana._estados = [fila]
+    lanzados = []
+    ventana._ejecutar_accion = lambda modo, trabajos: (
+        lanzados.append((modo, list(trabajos))) or True
+    )
+
+    ventana._subir_estas([fila])
+
+    assert fila.trabajo.manifiesto.lotes_previos == ["003VIEJO"]
+    assert lanzados[0][0] == "resubir"
+    assert lanzados[0][1] == [fila.trabajo]
+
+
+def test_la_espera_dice_que_se_puede_subir_sin_esperarla(ventana):
+    """El «cómo darle que sí» tiene que estar donde se lee la espera."""
+    from app.airvault.flujo import PROCESANDO
+
+    ventana._al_comprobar({
+        "estados": [parte(PROCESANDO, "DP | BITS -1", carpeta="job-1")],
+        "planes": {}, "partes": [], "reporte": None,
+    })
+
+    texto = ventana.resumen.text()
+    assert "Subir a AirVault ahora" in texto
+    assert "no espere" in texto
+
+
+# ── páginas amarillas: se pregunta, no se prohíbe ──────────────────
+
+def test_se_pregunta_antes_de_subir_paginas_amarillas_y_se_puede_decir_si(
+    ventana, monkeypatch
+):
+    """El batch ya está hecho: rehacerlo cuesta más que indexarlas a mano."""
+    from app.airvault import flujo
+    from app.airvault.flujo import PROCESANDO
+
+    fila = parte(PROCESANDO, "DP | BITS -1", carpeta="job-1")
+    monkeypatch.setattr(
+        flujo, "paginas_amarillas",
+        lambda trabajo: ["página 3: Aircraft", "página 7: Log Page Number"],
+    )
+    preguntas = []
+    ventana._confirmar_amarillas = lambda con_amarillas, cuantas: (
+        preguntas.append(cuantas) or True
+    )
+    lanzados = []
+    ventana._ejecutar_accion = lambda modo, trabajos: (
+        lanzados.append(modo) or True
+    )
+
+    ventana._subir_estas([fila])
+
+    assert preguntas == [2]
+    assert fila.trabajo.manifiesto.amarillas_permitidas
+    assert lanzados == ["resubir"]
+
+
+def test_decir_que_no_a_las_amarillas_no_sube_nada(ventana, monkeypatch):
+    from app.airvault import flujo
+    from app.airvault.flujo import PROCESANDO
+
+    fila = parte(PROCESANDO, "DP | BITS -1", carpeta="job-1")
+    monkeypatch.setattr(
+        flujo, "paginas_amarillas", lambda trabajo: ["página 3: Aircraft"]
+    )
+    ventana._confirmar_amarillas = lambda con_amarillas, cuantas: False
+    lanzados = []
+    ventana._ejecutar_accion = lambda modo, trabajos: (
+        lanzados.append(modo) or True
+    )
+
+    ventana._subir_estas([fila])
+
+    assert lanzados == []
+    assert not fila.trabajo.manifiesto.amarillas_permitidas
+
+
+def test_autorizado_una_vez_no_se_vuelve_a_preguntar(ventana, monkeypatch):
+    """Un reintento no puede pedir la misma autorización otra vez."""
+    from app.airvault import flujo
+    from app.airvault.flujo import PROCESANDO
+
+    fila = parte(PROCESANDO, "DP | BITS -1", carpeta="job-1")
+    fila.trabajo.manifiesto.amarillas_permitidas = True
+    monkeypatch.setattr(
+        flujo, "paginas_amarillas", lambda trabajo: ["página 3: Aircraft"]
+    )
+    preguntas = []
+    ventana._confirmar_amarillas = lambda *args: preguntas.append(args) or True
+    ventana._ejecutar_accion = lambda modo, trabajos: True
+
+    ventana._subir_estas([fila])
+
+    assert preguntas == []
+
+
+def test_una_carga_que_no_salio_no_se_cuenta_como_subida(ventana):
+    """Decir «subida terminada» de un archivo que nunca se envió engaña."""
+    ventana._al_subir({
+        "trabajos": [TrabajoFalso()], "cliente": object(),
+        "fallos": [("DP | BITS -2", "dejaría 4 páginas amarillas")],
+    })
+
+    assert "1 batch no se subió" in ventana.resumen.text()
+    anotado = [
+        ventana.bitacora.item(i).text()
+        for i in range(ventana.bitacora.count())
+    ]
+    assert any("dejaría 4 páginas amarillas" in linea for linea in anotado)
 
 
 def test_la_tabla_permite_elegir_varias_filas(ventana):
@@ -1491,7 +1678,7 @@ def test_una_accion_pedida_mientras_trabaja_espera_su_turno(ventana):
     # Al quedar libre, arranca sola.
     ventana.hilo = lambda: None
     assert ventana._siguiente_de_la_cola()
-    assert lanzados == ["subir_pendientes"]
+    assert lanzados == ["resubir"]
     assert ventana._cola_de_acciones == []
 
 
