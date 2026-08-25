@@ -39,8 +39,14 @@ class ResumenDepuracion:
 
 
 def _marcas_duplicadas(reports: Sequence[ValidationReport]) -> List[bool]:
-    """Un indicador por página, en el orden en que están en los reportes."""
-    return [item.duplicate for item in detect_duplicate_log_pages(reports)]
+    """Un indicador por página, en el orden en que están en los reportes.
+
+    Marca la aparición **sobrante**, no toda página repetida. La tabla y el
+    CSV señalan las dos apariciones, porque las dos hay que mirarlas, pero
+    borrar las dos dejaría la ejecución sin esa bitácora: lo que se quita
+    por omisión es la posterior.
+    """
+    return [item.sobrante for item in detect_duplicate_log_pages(reports)]
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,8 @@ class PaginaDepurable:
     pagina: int
     archivo: str
     log_number: int | None
+    #: Aparición sobrante: la que se marca sola al encender el criterio. No
+    #: es lo mismo que estar repetida, que lo están todas las del grupo.
     duplicada: bool
     en_blanco: bool
 

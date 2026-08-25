@@ -11,6 +11,7 @@ import pytest
 
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.validation.depuracion import contar_depuracion, depurar
+from app.validation.duplicates import detect_duplicate_log_pages
 
 
 def pagina(numero: int, log: str | None = None, blank: bool = False) -> PageResult:
@@ -122,3 +123,27 @@ def test_el_log_number_ilegible_no_es_duplicado():
     resumen = contar_depuracion(reports, duplicados=True, en_blanco=True)
 
     assert resumen.total == 0
+
+
+def test_marcar_las_dos_repetidas_no_borra_las_dos():
+    """Las dos apariciones salen marcadas, pero depurar conserva la primera.
+
+    Es la razón por la que la marca de repetida y la de sobrante son cosas
+    distintas: si el borrado siguiera a la marca, la bitácora repetida
+    desaparecería entera de la ejecución.
+    """
+    reports = [
+        ValidationReport(
+            pdf_path="unico.pdf",
+            template_name="fixture",
+            pages=[pagina(1, "2147300"), pagina(2, "2147300")],
+        )
+    ]
+
+    marcadas = [item.duplicate for item in detect_duplicate_log_pages(reports)]
+    assert marcadas == [True, True]
+
+    quedan, resumen = depurar(reports, duplicados=True, en_blanco=False)
+
+    assert resumen.total == 1
+    assert [p.page_number for p in quedan[0].pages] == [1]
