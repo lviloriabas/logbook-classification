@@ -111,3 +111,54 @@ def test_data_tables_paint_their_own_selection():
     finally:
         table.close()
         app.processEvents()
+
+
+def test_a_cell_without_item_does_not_cut_the_band():
+    """La columna vacía de la tabla de batches no puede partir el azul.
+
+    La banda se pintaba a partir del estado que llegaba en cada celda. Una
+    celda sin ``QTableWidgetItem`` —el ID de un batch que todavía no lo
+    tiene— podía quedarse fuera y dejar la fila con el azul empezando en la
+    segunda columna. Ahora quien decide es la selección de la vista, así
+    que la fila entera se pinta tenga ítems o no.
+    """
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    app = QApplication.instance() or QApplication([])
+    table = _table()
+    try:
+        table.setItem(1, 0, None)
+        table.selectRow(1)
+        delegado = table.itemDelegate()
+        fondos = []
+        for columna in range(_COLUMNS):
+            option = QStyleOptionViewItem()
+            option.initFrom(table)
+            delegado.initStyleOption(option, table.model().index(1, columna))
+            fondos.append(option.backgroundBrush.color().name())
+
+        assert fondos == [QColor(TABLE_SELECTION_BG).name()] * _COLUMNS
+    finally:
+        table.close()
+        app.processEvents()
+
+
+def test_an_unselected_row_keeps_its_own_colour():
+    app = QApplication.instance() or QApplication([])
+    table = _table()
+    try:
+        table.selectRow(1)
+        from PySide6.QtWidgets import QStyleOptionViewItem
+
+        option = QStyleOptionViewItem()
+        option.initFrom(table)
+        table.itemDelegate().initStyleOption(
+            option, table.model().index(2, 0)
+        )
+
+        assert option.backgroundBrush.color().name() != QColor(
+            TABLE_SELECTION_BG
+        ).name()
+    finally:
+        table.close()
+        app.processEvents()

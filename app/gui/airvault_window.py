@@ -749,6 +749,9 @@ class AirVaultWindow(QDialog):
         # sin esta marca comprobar y subir se llamarían el uno al otro sin
         # parar. Se vacía en cada vuelta del reloj y en cada acción manual.
         self._reenvios_del_ciclo: set[str] = set()
+        # Acciones pedidas desde la tabla mientras habia algo en vuelo.
+        # Se van lanzando en orden segun el hilo queda libre.
+        self._cola_de_acciones: list[tuple[str, list]] = []
         self._indexado_incompleto = False
         # Cerrar con trabajo en vuelo no bloquea: se pide la cancelación y
         # la ventana se va en cuanto el hilo suelta lo que tenía tomado.
@@ -957,14 +960,15 @@ class AirVaultWindow(QDialog):
             "está trabajando, elegir otra ejecución la abre aparte y ambas "
             "continúan simultáneamente."
         )
+        # Varios batches se mandan a la cola de una vez: con Ctrl o
+        # Mayúsculas se eligen las filas y la acción vale para todas.
         tabla.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
+            QAbstractItemView.SelectionMode.ExtendedSelection
         )
         tabla.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         tabla.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        tabla.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         tabla.setAlternatingRowColors(True)
         tabla.verticalHeader().setVisible(False)
         cabecera = tabla.horizontalHeader()
@@ -992,75 +996,130 @@ class AirVaultWindow(QDialog):
     # ── la cola: cada fila por separado ────────────────────────────
 
     def _menu_de_la_cola(self, punto) -> None:
-        """Abre el menú del batch sobre el que se hizo clic derecho."""
+        """Abre el menú de los batches sobre los que se hizo clic derecho.
+
+        Si la fila del clic ya estaba entre las elegidas, la acción vale
+        para toda la selección; si no, la selección pasa a ser esa fila.
+        Es lo que hace cualquier lista, y evita actuar sobre batches que no
+        se están mirando.
+        """
         fila = self.lotes.rowAt(punto.y())
         if fila < 0 or fila >= len(self._estados):
             return
-        menu = self._acciones_de_la_cola(self._estados[fila])
+        menu = self._acciones_de_la_cola(self._elegidas(fila))
         menu.exec(self.lotes.viewport().mapToGlobal(punto))
 
-    def _acciones_de_la_cola(self, parte) -> QMenu:
-        """Lo que se puede hacer con un batch, y lo que no.
+    def _elegidas(self, fila: int) -> list:
+        """Las filas sobre las que va a actuar el menú."""
+        seleccion = self.lotes.selectionModel()
+        filas = sorted(
+            {indice.row() for indice in seleccion.selectedRows()}
+        ) if seleccion is not None else []
+        if fila not in filas:
+            self.lotes.selectRow(fila)
+            filas = [fila]
+        return [
+            self._estados[numero] for numero in filas
+            if numero < len(self._estados)
+        ]
+
+    def _acciones_de_la_cola(self, partes) -> QMenu:
+        """Lo que se puede hacer con los batches elegidos, y lo que no.
 
         Cada acción es la misma que ya hace la ventana entera, acotada a
-        una fila: lo que no se puede hacer ahora sale desactivado en vez de
-        desaparecer, para que la fila diga siempre de qué es capaz.
+        las filas elegidas: se habilita si vale para alguna de ellas y se
+        aplica solo a esas, de modo que elegir cinco batches mezclados hace
+        en cada uno lo que corresponde. Lo que no se puede hacer sale
+        desactivado en vez de desaparecer, para que la fila diga siempre de
+        qué es capaz.
+
+        Trabajando también se puede elegir: la acción no se pierde, se pone
+        en cola y arranca en cuanto termine lo que hay en vuelo.
         """
         from app.airvault.flujo import BUSCANDO, INDEXADO, SIN_SUBIR
 
-        trabajo = parte.trabajo
-        manifiesto = trabajo.manifiesto
-        libre = self.hilo() is None
-        cancelado = bool(getattr(manifiesto, "cancelado", False))
+        planes = self._estado.get("planes") or {}
+
+        def activo(parte) -> bool:
+            return not bool(
+                getattr(parte.trabajo.manifiesto, "cancelado", False)
+            )
+
+        subibles = [
+            parte for parte in partes
+            if activo(parte) and parte.estado in (SIN_SUBIR, BUSCANDO)
+        ]
+        indexables = [
+            parte for parte in partes
+            if activo(parte) and parte.se_puede_indexar
+            and str(parte.trabajo.carpeta) in planes
+        ]
+        cerrables = [
+            parte for parte in partes
+            if activo(parte) and parte.estado == INDEXADO
+            and not parte.trabajo.manifiesto.solo_subir
+        ]
+        cancelables = [
+            parte for parte in partes
+            if activo(parte) and not parte.se_acabo
+        ]
+        reanudables = [parte for parte in partes if not activo(parte)]
+
         menu = QMenu(self)
-
-        subir = menu.addAction("Subir a AirVault ahora")
-        subir.setEnabled(
-            libre and not cancelado
-            and parte.estado in (SIN_SUBIR, BUSCANDO)
+        self._accion(
+            menu, "Subir a AirVault ahora", subibles,
+            lambda: self._subir_estas(subibles),
         )
-        subir.triggered.connect(lambda: self._subir_una(parte))
-
         comprobar = menu.addAction("Comprobar en AirVault")
-        comprobar.setEnabled(libre and not cancelado)
+        comprobar.setEnabled(bool(partes))
         comprobar.triggered.connect(self._comprobar)
-
-        indexar = menu.addAction("Indexar ahora")
-        indexar.setEnabled(
-            libre and not cancelado and parte.se_puede_indexar
-            and str(trabajo.carpeta) in (self._estado.get("planes") or {})
+        self._accion(
+            menu, "Indexar ahora", indexables,
+            lambda: self._indexar_estas(indexables),
         )
-        indexar.triggered.connect(lambda: self._indexar_una(parte))
-
-        completar = menu.addAction("Completar el batch")
-        completar.setEnabled(
-            libre and not cancelado
-            and parte.estado == INDEXADO and not manifiesto.solo_subir
+        self._accion(
+            menu, "Completar el batch", cerrables,
+            lambda: self._completar_estas(cerrables),
         )
-        completar.triggered.connect(lambda: self._completar_una(parte))
 
         menu.addSeparator()
-        if cancelado:
-            reanudar = menu.addAction("Reanudar en la cola")
-            reanudar.setEnabled(libre)
-            reanudar.triggered.connect(lambda: self._cancelar_una(parte, False))
+        if reanudables and not cancelables:
+            self._accion(
+                menu, "Reanudar en la cola", reanudables,
+                lambda: self._cancelar_estas(reanudables, False),
+            )
         else:
-            cancelar = menu.addAction("Cancelar en la cola")
-            cancelar.setEnabled(libre and not parte.se_acabo)
-            cancelar.triggered.connect(lambda: self._cancelar_una(parte, True))
+            self._accion(
+                menu, "Cancelar en la cola", cancelables,
+                lambda: self._cancelar_estas(cancelables, True),
+            )
 
         menu.addSeparator()
-        copiar_nombre = menu.addAction("Copiar el nombre del batch")
-        copiar_nombre.setEnabled(bool(parte.nombre))
-        copiar_nombre.triggered.connect(
-            lambda: self._copiar_al_portapapeles(parte.nombre)
+        con_nombre = [parte for parte in partes if parte.nombre]
+        self._accion(
+            menu, "Copiar el nombre del batch", con_nombre,
+            lambda: self._copiar_al_portapapeles(
+                "\n".join(parte.nombre for parte in con_nombre)
+            ),
         )
-        copiar_id = menu.addAction("Copiar el ID del batch")
-        copiar_id.setEnabled(bool(parte.batch_id))
-        copiar_id.triggered.connect(
-            lambda: self._copiar_al_portapapeles(parte.batch_id)
+        con_id = [parte for parte in partes if parte.batch_id]
+        self._accion(
+            menu, "Copiar el ID del batch", con_id,
+            lambda: self._copiar_al_portapapeles(
+                "\n".join(parte.batch_id for parte in con_id)
+            ),
         )
         return menu
+
+    @staticmethod
+    def _accion(menu: QMenu, texto: str, sobre, hacer):
+        """Añade una acción y dice a cuántos batches se aplicaría."""
+        accion = menu.addAction(
+            texto if len(sobre) <= 1 else f"{texto} ({len(sobre)})"
+        )
+        accion.setEnabled(bool(sobre))
+        accion.triggered.connect(hacer)
+        return accion
 
     def _copiar_al_portapapeles(self, texto: str) -> None:
         if not texto:
@@ -1068,8 +1127,71 @@ class AirVaultWindow(QDialog):
         QGuiApplication.clipboard().setText(texto)
         self._anotar(f"Copiado: {texto}")
 
-    def _subir_una(self, parte) -> None:
-        """Manda este batch a Quick Upload, esté como esté la espera.
+    # ── la cola de acciones ────────────────────────────────────────
+
+    def _encolar(self, modo: str, trabajos, texto: str) -> None:
+        """Lanza la acción, o la deja esperando si hay algo en vuelo.
+
+        Antes cada acción exigía la ventana parada, así que elegir un batch
+        mientras subía otro no hacía nada. Ahora se apunta y arranca sola
+        en cuanto el hilo queda libre: la tabla es una cola y se comporta
+        como tal.
+        """
+        trabajos = [
+            trabajo for trabajo in trabajos
+            if not getattr(trabajo.manifiesto, "cancelado", False)
+        ]
+        if not trabajos:
+            return
+        if self.hilo() is not None:
+            self._cola_de_acciones.append((modo, trabajos))
+            pendientes = len(self._cola_de_acciones)
+            plural = "acciones" if pendientes != 1 else "acción"
+            self._anotar(f"{texto}: en cola, {pendientes} {plural} esperando")
+            return
+        self._anotar(texto)
+        self._ejecutar_accion(modo, trabajos)
+
+    def _ejecutar_accion(self, modo: str, trabajos) -> bool:
+        """Prepara el estado que pide cada modo y arranca el hilo."""
+        estado = self._base_del_estado()
+        if estado is None:
+            return False
+        if modo == "subir_pendientes":
+            estado["pendientes_subida"] = list(trabajos)
+            estado["indexar_al_encontrar"] = (
+                self.auto_indexar_check.isChecked()
+            )
+            self._reenvios_del_ciclo.clear()
+        elif modo == "indexar":
+            planes = estado.get("planes") or {}
+            listos = [
+                trabajo for trabajo in trabajos
+                if str(trabajo.carpeta) in planes
+            ]
+            if not listos:
+                return False
+            estado["listos"] = listos
+        elif modo == "completar":
+            estado["por_completar"] = list(trabajos)
+        estado["completar"] = self.completar_check.isChecked()
+        self._lanzar(modo, estado)
+        return True
+
+    def _siguiente_de_la_cola(self) -> bool:
+        """Arranca la primera acción en espera que todavía tenga sentido."""
+        while self._cola_de_acciones:
+            modo, trabajos = self._cola_de_acciones.pop(0)
+            vigentes = [
+                trabajo for trabajo in trabajos
+                if not getattr(trabajo.manifiesto, "cancelado", False)
+            ]
+            if vigentes and self._ejecutar_accion(modo, vigentes):
+                return True
+        return False
+
+    def _subir_estas(self, partes) -> None:
+        """Manda estos batches a Quick Upload, esté como esté la espera.
 
         Es una orden expresa, así que no pasa por la regla que decide sola
         si una carga se dio por perdida: se olvida lo que el programa creía
@@ -1079,36 +1201,38 @@ class AirVaultWindow(QDialog):
         """
         from app.airvault.flujo import BUSCANDO, reiniciar_subida
 
-        estado = self._base_del_estado()
-        if estado is None:
-            return
-        if parte.estado == BUSCANDO:
-            reiniciar_subida(parte.trabajo)
-        self._reenvios_del_ciclo.clear()
-        estado["pendientes_subida"] = [parte.trabajo]
-        estado["indexar_al_encontrar"] = self.auto_indexar_check.isChecked()
-        estado["completar"] = self.completar_check.isChecked()
-        self._anotar(f"Se vuelve a subir {parte.nombre}")
-        self._lanzar("subir_pendientes", estado)
+        for parte in partes:
+            if parte.estado == BUSCANDO:
+                reiniciar_subida(parte.trabajo)
+        nombres = ", ".join(parte.nombre for parte in partes)
+        self._encolar(
+            "subir_pendientes",
+            [parte.trabajo for parte in partes],
+            f"Se vuelve a subir {nombres}",
+        )
 
-    def _indexar_una(self, parte) -> None:
-        """Escribe solo este batch, con el plan que ya se calculó."""
-        estado = self._base_del_estado()
-        if estado is None:
-            return
-        estado["listos"] = [parte.trabajo]
-        estado["completar"] = self.completar_check.isChecked()
-        self._anotar(f"Se indexa {parte.nombre}")
-        self._lanzar("indexar", estado)
+    def _indexar_estas(self, partes) -> None:
+        """Escribe solo estos batches, con el plan que ya se calculó."""
+        nombres = ", ".join(parte.nombre for parte in partes)
+        self._encolar(
+            "indexar",
+            [parte.trabajo for parte in partes],
+            f"Se indexa {nombres}",
+        )
 
-    def _completar_una(self, parte) -> None:
-        """Cierra solo este batch, sin volver a escribir sus páginas."""
-        estado = self._base_del_estado()
-        if estado is None:
-            return
-        estado["por_completar"] = [parte.trabajo]
-        self._anotar(f"Se cierra {parte.nombre}")
-        self._lanzar("completar", estado)
+    def _completar_estas(self, partes) -> None:
+        """Cierra solo estos batches, sin volver a escribir sus páginas."""
+        nombres = ", ".join(parte.nombre for parte in partes)
+        self._encolar(
+            "completar",
+            [parte.trabajo for parte in partes],
+            f"Se cierra {nombres}",
+        )
+
+    def _cancelar_estas(self, partes, cancelar: bool) -> None:
+        """Saca estos batches de la cola, o los devuelve a ella."""
+        for parte in partes:
+            self._cancelar_una(parte, cancelar)
 
     def _cancelar_una(self, parte, cancelar: bool) -> None:
         """Saca este batch de la cola, o lo devuelve a ella.
@@ -1122,6 +1246,19 @@ class AirVaultWindow(QDialog):
         trabajo = parte.trabajo
         trabajo.manifiesto.cancelado = bool(cancelar)
         trabajo.guardar()
+        if cancelar:
+            # Lo que estuviera esperando turno para este batch deja de
+            # tener sentido; lo que ya esté en vuelo termina su paso.
+            self._cola_de_acciones = [
+                (modo, [
+                    otro for otro in trabajos if otro is not trabajo
+                ])
+                for modo, trabajos in self._cola_de_acciones
+            ]
+            self._cola_de_acciones = [
+                (modo, trabajos)
+                for modo, trabajos in self._cola_de_acciones if trabajos
+            ]
         self._estados = [
             estado_local(otra.trabajo) if otra.trabajo is trabajo else otra
             for otra in self._estados
@@ -1191,16 +1328,19 @@ class AirVaultWindow(QDialog):
         self.auto_esperar_check.setChecked(True)
         self.auto_indexar_check = QCheckBox("Indexar páginas")
         self.auto_indexar_check.setChecked(True)
-        self.auto_completar_check = QCheckBox("Completar batches")
+        # Cerrar el batch se elige en «Completar batch», en el menú
+        # principal, y esa casilla se recuerda entre ejecuciones. Aquí había
+        # una segunda que decidía lo mismo y ademas forzaba a la otra: dos
+        # controles para un solo ajuste, y el que mandaba dependia de cual
+        # se hubiera tocado ultimo.
         for control in (
             self.auto_esperar_check,
             self.auto_indexar_check,
-            self.auto_completar_check,
         ):
             control.toggled.connect(self._ajustar_pasos_automaticos)
         for control in (
             self.auto_subir_check, self.auto_esperar_check,
-            self.auto_indexar_check, self.auto_completar_check,
+            self.auto_indexar_check,
         ):
             contenido.addWidget(control)
 
@@ -1235,13 +1375,7 @@ class AirVaultWindow(QDialog):
         self.auto_indexar_check.setEnabled(espera)
         if not espera:
             self.auto_indexar_check.setChecked(False)
-        indexa = espera and self.auto_indexar_check.isChecked()
-        self.auto_completar_check.setEnabled(indexa)
-        if not indexa:
-            self.auto_completar_check.setChecked(False)
         self.auto_check.setChecked(espera)
-        if self.auto_completar_check.isChecked():
-            self.completar_check.setChecked(True)
 
     def _sincronizar_espera_visible(self, marcada: bool) -> None:
         """La opción visible y el paso oculto representan la misma espera."""
@@ -2507,6 +2641,10 @@ class AirVaultWindow(QDialog):
                 self.completar_check.isChecked() and self._por_completar()
             ):
                 self._indexar()
+                return
+        # Lo que se pidió desde la tabla mientras esto trabajaba entra ahora,
+        # que es lo que hace de la tabla una cola y no una lista de avisos.
+        self._siguiente_de_la_cola()
 
     def _limpiar_progreso(self) -> None:
         """Deja la barra quieta en cero: lo que pasó lo cuenta el resumen."""
