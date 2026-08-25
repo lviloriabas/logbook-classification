@@ -930,8 +930,9 @@ class EmbeddedPdfViewer(QFrame):
         controls.setContentsMargins(0, 0, 0, 0)
         self.prev = QToolButton()
         self.prev.setArrowType(Qt.ArrowType.LeftArrow)
-        self.prev.setToolTip("Página anterior")
+        self.prev.setToolTip("Página anterior (flecha izquierda)")
         self.prev.setAccessibleName("Página anterior")
+        self.prev.setShortcut(QKeySequence(Qt.Key.Key_Left))
         self.prev.clicked.connect(self._show_previous_page)
         controls.addWidget(self.prev)
         controls.addWidget(QLabel("Página"))
@@ -945,8 +946,9 @@ class EmbeddedPdfViewer(QFrame):
         controls.addWidget(self.total_pages)
         self.next = QToolButton()
         self.next.setArrowType(Qt.ArrowType.RightArrow)
-        self.next.setToolTip("Página siguiente")
+        self.next.setToolTip("Página siguiente (flecha derecha)")
         self.next.setAccessibleName("Página siguiente")
+        self.next.setShortcut(QKeySequence(Qt.Key.Key_Right))
         self.next.clicked.connect(self._show_next_page)
         controls.addWidget(self.next)
 
@@ -1245,6 +1247,10 @@ class EmbeddedPdfViewer(QFrame):
         self._zoom = 1.0
         self._render_page()
 
+    def zoom_by(self, factor: float) -> None:
+        """Acerca o aleja la página; lo usan los atajos de la ventana."""
+        self._zoom_by(factor)
+
     def _zoom_by(self, factor: float) -> None:
         self._zoom = min(_MAX_ZOOM, max(_MIN_ZOOM, self._zoom * factor))
         self._render_page()
@@ -1399,6 +1405,23 @@ class CsvViewerWindow(QMainWindow):
         # _build_ui: apretarlo después dejaba el mínimo holgado guardado en el
         # layout y la ventana se abría cien píxeles más alta de lo que pedía.
         self._build_ui()
+        self._install_zoom_shortcuts()
+
+    def _install_zoom_shortcuts(self) -> None:
+        """Atajos Ctrl++ / Ctrl+- sobre la página, como en la ventana principal.
+
+        Las dos vistas enseñan una página de bitácora dentro del mismo
+        recuadro; el teclado que la acerca tiene que ser el mismo.
+        """
+        for secuencia, factor in (
+            (QKeySequence("Ctrl++"), 1.25),
+            (QKeySequence("Ctrl+="), 1.25),
+            (QKeySequence("Ctrl+-"), 0.8),
+        ):
+            QShortcut(
+                secuencia, self,
+                activated=lambda f=factor: self.pdf_viewer.zoom_by(f),
+            )
 
     def _build_ui(self) -> None:
         central = QWidget(self)

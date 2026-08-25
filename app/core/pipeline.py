@@ -22,6 +22,7 @@ import re
 import pickle
 import tempfile
 import time
+import weakref
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
@@ -222,6 +223,34 @@ def _calibrate_page_worker(
     return transform, angle
 
 
+# Los pools que siguen abiertos ahora mismo. Cerrar la ventana o cancelar
+# solo puede pedir la parada y esperar: las paginas en vuelo terminan una a
+# una, y con paginas grandes eso son minutos. Quien no quiera esperar corta
+# por aqui. Es una WeakSet para que un pool olvidado no sobreviva por estar
+# apuntado desde el registro.
+_POOLS_VIVOS: "weakref.WeakSet[OcrProcessPool]" = weakref.WeakSet()
+
+
+def abortar_pools() -> int:
+    """Corta todos los pools abiertos sin esperar a lo que estan haciendo.
+
+    Devuelve cuantos se cortaron. Las paginas en vuelo se pierden y las
+    llamadas que esperaban su resultado levantan excepcion, que es
+    exactamente lo que hace falta para que el pipeline se desenrede solo en
+    lugar de quedarse esperando. La usa la interfaz cuando alguien pide
+    forzar un cierre o una cancelacion, y no debe llamarse en un
+    procesamiento que se quiera terminar.
+    """
+    pools = list(_POOLS_VIVOS)
+    for pool in pools:
+        pool.abortar()
+    if pools:
+        logger.warning(
+            f"[Pool] Cortados {len(pools)} pool(s) de OCR por orden expresa"
+        )
+    return len(pools)
+
+
 class OcrProcessPool:
     """Pool de Paddle/Tesseract reutilizable durante un batch completo."""
 
@@ -245,6 +274,7 @@ class OcrProcessPool:
         )
         self._job_index = 0
         self._closed = False
+        _POOLS_VIVOS.add(self)
 
     def prepare(self, state: dict) -> Path:
         self._job_index += 1
@@ -265,10 +295,39 @@ class OcrProcessPool:
         if self._closed:
             return
         self._closed = True
+        _POOLS_VIVOS.discard(self)
         self.executor.shutdown(
             wait=True, cancel_futures=cancel_futures
         )
         self._temporary.cleanup()
+
+    def abortar(self) -> None:
+        """Mata los procesos del pool en vez de esperar a que acaben.
+
+        Es el cierre a la fuerza. Se matan los hijos primero para que las
+        paginas en curso no sigan gastando CPU despues de que nadie vaya a
+        recoger su resultado, y solo despues se suelta el executor sin
+        esperarlo. El directorio temporal puede seguir tomado por un hijo que
+        aun no murio: si no se deja borrar, se deja estar, que lo limpia
+        Windows con el resto de la carpeta temporal.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        _POOLS_VIVOS.discard(self)
+        for proceso in list(getattr(self.executor, "_processes", {}).values()):
+            try:
+                proceso.terminate()
+            except Exception:  # noqa: BLE001 - ya podia estar muerto
+                pass
+        try:
+            self.executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001 - el pool ya esta roto, da igual
+            pass
+        try:
+            self._temporary.cleanup()
+        except OSError:
+            pass
 
     def __enter__(self) -> "OcrProcessPool":
         return self
