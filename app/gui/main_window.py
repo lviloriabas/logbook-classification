@@ -131,6 +131,11 @@ _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _TABLE_CELL_CHUNK = 2000
 # Espera entre comprobaciones mientras se detiene el trabajo para cerrar.
 _SHUTDOWN_POLL_MS = 150
+_PISTA_BUSQUEDA = "Escriba lo que busca del batch: bitácora, matrícula, archivo…"
+# Lo que se espera a un hilo despues de romperle el pool por debajo. Con el
+# pool roto la espera real es de milisegundos; el margen es para el hilo que
+# estuviera escribiendo en disco justo en ese instante.
+_CORTE_ESPERA_MS = 4000
 # Pausa tras el último evento de tamaño antes de reescalar la vista previa.
 # Arrastrar el borde emite un evento por píxel y cada uno reescalaba la página
 # entera con interpolación suave; así se reescala una vez al soltar.
@@ -493,6 +498,17 @@ class MainWindow(QMainWindow):
         # Cierre ordenado: destruir un QThread en marcha aborta el proceso, así
         # que la ventana pide la parada y espera sin bloquear la interfaz.
         self._closing = False
+        # Coincidencias de la búsqueda, como filas mostradas de la tabla y la
+        # columna donde apareció el texto. Se guardan por fila mostrada
+        # porque es la tabla la que se busca, no una lista aparte: así lo que
+        # se encuentra es exactamente lo que se está viendo.
+        self._coincidencias: list[tuple[int, int]] = []
+        self._coincidencia = -1
+        self._buscado = ""
+        # Se pidio cortar por lo sano: ni el cierre ni la cancelacion
+        # esperan ya a que terminen las paginas en vuelo.
+        self._forzado = False
+        self._cancel_pedido = False
         self._torn_down = False
         self._shutdown_timer = QTimer(self)
         self._shutdown_timer.setInterval(_SHUTDOWN_POLL_MS)
@@ -1307,9 +1323,7 @@ class MainWindow(QMainWindow):
 
         self.btn_cancel = QPushButton("Cancelar")
         self.btn_cancel.setEnabled(False)
-        self.btn_cancel.setToolTip(
-            "Detener el procesamiento; las páginas ya leídas se guardan en el CSV"
-        )
+        self.btn_cancel.setToolTip(self._CANCELAR_AYUDA)
         self.btn_cancel.clicked.connect(self._request_cancel)
         row.addWidget(self.btn_cancel)
 
@@ -1508,6 +1522,7 @@ class MainWindow(QMainWindow):
         table_panel = QWidget()
         table_layout = QVBoxLayout(table_panel)
         table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.addLayout(self._build_search_row())
         table_layout.addWidget(self.table, 1)
         table_controls = QHBoxLayout()
         self.duplicates_label = QLabel("Duplicados: 0")
@@ -2718,7 +2733,7 @@ class MainWindow(QMainWindow):
         self.btn_process.setEnabled(False)
         self.btn_preprocess.setEnabled(False)
         self.btn_export.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
+        self._rearmar_cancelar()
         total = total_pages(slices)
         self._set_file_page_counts(slices)
         self.progress.setRange(0, max(1, total))
@@ -2843,7 +2858,7 @@ class MainWindow(QMainWindow):
         self.btn_process.setEnabled(False)
         self.btn_preprocess.setEnabled(False)
         self.btn_export.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
+        self._rearmar_cancelar()
         total = total_pages(slices)
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(0)
@@ -2872,8 +2887,26 @@ class MainWindow(QMainWindow):
 
     # ── Slots ───────────────────────────────────────────────────────────
 
+    _CANCELAR_AYUDA = (
+        "Detener el procesamiento; las páginas ya leídas se guardan en el CSV"
+    )
+
+    def _rearmar_cancelar(self) -> None:
+        """Devuelve el botón a «Cancelar» al empezar un trabajo nuevo."""
+        self._cancel_pedido = False
+        self.btn_cancel.setText("Cancelar")
+        self.btn_cancel.setToolTip(self._CANCELAR_AYUDA)
+        self.btn_cancel.setEnabled(True)
+
     def _request_cancel(self) -> None:
-        """Pide la cancelación ordenada del pipeline en curso."""
+        """Pide la cancelación del pipeline; repetida, la corta en seco.
+
+        La cancelación ordenada deja terminar las páginas que ya estaban
+        leyéndose, y con páginas grandes eso tarda. El botón se queda por
+        eso disponible: la segunda pulsación ofrece cortar sin esperarlas,
+        que es la diferencia entre una espera larga y una ventana que
+        parece colgada.
+        """
         worker = self._worker
         message = "Cancelando… (las páginas en vuelo terminan y se guardan)"
         if worker is None or not worker.isRunning():
@@ -2881,9 +2914,29 @@ class MainWindow(QMainWindow):
             message = "Cancelando preprocesamiento…"
         if worker is None or not worker.isRunning():
             return
+        if self._cancel_pedido:
+            if not self._confirmar_corte(
+                "Cancelar a la fuerza",
+                "La cancelación está esperando a que terminen las páginas "
+                "en curso.",
+            ):
+                return
+            self._cortar_trabajo_en_curso()
+            self.btn_cancel.setEnabled(False)
+            self.status_label.setText(
+                "Cancelando sin esperar a las páginas en curso…"
+            )
+            return
+        self._cancel_pedido = True
         worker.requestInterruption()
-        self.btn_cancel.setEnabled(False)
-        self.status_label.setText(message)
+        self.btn_cancel.setText("Cancelar sin esperar")
+        self.btn_cancel.setToolTip(
+            "Cortar la lectura ahora mismo. Las páginas que se estaban "
+            "leyendo se pierden; las ya leídas se conservan."
+        )
+        self.status_label.setText(
+            f"{message}. Vuelva a pulsar para no esperar."
+        )
 
     def _on_preprocess_progress(
         self, done: int, total: int, message: str
@@ -3541,6 +3594,9 @@ class MainWindow(QMainWindow):
         """
         self.table.setUpdatesEnabled(False)
         self.table_sort.suspend()
+        # Las coincidencias apuntaban a filas de la tabla anterior; dejarlas
+        # llevaría el visor a una página que ya no es la que se encontró.
+        self._olvidar_busqueda()
         try:
             self.table.setRowCount(0)
             self._row_pdfs = []
@@ -3799,6 +3855,152 @@ class MainWindow(QMainWindow):
 
     def _on_fields_toggled(self, _checked: bool) -> None:
         self._apply_preview_overlay()
+
+    def _build_search_row(self) -> QHBoxLayout:
+        """La misma búsqueda que ofrece el visor de CSV, sobre este batch.
+
+        Las dos ventanas enseñan a la vez la tabla y la página, así que la
+        manera de encontrar una bitácora tiene que ser la misma en las dos.
+        """
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Buscar:"))
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText(
+            "Bitácora, matrícula, archivo, página… cualquier texto de la tabla"
+        )
+        self.search_edit.setAccessibleName("Texto que se busca en la tabla")
+        self.search_edit.setToolTip(
+            "Busca el texto en las columnas que muestra la tabla; con el CSV "
+            "completo busca también en las que la vista resumida oculta. "
+            "Cada coincidencia selecciona su fila y abre su página en la "
+            "vista previa; se recorren con ‹ y ›, o repitiendo la búsqueda."
+        )
+        self.search_edit.returnPressed.connect(self._buscar_en_la_tabla)
+        row.addWidget(self.search_edit, 1)
+        buscar = QPushButton("Buscar")
+        buscar.setToolTip(
+            "Buscar el texto; repetido, pasa a la coincidencia siguiente"
+        )
+        buscar.clicked.connect(self._buscar_en_la_tabla)
+        row.addWidget(buscar)
+        self.search_prev = QPushButton("‹")
+        self.search_prev.setToolTip("Coincidencia anterior")
+        self.search_prev.setEnabled(False)
+        self.search_prev.clicked.connect(lambda: self._mover_busqueda(-1))
+        row.addWidget(self.search_prev)
+        self.search_next = QPushButton("›")
+        self.search_next.setToolTip("Coincidencia siguiente")
+        self.search_next.setEnabled(False)
+        self.search_next.clicked.connect(lambda: self._mover_busqueda(1))
+        row.addWidget(self.search_next)
+        self.search_context = QLabel(_PISTA_BUSQUEDA)
+        self.search_context.setStyleSheet("color: #57606a;")
+        row.addWidget(self.search_context, 1)
+        return row
+
+    def _columnas_buscables(self) -> list[int]:
+        """Las columnas que la tabla está mostrando ahora mismo."""
+        return [
+            index
+            for index in range(self.table.columnCount())
+            if not self.table.isColumnHidden(index)
+        ] or list(range(self.table.columnCount()))
+
+    def _coincidencias_de(self, texto: str) -> list[tuple[int, int]]:
+        """Filas que contienen el texto, con la columna donde aparece.
+
+        Primero las que lo tienen completo en una celda y después las que lo
+        llevan dentro de un valor más largo: escribir una bitácora entera
+        lleva a esa bitácora, no a la primera fila que la mencione de paso.
+        """
+        texto = texto.casefold()
+        columnas = self._columnas_buscables()
+        exactas: list[tuple[int, int]] = []
+        parciales: list[tuple[int, int]] = []
+        for fila in range(self.table.rowCount()):
+            for columna in columnas:
+                item = self.table.item(fila, columna)
+                if item is None:
+                    continue
+                valor = item.text().strip().casefold()
+                if valor == texto:
+                    exactas.append((fila, columna))
+                    break
+                if texto in valor:
+                    parciales.append((fila, columna))
+                    break
+        return exactas + parciales
+
+    def _buscar_en_la_tabla(self) -> None:
+        """Busca lo escrito y lleva la tabla y la vista previa a la primera fila."""
+        valor = self.search_edit.text().strip()
+        if valor and valor.casefold() == self._buscado and self._coincidencias:
+            self._mover_busqueda(1)
+            return
+        self._buscado = valor.casefold()
+        self._coincidencias = []
+        self._coincidencia = -1
+        if not valor:
+            self.search_context.setText(_PISTA_BUSQUEDA)
+            self._sincronizar_busqueda()
+            return
+        if self._table_pending or not self.table.rowCount():
+            self.search_context.setText(
+                "Procese un batch para buscar en sus bitácoras."
+            )
+            self._sincronizar_busqueda()
+            return
+        self._coincidencias = self._coincidencias_de(valor)
+        if not self._coincidencias:
+            self.search_context.setText(f"«{valor}»: sin coincidencias.")
+            self._sincronizar_busqueda()
+            return
+        self._coincidencia = 0
+        self._mostrar_coincidencia()
+
+    def _mover_busqueda(self, salto: int) -> None:
+        if not self._coincidencias:
+            return
+        self._coincidencia = (self._coincidencia + salto) % len(
+            self._coincidencias
+        )
+        self._mostrar_coincidencia()
+
+    def _mostrar_coincidencia(self) -> None:
+        fila, columna = self._coincidencias[self._coincidencia]
+        if fila >= self.table.rowCount():
+            # La tabla se rehizo bajo los pies de la búsqueda.
+            self._olvidar_busqueda()
+            return
+        self.table.selectRow(fila)
+        self.table.setCurrentCell(fila, columna)
+        item = self.table.item(fila, columna)
+        if item is not None:
+            self.table.scrollToItem(item)
+        self._jump_to_page(fila, columna)
+        nombre = (
+            self._table_columns[columna]
+            if columna < len(self._table_columns)
+            else "la tabla"
+        )
+        self.search_context.setText(
+            f"Coincidencia {self._coincidencia + 1} de "
+            f"{len(self._coincidencias)} en «{nombre}»"
+        )
+        self._sincronizar_busqueda()
+
+    def _olvidar_busqueda(self) -> None:
+        """Descarta las coincidencias: la tabla que las sostenía ya no está."""
+        self._coincidencias = []
+        self._coincidencia = -1
+        self._buscado = ""
+        self.search_context.setText(_PISTA_BUSQUEDA)
+        self._sincronizar_busqueda()
+
+    def _sincronizar_busqueda(self) -> None:
+        varias = len(self._coincidencias) > 1
+        self.search_prev.setEnabled(varias)
+        self.search_next.setEnabled(varias)
 
     def _jump_to_page(self, row: int, _col: int) -> None:
         if self._table_pending:
@@ -4129,14 +4331,73 @@ class MainWindow(QMainWindow):
         (0xC0000409). Ahora el cierre pide la parada, deja la ventana viva
         atendiendo eventos mientras el trabajo en vuelo termina, y se
         completa solo cuando ya no queda ningún hilo corriendo.
+
+        Esa espera puede ser larga. Cerrar por segunda vez ofrece cortarla:
+        se rompen los pools de OCR, con lo que los hilos terminan solos, y
+        se cierra sin destruir ninguno.
         """
         running = self._running_workers()
         if running:
+            # Volver a cerrar mientras ya se estaba cerrando es la senal de
+            # que la espera se hizo larga. Entonces se ofrece cortar: sin
+            # esta salida, un OCR de paginas grandes deja la ventana
+            # diciendo "cerrando" durante minutos y parece colgada.
+            if self._closing and self._confirmar_corte(
+                "Cerrar a la fuerza",
+                "El programa esta esperando a que terminen las paginas en "
+                "curso para cerrarse sin perderlas.",
+            ):
+                self._cortar_trabajo_en_curso()
+                running = self._running_workers()
+                if running:
+                    self._esperar_a_los_hilos(running)
+                self._teardown()
+                super().closeEvent(event)
+                return
             self._begin_shutdown(running)
             event.ignore()
             return
         self._teardown()
         super().closeEvent(event)
+
+    def _confirmar_corte(self, titulo: str, situacion: str) -> bool:
+        """Pregunta si se corta el trabajo en curso, avisando de lo que cuesta."""
+        respuesta = QMessageBox.warning(
+            self,
+            titulo,
+            f"{situacion}\n\n"
+            "Si prefiere no esperar, se puede cortar ahora mismo. Las "
+            "paginas que estaban leyendose en ese momento se pierden; las "
+            "que ya estaban leidas se conservan.\n\n"
+            "¿Desea cortar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return respuesta == QMessageBox.StandardButton.Yes
+
+    def _cortar_trabajo_en_curso(self) -> None:
+        """Rompe los pools de OCR para que el trabajo en vuelo se desenrede.
+
+        No se destruyen los hilos: matar un QThread en marcha aborta el
+        proceso entero. Se corta lo que los tiene esperando, que son los
+        procesos de OCR, y entonces los hilos terminan solos en el acto.
+        """
+        from app.core.pipeline import abortar_pools
+
+        self._forzado = True
+        logger.warning("Corte solicitado: se abandonan las paginas en vuelo")
+        for worker in self._running_workers():
+            worker.requestInterruption()
+        abortar_pools()
+
+    def _esperar_a_los_hilos(self, running: list[QThread]) -> None:
+        """Espera lo justo a que los hilos ya cortados terminen de salir."""
+        for worker in running:
+            if not worker.wait(_CORTE_ESPERA_MS):
+                logger.error(
+                    "Un hilo no termino tras el corte; se deja que Qt lo "
+                    "recoja al salir"
+                )
 
     def _begin_shutdown(self, running: list[QThread]) -> None:
         """Pide la parada del trabajo en curso y espera sin congelar la GUI."""
@@ -4154,7 +4415,8 @@ class MainWindow(QMainWindow):
                 button.setEnabled(False)
             self.status_label.setText(
                 "Cerrando… se está deteniendo el trabajo en curso. "
-                "Las páginas ya leídas se guardan."
+                "Las páginas ya leídas se guardan. Vuelva a cerrar para no "
+                "esperar."
             )
         if not self._shutdown_timer.isActive():
             self._shutdown_timer.start()
