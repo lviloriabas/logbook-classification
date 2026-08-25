@@ -2,11 +2,15 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
-## 2026-08-24 — Una carga que AirVault no publicó se da por perdida en cuanto las siguientes se indexan
+## 2026-08-24 — Una carga que AirVault no publicó se da por perdida en cuanto se sabe, y no cuando vence un reloj
 
 La única señal de que una carga aceptada por Quick Upload no iba a aparecer era un reloj, y el reloj empezaba tarde y en el momento equivocado. Se agotaban tres ciclos de identificación, se guardaba ahí la marca de espera y solo media hora después de esa marca se permitía reenviar. Como la marca se estrena cuando el programa se da cuenta, una ejecución que se retomaba días más tarde volvía a esperar media hora entera por un archivo que llevaba días perdido. Y agotados los dos reenvíos, la parte se quedaba en «Subido pendiente confirmación» para siempre, con las demás partes de la entrega ya terminadas y sin nada que la sacara de ahí.
 
 Ahora una carga se da por perdida por cualquiera de dos motivos, y el primero no depende de ningún reloj: si las partes que se enviaron **después** ya aparecieron en Web Index y quedaron indexadas, la cola pasó de largo. No es que AirVault vaya lento, es que esa carga no está. El segundo motivo sigue siendo el tiempo, pero contado desde la fecha del batch —el momento en que Quick Upload aceptó el archivo—, no desde que el programa miró. Una ejecución retomada días después reconoce la carga vieja en la primera comprobación en vez de estrenar la espera.
+
+Se añade un tercer motivo, y es el que resuelve el caso de los batches borrados. Cuando los títulos esperados no aparecen, el programa recorre la cola entera de AirVault buscándolos por nombre visible, por nombre embebido, por cantidad de páginas y por los Log Page Number de dentro. Si esa búsqueda tampoco los encuentra, no queda ningún nombre bajo el que puedan estar escondidos; y si además el archivo lleva subido más de lo que AirVault tarda en publicar, tampoco viene en camino. Antes ese hallazgo no contaba para nada: la misma búsqueda se repetía dos veces más y después empezaba la espera. Ahora se resuelve en la primera comprobación y el archivo vuelve a Quick Upload.
+
+Esa vía queda atada a la edad de la carga a propósito. Sobre un batch recién subido la misma búsqueda no demuestra nada —que AirVault aún no lo haya publicado es lo normal, tarda minutos y a veces horas—, así que una carga reciente conserva el camino de siempre: tres revisiones y después la espera. Volver a subirla antes publicaría el mismo archivo dos veces.
 
 Lo demás no cambia: los tres ciclos de identificación por nombre, páginas y contenido se siguen agotando antes de dar nada por perdido —la edad de un archivo no es motivo para saltarse la búsqueda de un batch publicado con otro nombre—, el reenvío sigue topado en dos veces para no acabar publicando lo mismo varias veces, y la decisión de qué falta por subir sigue viviendo en un solo sitio, de modo que el botón y la comprobación periódica deciden igual. Esa regla recibe ahora la ejecución entera, porque dar una carga por perdida depende de en qué van las demás.
 

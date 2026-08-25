@@ -1383,14 +1383,17 @@ def test_lo_que_falta_por_subir_sale_de_una_sola_regla(tmp_path):
     ]
 
 
-def test_una_subida_antigua_agota_revisiones_y_despues_se_reenvia(
+def test_una_carga_vieja_que_no_esta_en_la_cola_se_reenvia_enseguida(
     tmp_path, monkeypatch,
 ):
-    """La edad de Quick Upload no salta la búsqueda de nombres incorrectos.
+    """La búsqueda amplia se hace igual; lo que no se hace es repetirla.
 
-    Agotadas las revisiones sí manda la fecha del batch: un archivo subido
-    hace años que nunca apareció en Web Index no llegó, y no tiene sentido
-    hacerle esperar media hora más antes de volver a enviarlo.
+    Recorrer la cola entera —por nombre visible, por nombre embebido, por
+    páginas y por Log Page Number— y no encontrar nada no deja ningún sitio
+    donde la carga pueda estar escondida. Si además el archivo se subió hace
+    mucho, no viene en camino: se volvió a borrar o nunca entró. Repetir esa
+    misma búsqueda dos veces más y esperar después media hora es tiempo
+    perdido.
     """
     trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
     subida = trabajo.manifiesto.etapa("subir")
@@ -1408,20 +1411,20 @@ def test_una_subida_antigua_agota_revisiones_y_despues_se_reenvia(
         lambda self, *a, **k: setattr(self.manifiesto, "batch_id", "003NUE"),
     )
 
-    estados = [comprobar_partes([trabajo], cliente)[0] for _ in range(3)]
+    estado = comprobar_partes([trabajo], cliente)[0]
 
-    assert [estado.estado for estado in estados] == [
-        PROCESANDO, PROCESANDO, BUSCANDO,
-    ]
-    assert trabajo.manifiesto.intentos_identificacion == 3
-    assert trabajo.manifiesto.espera_reenvio_desde
-    assert subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
+    assert estado.estado == BUSCANDO
+    assert "ningún nombre" in estado.detalle
+    assert trabajo.manifiesto.busquedas_amplias_sin_hallar == 1
     subir_partes(
         [trabajo], SesionFalsa(), cliente=cliente,
         reintentar_estancados=True,
     )
     assert subidas == [True]
     assert trabajo.manifiesto.reenvios == 1
+    # Reenviada, la cuenta vuelve a cero: la carga nueva empieza de nuevo
+    # con todo el margen de identificacion por delante.
+    assert trabajo.manifiesto.busquedas_amplias_sin_hallar == 0
 
 
 def test_los_ids_se_publican_solo_despues_de_intentar_todas_las_subidas(
@@ -2098,3 +2101,37 @@ def test_un_batch_cerrado_por_fuera_no_se_da_por_autocompletado(tmp_path):
 
     assert parte.estado == COMPLETADO
     assert parte.se_acabo
+
+
+def test_una_carga_recien_subida_no_se_reenvia_por_no_estar_todavia(
+    tmp_path, monkeypatch,
+):
+    """AirVault tarda: que aun no aparezca es lo normal, no una perdida.
+
+    La resubida inmediata es para la carga vieja que ya no esta en la cola.
+    Una recien enviada conserva el camino de siempre —tres revisiones y
+    despues la espera— porque volver a subirla ahora publicaria el mismo
+    archivo dos veces.
+    """
+    trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
+    _subida_en(trabajo, datetime.now() - timedelta(minutes=2))
+    cliente = ClienteFalso()
+    subidas = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
+    )
+
+    estados = [comprobar_partes([trabajo], cliente)[0] for _ in range(3)]
+
+    assert [estado.estado for estado in estados] == [
+        PROCESANDO, PROCESANDO, BUSCANDO,
+    ]
+    assert trabajo.manifiesto.busquedas_amplias_sin_hallar == 0
+    assert trabajo.manifiesto.intentos_identificacion == 3
+    assert not subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
+    assert not reenvio_pendiente(estados[-1], [trabajo])
+    subir_partes(
+        [trabajo], SesionFalsa(), cliente=cliente,
+        reintentar_estancados=True,
+    )
+    assert subidas == []

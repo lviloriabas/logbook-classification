@@ -336,7 +336,15 @@ El flujo es:
 9. liberar el batch al terminar, cancelar o abandonar.
 
 La recuperación de Quick Upload agota primero tres ciclos de identificación
-por nombre, páginas y contenido. Solo entonces se pregunta si la carga se
+por nombre, páginas y contenido, salvo que la búsqueda amplia —la que recorre
+la cola entera, incluido el `Empty-Batch` sin nombre, contrastando páginas y
+Log Page Number— falle sobre una carga cuya edad ya supera la espera
+configurada (`_carga_vieja_sin_publicar`). Ese caso se resuelve en la primera
+comprobación: no queda nombre bajo el que la carga pueda estar y no viene en
+camino. Sobre una carga reciente la misma búsqueda no concluye nada, porque que
+AirVault aún no la haya publicado es lo esperable.
+
+Agotados los ciclos se pregunta si la carga se
 perdió, y basta con uno de dos motivos. El primero no depende de ningún reloj:
 las partes que se enviaron **después** ya aparecieron en Web Index y quedaron
 indexadas, así que la cola pasó de largo (`subida_rebasada`). El segundo son

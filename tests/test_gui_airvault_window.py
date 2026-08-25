@@ -501,6 +501,7 @@ class ManifiestoFalso:
         self.intentos_identificacion = 0
         self.espera_reenvio_desde = ""
         self.reenvios = 0
+        self.busquedas_amplias_sin_hallar = 0
         self.completado_automatico = False
         # Que una parte este verificada es lo que demuestra que AirVault
         # publico lo que se subio despues de otra, asi que la regla de

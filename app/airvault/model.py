@@ -140,6 +140,11 @@ class Manifiesto(BaseModel):
     # acepto pero AirVault nunca publico. Se cuenta para no seguir enviando
     # el mismo archivo indefinidamente y acabar con batches duplicados.
     reenvios: int = 0
+    # Veces que se recorrio la cola entera de AirVault —por nombre visible,
+    # nombre embebido, cantidad de paginas y Log Page Number— sin encontrar
+    # esta carga. Una sola basta para darla por no publicada: ya no queda
+    # nombre bajo el que pueda estar.
+    busquedas_amplias_sin_hallar: int = 0
     # El propio programa cerro el batch al terminar de indexarlo. Distingue
     # lo que quedo terminado sin que nadie interviniera de lo que ya estaba
     # cerrado en AirVault cuando se encontro.

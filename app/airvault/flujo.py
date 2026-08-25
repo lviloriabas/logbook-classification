@@ -995,6 +995,7 @@ class Trabajo:
         # batch siguiera indistinguible como ``Empty-Batch``.
         self.manifiesto.batch_id = lote.batch_id
         self.manifiesto.intentos_identificacion = 0
+        self.manifiesto.busquedas_amplias_sin_hallar = 0
         self.manifiesto.espera_reenvio_desde = ""
         # AirVault lo publico: la carga no se perdio y el tope de reenvios
         # vuelve a cero para el proximo trabajo que use este manifiesto.
@@ -2069,6 +2070,7 @@ def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:
     manifiesto.batch_id = None
     manifiesto.lotes_previos = []
     manifiesto.intentos_identificacion = 0
+    manifiesto.busquedas_amplias_sin_hallar = 0
     manifiesto.espera_reenvio_desde = ""
     for nombre in (
         "subir",
@@ -2188,19 +2190,34 @@ def subida_rebasada(
     return False
 
 
+def busqueda_amplia_sin_hallar(trabajo: "Trabajo") -> bool:
+    """Si ya se recorrio la cola entera de AirVault sin encontrar la carga.
+
+    La busqueda amplia no va por el titulo esperado: mira todos los lotes
+    publicados, incluido el ``Empty-Batch`` sin nombre, y los contrasta por
+    cantidad de paginas y por los Log Page Number de dentro. Que falle no
+    deja ningun nombre bajo el que la carga pueda estar escondida, asi que
+    no hay nada mas que buscar ni que esperar: falta el archivo.
+    """
+    return int(trabajo.manifiesto.busquedas_amplias_sin_hallar or 0) > 0
+
+
 def subida_perdida(
     parte: EstadoParte, ejecucion: Sequence["Trabajo"] = ()
 ) -> bool:
     """Si una carga que Quick Upload acepto se puede dar por no publicada.
 
-    Dos motivos, y basta con uno: las partes siguientes ya se indexaron, o
-    el archivo lleva subido mas tiempo del que AirVault tarda en publicar.
-    Solo se pregunta de una carga que ya agoto las revisiones de identidad,
-    que es lo que significa ``BUSCANDO``.
+    Tres motivos, y basta con uno: la cola entera de AirVault no la tiene
+    bajo ningun nombre, las partes siguientes ya se indexaron, o el archivo
+    lleva subido mas tiempo del que AirVault tarda en publicar. Solo se
+    pregunta de una carga que ya agoto las revisiones de identidad, que es
+    lo que significa ``BUSCANDO``.
     """
     if parte.estado != BUSCANDO:
         return False
     trabajo = parte.trabajo
+    if busqueda_amplia_sin_hallar(trabajo):
+        return True
     if subida_rebasada(trabajo, ejecucion):
         return True
     return subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
@@ -3186,6 +3203,63 @@ def _registrar_revision_sin_identificar(
     return intentos, esperando
 
 
+def edad_de_la_carga(
+    trabajo: "Trabajo", ahora: Optional[datetime] = None
+) -> Optional[float]:
+    """Segundos desde que se subio este archivo, o ``None`` si no se sabe.
+
+    La fecha de la subida es la del manifiesto; si esa carga nunca llego a
+    registrarse se usa la de preparacion del trabajo, que es la hora que
+    llevan el nombre del batch y los archivos de la ejecucion.
+    """
+    momento = momento_de_subida(trabajo) or _momento(trabajo.manifiesto.creado)
+    if momento is None:
+        return None
+    presente = ahora or (
+        datetime.now(momento.tzinfo) if momento.tzinfo else datetime.now()
+    )
+    if not _mismo_reloj(presente, momento):
+        return None
+    try:
+        return (presente - momento).total_seconds()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _carga_vieja_sin_publicar(trabajo: "Trabajo") -> bool:
+    """Si esta carga es lo bastante antigua como para no estar en camino.
+
+    AirVault tarda, y un batch recien subido que aun no aparece es lo
+    normal. Uno que lleva mas tiempo del que el servidor tarda en publicar
+    y sigue sin estar en la cola es otra cosa: probablemente lo borraron o
+    nunca entro. Es la condicion que separa los dos casos.
+    """
+    edad = edad_de_la_carga(trabajo)
+    if edad is None:
+        return False
+    return edad >= max(0.0, float(trabajo.config.espera_reenvio_s))
+
+
+def _registrar_busqueda_amplia_fallida(trabajo: "Trabajo") -> EstadoParte:
+    """Anota que la cola entera no tenia esta carga y la deja por reenviar."""
+    manifiesto = trabajo.manifiesto
+    manifiesto.busquedas_amplias_sin_hallar = (
+        int(manifiesto.busquedas_amplias_sin_hallar or 0) + 1
+    )
+    manifiesto.intentos_identificacion = INTENTOS_IDENTIFICACION_ANTES_DE_ESPERA
+    if not manifiesto.espera_reenvio_desde:
+        manifiesto.espera_reenvio_desde = datetime.now().isoformat(
+            timespec="seconds"
+        )
+    trabajo.guardar()
+    return EstadoParte(
+        trabajo,
+        BUSCANDO,
+        "no está en AirVault con ningún nombre, ni por páginas ni por Log "
+        "Page Number; se vuelve a subir",
+    )
+
+
 def _estado_de(
     trabajo: "Trabajo",
     cliente,
@@ -3193,6 +3267,7 @@ def _estado_de(
     cache: Optional[dict[str, str]] = None,
     lote_confirmado: Optional[ResumenLote] = None,
     identidad_fallida: bool = False,
+    amplia_fallida: bool = False,
 ) -> EstadoParte:
     """En que va una parte, mirando la cola que se acaba de pedir."""
     manifiesto = trabajo.manifiesto
@@ -3277,6 +3352,13 @@ def _estado_de(
                 PROCESANDO,
                 "batch encontrado; verificando el nombre completo y su contenido",
             )
+        if amplia_fallida and _carga_vieja_sin_publicar(trabajo):
+            # Se recorrio la cola entera y no aparecio bajo ningun nombre, y
+            # ademas la carga es vieja: no viene en camino, no esta. Contar
+            # tres rondas y esperar media hora mas no va a cambiar eso, asi
+            # que vuelve a Quick Upload. Una carga reciente sigue el camino
+            # normal: que AirVault aun no la publique es lo esperable.
+            return _registrar_busqueda_amplia_fallida(trabajo)
         intentos, esperando = _registrar_revision_sin_identificar(trabajo)
         if not esperando:
             return EstadoParte(
@@ -3388,6 +3470,7 @@ def comprobar_partes(
     nombres_embebidos: dict[str, str] = {}
     confirmados: set[str] = set()
     fallos_identidad: set[str] = set()
+    sin_hallar: set[str] = set()
     por_busqueda_amplia: List["Trabajo"] = []
 
     for numero, trabajo in enumerate(pendientes, start=1):
@@ -3462,6 +3545,13 @@ def comprobar_partes(
             for trabajo in por_busqueda_amplia
             if trabajo.manifiesto.batch_id
         )
+        # Los que siguen sin ID despues de mirar la cola entera ya no estan
+        # esperando a que AirVault los publique: no llegaron.
+        sin_hallar.update(
+            str(trabajo.carpeta)
+            for trabajo in por_busqueda_amplia
+            if not trabajo.manifiesto.batch_id
+        )
 
     return [
         _estado_de(
@@ -3473,6 +3563,7 @@ def comprobar_partes(
                 str(trabajo.manifiesto.batch_id or "").strip().upper()
             ) if str(trabajo.carpeta) in confirmados else None,
             str(trabajo.carpeta) in fallos_identidad,
+            str(trabajo.carpeta) in sin_hallar,
         )
         for trabajo in trabajos
     ]
