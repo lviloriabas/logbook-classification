@@ -1,8 +1,8 @@
 # 4. Salidas y trazabilidad
 
-## 4.1 Carpeta de corrida
+## 4.1 Carpeta de ejecución
 
-Cada corrida nueva crea una carpeta con fecha y hora:
+Cada ejecución nueva crea una carpeta con fecha y hora:
 
 ```text
 output/
@@ -17,7 +17,7 @@ output/
     └── otros PDF opcionales
 ```
 
-Si el nombre ya existe, el sistema añade `-2`, `-3`, etc. No sobrescribe otra corrida.
+Si el nombre ya existe, el sistema añade `-2`, `-3`, etc. No sobrescribe otra ejecución.
 
 ## 4.2 CSV mínimo
 
@@ -44,7 +44,7 @@ Además contiene:
 - `dup`: `true` desde la segunda aparición de un `log_number`; la primera queda en `false`;
 - `disc`: `true` cuando la página presenta una posible discrepancia de firmas;
 - `date`: fecha normalizada `YYYY/MM/DD`;
-- `time_ms`: parte proporcional del tiempo real de la corrida.
+- `time_ms`: parte proporcional del tiempo real de la ejecución.
 
 ## 4.4 Política de fecha del CSV
 
@@ -57,7 +57,7 @@ Cuando la política sustituye el día, el CSV identifica la fuente como `csv_dat
 
 ## 4.5 JSON consolidado
 
-El JSON tiene el mismo nombre base que la corrida. Contiene:
+El JSON tiene el mismo nombre base que la ejecución. Contiene:
 
 - nombre y fecha de generación;
 - cantidad de documentos;
@@ -82,7 +82,7 @@ Los metadatos exclusivos de la vista previa no se guardan.
 
 El campo histórico `total_bitacoras` cuenta reportes de entrada, es decir, PDF fuente. No representa el número de libros físicos cuando un libro cruza archivos o un PDF contiene más de un libro.
 
-El bloque de separación comprueba que cada página no blanca esté distribuida, excluida por discrepancia o destinada a revisión. `paginas_fuera` debe ser cero y `completa` debe ser `true`.
+El bloque de separación comprueba que cada página esté distribuida, excluida por discrepancia confirmada o destinada a revisión. `paginas_fuera` debe ser cero y `completa` debe ser `true`.
 
 ## 4.7 PDF único
 
@@ -93,9 +93,9 @@ Con separación por matrícula o mes, crea un solo PDF con páginas divisorias b
 1. matrícula ascendente;
 2. mes cronológico dentro de la matrícula;
 3. posibles discrepancias, si la opción está activa;
-4. **REVISAR**, si existen páginas sin aeronave confirmada.
+4. **REVISAR**, si existen páginas sin datos críticos seguros o detectadas en blanco.
 
-Las páginas fuente se insertan directamente desde el PDF original. No se rasterizan ni reciben anotaciones de BITS. Las páginas en blanco se omiten.
+Las páginas fuente se insertan directamente desde el PDF original. No se rasterizan ni reciben anotaciones de BITS. Las páginas en blanco se conservan bajo **REVISAR**.
 
 ## 4.8 Varios PDF
 
@@ -107,13 +107,13 @@ Los nombres dependen de los criterios seleccionados:
 | Mes | `YYYY-MMM.pdf` |
 | Matrícula y mes | `HP-XXXXCMP_YYYY-MMM.pdf` |
 | Mes no resuelto | `sf.pdf` o sufijo `_sf` |
-| Matrícula no confirmada | `revisar.pdf` |
+| Matrícula ausente, débil o en conflicto | `revisar.pdf` |
 
 Las páginas de cada archivo se ordenan por libro y `log_number`. Las páginas con número ilegible quedan al final, en su orden de entrada.
 
 ## 4.9 Posibles discrepancias
 
-Si la opción está activa, las páginas afectadas salen de las secciones normales.
+Si la opción está activa, las páginas con una firma requerida cuya ausencia quedó confirmada salen de las secciones normales. Las firmas meramente inciertas conservan `disc=true` y su detalle de auditoría, pero permanecen en el flujo normal.
 
 - En PDF único, se agregan al final bajo **POSIBLES DISCREPANCIAS**.
 - En modo de varios PDF, se escriben en `discrepancias.pdf`.
@@ -122,17 +122,16 @@ El orden es global por `log_number`. La sección no se subdivide por matrícula 
 
 ## 4.10 Páginas para revisar
 
-Una página sin matrícula confirmada no se asigna a un avión supuesto.
+Una página sin matrícula o `log_number` confirmados no se asigna a un avión supuesto. Tampoco se asigna automáticamente cuando su propia lectura canónica contradice al consenso del libro, cuando un campo crítico quedó en `WARNING` o cuando una inferencia solo tiene una lectura de respaldo. Una inferencia coherente respaldada por dos o más lecturas, incluida una asociación fuerte recordada de otra ejecución, conserva la lógica normal. La alineación dudosa no basta para apartar una página si matrícula y `log_number` quedaron firmes. Las páginas detectadas en blanco también van a **REVISAR**.
+
+Las advertencias de fecha no deciden esta separación. Mes, año y día pueden inferirse con las reglas del libro, incluido el último día del mes cuando corresponde.
 
 - En PDF único, cierra el documento bajo **REVISAR**.
 - En modo de varios PDF, se incorpora a `revisar.pdf`.
 
 Esta regla se aplica aunque no se haya seleccionado separación por matrícula.
 
-Si la misma página también tiene una posible discrepancia, el resultado depende del formato:
-
-- PDF único: aparece solo en **REVISAR**;
-- varios PDF: aparece en `revisar.pdf` y también en `discrepancias.pdf`.
+Si la misma página también debe ir a **REVISAR**, esa sección tiene prioridad y la página aparece una sola vez. No se duplica en `discrepancias.pdf`.
 
 ## 4.11 Salidas opcionales
 
@@ -147,7 +146,7 @@ Si la misma página también tiene una posible discrepancia, el resultado depend
 Los registros se llaman `app_YYYY-MM-DD.log`, rotan a diario y se conservan siete días.
 
 - GUI y editor: `output/logs/`.
-- CLI: `logs/` dentro de la carpeta de la corrida.
+- CLI: `logs/` dentro de la carpeta de la ejecución.
 
 El archivo registra detalle de depuración aunque la terminal muestre solo información normal.
 
@@ -160,4 +159,4 @@ Una reexportación usa resultados existentes y no modifica el OCR.
 - Si un PDF nuevo repite un nombre, añade `-2`, `-3`, etc.
 - Limpia y regenera otros artefactos derivados, como los recortes de auditoría.
 
-> **PRECAUCIÓN:** No use una reexportación como sustituto de un OCR nuevo cuando cambió la plantilla, la flota o el contenido del PDF fuente. Esos cambios requieren procesar otra corrida.
+> **PRECAUCIÓN:** No use una reexportación como sustituto de un OCR nuevo cuando cambió la plantilla, la flota o el contenido del PDF fuente. Esos cambios requieren procesar otra ejecución.

@@ -15,7 +15,7 @@ _DEFAULT_KEY = "__default__"
 # Columnas que se marcan solas mientras nadie edite la selección: los
 # identificadores de la página y los campos críticos de indexación. Vive aquí
 # y no en la ventana porque el CSV mínimo lo escriben las dos superficies, y
-# una corrida de línea de comandos tiene que dar el mismo archivo que la
+# una ejecución de línea de comandos tiene que dar el mismo archivo que la
 # interfaz sobre la misma plantilla.
 _DEFAULT_IMPORTANT = frozenset({
     "file", "page", "date", "time_ms", "dup", "disc", "log_number",

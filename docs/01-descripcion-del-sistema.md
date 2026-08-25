@@ -23,7 +23,7 @@ El resultado no reemplaza la revisión humana. Las lecturas incompletas, inciert
 - Formato de matrícula confirmado: `HP-XXXXCMP` o `HP-XXXXWWP`.
 - Formato de `log_number`: siete dígitos.
 
-> **PRECAUCIÓN:** No retire archivos ni apague el equipo mientras el estado indique procesamiento o generación de salidas. Una interrupción puede dejar una corrida parcial.
+> **PRECAUCIÓN:** No retire archivos ni apague el equipo mientras el estado indique procesamiento o generación de salidas. Una interrupción puede dejar una ejecución parcial.
 
 ## 1.3 Reglas del libro
 
@@ -40,7 +40,7 @@ Dentro del mismo libro, una fecha posterior en `log_number` no debe ser anterior
 |---|---|
 | `LogbookClassification.exe` | Abre la aplicación sin consola mediante el Python portable. |
 | `run_gui.py` | Inicia la ventana principal. |
-| `run_cli.py` | Ejecuta lotes desde una terminal. |
+| `run_cli.py` | Ejecuta batches desde una terminal. |
 | `run_editor.py` | Inicia el editor visual de plantillas. |
 | `app/core/` | Configura y coordina el procesamiento. |
 | `app/vision/` | Renderiza, endereza, alinea y analiza tinta. |
@@ -55,7 +55,7 @@ Dentro del mismo libro, una fecha posterior en `log_number` no debe ser anterior
 | `template/` | Contiene las definiciones de campos. |
 | `input/` | Recibe los PDF pendientes. |
 | `input/processed/` | Conserva los PDF terminados que procedían de `input/`. |
-| `output/` | Conserva una carpeta independiente por corrida. |
+| `output/` | Conserva una carpeta independiente por ejecución. |
 | `portable/` | Contiene Python, dependencias, Tesseract y modelos locales. |
 | `tools/` | Contiene utilidades de preparación, evaluación y calibración. |
 | `tests/` | Contiene la verificación automatizada. |
@@ -73,4 +73,4 @@ PDF de entrada
   -> CSV + JSON + estadísticas + PDF de entrega
 ```
 
-La interfaz y la línea de comandos usan el mismo generador de salidas. Con la misma entrada y las mismas opciones, la estructura de la corrida es equivalente.
+La interfaz y la línea de comandos usan el mismo generador de salidas. Con la misma entrada y las mismas opciones, la estructura de la ejecución es equivalente.

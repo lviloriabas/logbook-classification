@@ -40,7 +40,7 @@ from app.gui.csv_utils import (
 )
 
 
-INPUT = Path(__file__).resolve().parents[1] / "input"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _columns() -> list[str]:
@@ -140,6 +140,66 @@ def test_true_dup_uses_warning_color_convention():
 
     assert viewer._status_for({"dup": "true"}, "dup") == "WARNING"
     assert viewer._status_for({"dup": "false"}, "dup") is None
+
+    viewer.close()
+    app.processEvents()
+
+
+def test_minimal_csv_recovers_field_color_from_companion_json(tmp_path: Path):
+    """El CSV mínimo no trae columnas ``_status``: el color sale del JSON.
+
+    ``find_csv_files`` abre por defecto el CSV mínimo (ordena antes que
+    ``_completo``), y ese CSV se recorta al exportar sin esas columnas. Sin
+    este respaldo, el historial se abría sin ningún campo coloreado aunque
+    la ejecución sí tuviera estados de WARNING/ERROR.
+    """
+    import json
+
+    from app.models.schemas import FieldResult, PageResult, ValidationReport
+    from app.reports.csv_reporter import CsvReporter
+    from app.reports.dual_csv import write_minimal_csv
+    from app.templates.manager import TemplateManager
+
+    app = QApplication.instance() or QApplication([])
+    template = TemplateManager().load(
+        Path(__file__).resolve().parents[1] / "template" / "aircraft_log.json"
+    )
+    page = PageResult(page_number=1)
+    page.add_field(
+        FieldResult(
+            page_number=1,
+            field_id="log_number",
+            field_type="ocr",
+            value="2147337",
+            confidence=0.4,
+            status="ERROR",
+        )
+    )
+    reports = [
+        ValidationReport(
+            pdf_path=str(FIXTURES / "test.pdf"),
+            template_name=template.name,
+            pages=[page],
+        )
+    ]
+    run = tmp_path / "run"
+    data = run / "datos"
+    data.mkdir(parents=True)
+    complete_path = data / "run_completo.CSV"
+    minimal_path = data / "run.CSV"
+    CsvReporter().write(reports, complete_path, template)
+    write_minimal_csv(complete_path, minimal_path)
+    (data / "run.json").write_text(
+        json.dumps({"reportes": [r.model_dump(mode="json") for r in reports]}),
+        encoding="utf-8",
+    )
+
+    viewer = CsvViewerWindow(tmp_path)
+    assert viewer.load_csv_file(minimal_path)
+
+    assert "log_number_status" not in viewer._columns
+    row = viewer._rows[0]
+    assert viewer._status_for(row, "log_number") == "ERROR"
 
     viewer.close()
     app.processEvents()
@@ -276,6 +336,18 @@ def test_column_control_is_hidden_until_a_csv_is_loaded(tmp_path: Path):
     assert viewer.content_splitter.widget(1) is viewer.table
     pdf_width, csv_width = viewer.content_splitter.sizes()
     assert abs(pdf_width / (pdf_width + csv_width) - 0.4) <= 0.01
+
+
+def test_viewer_is_an_unowned_normal_window(tmp_path: Path):
+    """Windows solo da botón propio en la barra a ventanas sin dueño."""
+    app = QApplication.instance() or QApplication([])
+    viewer = CsvViewerWindow(tmp_path)
+    try:
+        assert viewer.parent() is None
+        assert viewer.windowType() == Qt.WindowType.Window
+    finally:
+        viewer.close()
+        app.processEvents()
 
 
 def test_companion_json_resolves_source_pdf_per_csv_row(tmp_path: Path):
@@ -545,7 +617,150 @@ def test_every_source_pdf_is_selectable_and_switching_resets_the_page(
     ] == ["uno.pdf", "dos.pdf"]
     assert viewer._path == second
     assert viewer._page == 1
+    assert viewer.page_edit.text() == "13"
+    assert viewer.total_pages.text() == "de 24"
     assert "2 PDF de origen disponibles" in viewer.source_status.text()
+    viewer.close()
+    app.processEvents()
+
+
+def test_pdf_pagination_crosses_documents_and_uses_the_combined_total(
+    tmp_path: Path, monkeypatch
+):
+    """La numeración del visor es continua entre todos los PDF de origen."""
+    app = QApplication.instance() or QApplication([])
+    from app.vision import pdf_loader
+
+    first = tmp_path / "uno.pdf"
+    second = tmp_path / "dos.pdf"
+    first.touch()
+    second.touch()
+    totals = {first: 2, second: 3}
+    monkeypatch.setattr(pdf_loader, "page_count", lambda path: totals[Path(path)])
+    monkeypatch.setattr(
+        pdf_loader,
+        "render_page",
+        lambda _path, _page, dpi=150: __import__("numpy").zeros(
+            (20, 30, 3), dtype="uint8"
+        ),
+    )
+    viewer = EmbeddedPdfViewer()
+
+    viewer.load_paths([first, second])
+    assert viewer.total_pages.text() == "de 5"
+
+    viewer.show_page(3)
+    assert viewer._path == second
+    assert viewer._page == 1
+    assert viewer.page_edit.text() == "3"
+
+    # Las filas del CSV entregan una página local y el PDF que la originó.
+    viewer.show_page(3, second)
+    assert viewer._path == second
+    assert viewer._page == 3
+    assert viewer.page_edit.text() == "5"
+
+    viewer._show_previous_page()
+    assert viewer._path == second
+    assert viewer._page == 2
+    viewer.close()
+    app.processEvents()
+
+
+def test_csv_viewer_counts_execution_pages_and_clicks_their_source_page(
+    tmp_path: Path, monkeypatch
+):
+    """Los huecos del PDF no cuentan como filas ni desplazan el clic del CSV."""
+    import json
+
+    app = QApplication.instance() or QApplication([])
+    run = tmp_path / "run"
+    data = run / "datos"
+    data.mkdir(parents=True)
+    first = run / "uno.pdf"
+    second = run / "dos.pdf"
+    first.touch()
+    second.touch()
+    csv_path = data / "run.csv"
+    csv_path.write_text(
+        "file,page,log_number\n"
+        "uno.pdf,2,1234500\n"
+        "uno.pdf,4,1234501\n"
+        "dos.pdf,3,1234502\n",
+        encoding="utf-8",
+    )
+    csv_path.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "reportes": [
+                    {
+                        "pdf_path": str(first),
+                        "pages": [{"page_number": 2}, {"page_number": 4}],
+                    },
+                    {
+                        "pdf_path": str(second),
+                        "pages": [{"page_number": 3}],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    from app.vision import pdf_loader
+
+    monkeypatch.setattr(pdf_loader, "page_count", lambda _path: 5)
+    monkeypatch.setattr(
+        pdf_loader,
+        "render_page",
+        lambda _path, _page, dpi=150: __import__("numpy").zeros(
+            (20, 30, 3), dtype="uint8"
+        ),
+    )
+    viewer = CsvViewerWindow(tmp_path / "sin-historial")
+
+    assert viewer.load_csv_file(csv_path)
+    # Los originales suman diez hojas, pero la ejecución contiene tres.
+    assert viewer.pdf_viewer.total_pages.text() == "de 3"
+
+    viewer.table.cellClicked.emit(1, 0)
+    assert viewer.pdf_viewer._path == first
+    assert viewer.pdf_viewer._page == 4
+    assert viewer.pdf_viewer.page_edit.text() == "2"
+
+    viewer.table.cellClicked.emit(2, 0)
+    assert viewer.pdf_viewer._path == second
+    assert viewer.pdf_viewer._page == 3
+    assert viewer.pdf_viewer.page_edit.text() == "3"
+    viewer.pdf_viewer.shutdown()
+    viewer.close()
+    app.processEvents()
+
+
+def test_clicking_the_current_row_locates_its_pdf_again(tmp_path: Path):
+    """Un segundo clic en la misma bitácora no cambia la celda actual."""
+    app = QApplication.instance() or QApplication([])
+    viewer = CsvViewerWindow(tmp_path)
+    source = tmp_path / "bitacora.pdf"
+    source.touch()
+    viewer._rows = [{"file": source.name, "page": "7"}]
+    viewer._row_pdf_paths = [source]
+    viewer.table.setColumnCount(1)
+    viewer.table.setRowCount(1)
+    from PySide6.QtWidgets import QTableWidgetItem
+
+    item = QTableWidgetItem(source.name)
+    item.setData(Qt.ItemDataRole.UserRole, 0)
+    viewer.table.setItem(0, 0, item)
+    shown: list[tuple[int, Path | None]] = []
+    viewer.pdf_viewer.show_page = lambda page, path=None: shown.append(
+        (page, Path(path) if path is not None else None)
+    )
+
+    viewer.table.setCurrentCell(0, 0)
+    shown.clear()
+    viewer.table.cellClicked.emit(0, 0)
+
+    assert shown == [(1, None)]
     viewer.close()
     app.processEvents()
 
@@ -725,6 +940,9 @@ def test_page_is_scaled_to_fill_the_available_panel(tmp_path: Path, monkeypatch)
     assert pixmap.height() <= viewport.height()
     assert pixmap.height() > viewport.height() * 0.8
     assert pixmap.width() <= viewport.width()
+    # El área útil del QLabel coincide con la imagen. Si el estilo vuelve a
+    # reservar padding dentro del mismo tamaño, Qt recorta los cuatro bordes.
+    assert viewer.image.contentsRect().size() == pixmap.size()
 
     viewer._zoom_by(2.0)
     assert viewer.image.pixmap().height() > pixmap.height()
@@ -737,7 +955,7 @@ def test_page_is_scaled_to_fill_the_available_panel(tmp_path: Path, monkeypatch)
 
 
 def _run_with_companion_json(tmp_path: Path, pdf_path: Path) -> tuple[Path, Path]:
-    """Corrida mínima en disco: CSV, CSV completo y su JSON consolidado."""
+    """Ejecución mínima en disco: CSV, CSV completo y su JSON consolidado."""
     import json
 
     from app.models.schemas import FieldResult, PageResult, ValidationReport
@@ -749,7 +967,9 @@ def _run_with_companion_json(tmp_path: Path, pdf_path: Path) -> tuple[Path, Path
     )
 
     def _page(number: int, log: str, matricula: str) -> PageResult:
-        page = PageResult(page_number=number)
+        # La ejecución de prueba representa filas completas para AirVault;
+        # la ausencia de fecha se prueba aparte como ruta de REVISAR.
+        page = PageResult(page_number=number, date="2026/08/17")
         for field_id, value in (("log_number", log), ("matricula", matricula)):
             page.add_field(
                 FieldResult(
@@ -786,23 +1006,23 @@ def test_run_folder_is_recovered_from_the_csv_location(tmp_path: Path):
     run = tmp_path / "BITS TEST"
     assert run_dir_for_csv(run / "datos" / "BITS TEST.CSV") == run
     assert run_dir_for_csv(run / "datos" / "BITS TEST_completo.CSV") == run
-    # Las corridas históricas dejaban el reporte en la raíz de la corrida.
+    # Las ejecuciones históricas dejaban el reporte en la raíz de la ejecución.
     assert run_dir_for_csv(run / "BITS TEST.CSV") == run
     # Una copia suelta no identifica ninguna carpeta: volver a exportar sobre
-    # ella borraría los archivos que la corrida regenera, que ahí son ajenos.
+    # ella borraría los archivos que la ejecución regenera, que ahí son ajenos.
     assert run_dir_for_csv(tmp_path / "Documentos" / "BITS TEST.CSV") is None
     assert run_dir_for_csv(run / "datos" / "copia.CSV") is None
 
 
 def test_reports_are_rebuilt_from_the_companion_json(tmp_path: Path):
-    pdf_path = INPUT / "test.pdf"
+    pdf_path = FIXTURES / "test.pdf"
     _run, csv_path = _run_with_companion_json(tmp_path, pdf_path)
 
     reports, missing = reports_for_csv(csv_path)
 
     assert missing == []
     assert [Path(report.pdf_path) for report in reports] == [pdf_path]
-    # El JSON guarda los reportes enteros: la corrida se re-exporta sin OCR.
+    # El JSON guarda los reportes enteros: la ejecución se re-exporta sin OCR.
     assert [page.page_number for page in reports[0].pages] == [1, 2]
     assert reports[0].pages[0].fields[0].value == "2147337"
 
@@ -828,20 +1048,20 @@ def test_moved_source_pdfs_are_relocated_or_reported_as_missing(tmp_path: Path):
 
 def test_export_is_offered_only_when_the_run_can_be_rebuilt(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
-    _run, csv_path = _run_with_companion_json(tmp_path, INPUT / "test.pdf")
+    _run, csv_path = _run_with_companion_json(tmp_path, FIXTURES / "test.pdf")
     viewer = CsvViewerWindow(tmp_path)
     try:
         assert viewer.load_csv_file(csv_path) is True
         assert viewer.btn_export.isEnabled()
 
-        # Un CSV suelto no trae el JSON de su corrida y no se puede rehacer.
+        # Un CSV suelto no trae el JSON de su ejecución y no se puede rehacer.
         loose = tmp_path / "suelto.csv"
         loose.write_text("file,page\na.pdf,1\n", encoding="utf-8")
         assert viewer.load_csv_file(loose) is True
         assert not viewer.btn_export.isEnabled()
         assert "JSON" in viewer.btn_export.toolTip()
 
-        # Al volver a la corrida el botón recupera su explicación de siempre.
+        # Al volver a la ejecución el botón recupera su explicación de siempre.
         assert viewer.load_csv_file(csv_path) is True
         assert viewer.btn_export.isEnabled()
         assert "Volver a generar" in viewer.btn_export.toolTip()
@@ -852,7 +1072,7 @@ def test_export_is_offered_only_when_the_run_can_be_rebuilt(tmp_path: Path):
 
 def test_exporting_rewrites_the_run_without_reprocessing(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
-    run, csv_path = _run_with_companion_json(tmp_path, INPUT / "test.pdf")
+    run, csv_path = _run_with_companion_json(tmp_path, FIXTURES / "test.pdf")
     viewer = CsvViewerWindow(tmp_path)
     try:
         assert viewer.load_csv_file(csv_path) is True
@@ -870,7 +1090,7 @@ def test_exporting_rewrites_the_run_without_reprocessing(tmp_path: Path):
         app.processEvents()
 
         # Las mismas salidas que produce «Exportar» en la ventana principal,
-        # escritas sobre la carpeta de la corrida abierta.
+        # escritas sobre la carpeta de la ejecución abierta.
         assert (run / "HP-1534CMP.pdf").is_file()
         assert (run / "HP-1538CMP.pdf").is_file()
         assert (run / "stats.json").is_file()

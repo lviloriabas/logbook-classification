@@ -170,7 +170,7 @@ def ocr_fallback_batch(
                     for _index, region in items
                 ]
         except Exception as exc:  # noqa: BLE001 - respaldo no rompe pipeline
-            logger.debug(f"OCR de respaldo en lote falló: {exc}")
+            logger.debug(f"OCR de respaldo en batch falló: {exc}")
             continue
         for (index, _region), lines in zip(items, batches):
             texts = [line.text.strip() for line in lines if line.text.strip()]
@@ -347,7 +347,7 @@ def read_date_slots(
                     for region in regions
                 ]
         except Exception as exc:  # noqa: BLE001 - respaldo no rompe pipeline
-            logger.debug(f"Lectura de ranuras en lote falló: {exc}")
+            logger.debug(f"Lectura de ranuras en batch falló: {exc}")
             batches = [[] for _region in regions]
         for lines in batches:
             best = max(lines, key=lambda line: line.confidence) if lines else None

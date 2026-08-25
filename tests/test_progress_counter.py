@@ -1,8 +1,8 @@
-"""Contador de páginas del avance: solo sube y cuenta el lote entero.
+"""Contador de páginas del avance: solo sube y cuenta el batch entero.
 
 Dos fallos que se veían en pantalla: el número se devolvía (52, 48, 53…)
 porque la etapa nombraba la última página que entregaba el pool, y el total
-era el del documento abierto en vez del de la corrida.
+era el del documento abierto en vez del de la ejecución.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ class _FakePool:
 
 
 class _FakeRenderer:
-    """Renderer de lote: solo hace falta el recuento de páginas."""
+    """Renderer de batch: solo hace falta el recuento de páginas."""
 
     counts = {"a.pdf": 10, "b.pdf": 20}
 
@@ -134,7 +134,7 @@ def test_sequential_pages_report_the_same_stage(tmp_path):
 
 
 def test_batch_message_counts_the_pages_of_the_whole_run(tmp_path):
-    """El texto habla del lote (30), no del documento en curso (20)."""
+    """El texto habla del batch (30), no del documento en curso (20)."""
     paths = [tmp_path / "a.pdf", tmp_path / "b.pdf"]
     pool = _FakePool(tmp_path, workers=4)
     updates: list[tuple[int, int, str]] = []
@@ -179,16 +179,16 @@ def test_batch_message_counts_the_pages_of_the_whole_run(tmp_path):
     counters = [done for done, _total, _message in stages]
     assert counters == sorted(counters)
     assert counters[-1] == 29
-    # Cada etapa dice de qué archivo del lote está hablando.
-    assert stages[0][2].startswith("Archivo 1/2: a.pdf — ")
-    assert stages[-1][2].startswith("Archivo 2/2: b.pdf — ")
+    # Cada etapa dice de qué archivo del batch está hablando.
+    assert stages[0][2].startswith("Archivo 1/2: a.pdf - ")
+    assert stages[-1][2].startswith("Archivo 2/2: b.pdf - ")
     assert with_page_counter(*stages[-1]) == (
-        "Archivo 2/2: b.pdf — Procesando páginas 29/30"
+        "Archivo 2/2: b.pdf - Procesando páginas 29/30"
     )
 
 
 def test_file_strategy_message_carries_the_page_counter(tmp_path):
-    """Repartiendo PDFs completos el texto también cuenta páginas del lote."""
+    """Repartiendo PDFs completos el texto también cuenta páginas del batch."""
     paths = [tmp_path / "a.pdf", tmp_path / "b.pdf"]
     pool = _FakePool(tmp_path, workers=2)
     updates: list[tuple[int, int, str]] = []
@@ -241,5 +241,5 @@ def test_file_strategy_message_carries_the_page_counter(tmp_path):
 def test_with_page_counter_only_touches_the_pages_stage():
     assert with_page_counter(5, 30, PAGES_STAGE) == "Procesando páginas 5/30"
     assert with_page_counter(5, 30, "Generando reporte") == "Generando reporte"
-    # Sin total no hay contador que poner (arranque de la corrida).
+    # Sin total no hay contador que poner (arranque de la ejecución).
     assert with_page_counter(0, 0, PAGES_STAGE) == PAGES_STAGE

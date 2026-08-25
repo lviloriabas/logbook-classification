@@ -8,9 +8,9 @@ Compara dos cosas sobre los mismos recortes:
   bitácora (``app/vision/book_background.py``), que es lo que corre en el
   pipeline desde que existe ``Pipeline._review_signatures``.
 
-Reproduce el procedimiento del pipeline paso por paso —muestra de páginas
+Reproduce el procedimiento del pipeline paso por paso (muestra de páginas
 repartida por el libro, fondo mediano, franja aprendida de los veredictos
-firmes— y usa las funciones de producción, no copias. Cada bitácora se mide
+firmes) y usa las funciones de producción, no copias. Cada bitácora se mide
 por separado, porque el fondo es del libro: mezclar dos escaneos en la misma
 mediana daría un formulario que no es el de ninguno de los dos.
 

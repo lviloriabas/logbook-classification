@@ -48,7 +48,7 @@ def test_the_preprocessing_stores_geometry_instead_of_the_page_image():
 def test_the_preview_asks_for_the_page_with_the_stored_geometry(tmp_path):
     """Sin resultado OCR manda el preprocesado; con resultado, manda el OCR.
 
-    El resultado procesado refleja el anclaje por lote que usó el OCR, así
+    El resultado procesado refleja el anclaje por batch que usó el OCR, así
     que debe ganarle a la geometría medida antes por el preprocesado.
     """
     pdf = tmp_path / "libro.pdf"

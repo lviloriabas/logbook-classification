@@ -178,7 +178,7 @@ def search(
 
     ``min_resolved`` es lo que impide la solución tramposa: como dejar algo en
     incierto cuesta mucho menos que equivocarse, el óptimo sin restricción es
-    un detector que no se moja con nada y manda el lote entero a revisión
+    un detector que no se moja con nada y manda el batch entero a revisión
     manual. Se descartan las configuraciones que resuelven menos de esa
     fracción de los recortes etiquetados.
     """

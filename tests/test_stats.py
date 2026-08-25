@@ -1,4 +1,4 @@
-"""Pruebas de stats.json (estadísticas de la corrida) y del JSON
+"""Pruebas de stats.json (estadísticas de la ejecución) y del JSON
 consolidado de la carpeta datos/."""
 
 from __future__ import annotations
@@ -65,8 +65,8 @@ class TestConstruirStats(unittest.TestCase):
         ]
 
     def test_totales(self):
-        stats = construir_stats(self.reports, corrida="corrida X")
-        self.assertEqual(stats["corrida"], "corrida X")
+        stats = construir_stats(self.reports, corrida="ejecución X")
+        self.assertEqual(stats["corrida"], "ejecución X")
         self.assertEqual(stats["total_bitacoras"], 2)
         self.assertEqual(stats["total_paginas"], 6)
         self.assertEqual(stats["paginas_en_blanco"], 1)
@@ -125,7 +125,7 @@ class TestConstruirStats(unittest.TestCase):
         stats = construir_stats(self.reports, separar_por=["avion", "mes"])
         sep = stats["separacion"]
         self.assertEqual(sep["criterios"], ["avion", "mes"])
-        self.assertEqual(sep["paginas_distribuidas"], 5)
+        self.assertEqual(sep["paginas_distribuidas"], 6)
         self.assertEqual(sep["paginas_excluidas_por_discrepancia"], 0)
         self.assertEqual(sep["paginas_fuera"], 0)
         self.assertTrue(sep["completa"])
@@ -136,7 +136,7 @@ class TestConstruirStats(unittest.TestCase):
                 "HP-1534CMP_2026-JUL.pdf": 2,
                 "HP-1534CMP_sf.pdf": 1,
                 "HP-1538CMP_2026-AUG.pdf": 1,
-                "revisar.pdf": 1,
+                "revisar.pdf": 2,
             },
         )
         self.assertEqual(sep["total_pdfs"], 4)
@@ -147,7 +147,7 @@ class TestConstruirStats(unittest.TestCase):
             self.reports, separar_por=["avion"], excluidas=excluidas
         )
         sep = stats["separacion"]
-        self.assertEqual(sep["paginas_distribuidas"], 3)
+        self.assertEqual(sep["paginas_distribuidas"], 4)
         self.assertEqual(sep["paginas_excluidas_por_discrepancia"], 2)
         self.assertEqual(sep["paginas_fuera"], 0)
         self.assertTrue(sep["completa"])
@@ -155,7 +155,7 @@ class TestConstruirStats(unittest.TestCase):
         self.assertEqual(
             archivos,
             {"HP-1534CMP.pdf": 1, "HP-1538CMP.pdf": 1,
-             "revisar.pdf": 1},
+             "revisar.pdf": 2},
         )
 
     def test_sin_separacion_no_hay_bloque(self):
@@ -188,11 +188,11 @@ class TestEscribirStats(unittest.TestCase):
         reports = [_reporte("a.pdf", _page(1, "2147300", "HP-1534CMP",
                                            date="2026/07/15"))]
         with tempfile.TemporaryDirectory() as tmp:
-            ruta = escribir_stats(reports, Path(tmp), corrida="corrida X",
+            ruta = escribir_stats(reports, Path(tmp), corrida="ejecución X",
                                   separar_por=["mes"])
             self.assertEqual(ruta, Path(tmp) / "stats.json")
             stats = json.loads(ruta.read_text(encoding="utf-8"))
-        self.assertEqual(stats["corrida"], "corrida X")
+        self.assertEqual(stats["corrida"], "ejecución X")
         self.assertEqual(stats["por_mes"], {"2026-07": 1})
         self.assertTrue(stats["separacion"]["completa"])
 

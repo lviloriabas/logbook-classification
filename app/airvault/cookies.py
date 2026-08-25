@@ -21,15 +21,23 @@ import re
 from typing import Dict, Iterable, Mapping
 from urllib.parse import urlsplit
 
-# Cookies que **autentican**. ``FedAuth`` es la de WS-Federation y se parte
-# en ``FedAuth1``, ``FedAuth2``... cuando el token no cabe en una sola, asi
-# que se compara por prefijo.
-PREFIJOS_DE_AUTENTICACION = ("FedAuth", ".ASPXAUTH")
+# Cookies que **autentican**. ``Critical`` es la de AirVault: la pone el
+# sitio al volver de Entra ID y es la unica que abre la sesion, medido
+# pidiendo el listado de batches con cada cookie por separado. Las otras dos
+# son las formas habituales de ASP.NET (``FedAuth`` se parte en
+# ``FedAuth1``, ``FedAuth2``... cuando el token no cabe en una sola, asi que
+# se compara por prefijo) y se dejan por si otra instalacion las usa.
+#
+# Buscar solo las de ASP.NET dejaba al programa esperando cinco minutos con
+# la sesion ya abierta delante: las cookies estaban, ninguna se llamaba como
+# se esperaba, y el aviso acusaba a la ventana de haberse quedado en la
+# pagina de Microsoft.
+PREFIJOS_DE_AUTENTICACION = ("Critical", "FedAuth", ".ASPXAUTH")
 
 # Cookies que acompanan pero no autentican. ``ASP.NET_SessionId`` lo pone el
 # servidor al primer contacto, antes de saber quien eres: darla por buena
-# hacia pasar por sesion abierta una que todavia estaba en la pagina de
-# Microsoft, y el lote moria en la primera pagina.
+# hacia pasar por sesion abierta una que todavía estaba en la pagina de
+# Microsoft, y el batch moria en la primera pagina.
 PREFIJOS_DE_ACOMPANAMIENTO = ("ASP.NET_SessionId",)
 
 PREFIJOS_DE_SESION = PREFIJOS_DE_AUTENTICACION + PREFIJOS_DE_ACOMPANAMIENTO
@@ -72,7 +80,7 @@ def sostienen_sesion(cookies: Mapping[str, str]) -> bool:
     """Dice si entre las cookies esta la que de verdad autentica.
 
     Sirve para avisar temprano de que lo pegado no es lo que hace falta, en
-    vez de descubrirlo a mitad de un lote de 400 paginas. Una
+    vez de descubrirlo a mitad de un batch de 400 paginas. Una
     ``ASP.NET_SessionId`` sola no cuenta: la pone el servidor antes de saber
     quien eres.
     """
@@ -101,9 +109,7 @@ def dominio(base_url: str) -> str:
     return (partes.hostname or str(base_url or "").strip()).lower()
 
 
-def del_dominio(
-    cookies: Mapping[str, Mapping[str, str]], host: str
-) -> Dict[str, str]:
+def del_dominio(cookies: Mapping[str, Mapping[str, str]], host: str) -> Dict[str, str]:
     """Filtra un mapa ``{host: {nombre: valor}}`` para quedarse con ``host``.
 
     Se aceptan tambien los dominios padre: una cookie puesta en

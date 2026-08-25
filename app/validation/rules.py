@@ -78,6 +78,6 @@ def apply_rules(
         result.status = Status.OK
         if not result.comment:
             result.comment = "OK"
-    logger.debug(f"Regla {field.id}: {result.status.value} — "
+    logger.debug(f"Regla {field.id}: {result.status.value} - "
                  f"{result.comment}")
     return result

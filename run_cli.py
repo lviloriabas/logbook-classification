@@ -3,9 +3,9 @@
 
 Por defecto procesa TODOS los PDFs de la carpeta ``input/`` y genera un
 único CSV consolidado en ``output/`` con nombre en mayúsculas en el formato
-``BITS <DD MON YYYY> <HH MM>.CSV`` (fecha/hora de la corrida).
+``BITS <DD MON YYYY> <HH MM>.CSV`` (fecha/hora de la ejecución).
 
-Todos los outputs de la corrida se generan dentro de una carpeta con el
+Todos los outputs de la ejecución se generan dentro de una carpeta con el
 nombre del CSV (sin extensión): ``output/BITS <DD MON YYYY> <HH MM>/``.
 El CSV y el JSON consolidado (mismo nombre que el CSV) van en su
 subcarpeta ``datos/``; junto a ellos quedan ``stats.json``, los logs,
@@ -13,7 +13,7 @@ los PDFs ordenados (PDFs por matrícula, o carpetas por matrícula con un
 PDF por mes dentro) y los informes opcionales.
 
 Opciones útiles:
-    --pages 1-40      Procesar solo ese rango de páginas del lote completo,
+    --pages 1-40      Procesar solo ese rango de páginas del batch completo,
                       numerado de corrido sobre los PDFs de la entrada.
     --debug           Generar debug.pdf con los bounding boxes de los
                       campos sobre los archivos procesados.
@@ -93,9 +93,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dpi", type=int, default=150, help="DPI de renderizado")
     parser.add_argument(
         "--pages", default=None, metavar="RANGO",
-        help="Procesar solo un rango de páginas del lote completo, numerado "
+        help="Procesar solo un rango de páginas del batch completo, numerado "
              "de corrido sobre los PDFs ordenados de la entrada: '1-40' "
-             "(las 40 primeras del lote, caigan donde caigan), '200-' (desde "
+             "(las 40 primeras del batch, caigan donde caigan), '200-' (desde "
              "la 200 hasta el final) o '15' (solo esa página). Sin esta "
              "opción se procesa todo.",
     )
@@ -138,10 +138,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--paginas-por-parte", type=int, default=0, metavar="N",
         help="Reparte el PDF unico en partes de a lo sumo N paginas. Cada "
-             "parte es un lote aparte en AirVault. Cero deja un solo "
+             "parte es un batch aparte en AirVault. Cero deja un solo "
              "archivo.",
     )
-    salida.add_argument(
+    parser.add_argument(
         "--un-solo-pdf", action="store_true",
         help="Generar un único PDF con el mismo nombre que la carpeta de "
              "salida: con --separar-por se "
@@ -158,7 +158,7 @@ def parse_args() -> argparse.Namespace:
         "--recortes-firmas", action="store_true",
         help="Volcar los recortes de las regiones de firma a "
              "recortes_firmas/ para auditar visualmente los bounding boxes "
-             "(usar con --pages para lotes pequeños).",
+             "(usar con --pages para batches pequeños).",
     )
     parser.add_argument(
         "--errores", action="store_true",
@@ -237,7 +237,7 @@ def _important_columns(
 
     Sin ``--campos-importantes`` se lee la selección que el selector de la
     ventana dejó guardada en la carpeta del programa, y si esa plantilla
-    nunca se editó se usa el mismo conjunto por defecto. Así una corrida de
+    nunca se editó se usa el mismo conjunto por defecto. Así una ejecución de
     línea de comandos y una de la interfaz escriben el mismo CSV mínimo.
     """
     columns = CsvReporter.columns_for_fields(
@@ -328,13 +328,13 @@ def _run(args: argparse.Namespace) -> int:
         print("ERROR: --threads debe ser >= 1", file=sys.stderr)
         return 1
 
-    # ── Carpeta de la corrida: nombre del CSV (sin extensión) ──────────
+    # ── Carpeta de la ejecución: nombre del CSV (sin extensión) ──────────
     run_dir = new_run_dir(Path(args.output_dir))
     setup_logging(run_dir / "logs",
                   level="DEBUG" if args.verbose else "INFO")
 
     entrada = _resolve_pdfs(args)
-    # El rango numera el lote de corrido: se reparte entre los archivos que
+    # El rango numera el batch de corrido: se reparte entre los archivos que
     # lo contienen y los demás ni se abren.
     slices = slice_paths(entrada, page_range)
     if not slices:
@@ -357,7 +357,7 @@ def _run(args: argparse.Namespace) -> int:
 
     print(f"Analizando {len(pdfs)} archivo(s) de: {pdfs[0].parent}")
     if not page_range.is_full:
-        print(f"Rango del lote: {page_range.label()}")
+        print(f"Rango del batch: {page_range.label()}")
     print(f"Plantilla : {template.name} ({len(template.fields)} campos)")
     print(f"Salida    : {run_dir}")
 
@@ -453,7 +453,9 @@ def _run(args: argparse.Namespace) -> int:
     from app.validation.book_corrector import correct_matricula_by_book
     from app.validation.date_corrector import correct_dates_by_book
 
-    stats = correct_matricula_by_book(reports)
+    stats = correct_matricula_by_book(
+        reports, config.book_matriculas_file
+    )
     print(f"\nCorrector de matrículas por libro: {stats['books']} libro(s), "
           f"{stats['corrected']} matrícula(s) corregidas, "
           f"{stats['flagged']} discrepante(s) marcada(s)")
@@ -471,10 +473,14 @@ def _run(args: argparse.Namespace) -> int:
         verify_reports_against_fleet(reports, config.fleet_file)
         print(f"Lista de aviones: {config.fleet_file}")
 
-    # ── Salidas de la corrida ───────────────────────────────────────────
+    from app.validation.book_corrector import learn_book_matriculas
+
+    learn_book_matriculas(reports, config.book_matriculas_file)
+
+    # ── Salidas de la ejecución ───────────────────────────────────────────
     # Se escriben con la misma función que usa la interfaz. Tenerlas
     # duplicadas era lo que hacía que las dos superficies entregaran
-    # carpetas distintas sobre la misma corrida.
+    # carpetas distintas sobre la misma ejecución.
     def on_stage(message: str, percent: int) -> None:
         print(f"[{percent:3d}%] {message}")
 

@@ -2,7 +2,7 @@
 
 Cubre el recorrido que comparte la ventana con la linea de comandos: que
 un trabajo a medias se retome sin repetir escrituras, que la subida no se
-haga dos veces y que un CSV de otra corrida no se cuele en el lote de la
+haga dos veces y que un CSV de otra ejecución no se cuele en el batch de la
 anterior. Todo contra el cliente falso; ninguna prueba toca la red.
 """
 
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from app.airvault import manifest as manifiestos
-from app.airvault.config import AirVaultConfig
+from app.airvault.config import AirVaultConfig, CAMPO_LOG_NUMBER
 from app.airvault.flujo import (
     ErrorDeCorrida,
     Trabajo,
@@ -42,12 +42,13 @@ CSV = (
 
 def corrida(tmp_path, nombre: str = "BITS 18 AUG 2026 05 42",
             pdfs: tuple[str, ...] = (), con_indice: bool = True):
-    """Arma en el temporal la carpeta que deja una corrida terminada.
+    """Arma en el temporal la carpeta que deja una ejecución terminada.
 
     Sin ``pdfs`` deja la entrega en un solo archivo, como la exportacion sin
     repartir; con varios, cada uno lleva una de las dos bitacoras del CSV.
     """
     import json
+    import pymupdf as fitz
 
     carpeta = tmp_path / "output" / nombre
     (carpeta / "datos").mkdir(parents=True)
@@ -56,7 +57,11 @@ def corrida(tmp_path, nombre: str = "BITS 18 AUG 2026 05 42",
 
     archivos = list(pdfs) or [f"{nombre}.pdf"]
     for pdf in archivos:
-        (carpeta / pdf).write_bytes(b"%PDF-1.4\n")
+        documento = fitz.open()
+        for _pagina in range(2 if len(archivos) == 1 else 1):
+            documento.new_page()
+        documento.save(str(carpeta / pdf))
+        documento.close()
     if con_indice:
         paginas = [
             [{"archivo": "Image_001.pdf", "pagina": 1},
@@ -85,7 +90,7 @@ def cliente_con_lote(batch_id: str = "003SRO", paginas: int = 2,
     )
 
 
-# ── ubicacion de los archivos de la corrida ────────────────────────
+# ── ubicacion de los archivos de la ejecución ────────────────────────
 
 def test_la_carpeta_de_la_corrida_sale_del_csv(tmp_path):
     csv = corrida(tmp_path)
@@ -100,19 +105,19 @@ def test_encuentra_el_pdf_de_entrega(tmp_path):
 
 
 def test_cada_parte_es_un_archivo(tmp_path):
-    csv = corrida(tmp_path, pdfs=("corrida (1 de 2).pdf",
-                                  "corrida (2 de 2).pdf"))
+    csv = corrida(tmp_path, pdfs=("ejecución (1 de 2).pdf",
+                                  "ejecución (2 de 2).pdf"))
     partes = comprobar_entrega(csv)
     assert [p.indice for p in partes] == [1, 2]
     assert all(p.total == 2 for p in partes)
     assert [p.pdf.name for p in partes] == [
-        "corrida (1 de 2).pdf", "corrida (2 de 2).pdf"
+        "ejecución (1 de 2).pdf", "ejecución (2 de 2).pdf"
     ]
     assert len(pdfs_de_corrida(csv)) == 2
 
 
 def test_cada_parte_lleva_su_numero_en_el_nombre_del_lote(tmp_path):
-    """Los lotes se localizan por nombre; dos iguales no se distinguirian."""
+    """Los batches se localizan por nombre; dos iguales no se distinguirian."""
     csv = corrida(tmp_path, pdfs=("a.pdf", "b.pdf"))
     partes = comprobar_entrega(csv)
     assert partes[0].nombre_lote("DP | BITS") == "DP | BITS -1"
@@ -236,7 +241,7 @@ def test_volver_a_revisar_retoma_el_mismo_trabajo(tmp_path):
 
 
 def test_otra_corrida_en_la_misma_carpeta_rehace_el_trabajo(tmp_path):
-    """Seguir el trabajo anterior escribiria una corrida en el lote de otra."""
+    """Seguir el trabajo anterior escribiria una ejecución en el batch de otra."""
     primera = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
     trabajo = Trabajo.abrir_o_preparar(AirVaultConfig(), tmp_path / "job",
                                        primera)
@@ -255,6 +260,7 @@ def test_otra_corrida_en_la_misma_carpeta_rehace_el_trabajo(tmp_path):
 class SubidorFalso:
     def __init__(self):
         self.subidos = []
+        self.valores = []
 
     def __call__(self, sesion, repo_id):
         return self
@@ -263,13 +269,14 @@ class SubidorFalso:
         from app.airvault.uploader import ResultadoSubida
 
         self.subidos.append(ruta)
+        self.valores.append(dict(valores))
         if avisar is not None:
             avisar("Subiendo", 1, 1)
         return ResultadoSubida(str(ruta), True)
 
 
 def test_el_lote_no_se_sube_dos_veces(tmp_path, monkeypatch):
-    """Subirlo otra vez crearia un lote gemelo y no se sabria en cual escribir."""
+    """Subirlo otra vez crearia un batch gemelo y no se sabria en cual escribir."""
     from app.airvault import uploader
 
     csv = corrida(tmp_path)
@@ -281,6 +288,62 @@ def test_el_lote_no_se_sube_dos_veces(tmp_path, monkeypatch):
     trabajo.subir(object())
     assert len(falso.subidos) == 1
     assert trabajo.manifiesto.etapa_hecha("subir")
+
+
+def test_quick_upload_recibe_el_titulo_del_manifiesto(tmp_path, monkeypatch):
+    from app.airvault import uploader
+    from app.airvault.config import CAMPO_BATCH_NAME
+
+    csv = corrida(tmp_path)
+    falso = SubidorFalso()
+    monkeypatch.setattr(uploader, "SubidorQuickUpload", falso)
+    trabajo = Trabajo.preparar(
+        AirVaultConfig(), tmp_path / "job", csv, "DP | BIT -2"
+    )
+
+    trabajo.subir(object())
+
+    assert falso.valores[0][CAMPO_BATCH_NAME] == "DP | BIT -2"
+
+
+def test_la_subida_guarda_la_cola_previa_para_reconocer_empty_batch(
+    tmp_path, monkeypatch
+):
+    from app.airvault import uploader
+
+    csv = corrida(tmp_path)
+    falso = SubidorFalso()
+    monkeypatch.setattr(uploader, "SubidorQuickUpload", falso)
+    cliente = ClienteFalso(lotes=[lote("003VIEJO", "Empty-Batch", 2)])
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv)
+
+    trabajo.subir(object(), cliente=cliente)
+
+    assert trabajo.manifiesto.lotes_previos == ["003VIEJO"]
+
+
+def test_descubre_el_empty_batch_que_no_estaba_antes(tmp_path):
+    csv = corrida(tmp_path)
+    trabajo = Trabajo.preparar(
+        AirVaultConfig(), tmp_path / "job", csv, "DP | BIT PRUEBA"
+    )
+    trabajo.manifiesto.lotes_previos = ["003VIEJO"]
+    trabajo.guardar()
+    cliente = ClienteFalso(lotes=[
+        lote("003VIEJO", "Empty-Batch", 2),
+        lote("003NUEVO", "Empty-Batch", 2),
+    ], paginas={
+        registro.seq: pagina(
+            registro.seq,
+            valores={CAMPO_LOG_NUMBER: registro.log_number},
+        )
+        for registro in trabajo.manifiesto.bitacoras()
+    })
+
+    assert trabajo.descubrir(cliente, esperar=True, dormir=lambda _s: None) == (
+        "003NUEVO"
+    )
+    assert trabajo.manifiesto.nombre_batch == "DP | BIT PRUEBA"
 
 
 def test_la_subida_a_mano_se_puede_dar_por_hecha(tmp_path):
@@ -330,6 +393,20 @@ def test_escribe_lo_que_el_plan_habia_anunciado(tmp_path):
     assert (validas, total) == (2, 2)
 
 
+def test_indexar_no_modifica_el_csv_de_la_corrida(tmp_path):
+    csv = corrida(tmp_path)
+    contenido_original = csv.read_bytes()
+    cliente = cliente_con_lote()
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.descubrir(cliente, esperar=False)
+    plan, indexador = trabajo.planificar(cliente)
+
+    trabajo.indexar(indexador, plan)
+
+    assert csv.read_bytes() == contenido_original
+
+
 def test_un_lote_con_otra_cantidad_de_paginas_no_se_toca(tmp_path):
     """Si la correspondencia por posicion esta rota, no se escribe nada."""
     from app.airvault.guards import ErrorDeGuarda
@@ -364,3 +441,109 @@ def test_el_avance_llega_pagina_a_pagina(tmp_path):
     trabajo.indexar(indexador, plan,
                     avisar=lambda t, h, n: avisos.append((h, n)))
     assert avisos == [(1, 2), (2, 2)]
+
+
+# ── el batch se suelta ──────────────────────────────────────────────
+
+def test_el_lote_se_suelta_al_terminar_cada_etapa(tmp_path):
+    """AirVault admite un solo dueno: quedarselo cuelga la proxima apertura.
+
+    Sin soltarlo, la ejecucion siguiente (o la persona que abre el batch en
+    el navegador) se encuentra con una peticion que nunca contesta, y el
+    programa culpaba al navegador de un candado que habia dejado el.
+
+    Planificar solo lee, asi que suelta en cuanto termina: entre revisar y
+    escribir puede pasar un rato largo, y antes el batch se quedaba tomado
+    todo ese tiempo. Escribir lo vuelve a tomar, que es lo unico que de
+    verdad necesita ser el dueno, y lo suelta al acabar.
+    """
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.descubrir(cliente, esperar=False)
+    plan, indexador = trabajo.planificar(cliente)
+    # Descubrir confirma el Batch Name y la huella de Log Page Number;
+    # planificar lo vuelve a abrir para leer el indexado.
+    assert cliente.abiertos == ["003SRO", "003SRO", "003SRO"]
+    assert cliente.cerrados == ["003SRO", "003SRO", "003SRO"]
+
+    trabajo.indexar(indexador, plan)
+    assert cliente.abiertos == ["003SRO"] * 4
+    assert cliente.cerrados == ["003SRO"] * 4
+
+
+def test_un_lote_sin_nada_que_escribir_ni_se_toma(tmp_path):
+    """Tomarlo seria bloquearlo para no escribir ni una pagina."""
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.descubrir(cliente, esperar=False)
+    plan, indexador = trabajo.planificar(cliente)
+    plan.paginas = []
+    cliente.abiertos.clear()
+    trabajo.indexar(indexador, plan)
+    assert cliente.abiertos == []
+
+
+def test_un_plan_que_falla_no_deja_el_lote_tomado(tmp_path):
+    """El plan no sale, nadie va a escribir: quedarselo solo estorba."""
+    from app.airvault.guards import ErrorDeGuarda
+
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote(paginas=3)
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.fijar_lote("003SRO")
+    with pytest.raises(ErrorDeGuarda):
+        trabajo.planificar(cliente)
+    assert cliente.cerrados == ["003SRO"]
+
+
+def test_soltar_un_lote_que_no_se_deja_no_tumba_la_corrida(tmp_path):
+    """Cerrar es limpieza: si falla se anota, pero no se pierde lo escrito."""
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+
+    def no_se_deja(_batch_id):
+        raise RuntimeError("AirVault no contesto")
+
+    cliente.cerrar_lote = no_se_deja
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.fijar_lote("003SRO")
+    trabajo.cerrar(cliente)
+
+
+def test_el_lote_de_revisar_no_queda_tomado(tmp_path):
+    """Es el que una persona tiene que abrir a mano; tomarlo la deja fuera."""
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.manifiesto.solo_subir = True
+    trabajo.fijar_lote("003SRO")
+    trabajo.planificar(cliente)
+    assert cliente.cerrados == ["003SRO"]
+
+
+def test_si_el_lote_esta_tomado_se_dice_quien_lo_tiene(tmp_path):
+    """Un tiempo agotado sin explicacion no se puede resolver; un nombre si."""
+    from app.airvault.session import ErrorDeConexion
+
+    csv = corrida(tmp_path)
+    cliente = cliente_con_lote()
+    cliente.lotes = [lote("003SRO", "DP | BIT 18 AUG 2026 05 42", 2,
+                          bloqueado_por="jperez@dominio.com")]
+
+    def no_contesta(_batch_id):
+        raise ErrorDeConexion("no contesto en 60s")
+
+    cliente.abrir_lote = no_contesta
+    trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
+                               "DP | BIT 18 AUG 2026 05 42")
+    trabajo.fijar_lote("003SRO")
+    with pytest.raises(ErrorDeConexion) as fallo:
+        trabajo.planificar(cliente)
+    assert "jperez@dominio.com" in str(fallo.value)

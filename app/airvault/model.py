@@ -8,6 +8,7 @@ las anteriores.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import ClassVar, Dict, List, Optional
@@ -51,25 +52,33 @@ class Registro(BaseModel):
     """Una bitacora: de donde salio, que se le va a escribir y como quedo."""
 
     # Posicion dentro del artefacto que se sube. Es la que debe coincidir
-    # con la pagina del lote en AirVault cuando el lote se arma con el PDF
-    # ordenado de la corrida.
+    # con la pagina del batch en AirVault cuando el batch se arma con el PDF
+    # ordenado de la ejecución.
     seq: int
     archivo_origen: str = ""
     pagina_origen: int = 0
 
-    # Etiqueta del separador cuando esta posicion del lote no es una
+    # Etiqueta del separador cuando esta posicion del batch no es una
     # bitacora sino una pagina divisoria del PDF de entrega («REVISAR»,
     # «POSIBLES DISCREPANCIAS», la matricula de un grupo). Ocupa su lugar en
-    # el lote para que la correspondencia por posicion siga en pie, pero no
+    # el batch para que la correspondencia por posicion siga en pie, pero no
     # se le escribe nada: no es un documento que indexar.
     separador: str = ""
 
     matricula: str = ""
     log_number: str = ""
-    # Fecha en el formato del CSV de la corrida (YYYY/MM/dd). La conversion
+    # Numero de vuelo tal como lo dejo la lectura: un vuelo numerado
+    # (``703``, ``CM137``) o un codigo de mantenimiento del vocabulario
+    # (``TCK``, ``SPV``). Va al campo Description de AirVault.
+    flight_number: str = ""
+    # Fecha en el formato del CSV de la ejecución (YYYY/MM/dd). La conversion
     # al formato de AirVault (m/d/Y) se hace al construir los valores, no
     # aqui, para que el manifiesto se siga leyendo igual que el CSV.
     fecha: str = ""
+    # Regla con la que se dedujo la fecha cuando la bitacora no la trajo
+    # leida (``app/airvault/fechas.py``). Vacio cuando la fecha es la que
+    # se leyo de la pagina, que es el caso normal.
+    fecha_inferida: str = ""
     fleet: str = ""
     lessor: str = ""
     fleet_inferido: bool = False
@@ -103,15 +112,53 @@ class Manifiesto(BaseModel):
     repo_id: int = 3209
     batch_id: Optional[str] = None
     csv_origen: str = ""
-    # Archivo de entrega que forma este lote. Una corrida repartida en
-    # partes tiene un manifiesto por parte, cada uno con su PDF y su lote.
+    # Archivo de entrega que forma este batch. Una ejecución repartida en
+    # partes tiene un manifiesto por parte, cada uno con su PDF y su batch.
     pdf_origen: str = ""
     parte: int = 1
     partes: int = 1
-    # El lote se sube pero no se indexa: recoge las bitacoras sin avion
-    # confirmado, que nadie puede archivar sin mirarlas una por una.
+    # Maximo elegido al preparar los archivos que van a Quick Upload.
+    # Cero identifica manifiestos antiguos, anteriores a este reparto.
+    paginas_por_batch: int = 0
+    # Si el PDF interno que se envia fue rasterizado a 200 DPI. Se guarda
+    # para que una reanudacion use exactamente el mismo archivo y ajuste.
+    compresion: bool = False
+    # El batch recoge bitacoras con algun dato dudoso o en conflicto. Se
+    # indexan automaticamente los valores confirmados y queda abierto para
+    # revisar solo lo que falta o no es seguro.
     solo_subir: bool = False
-
+    # Foto de la cola inmediatamente anterior a Quick Upload. Si AirVault
+    # pierde C_BatchName y publica ``Empty-Batch``, acota los candidatos que
+    # despues se confirman por paginas y contenido.
+    lotes_previos: List[str] = Field(default_factory=list)
+    # Antes de considerar perdida una subida, varias revisiones completas
+    # recorren nombres, cantidades y contenido. Solo al agotarlas empieza el
+    # reloj de espera que eventualmente permite ofrecer una resubida.
+    intentos_identificacion: int = 0
+    espera_reenvio_desde: str = ""
+    # Reenvios que la automatizacion ya hizo de una carga que Quick Upload
+    # acepto pero AirVault nunca publico. Se cuenta para no seguir enviando
+    # el mismo archivo indefinidamente y acabar con batches duplicados.
+    reenvios: int = 0
+    # Veces que se recorrio la cola entera de AirVault (por nombre visible,
+    # nombre embebido, cantidad de paginas y Log Page Number) sin encontrar
+    # esta carga. Una sola basta para darla por no publicada: ya no queda
+    # nombre bajo el que pueda estar.
+    busquedas_amplias_sin_hallar: int = 0
+    # Alguien autorizo expresamente subir este batch aunque deje paginas
+    # amarillas (sin algun campo obligatorio) en AirVault. Lo normal es
+    # evitarlas repartiendo esas bitacoras al batch REVISAR, pero cuando el
+    # archivo ya esta hecho rehacerlo cuesta mas que terminar de indexar a
+    # mano esas paginas, asi que la decision es de quien sube. Se guarda en
+    # el manifiesto para que un reintento no vuelva a preguntar.
+    amarillas_permitidas: bool = False
+    # Se saco de la cola a mano. No se sube, no se busca y no se indexa
+    # hasta que alguien lo reanude; lo que ya este hecho se conserva.
+    cancelado: bool = False
+    # El propio programa cerro el batch al terminar de indexarlo. Distingue
+    # lo que quedo terminado sin que nadie interviniera de lo que ya estaba
+    # cerrado en AirVault cuando se encontro.
+    completado_automatico: bool = False
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
 
@@ -161,6 +208,25 @@ class Manifiesto(BaseModel):
 
     def separadores(self) -> List[Registro]:
         return [r for r in self.registros if r.es_separador]
+
+    def separadores_borrados(self) -> int:
+        """Divisorias que el ultimo indexado confirmo borradas en AirVault."""
+        etapa = self.etapas.get("indexar")
+        if etapa is None:
+            return 0
+        coincidencia = re.search(
+            r"separadores borrados\s+(\d+)", etapa.detalle or "",
+            flags=re.IGNORECASE,
+        )
+        if coincidencia is None:
+            return 0
+        return min(int(coincidencia.group(1)), len(self.separadores()))
+
+    def cantidades_paginas_compatibles(self) -> set[int]:
+        """Cantidades validas antes y despues de borrar divisorias."""
+        total = len(self.registros)
+        borrados = self.separadores_borrados()
+        return {total, total - borrados} if borrados else {total}
 
     def resumen(self) -> Dict[str, int]:
         return {

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def wall_ms_per_page(elapsed_seconds: float, completed_pages: int) -> float | None:
-    """Costo efectivo por página, incluyendo la concurrencia del lote."""
+    """Costo efectivo por página, incluyendo la concurrencia del batch."""
     if elapsed_seconds <= 0 or completed_pages <= 0:
         return None
     return elapsed_seconds * 1000.0 / completed_pages
@@ -19,10 +19,10 @@ def estimate_remaining_seconds(
 ) -> float | None:
     """Estima lo pendiente mezclando historial y throughput observado.
 
-    El ritmo observado usa tiempo de pared del lote, no la suma de tiempos de
+    El ritmo observado usa tiempo de pared del batch, no la suma de tiempos de
     cada worker. Durante las primeras páginas conserva más peso del historial
     para evitar saltos por la inicialización del modelo; a partir de veinte
-    páginas el lote actual domina en 90%.
+    páginas el batch actual domina en 90%.
     """
     if total_pages <= 0:
         return None

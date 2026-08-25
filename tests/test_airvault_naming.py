@@ -1,4 +1,4 @@
-"""El nombre del lote es la llave para reconocerlo en AirVault."""
+"""El nombre del batch es la llave para reconocerlo en AirVault."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def test_ruta_sin_marca():
 
 
 def test_nombre_desde_corrida_usa_la_marca_de_la_corrida():
-    # El lote se llama igual que la corrida que lo produjo, no como la hora
+    # El batch se llama igual que la ejecución que lo produjo, no como la hora
     # en que alguien se acordo de subirlo.
     ruta = "output/BITS 18 AUG 2026 05 42/datos/BITS 18 AUG 2026 05 42.CSV"
     assert nombre_desde_corrida(ruta) == "DP | BITS 18 AUG 2026 05 42"
@@ -64,7 +64,7 @@ def test_nombre_desde_corrida_sin_marca_usa_el_momento_dado():
 
 
 def test_sin_marca_en_el_nombre_se_toma_la_hora_del_archivo(tmp_path):
-    """El lote dice cuando se proceso la bitacora, no cuando se subio."""
+    """El batch dice cuando se proceso la bitacora, no cuando se subio."""
     import os
     from datetime import datetime as _dt
 
@@ -101,7 +101,7 @@ def test_el_lote_de_revisar_va_marcado():
 
 
 def test_el_archivo_y_el_lote_llevan_el_mismo_sufijo():
-    """Si se separan, el lote deja de poder emparejarse con su archivo."""
+    """Si se separan, el batch deja de poder emparejarse con su archivo."""
     from app.reports.organize import nombre_de_parte as nombre_de_archivo
 
     for indice, total in ((1, 1), (2, 5), (5, 5)):
@@ -111,8 +111,8 @@ def test_el_archivo_y_el_lote_llevan_el_mismo_sufijo():
 
 
 def test_dos_corridas_del_mismo_minuto_dan_el_mismo_nombre():
-    # Es lo esperado: la carpeta de la corrida se desempata con sufijo y el
-    # lote se distingue por la cantidad de paginas.
+    # Es lo esperado: la carpeta de la ejecución se desempata con sufijo y el
+    # batch se distingue por la cantidad de paginas.
     assert nombre_de_lote(momento=MOMENTO) == nombre_de_lote(momento=MOMENTO)
 
 

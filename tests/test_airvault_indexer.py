@@ -5,8 +5,11 @@ from __future__ import annotations
 import pytest
 
 from app.airvault.config import (
+    CAMPO_DESCRIPCION,
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
+    CAMPO_WORK_LOCATION,
+    ESTADO_NECESITA_CORRECCION,
     ESTADO_VALIDO,
 )
 from app.airvault.guards import ErrorDeGuarda
@@ -32,7 +35,8 @@ def test_plan_marca_todo_escribible_en_lote_limpio():
     cliente = ClienteFalso(page_count=2)
     plan = Indexador(cliente, manifiesto(), PICKLIST).planificar(2)
     assert plan.resumen() == {"total": 2, "escribibles": 2, "bloqueadas": 0,
-                              "separadores": 0, "avisos_globales": 0}
+                              "separadores": 0, "avisos_globales": 0,
+                              "fechas_inferidas": 0}
 
 
 def test_plan_no_escribe_nada():
@@ -78,7 +82,46 @@ def test_escritura_manda_los_valores_correctos():
     _pagina, valores, estado = cliente.escrituras[0]
     assert valores[CAMPO_MATRICULA] == "HP-1848CMP"
     assert valores[CAMPO_LOG_NUMBER] == "2287321"
+    assert valores[CAMPO_WORK_LOCATION] == ""
     assert estado == ESTADO_VALIDO
+
+
+def test_una_pagina_localmente_escrita_se_reenvia_si_sigue_amarilla():
+    cliente = ClienteFalso(
+        paginas={1: pagina(1, estado=3)}, page_count=1
+    )
+    m = manifiesto(1)
+    m.registros[0].estado = EstadoRegistro.ESCRITA
+
+    indexador = Indexador(cliente, m, PICKLIST)
+    indexador.aplicar(indexador.planificar(1))
+
+    assert [numero for numero, _valores, _estado in cliente.escrituras] == [1]
+
+
+def test_el_vuelo_se_marca_solo_en_el_payload_automatico():
+    cliente = ClienteFalso(page_count=1)
+    m = manifiesto(1)
+    m.registros[0].flight_number = "CM137"
+    indexador = Indexador(cliente, m, PICKLIST)
+    plan = indexador.planificar(1)
+
+    # El plan alimenta el reporte local y conserva el vuelo original.
+    assert plan.paginas[0].valores[CAMPO_DESCRIPCION] == "CM137"
+    indexador.aplicar(plan)
+
+    _pagina, valores_remotos, _estado = cliente.escrituras[0]
+    assert valores_remotos[CAMPO_DESCRIPCION] == "CM137 AUTO INDEX"
+
+
+def test_sin_vuelo_se_manda_solo_la_marca_automatica():
+    cliente = ClienteFalso(page_count=1)
+    m = manifiesto(1)
+    indexador = Indexador(cliente, m, PICKLIST)
+    indexador.aplicar(indexador.planificar(1))
+
+    _pagina, valores_remotos, _estado = cliente.escrituras[0]
+    assert valores_remotos[CAMPO_DESCRIPCION] == "AUTO INDEX"
 
 
 def test_pagina_ya_valida_se_respeta():
@@ -89,6 +132,25 @@ def test_pagina_ya_valida_se_respeta():
     assert plan.bloqueadas[0].avisos[0].codigo == "ya_indexada"
     indexador.aplicar(plan)
     assert cliente.escrituras == []
+
+
+def test_pagina_valida_se_reescribe_si_work_location_no_esta_vacio():
+    cliente = ClienteFalso(
+        paginas={
+            1: pagina(
+                1, estado=ESTADO_VALIDO,
+                valores={CAMPO_WORK_LOCATION: "PTY"},
+            )
+        },
+        page_count=1,
+    )
+    indexador = Indexador(cliente, manifiesto(1), PICKLIST)
+
+    plan = indexador.planificar(1)
+    indexador.aplicar(plan)
+
+    assert len(cliente.escrituras) == 1
+    assert cliente.escrituras[0][1][CAMPO_WORK_LOCATION] == ""
 
 
 def test_sobrescribir_permite_pisar():
@@ -117,7 +179,7 @@ def test_reanudar_no_reescribe_lo_ya_hecho():
     indexador = Indexador(cliente, m, PICKLIST)
     indexador.aplicar(indexador.planificar(3))
 
-    # Segunda corrida: la pagina 1 ya esta escrita y no se vuelve a tocar.
+    # Segunda ejecución: la pagina 1 ya esta escrita y no se vuelve a tocar.
     cliente.fallar_en = set()
     m.registros[1].estado = EstadoRegistro.PENDIENTE
     m.registros[1].avisos = []
@@ -148,7 +210,14 @@ def test_sin_lote_no_se_planifica():
 
 def test_verificar_cuenta_las_validas():
     cliente = ClienteFalso(
-        paginas={1: pagina(1, estado=ESTADO_VALIDO), 2: pagina(2, estado=3)},
+        paginas={
+            1: pagina(1, estado=ESTADO_VALIDO, valores={
+                CAMPO_LOG_NUMBER: "2287321", CAMPO_MATRICULA: "HP-1848CMP",
+            }),
+            2: pagina(2, estado=3, valores={
+                CAMPO_LOG_NUMBER: "2287322", CAMPO_MATRICULA: "HP-1848CMP",
+            }),
+        },
         page_count=2,
     )
     validas, total, problemas = verificar_lote(cliente, manifiesto(2))
@@ -156,13 +225,93 @@ def test_verificar_cuenta_las_validas():
     assert len(problemas) == 1
 
 
-def test_matricula_fuera_de_picklist_bloquea():
+def test_verificar_exige_work_location_vacio():
+    cliente = ClienteFalso(
+        paginas={
+            1: pagina(
+                1, estado=ESTADO_VALIDO,
+                valores={
+                    CAMPO_WORK_LOCATION: "BOG",
+                    CAMPO_LOG_NUMBER: "2287321",
+                    CAMPO_MATRICULA: "HP-1848CMP",
+                },
+            )
+        },
+        page_count=1,
+    )
+
+    validas, total, problemas = verificar_lote(cliente, manifiesto(1))
+
+    assert (validas, total) == (0, 1)
+    assert any("Work Location" in problema for problema in problemas)
+
+
+def test_verificar_no_cuenta_una_verde_con_identidad_equivocada():
+    cliente = ClienteFalso(paginas={
+        1: pagina(1, estado=ESTADO_VALIDO, valores={
+            CAMPO_LOG_NUMBER: "2287999", CAMPO_MATRICULA: "HP-1852CMP",
+        }),
+    })
+
+    validas, total, problemas = verificar_lote(cliente, manifiesto(1))
+
+    assert (validas, total) == (0, 1)
+    assert any("log 2287999" in problema for problema in problemas)
+    assert any("HP-1852CMP" in problema for problema in problemas)
+
+
+def test_matricula_fuera_de_picklist_se_escribe_completa_y_valida():
     m = manifiesto(1)
     m.registros[0].matricula = "HP-0000CMP"
     cliente = ClienteFalso(page_count=1)
-    plan = Indexador(cliente, m, PICKLIST).planificar(1)
-    codigos = {a.codigo for a in plan.bloqueadas[0].avisos}
+    indexador = Indexador(cliente, m, PICKLIST)
+    plan = indexador.planificar(1)
+    codigos = {a.codigo for a in plan.escribibles[0].avisos}
     assert "matricula_desconocida" in codigos
+    assert plan.escribibles[0].requiere_revision
+
+    indexador.aplicar(plan)
+
+    assert cliente.escrituras[0][2] == ESTADO_VALIDO
+
+
+def test_campo_obligatorio_vacio_bloquea_un_batch_automatico():
+    m = manifiesto(1)
+    m.registros[0].log_number = ""
+    cliente = ClienteFalso(page_count=1)
+    indexador = Indexador(cliente, m, PICKLIST)
+
+    plan = indexador.planificar(1)
+    indexador.aplicar(plan)
+
+    assert len(plan.escribibles) == 0
+    assert cliente.escrituras == []
+
+
+def test_campo_obligatorio_vacio_solo_se_envia_en_revisar():
+    m = manifiesto(1)
+    m.solo_subir = True
+    m.registros[0].log_number = ""
+    cliente = ClienteFalso(page_count=1)
+    indexador = Indexador(cliente, m, PICKLIST)
+
+    plan = indexador.planificar(1)
+    indexador.aplicar(plan)
+
+    assert len(plan.escribibles) == 1
+    assert cliente.escrituras[0][1][CAMPO_LOG_NUMBER] == ""
+    assert cliente.escrituras[0][2] == ESTADO_NECESITA_CORRECCION
+
+
+def test_una_discrepancia_completa_se_conserva_amarilla_en_revisar():
+    m = manifiesto(1)
+    m.solo_subir = True
+    cliente = ClienteFalso(page_count=1)
+    indexador = Indexador(cliente, m, PICKLIST)
+
+    indexador.aplicar(indexador.planificar(1))
+
+    assert cliente.escrituras[0][2] == ESTADO_NECESITA_CORRECCION
 
 
 def test_aprende_la_flota_que_airvault_ya_tiene():

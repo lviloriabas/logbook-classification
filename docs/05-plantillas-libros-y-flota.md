@@ -136,9 +136,9 @@ No ajuste una plantilla únicamente contra una página limpia. Incluya páginas 
 
 Use **Editar lista de matrículas…** para agregar o retirar aeronaves. El editor normaliza, elimina duplicados y guarda la lista en la raíz del programa.
 
-La lista solo afecta una corrida cuando está activa **Verificar matrículas** o cuando la CLI usa `--verificar-flota`. La CLI la ignora por defecto.
+La lista solo afecta una ejecución cuando está activa **Verificar matrículas** o cuando la CLI usa `--verificar-flota`. La CLI la ignora por defecto.
 
-> **PRECAUCIÓN:** Trate `fleet.json` como el catálogo completo. Una matrícula canónica que no aparezca allí se considera inexistente para la corrida.
+> **PRECAUCIÓN:** Trate `fleet.json` como el catálogo completo. Una matrícula canónica que no aparezca allí se considera inexistente para la ejecución.
 
 ## 5.9 Identificación de libros
 
@@ -155,7 +155,7 @@ Si falta `log_number`:
 - con un solo libro conocido, la página se agrega a ese libro;
 - con varios libros posibles, las páginas desconocidas quedan en un grupo separado y no se asignan por posición del PDF.
 
-> **PRECAUCIÓN:** En un lote con varios libros, revise las páginas sin `log_number` antes de aceptar inferencias. Al quedar juntas en el grupo no identificado, pueden compartir evidencia que no pertenece al mismo libro físico.
+> **PRECAUCIÓN:** En un batch con varios libros, revise las páginas sin `log_number` antes de aceptar inferencias. Al quedar juntas en el grupo no identificado, pueden compartir evidencia que no pertenece al mismo libro físico.
 
 ## 5.10 Datos manuscritos de fecha
 

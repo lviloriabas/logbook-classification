@@ -8,16 +8,20 @@ y no se guarda en disco.
 from __future__ import annotations
 
 import json
+import os
+import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping
 
 AIRVAULT_FILENAME = "airvault.json"
+_CONFIG_WRITE_LOCK = threading.Lock()
 
 # Identificadores de campo del repositorio MXDocs (repoId 3209). Son
 # estables: los asigna el administrador de AirVault al definir el
-# repositorio, no cambian entre lotes.
+# repositorio, no cambian entre batches.
 CAMPO_DOC_TYPE = 9586
+CAMPO_WORK_LOCATION = 9624
 CAMPO_WORK_TYPE = 9627
 CAMPO_MATRICULA = 9633
 CAMPO_DESCRIPCION = 9752
@@ -53,6 +57,29 @@ NOMBRE_ESTADO = {
     ESTADO_NECESITA_CORRECCION: "Need Correction",
 }
 
+# Como se llama cada campo en la pantalla de AirVault. Un aviso que dice
+# «el campo 9633 quedaria vacio» no se puede leer sin abrir el codigo; el
+# mismo aviso con el nombre se resuelve mirando la bitacora.
+NOMBRE_CAMPO = {
+    CAMPO_DOC_TYPE: "Doc Type",
+    CAMPO_WORK_LOCATION: "Work Location",
+    CAMPO_WORK_TYPE: "Work Type",
+    CAMPO_MATRICULA: "Aircraft",
+    CAMPO_DESCRIPCION: "Description",
+    CAMPO_FLEET: "Fleet",
+    CAMPO_LESSOR: "Lessor",
+    CAMPO_LOG_NUMBER: "Log Page Number",
+    CAMPO_AUDIT_STATUS: "Audit Status",
+    CAMPO_START_DATE: "Start Date",
+    CAMPO_END_DATE: "End Date",
+    CAMPO_BATCH_NAME: "Batch Name",
+}
+
+
+def nombre_campo(field_id: int) -> str:
+    """Nombre legible de un campo; el numero solo si no se conoce."""
+    return NOMBRE_CAMPO.get(field_id, f"campo {field_id}")
+
 
 @dataclass(frozen=True)
 class AirVaultConfig:
@@ -68,17 +95,29 @@ class AirVaultConfig:
     )
     repo_id: int = 3209
     index_scheme_id: int = 137
-    # El picklist de Doc Type contiene "Log Page"; los lotes cargados hasta
+    # El picklist de Doc Type contiene "Log Page"; los batches cargados hasta
     # hoy llevan "LOG PAGE", que no existe en ese picklist y la interfaz
     # solo conserva porque lo agrega al combo. Se deja configurable para no
     # decidir por el administrador, con el valor valido como defecto.
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
-    # Segundos de espera entre sondeos al buscar el lote por nombre.
+    # Preferencia portable de la interfaz. No hay un valor fijo en el
+    # codigo: la instalacion conserva aqui la ultima cantidad elegida tanto
+    # al repartir la entrega como al preparar los batches de Quick Upload.
+    paginas_por_batch: int | None = None
+    # Preferencia de la interfaz sin valor impuesto por el programa. Cuando
+    # la persona marca o desmarca «Completar batch», se conserva exactamente
+    # ese último estado en la carpeta portable.
+    completar_batch: bool | None = None
+    # Segundos de espera entre sondeos al buscar el batch por nombre.
     espera_descubrimiento_s: float = 20.0
     espera_maxima_s: float = 900.0
+    # Quick Upload puede tardar bastante en publicar el batch en Web Index.
+    # Tras agotar las revisiones de nombres y contenido empieza esta espera;
+    # solo al terminar se habilita una posible resubida.
+    espera_reenvio_s: float = 1800.0
     # Tiempo limite de cada peticion. El servidor cuelga la peticion de
-    # apertura cuando el mismo usuario tiene el lote abierto en otra sesion,
+    # apertura cuando el mismo usuario tiene el batch abierto en otra sesion,
     # asi que sin limite el proceso se queda esperando para siempre.
     timeout_s: float = 60.0
     reintentos: int = 3
@@ -120,3 +159,59 @@ class AirVaultConfig:
 
     def url(self, ruta: str) -> str:
         return f"{self.base_url.rstrip('/')}/{ruta.lstrip('/')}"
+
+
+def guardar_paginas_por_batch(path: Path | str, cantidad: int) -> bool:
+    """Conserva la ultima cantidad elegida sin perder otras opciones.
+
+    La preferencia vive en el JSON portable de AirVault, no en QSettings,
+    porque la aplicacion completa debe poder moverse a otro Windows sin
+    depender del registro ni de una ruta del perfil del usuario.
+    """
+    ruta = Path(path)
+    try:
+        with _CONFIG_WRITE_LOCK:
+            if ruta.is_file():
+                datos = json.loads(ruta.read_text(encoding="utf-8"))
+                if not isinstance(datos, Mapping):
+                    return False
+            else:
+                datos = {}
+            valor = int(cantidad)
+            if valor <= 0:
+                return False
+            datos["paginas_por_batch"] = valor
+            ruta.parent.mkdir(parents=True, exist_ok=True)
+            temporal = ruta.with_name(f"{ruta.name}.tmp")
+            temporal.write_text(
+                json.dumps(datos, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporal, ruta)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return True
+
+
+def guardar_completar_batch(path: Path | str, marcado: bool) -> bool:
+    """Conserva el último estado de «Completar batch» en el JSON portable."""
+    ruta = Path(path)
+    try:
+        with _CONFIG_WRITE_LOCK:
+            if ruta.is_file():
+                datos = json.loads(ruta.read_text(encoding="utf-8"))
+                if not isinstance(datos, Mapping):
+                    return False
+            else:
+                datos = {}
+            datos["completar_batch"] = bool(marcado)
+            ruta.parent.mkdir(parents=True, exist_ok=True)
+            temporal = ruta.with_name(f"{ruta.name}.tmp")
+            temporal.write_text(
+                json.dumps(datos, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporal, ruta)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return True

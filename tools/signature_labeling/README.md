@@ -17,7 +17,7 @@ portable/python312/tools/python.exe tools/signature_labeling/extract.py --pages 
 ```
 
 Lee los PDF de `input/`, repite la geometría exacta del pipeline (corrección
-de inclinación + alineación con las anclas del lote) y guarda un PNG por cada
+de inclinación + alineación con las anclas del batch) y guarda un PNG por cada
 campo de firma en `output/firmas_dataset/recortes/`.
 
 Los recortes se guardan con más margen del que usa el detector: usted ve el
@@ -38,7 +38,7 @@ Cada página aporta 5 recortes (los cinco campos de firma de la plantilla).
 Con 100 páginas ya hay 500 recortes, que es más que suficiente: **entre 300 y
 600 recortes** dan una calibración sólida sin que etiquetarlos se haga eterno.
 Conviene que vengan de PDF distintos, porque la calidad del escaneo es lo que
-más cambia entre lotes.
+más cambia entre batches.
 
 Volver a ejecutarlo añade lo que falte y **no borra las etiquetas ya puestas**.
 
@@ -84,10 +84,10 @@ portable/python312/tools/python.exe tools/signature_labeling/tune.py
 Mide cada recorte etiquetado con la función real del detector y busca los
 umbrales que menos cuestan. El coste no es la tasa de acierto:
 
-- **falso presente** (el sistema da por firmada una página sin firmar): 6 —
+- **falso presente** (el sistema da por firmada una página sin firmar): 6;
   esconde una falta real, y nadie va a ir a buscarla;
-- **falso ausente** (reclama una firma que sí está): 4 — acusa en falso;
-- **incierto**: 1 — solo cuesta una revisión manual.
+- **falso ausente** (reclama una firma que sí está): 4; acusa en falso,
+- **incierto**: 1; solo cuesta una revisión manual.
 
 El informe compara la configuración actual con la propuesta, valida con
 particiones que no participaron en la búsqueda (para que la mejora no sea
@@ -112,8 +112,8 @@ una y dejar el margen de la otra daría una mezcla que nadie ha medido.
 
 Si la diferencia de coste entre ambas compensa, edite las dos constantes a
 mano y vuelva a ejecutar `tune.py`: las dos filas del informe pasarán a ser la
-misma. Todo lo que va después de esas filas —validación cruzada, desglose por
-campo y lista de errores— habla siempre de la configuración que se aplicaría.
+misma. Todo lo que va después de esas filas (validación cruzada, desglose por
+campo y lista de errores) habla siempre de la configuración que se aplicaría.
 
 Otras opciones: `--rapido` (rejilla reducida), `--por-campo` (umbrales propios
 por campo), `--solo-alineadas`, `--cv 0` (sin validación cruzada) y los pesos

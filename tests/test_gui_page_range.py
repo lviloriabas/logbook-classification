@@ -9,9 +9,10 @@ import pymupdf as fitz
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QAbstractSpinBox, QApplication
 
 from app.gui.main_window import MainWindow
+from app.gui.widgets import SpinBoxWithButtons
 
 
 def _pdf(path: Path, pages: int) -> Path:
@@ -32,11 +33,12 @@ def _window(tmp_path: Path, sizes=(10, 20, 5)) -> MainWindow:
         for index, size in enumerate(sizes)
     ]
     window._set_input_paths(paths)
+    window.esperar_lectura_de_entrada()
     return window
 
 
 def test_the_batch_starts_on_the_first_and_last_page_of_the_input(tmp_path):
-    """Los dos extremos son números reales: 1 y la última del lote."""
+    """Los dos extremos son números reales: 1 y la última del batch."""
     window = _window(tmp_path)
     try:
         assert window.page_from_spin.value() == 1
@@ -50,11 +52,57 @@ def test_the_batch_starts_on_the_first_and_last_page_of_the_input(tmp_path):
         window.close()
 
 
+def test_page_range_fields_do_not_mix_arrows_with_the_number(tmp_path):
+    window = _window(tmp_path)
+    try:
+        window.show()
+        QApplication.instance().processEvents()
+        for spin, control in (
+            (window.page_from_spin, window.page_from_control),
+            (window.page_to_spin, window.page_to_control),
+            (window.threads_spin, window.threads_control),
+            (window.ref_spin, window.ref_control),
+        ):
+            assert isinstance(control, SpinBoxWithButtons)
+            assert control.spin is spin
+            assert spin.parentWidget() is control
+            assert spin.buttonSymbols() == (
+                QAbstractSpinBox.ButtonSymbols.NoButtons
+            )
+            assert control.up_button.parentWidget() is control
+            assert control.down_button.parentWidget() is control
+
+        for spin, control in (
+            (window.page_from_spin, window.page_from_control),
+            (window.page_to_spin, window.page_to_control),
+        ):
+            assert control.up_button.geometry().left() > spin.geometry().right()
+            assert control.down_button.geometry().left() > spin.geometry().right()
+            assert control.height() == spin.height()
+
+        # Las flechas externas cambian el valor y reflejan los límites.
+        assert not window.page_from_control.down_button.isEnabled()
+        window.page_from_control.up_button.click()
+        assert window.page_from_spin.value() == 2
+        window.page_from_control.down_button.click()
+        assert window.page_from_spin.value() == 1
+        assert not window.page_from_control.down_button.isEnabled()
+
+        assert not window.page_to_control.up_button.isEnabled()
+        window.page_to_control.down_button.click()
+        assert window.page_to_spin.value() == 34
+        window.page_to_control.up_button.click()
+        assert window.page_to_spin.value() == 35
+    finally:
+        window.close()
+
+
 def test_changing_the_input_moves_the_end_to_the_new_last_page(tmp_path):
     window = _window(tmp_path)
     try:
         assert window.page_to_spin.value() == 35
         window._set_input_paths([_pdf(tmp_path / "otra.pdf", 7)])
+        window.esperar_lectura_de_entrada()
         assert window.page_from_spin.value() == 1
         assert window.page_to_spin.value() == 7
         assert window.page_range_label.text() == "de 7 pág."
@@ -66,6 +114,7 @@ def test_an_empty_input_leaves_the_controls_at_one(tmp_path):
     window = _window(tmp_path)
     try:
         window._set_input_paths([])
+        window.esperar_lectura_de_entrada()
         assert window.page_from_spin.value() == 1
         assert window.page_to_spin.value() == 1
         assert window.page_range_label.text() == ""
@@ -75,7 +124,7 @@ def test_an_empty_input_leaves_the_controls_at_one(tmp_path):
 
 
 def test_a_range_across_two_files_cuts_each_one(tmp_path):
-    """8-22 del lote: las tres últimas del primero y doce del segundo."""
+    """8-22 del batch: las tres últimas del primero y doce del segundo."""
     window = _window(tmp_path)
     try:
         window.page_from_spin.setValue(8)

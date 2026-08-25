@@ -1,13 +1,13 @@
 """Subida de archivos a AirVault por Quick Upload.
 
-Quick Upload crea un lote nuevo a partir de los archivos que se le envian y
+Quick Upload crea un batch nuevo a partir de los archivos que se le envian y
 lo deja en la cola de Web Index. La subida va por trozos, como la hace la
 propia pagina, y despues se confirma cada archivo con sus valores de
 indice.
 
 Aviso importante: Quick Upload solo expone los campos marcados para ese
 modulo, y entre ellos no estan Log Page Number, Fleet ni End Date. Por eso
-la subida deja el lote clasificado pero no indexado, y el indexado real lo
+la subida deja el batch clasificado pero no indexado, y el indexado real lo
 hace :mod:`app.airvault.indexer` despues. Si el administrador habilita esos
 campos para Quick Upload, esta etapa podria cerrarlo todo de una vez.
 """
@@ -86,7 +86,7 @@ class SubidorQuickUpload:
     ) -> ResultadoSubida:
         """Sube un archivo y confirma sus valores de indice.
 
-        Los PDF de una corrida completa pesan casi dos gigas y viajan en
+        Los PDF de una ejecución completa pesan casi dos gigas y viajan en
         trozos de un mega, asi que sin ``avisar`` la subida parece colgada
         durante media hora.
         """

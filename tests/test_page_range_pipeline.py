@@ -1,4 +1,4 @@
-"""El rango del lote recorta de verdad lo que procesan Pipeline y lote."""
+"""El rango del batch recorta de verdad lo que procesan Pipeline y batch."""
 
 from __future__ import annotations
 
@@ -154,7 +154,7 @@ def test_the_parallel_worker_indexes_the_anchors_from_the_first_page(tmp_path):
 
 
 def test_the_batch_range_spans_files_and_skips_the_ones_outside(tmp_path):
-    """8-22 de un lote 10+20+5: cola del primero, cabeza del segundo."""
+    """8-22 de un batch 10+20+5: cola del primero, cabeza del segundo."""
     paths = [
         _pdf(tmp_path / "a.pdf", 10),
         _pdf(tmp_path / "b.pdf", 20),
@@ -212,7 +212,7 @@ def test_a_batch_range_outside_the_input_returns_nothing(tmp_path):
 
 
 def test_the_batch_progress_totals_only_the_selected_pages(tmp_path):
-    """La barra global cuenta las páginas del rango, no las del lote."""
+    """La barra global cuenta las páginas del rango, no las del batch."""
     paths = [
         _pdf(tmp_path / "a.pdf", 10),
         _pdf(tmp_path / "b.pdf", 20),
@@ -240,7 +240,7 @@ def test_the_batch_progress_totals_only_the_selected_pages(tmp_path):
 
     class _Pool:
         # Más workers que archivos: el planificador reparte páginas y el
-        # lote es quien lleva el contador global.
+        # batch es quien lleva el contador global.
         max_workers = 4
 
         def temporary_path(self, name):

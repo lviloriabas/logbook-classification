@@ -47,6 +47,19 @@ class TestCsvGates(unittest.TestCase):
         row = self._rows(page)
         self.assertEqual(row["matricula"], "HP-1534CMP")
 
+    def test_archiving_with_a_suffix_does_not_rename_the_csv_source(self):
+        page = PageResult(page_number=1)
+        report = ValidationReport(
+            pdf_path="input/processed/bitacora-2.pdf",
+            source_name="bitacora.pdf",
+            template_name="fixture",
+            pages=[page],
+        )
+
+        row = CsvReporter.row_for_page(report, page, [])
+
+        self.assertEqual(row["file"], "bitacora.pdf")
+
     def test_date_part_gates(self):
         page = PageResult(page_number=1)
         page.add_field(_field("day", "Schedule Fit 211 DATE"))
@@ -206,7 +219,9 @@ class TestCsvGates(unittest.TestCase):
             "dup",
             "disc",
         ])
-        self.assertEqual([row["dup"] for row in rows], ["false", "true"])
+        # Las dos apariciones de 2147300 se marcan: quien lee el CSV tiene
+        # que ver las dos filas del choque, no solo la posterior.
+        self.assertEqual([row["dup"] for row in rows], ["true", "true"])
 
     def test_disc_marks_the_pages_flagged_as_discrepancy(self):
         limpia = PageResult(page_number=1)
@@ -278,7 +293,7 @@ class TestPageTime(unittest.TestCase):
 
 
 class TestRunTime(unittest.TestCase):
-    """El lote se normaliza contra el reloj de la corrida, no por archivo."""
+    """El batch se normaliza contra el reloj de la ejecución, no por archivo."""
 
     def _report(
         self, page_times, total_ms, started_at=0.0
@@ -304,7 +319,7 @@ class TestRunTime(unittest.TestCase):
                 return [float(row["time_ms"]) for row in csv.DictReader(fh)]
 
     def test_overlapping_files_are_not_counted_once_per_file(self):
-        # Cuatro archivos arrancados a la vez, 100 s cada uno: la corrida duró
+        # Cuatro archivos arrancados a la vez, 100 s cada uno: la ejecución duró
         # 100 s, no 400. Sumar los relojes multiplicaba la columna por cuatro.
         reports = [
             self._report([50_000.0, 50_000.0], 100_000.0, started_at=1_000.0)

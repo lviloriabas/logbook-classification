@@ -98,7 +98,7 @@ def important_csv_columns(
 
 
 def find_csv_files(folder: Path) -> list[Path]:
-    """Encuentra reportes CSV en una carpeta de corrida o carpeta contenedora."""
+    """Encuentra reportes CSV en una carpeta de ejecución o carpeta contenedora."""
     folder = Path(folder)
     if not folder.is_dir():
         return []
@@ -113,7 +113,7 @@ def find_csv_files(folder: Path) -> list[Path]:
         ]
 
     # La estructura actual guarda el reporte en <corrida>/datos/. Las dos
-    # rutas siguientes cubren además las corridas históricas con CSV en raíz.
+    # rutas siguientes cubren además las ejecuciones históricas con CSV en raíz.
     preferred = csvs_in(folder / "datos")
     direct = csvs_in(folder)
     found = preferred + [path for path in direct if path not in preferred]
@@ -134,13 +134,13 @@ def _holds_csv(folder: Path) -> bool:
 
 
 def find_run_dirs(root: Path, limit: int | None = None) -> list[Path]:
-    """Corridas guardadas en ``root``, de la más reciente a la más antigua.
+    """Ejecuciones guardadas en ``root``, de la más reciente a la más antigua.
 
-    Una corrida es una carpeta con su reporte dentro: en ``datos/`` las
+    Una ejecución es una carpeta con su reporte dentro: en ``datos/`` las
     actuales y en la propia carpeta las históricas. Lo demás que vive junto a
-    ellas —los logs, los recortes de firmas— no es una corrida y no aparece.
+    ellas (los logs, los recortes de firmas) no es una ejecución y no aparece.
     El recorrido se queda en el primer nivel de cada carpeta: recorrerlas
-    enteras solo para saber si son corridas costaría más que abrir la que se
+    enteras solo para saber si son ejecuciones costaría más que abrir la que se
     elija.
     """
     root = Path(root)
@@ -195,7 +195,7 @@ def template_for_csv(path: Path):
 
     El CSV solo guarda el nombre de la plantilla, así que se busca por nombre
     entre las del programa. Sin ella no se pueden volver a generar las
-    salidas de la corrida ni saber qué campos declaró importantes.
+    salidas de la ejecución ni saber qué campos declaró importantes.
     """
     template_name = template_name_for_csv(path)
     if not template_name:
@@ -212,7 +212,7 @@ def template_for_csv(path: Path):
 
 
 def important_field_ids_for_csv(path: Path, columns: Iterable[str]) -> set[str]:
-    """Recupera los campos obligatorios desde la plantilla de la corrida."""
+    """Recupera los campos obligatorios desde la plantilla de la ejecución."""
     template = template_for_csv(path)
     if template is not None:
         important = {field.id for field in template.fields if field.required}

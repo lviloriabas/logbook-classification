@@ -82,7 +82,7 @@ class TestReservedMemoryScales(unittest.TestCase):
         self.assertLessEqual(reserved, parallelism._MAX_RESERVED_MEMORY_MB)
 
     def test_a_large_machine_does_not_reserve_without_limit(self):
-        """Lo que se cubre —sistema, interfaz, salidas— no crece con la RAM."""
+        """Lo que se cubre (sistema, interfaz, salidas) no crece con la RAM."""
         with mock.patch.object(parallelism, "total_memory_mb",
                                return_value=131072):
             self.assertEqual(reserved_memory_mb(),

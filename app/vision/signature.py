@@ -35,11 +35,11 @@ La decisión tiene tres estados:
 
 - ``true``: densidad local >= ``min_ink_peak``; o densidad moderada
   (>= ``max_empty_peak``) repartida a lo largo de al menos ``min_ink_span``
-  del ancho, que es la forma de un número de licencia — dígitos separados
+  del ancho, que es la forma de un número de licencia: dígitos separados
   que nunca concentran tanta tinta como una rúbrica.
 - ``false``: densidad por debajo de ``max_empty_peak``, poca tinta total y
   ninguna evidencia ni siquiera con el umbral de tinta relajado.
-- ``unclear`` (WARNING): todo lo demás — escritura que se sale del campo,
+- ``unclear`` (WARNING): todo lo demás, escritura que se sale del campo,
   sellos, calcas. No se acusa una falta: la clasificación de discrepancias
   lo marca como REVISAR y el verificador VLM puede arbitrarlo.
 
@@ -298,7 +298,7 @@ def background_peak(region: np.ndarray, background: np.ndarray) -> float:
     """Densidad de tinta escrita en esta casilla, sobre el fondo del libro.
 
     Entre medir y decidir hay un paso de atribución: la tinta que solo cruza
-    la casilla —la X de una página anulada— se descuenta, porque está en la
+    la casilla (la X de una página anulada) se descuenta, porque está en la
     página pero no es de este campo.
     """
     return book_peak_density(
@@ -313,7 +313,7 @@ def review_with_background(
 
     Solo se pronuncia cuando el valor cae *fuera* de la franja de duda que
     dejaron las páginas ya resueltas de esta bitácora. Dentro de la franja
-    devuelve None —"sigo sin saberlo"— en lugar de partir por el medio: la
+    devuelve None ("sigo sin saberlo") en lugar de partir por el medio: la
     firma incierta ya está a salvo en REVISAR, y convertirla en un veredicto
     equivocado sería el único cambio que empeora las cosas de verdad.
 
@@ -352,7 +352,7 @@ def detect_signature(
         page_number: Página a la que pertenece el recorte.
         dpi: Resolución a la que se renderizó el recorte. El recorte se lleva
             a la escala canónica antes de medirlo, de forma que el veredicto
-            no dependa del DPI elegido para la corrida.
+            no dependa del DPI elegido para la ejecución.
 
     Returns:
         FieldResult con valor "true", "false" o "unclear" y su confianza.

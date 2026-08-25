@@ -360,7 +360,7 @@ def _matricula_token(raw: str) -> Optional[Tuple[str, int]]:
         elif not suffix:
             suffix_score = 1
         elif suffix[0].isdigit():
-            # Un dígito suelto detrás delata una ventana corrida.
+            # Un dígito suelto detrás delata una ventana ejecución.
             suffix_score = -3
         else:
             suffix_score = -1
@@ -429,7 +429,7 @@ FLIGHT_CODES = ("TCK", "CCK", "SPV", "SVC", "SUP", "MTC", "SV")
 # 5, la P con el 9 y la R, la T con el 7 y la J, la U con la V. Comparar los
 # códigos por clase y no letra a letra es lo que permite reconocer "S9V",
 # "SRV" o "52V" como el SPV que está escrito en la página, y "JCK" como TCK
-# sin tener que aflojar la distancia y confundir "ZCC" —que es un 700— con
+# sin tener que aflojar la distancia y confundir "ZCC" (que es un 700) con
 # CCK.
 _FLIGHT_STROKE_GROUPS = (
     "0OQD", "1IL", "2Z", "3E", "4YA", "5S", "6G", "7TFJ", "8B", "9PR", "UV",
@@ -457,8 +457,8 @@ _FLIGHT_LETTER_TO_DIGIT = {
 }
 # Detrás de un ``CM`` leído entero no puede haber letras: lo que sigue es el
 # número. Ahí valen además las confusiones que en cualquier otro sitio serían
-# ambiguas —la A de "CMPBA3" (CM843) es un 4, pero la de "A123" es el
-# prefijo del vuelo—.
+# ambiguas (la A de "CMPBA3" (CM843) es un 4, pero la de "A123" es el
+# prefijo del vuelo).
 _FLIGHT_TAIL_TO_DIGIT = {
     **_FLIGHT_LETTER_TO_DIGIT,
     "A": "4",

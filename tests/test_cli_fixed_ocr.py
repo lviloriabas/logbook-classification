@@ -33,7 +33,7 @@ def test_cli_writes_its_outputs_with_the_same_function_as_the_window():
     """El CSV doble, los PDFs y las stats salen de ``write_outputs``.
 
     Escribir las salidas por separado en cada superficie era lo que hacía
-    que una corrida de línea de comandos y una de la interfaz entregaran
+    que una ejecución de línea de comandos y una de la interfaz entregaran
     carpetas distintas. Si vuelve a aparecer aquí una escritura propia, la
     divergencia vuelve con ella.
     """

@@ -1,6 +1,6 @@
-"""Lo que pasa cuando AirVault falla a mitad de un lote.
+"""Lo que pasa cuando AirVault falla a mitad de un batch.
 
-Un lote son cientos de peticiones y una subida completa casi dos mil: a esa
+Un batch son cientos de peticiones y una subida completa casi dos mil: a esa
 escala un corte de red o una página que no carga dejan de ser raros. Lo que
 no puede pasar es que un tropiezo tire el trabajo entero, ni que una caída
 marque como fallidas cuatrocientas páginas que nadie llegó a intentar.
@@ -15,6 +15,7 @@ from app.airvault.config import AirVaultConfig
 from app.airvault.indexer import Indexador
 from app.airvault.model import EstadoRegistro, Manifiesto, Registro
 from app.airvault.session import (
+    ErrorDeAirVault,
     ErrorDeConexion,
     ErrorDeSesion,
     SesionAirVault,
@@ -30,20 +31,41 @@ class HttpFalso:
     def __init__(self, respuestas):
         self.respuestas = list(respuestas)
         self.pedidas = []
+        self.cabeceras: list = []
+        self.portadas: list = []
         self.headers: dict = {}
         self.cookies = _Tarro()
 
     def request(self, metodo, url, **extra):
         self.pedidas.append((metodo, url))
+        self.cabeceras.append(dict(extra.get("headers") or {}))
         siguiente = self.respuestas.pop(0)
         if isinstance(siguiente, Exception):
             raise siguiente
         return siguiente
 
+    def get(self, url, **_extra):
+        """La portada de la que el sitio sirve su token antiforgery.
+
+        No sale del guion a proposito: no es una peticion del trabajo sino
+        lo que AirVault exige para aceptar cualquier escritura, y meterla
+        en el guion obligaria a repetirla en todas las pruebas que escriben.
+        """
+        self.portadas.append(url)
+        return RespuestaFalsa(
+            text='<div id="ct-antiforgery" data-root-antiforgery="tok-123">'
+        )
+
 
 class _Tarro:
+    def __init__(self):
+        self.vaciado = 0
+
     def set(self, *_a, **_k):
         return None
+
+    def clear(self, *_a, **_k):
+        self.vaciado += 1
 
 
 class RespuestaFalsa:
@@ -88,6 +110,23 @@ def test_un_tiempo_agotado_se_reintenta():
     assert s.get("/x") == {"ok": True}
 
 
+def test_un_certificado_invalido_no_se_reintenta_y_se_explica():
+    s = sesion([
+        requests.exceptions.SSLError("CERTIFICATE_VERIFY_FAILED"),
+        RespuestaFalsa(json_data={"no": "deberia llegar"}),
+    ])
+
+    with pytest.raises(ErrorDeConexion) as fallo:
+        s.get("/x")
+
+    motivo = str(fallo.value)
+    assert "certificado SSL" in motivo
+    assert "certificados confiables de Windows" in motivo
+    assert "fecha y hora" in motivo
+    assert "REQUESTS_CA_BUNDLE" in motivo
+    assert len(s.http.pedidas) == 1
+
+
 def test_el_servidor_ocupado_se_reintenta():
     """503 es «vuelve luego», no «esto esta mal»."""
     s = sesion([
@@ -101,9 +140,23 @@ def test_el_servidor_ocupado_se_reintenta():
 def test_lo_que_no_mejora_insistiendo_no_se_reintenta():
     """Un 404 se responde igual las tres veces; insistir solo hace esperar."""
     s = sesion([RespuestaFalsa(status_code=404)])
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(ErrorDeAirVault) as fallo:
         s.get("/x")
     assert len(s.http.pedidas) == 1
+    # El motivo tiene que decir que fallo y por que, no un codigo suelto.
+    assert "no existe" in str(fallo.value)
+    assert "404" in str(fallo.value)
+
+
+def test_un_rechazo_de_una_pagina_no_es_un_fallo_del_camino():
+    """Un 404 frena esa pagina; el batch entero sigue.
+
+    Si se anunciara como error de conexion, el indexador daria por caido el
+    camino y marcaria como fallidas cientos de paginas que nadie intento.
+    """
+    from app.airvault.indexer import FALLOS_DE_CAMINO
+
+    assert not issubclass(ErrorDeAirVault, FALLOS_DE_CAMINO)
 
 
 def test_agotados_los_intentos_se_dice_que_paso():
@@ -119,7 +172,10 @@ def test_el_tiempo_agotado_menciona_el_lote_abierto():
     s = sesion([requests.Timeout("nada")] * 3)
     with pytest.raises(ErrorDeConexion) as fallo:
         s.get("/index/Batch/LockAndGetBatchInfo")
-    assert "abierto en el navegador" in str(fallo.value)
+    motivo = str(fallo.value)
+    assert "un solo dueno por batch" in motivo
+    # Tambien cuando lo dejo tomado el propio programa, no solo el navegador.
+    assert "intento anterior no llego a desbloquearlo" in motivo
 
 
 def test_la_espera_crece_con_cada_intento():
@@ -300,11 +356,205 @@ def test_un_fallo_de_una_pagina_si_se_marca_en_esa_pagina():
 
 def test_verificar_cuenta_aparte_la_pagina_que_no_pudo_leerse():
     from app.airvault.indexer import verificar_lote
+    from app.airvault.config import CAMPO_LOG_NUMBER, CAMPO_MATRICULA
 
+    manifiesto_ = manifiesto()
     cliente = ClienteQueFalla(
-        [2], paginas={1: pagina(1, estado=0), 3: pagina(3, estado=0)},
+        [2], paginas={
+            numero: pagina(numero, estado=0, valores={
+                CAMPO_LOG_NUMBER: manifiesto_.registros[numero - 1].log_number,
+                CAMPO_MATRICULA: manifiesto_.registros[numero - 1].matricula,
+            })
+            for numero in (1, 3)
+        },
         page_count=3,
     )
-    validas, total, problemas = verificar_lote(cliente, manifiesto())
+    validas, total, problemas = verificar_lote(cliente, manifiesto_)
     assert (validas, total) == (2, 3)
     assert any("no se pudo leer" in p for p in problemas)
+
+
+# ── la sesion guardada que ya no vale ──────────────────────────────
+
+def test_una_sesion_caducada_se_renueva_sin_ventana_y_sigue(monkeypatch):
+    """La sesion se cae a mitad del trabajo y se rehace ahi mismo.
+
+    El perfil de Edge sabe volver a entrar solo (pasa otra vez por el
+    enlace federado y Microsoft lo reconoce sin preguntar nada), asi que
+    una caducidad no tiene por que tumbar un batch de cuatrocientas
+    paginas: se rehace la sesion y se repite la peticion.
+    """
+    from app.airvault import navegador
+    from app.airvault.session import ORIGEN_EDGE
+
+    s = sesion([
+        RespuestaFalsa(status_code=401),
+        RespuestaFalsa(json_data={"records": 7}),
+    ])
+    s._origen = ORIGEN_EDGE
+    pedidos: list = []
+
+    def entrar(*_a, forzar_login=False, **_k):
+        pedidos.append(forzar_login)
+        return {"FedAuth": "nueva"}
+
+    monkeypatch.setattr(navegador, "obtener_cookies", entrar)
+    assert s.comprobar() == 7
+    # Sin ventana: se lee el perfil, que es lo que ya vale otra vez.
+    assert pedidos == [False]
+
+
+def test_no_se_reentra_una_y_otra_vez_en_la_misma_peticion(monkeypatch):
+    """Se prueba el perfil y una ventana, no Edge en cada intento."""
+    from app.airvault import navegador
+    from app.airvault.session import ORIGEN_EDGE
+
+    s = sesion([RespuestaFalsa(status_code=401)] * 3)
+    s._origen = ORIGEN_EDGE
+    pedidos: list = []
+
+    def entrar(*_a, forzar_login=False, **_k):
+        pedidos.append(forzar_login)
+        return {"FedAuth": "nueva"}
+
+    monkeypatch.setattr(navegador, "obtener_cookies", entrar)
+    with pytest.raises(ErrorDeSesion):
+        s.get("/x")
+    assert pedidos == [False, True]
+
+
+def test_cuando_ni_renovando_vale_se_vuelve_a_entrar_con_ventana(monkeypatch):
+    """Ultimo recurso: pedir el acceso en la ventana del navegador."""
+    from app.airvault import navegador
+    from app.airvault.session import ORIGEN_EDGE, comprobar_o_renovar
+
+    s = sesion([
+        RespuestaFalsa(status_code=401),
+        RespuestaFalsa(status_code=401),
+        RespuestaFalsa(json_data={"records": 3}),
+    ])
+    s._origen = ORIGEN_EDGE
+    pedidos: list = []
+
+    def entrar(*_a, forzar_login=False, **_k):
+        pedidos.append(forzar_login)
+        return {"FedAuth": "nueva"}
+
+    monkeypatch.setattr(navegador, "obtener_cookies", entrar)
+    assert comprobar_o_renovar(s) == 3
+    # Primero en silencio; como el servidor siguio diciendo que no, con
+    # ventana y sin mirar lo que guarda el perfil.
+    assert pedidos == [False, True]
+    # Y la vieja sale del tarro: requests mandaria las dos y AirVault se
+    # quedaria con la que acaba de rechazar.
+    assert s.http.cookies.vaciado == 1
+
+
+def test_reentrar_repite_la_peticion_y_continua_el_trabajo(monkeypatch):
+    """La ventana de acceso no deja el paso actual detenido.
+
+    La renovacion de sesion no es un reintento de red. Incluso si la
+    configuracion permite una sola peticion, al terminar de entrar en Edge
+    se repite la que quedo pendiente y el proceso sigue solo.
+    """
+    from app.airvault import navegador
+    from app.airvault.session import ORIGEN_EDGE
+
+    s = sesion([
+        RespuestaFalsa(status_code=401),
+        RespuestaFalsa(status_code=401),
+        RespuestaFalsa(json_data={"records": 8}),
+    ], reintentos=1)
+    s._origen = ORIGEN_EDGE
+    pedidos: list[bool] = []
+
+    def entrar(*_a, forzar_login=False, **_k):
+        pedidos.append(forzar_login)
+        return {"FedAuth": "nueva"}
+
+    monkeypatch.setattr(navegador, "obtener_cookies", entrar)
+
+    assert s.get("/index/Batch/GetBatches") == {"records": 8}
+    assert pedidos == [False, True]
+    assert len(s.http.pedidas) == 3
+
+
+def test_lo_que_escribe_lleva_el_token_del_sitio():
+    """Sin la cabecera ``AntiForgery`` el servidor contesta 500 y ya esta.
+
+    No da 403 ni dice que falta nada: devuelve su pagina de error generica,
+    que ademas se reintenta por transitoria. Asi murio la subida durante
+    dias, siempre en ``FinishUpload`` y despues de mandar el archivo entero.
+    """
+    s = sesion([RespuestaFalsa(json_data={"ok": True})])
+    s.post("/quickuploadex/Home/FinishUpload", json={"model": {}})
+    assert s.http.cabeceras[-1].get("AntiForgery") == "tok-123"
+    # Y se lee de la portada de esa aplicacion, no de otra.
+    assert s.http.portadas[-1].endswith("/quickuploadex/")
+
+
+def test_leer_no_pide_token_ni_gasta_una_peticion_de_mas():
+    """Son cientos de lecturas por batch; una portada por cada una sobra."""
+    s = sesion([RespuestaFalsa(json_data={"rows": []})])
+    s.get("/index/Batch/GetBatches")
+    assert s.http.portadas == []
+    assert "AntiForgery" not in s.http.cabeceras[-1]
+
+
+def test_un_500_al_escribir_hace_releer_el_token():
+    """Un token caducado se ve como un 500; releerlo es lo que lo arregla."""
+    s = sesion([
+        RespuestaFalsa(status_code=500, text="error"),
+        RespuestaFalsa(json_data={"ok": True}),
+    ])
+    s.post("/index/Batch/UpdateBatchName", data={})
+    # Dos portadas: la del primer intento y la que se relee al fallar.
+    assert len(s.http.portadas) == 2
+
+
+def test_un_440_es_que_caduco_la_sesion_y_no_un_rechazo_del_sitio(monkeypatch):
+    """IIS contesta 440 («Login Timeout») con su pagina de error generica.
+
+    Sin nombrarlo se leia como un rechazo de AirVault y el trabajo moria en
+    medio de una espera larga en vez de volver a entrar.
+    """
+    from app.airvault import navegador
+    from app.airvault.session import ORIGEN_EDGE
+
+    s = sesion([
+        RespuestaFalsa(status_code=440, text="<html>error</html>"),
+        RespuestaFalsa(json_data={"records": 1}),
+    ])
+    s._origen = ORIGEN_EDGE
+    monkeypatch.setattr(navegador, "obtener_cookies",
+                        lambda *_a, **_k: {"FedAuth": "nueva"})
+    assert s.comprobar() == 1
+
+
+def test_una_cookie_pegada_a_mano_no_se_renueva_sola(monkeypatch):
+    """No hay navegador del que sacarla; hay que decirlo y no insistir."""
+    from app.airvault.session import comprobar_o_renovar
+
+    s = sesion([RespuestaFalsa(status_code=401)])
+    with pytest.raises(ErrorDeSesion) as fallo:
+        comprobar_o_renovar(s)
+    assert "F12" in str(fallo.value) or "herramientas de" in str(fallo.value)
+
+
+def test_la_sesion_caducada_del_navegador_no_manda_a_copiar_cookies(monkeypatch):
+    """Mandar a copiar con F12 a quien entro por el navegador es el camino largo."""
+    from app.airvault import navegador
+    from app.airvault.navegador import ErrorDeNavegador
+    from app.airvault.session import ORIGEN_EDGE
+
+    def no_hay_navegador(*_a, **_k):
+        raise ErrorDeNavegador("no arranco")
+
+    monkeypatch.setattr(navegador, "obtener_cookies", no_hay_navegador)
+    s = sesion([RespuestaFalsa(status_code=401)])
+    s._origen = ORIGEN_EDGE
+    with pytest.raises(ErrorDeSesion) as fallo:
+        s.get("/x")
+    motivo = str(fallo.value)
+    assert "perfil de Edge" in motivo
+    assert "F12" not in motivo

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -47,6 +48,12 @@ class FieldResult(BaseModel):
     source: str = "direct"
     inference_method: Optional[str] = None
     alternatives: List[str] = Field(default_factory=list)
+    # Cuantas lecturas independientes respaldan este valor exacto. Lo llenan
+    # los correctores cuando imponen un valor que la pagina no leyo o cuando
+    # el consenso confirma una lectura propia que estaba marcada. None
+    # significa que el valor se sostiene solo en la lectura directa. Con 0 o
+    # 1 una inferencia no alcanza para indexarla sin mirar.
+    votes: Optional[int] = None
 
 
 class PageResult(BaseModel):
@@ -70,6 +77,16 @@ class PageResult(BaseModel):
     preview_boxes: Dict[str, List[float]] = Field(
         default_factory=dict, exclude=True, repr=False
     )
+    # Decisión efímera tomada sobre la fila final del CSV. Permite que la
+    # división de los PDF use exactamente la misma información local que
+    # recibirá AirVault, sin convertirla en una columna ni persistirla.
+    airvault_review: bool = Field(default=False, exclude=True, repr=False)
+    # Discrepancia confirmada antes de clasificar las firmas. Se mantiene
+    # separada de ``discrepancy`` porque esa columna también incluye lecturas
+    # inciertas para auditoría y no todas justifican apartar la página.
+    airvault_discrepancy: bool = Field(
+        default=False, exclude=True, repr=False
+    )
 
     def add_field(self, field: FieldResult) -> None:
         """Agrega un campo y recalcula el estado de la página."""
@@ -89,6 +106,10 @@ class ValidationReport(BaseModel):
     """Reporte completo de validación de un documento PDF."""
 
     pdf_path: str
+    # Nombre lógico con el que la fuente entró a la ejecución. ``pdf_path``
+    # puede terminar en ``processed/archivo-2.pdf`` para abrir la copia exacta,
+    # pero el CSV debe conservar ``archivo.pdf`` al volver a exportarse.
+    source_name: Optional[str] = None
     template_name: str
     generated_at: str = Field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
@@ -96,10 +117,14 @@ class ValidationReport(BaseModel):
     processing_ms: float = 0.0
     calibration_ms: float = 0.0
     # Instante de arranque (epoch, ``time.time()``) para poder medir el reloj
-    # real de un lote: con un proceso por archivo las bitácoras se solapan y
+    # real de un batch: con un proceso por archivo las bitácoras se solapan y
     # sumar ``processing_ms`` cuenta el mismo minuto una vez por archivo. No
-    # viaja al JSON: es metadato de la corrida, no del reporte.
+    # viaja al JSON: es metadato de la ejecución, no del reporte.
     started_at: float = Field(default=0.0, exclude=True, repr=False)
     cancelled: bool = False
     summary: Dict[str, int] = Field(default_factory=dict)
     pages: List[PageResult] = Field(default_factory=list)
+
+    @property
+    def source_filename(self) -> str:
+        return self.source_name or Path(self.pdf_path).name

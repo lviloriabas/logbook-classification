@@ -12,7 +12,7 @@ dibujado encima, que es lo que hay que mirar para decidir si la escritura está
 El veredicto actual del detector está oculto a propósito: verlo antes de
 decidir sesga la etiqueta, y estas etiquetas son la vara con la que después se
 mide el detector. Se puede encender (casilla o tecla ``V``) para revisar en
-qué se equivoca, una vez etiquetado el lote.
+qué se equivoca, una vez etiquetado el batch.
 
 Uso::
 

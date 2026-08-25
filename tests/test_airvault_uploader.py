@@ -67,3 +67,19 @@ def test_archivo_vacio_manda_un_trozo(tmp_path):
     ruta.write_bytes(b"")
     partes = list(trozos(ruta))
     assert len(partes) == 1 and partes[0][2] == b""
+
+
+def test_la_subida_no_lleva_el_vuelo():
+    """``Description`` es de cada pagina, no del batch.
+
+    La subida clasifica el archivo entero con un solo juego de valores; el
+    vuelo cambia de una bitacora a la siguiente y ponerlo ahi seria darle a
+    las 400 paginas el vuelo de la primera. Quick Upload ni siquiera expone
+    ese campo: lo escribe el indexado, pagina por pagina.
+    """
+    from app.airvault.config import CAMPO_DESCRIPCION
+    from app.airvault.uploader import CAMPOS_QUICK_UPLOAD, valores_quick_upload
+
+    assert CAMPO_DESCRIPCION not in CAMPOS_QUICK_UPLOAD
+    salida = valores_quick_upload({CAMPO_DESCRIPCION: "CM137"})
+    assert all(v["FieldId"] != str(CAMPO_DESCRIPCION) for v in salida)

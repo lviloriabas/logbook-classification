@@ -21,3 +21,4 @@ loguru>=0.7.2
 
 # Indexado en AirVault (ya venía instalado como dependencia de paddlex)
 requests>=2.31.0
+truststore>=0.10.4

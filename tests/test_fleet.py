@@ -63,6 +63,9 @@ def test_out_of_fleet_registration_is_reclassified_as_the_closest(
     assert field.status is Status.WARNING
     assert page.status is Status.WARNING
     assert report.summary["warning_pages"] == 1
+    # El candidato se conserva para ayudar a revisar. Esta fixture no trae
+    # log_number, así que sigue sin poder llenar todos los obligatorios.
+    assert por_revisar(page)
 
 
 def test_closest_fleet_match_corrects_handwritten_2_read_instead_of_7(
@@ -144,7 +147,7 @@ def test_reading_without_registration_format_is_not_kept(tmp_path: Path):
 def test_an_unconfirmed_registration_never_opens_a_group_of_its_own(
     tmp_path: Path,
 ):
-    """El caso que reportó la corrida: aviones que no existen en la entrega.
+    """El caso que reportó la ejecución: aviones que no existen en la entrega.
 
     Con la verificación activa, una lectura que no es ningún avión de la
     flota se quedaba escrita y abría su propia sección en el PDF y su

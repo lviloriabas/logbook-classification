@@ -1,4 +1,4 @@
-"""Rango de páginas del lote completo repartido entre archivos."""
+"""Rango de páginas del batch completo repartido entre archivos."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from app.core.page_range import (
     total_pages,
 )
 
-# Lote de referencia: 35 páginas repartidas en tres bitácoras.
+# Batch de referencia: 35 páginas repartidas en tres bitácoras.
 PATHS = [Path("a.pdf"), Path("b.pdf"), Path("c.pdf")]
 COUNTS = [10, 20, 5]
 

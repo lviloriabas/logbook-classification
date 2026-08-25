@@ -2,7 +2,7 @@
 
 El servidor no recibe JSON: espera los valores de indice como una cadena
 ``fieldId=valor`` separada por tabuladores y codificada en base64, y el
-identificador del lote tambien en base64. Aislar esa mecanica aqui deja el
+identificador del batch tambien en base64. Aislar esa mecanica aqui deja el
 resto del modulo trabajando con diccionarios normales.
 """
 
@@ -26,7 +26,7 @@ def codificar_valores(valores: Mapping[int, str]) -> str:
     """Codifica ``{fieldId: valor}`` en el ``encodedValues`` del servidor.
 
     Se conserva el orden de insercion del diccionario: AirVault no lo usa
-    para nada, pero mantenerlo estable hace que dos corridas con los mismos
+    para nada, pero mantenerlo estable hace que dos ejecuciones con los mismos
     datos produzcan exactamente la misma peticion, que es lo que permite
     comparar un dry run con lo que se termino enviando.
     """

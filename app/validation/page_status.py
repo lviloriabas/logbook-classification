@@ -18,7 +18,7 @@ Dos familias de campos no deciden el estado:
 - **Las firmas.** Que una bitácora de vuelo no traiga firma de técnico es lo
   normal, no un error de lectura; quién debía firmar cada tipo de página lo
   juzga ``app.validation.discrepancias``. Contarlas aquí ponía en ERROR a
-  casi toda la corrida por páginas perfectamente indexables.
+  casi toda la ejecución por páginas perfectamente indexables.
 - **Las celdas de carácter** (``day_1``, ``month_2``…). Son evidencia
   auxiliar de la fecha: si día, mes y año quedaron resueltos, da igual que
   una casilla suelta no se leyera.
@@ -37,6 +37,17 @@ from app.models.schemas import FieldResult, PageResult, Status
 LOG_NUMBER_FIELD_ID = "log_number"
 MATRICULA_FIELD_ID = "matricula"
 DATE_FIELD_IDS = ("day", "month", "year")
+
+# Una matrícula impuesta por el consenso necesita más de una lectura física.
+# Para las lecturas directas, el ``status`` ya refleja el umbral configurado
+# por el usuario; imponer aquí otro piso fijo mandaría páginas válidas a
+# Revisar de forma liberal y haría crecer innecesariamente ese batch.
+AUTO_INDEX_MIN_VOTES = 2
+_INFERRED_MATRICULA_SOURCES = frozenset({
+    "book_correction",
+    "fleet_validation",
+    "inferred",
+})
 
 _LOG_NUMBER_RE = re.compile(r"^\d{7}$")
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(?:CMP|WWP)$")
@@ -153,6 +164,44 @@ def page_status(page: PageResult) -> Status:
     # Un dato del índice marcado ya no puede dejar la página en ERROR: los
     # tres salieron, y lo que quedó marcado es una lectura por confirmar.
     return Status.WARNING if worst is not Status.OK else Status.OK
+
+
+def ready_for_auto_index(page: PageResult) -> bool:
+    """La página tiene todo lo necesario para indexarse automáticamente.
+
+    No vuelve a interpretar los valores ni elimina inferencias. Un valor
+    deducido por el libro sigue siendo válido cuando lo respaldan al menos
+    dos lecturas independientes. Lo que se rechaza es un dato crítico marcado
+    por las reglas normales o una inferencia sostenida por cero o una sola
+    página. Una alineación dudosa no bloquea por sí sola: si aun así
+    matrícula y ``log_number`` quedaron firmes, conserva el flujo automático.
+
+    El número de bitácora debe conservar sus siete dígitos. La fecha puede
+    resolverse después con las anclas del libro completo; la barrera previa a
+    Quick Upload comprueba que esa inferencia sí haya producido un valor. Un
+    log inválido va a ``REVISAR`` desde la exportación.
+    """
+    if page.blank:
+        return False
+
+    field = field_of(page, MATRICULA_FIELD_ID)
+    if field is None or not has_matricula(page):
+        return False
+    if field.status is not Status.OK:
+        return False
+    if (
+        field.source in _INFERRED_MATRICULA_SOURCES
+        and (field.votes is None or field.votes < AUTO_INDEX_MIN_VOTES)
+    ):
+        return False
+    if field.votes is not None and field.votes < AUTO_INDEX_MIN_VOTES:
+        return False
+    log_field = field_of(page, LOG_NUMBER_FIELD_ID)
+    return bool(
+        log_field
+        and log_field.status is Status.OK
+        and has_log_number(page)
+    )
 
 
 def recompute_page_status(page: PageResult) -> None:

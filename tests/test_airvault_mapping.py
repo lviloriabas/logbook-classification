@@ -1,9 +1,10 @@
-"""Traduccion del CSV de la corrida a los valores de AirVault."""
+"""Traduccion del CSV de la ejecucion a los valores de AirVault."""
 
 from __future__ import annotations
 
 from app.airvault.config import (
     CAMPO_AUDIT_STATUS,
+    CAMPO_DESCRIPCION,
     CAMPO_DOC_TYPE,
     CAMPO_END_DATE,
     CAMPO_FLEET,
@@ -15,6 +16,7 @@ from app.airvault.mapping import (
     fecha_airvault,
     normalizar_log_number,
     normalizar_matricula,
+    obligatorios_vacios_por_pagina,
     registros_desde_csv,
     valores_de_indice,
 )
@@ -87,7 +89,7 @@ def test_registros_conservan_el_orden_del_csv():
 
 
 def test_paginas_en_blanco_no_entran():
-    # Si entraran, la correspondencia con las paginas del lote se correria.
+    # Si entraran, la correspondencia con las paginas del batch se correria.
     filas = [_fila(page="1"),
              _fila(page="2", log_number="", matricula="", date=""),
              _fila(page="3", log_number="2287327")]
@@ -111,6 +113,48 @@ def test_banderas_del_csv_viajan():
     assert registros[0].discrepancia is True
 
 
+def test_una_bitacora_sin_fecha_la_hereda_de_su_libro():
+    """End Date es obligatorio: sin fecha la pagina no se puede escribir."""
+    filas = [_fila(page="1", log_number="2287310", date="2026/08/03"),
+             _fila(page="2", log_number="2287311", date=""),
+             _fila(page="3", log_number="2287312", date="2026/08/28")]
+    registros = registros_desde_csv(filas)
+    valores = valores_de_indice(registros[1], "Log Page", "PUBLISHED")
+    assert valores[CAMPO_END_DATE] == "08/28/2026"
+    assert registros[1].fecha_inferida == "entre bitacoras del libro"
+
+
+def test_la_fecha_leida_no_queda_marcada_como_deducida():
+    registros = registros_desde_csv([_fila(date="2026/08/31")])
+    assert registros[0].fecha == "2026/08/31"
+    assert registros[0].fecha_inferida == ""
+
+
+def test_sin_log_number_la_fecha_sigue_vacia():
+    """No hay libro con el que ubicarla, y el propio log_number la bloquea."""
+    filas = [_fila(page="1", log_number="2287310", date="2026/08/03"),
+             _fila(page="2", log_number="", date="")]
+    registros = registros_desde_csv(filas)
+    assert registros[1].fecha == ""
+    assert registros[1].fecha_inferida == ""
+
+
+def test_detecta_solo_los_obligatorios_que_quedarian_vacios():
+    filas = [
+        _fila(page="1", log_number="2287310", date="2026/08/03"),
+        _fila(page="2", log_number="2287311", date=""),
+        _fila(page="3", log_number="2287312", date="2026/08/28"),
+        _fila(page="4", log_number="", date=""),
+    ]
+
+    faltantes = obligatorios_vacios_por_pagina(filas)
+
+    assert ("Image_001.pdf", 2) not in faltantes
+    assert faltantes[("Image_001.pdf", 4)] == (
+        "Log Page Number", "End Date"
+    )
+
+
 def test_valores_de_indice_llevan_los_seis_obligatorios():
     registro = registros_desde_csv([_fila()])[0]
     valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
@@ -127,6 +171,26 @@ def test_no_se_mandan_campos_que_el_sistema_no_controla():
     # que alguien puso a mano.
     registro = registros_desde_csv([_fila()])[0]
     valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
-    assert 9752 not in valores  # Description
     assert 9625 not in valores  # WO #
     assert 9594 not in valores  # Start Date
+
+
+def test_el_vuelo_de_la_bitacora_va_en_description():
+    """Es la informacion de vuelo que la bitacora trae escrita."""
+    registro = registros_desde_csv([_fila(flight_number="CM137")])[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+    assert valores[CAMPO_DESCRIPCION] == "CM137"
+
+
+def test_un_vuelo_de_mantenimiento_viaja_igual():
+    """No todos son numeros: ``TCK`` y compania son vuelos tambien."""
+    registro = registros_desde_csv([_fila(flight_number="tck")])[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+    assert valores[CAMPO_DESCRIPCION] == "TCK"
+
+
+def test_sin_vuelo_leido_no_se_toca_description():
+    """Mandarlo vacio borraria lo que alguien haya escrito a mano."""
+    registro = registros_desde_csv([_fila(flight_number="")])[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+    assert CAMPO_DESCRIPCION not in valores

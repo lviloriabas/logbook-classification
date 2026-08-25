@@ -1,7 +1,7 @@
-"""Recorrido del lote: comprueba, escribe y deja constancia.
+"""Recorrido del batch: comprueba, escribe y deja constancia.
 
 El indexador es deliberadamente aburrido. Antes de tocar nada verifica el
-lote completo; despues escribe pagina por pagina guardando el manifiesto
+batch completo; despues escribe pagina por pagina guardando el manifiesto
 tras cada una, de modo que una interrupcion no obliga a repetir trabajo ni
 deja dudas sobre que se alcanzo a escribir.
 """
@@ -14,9 +14,13 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence
 from loguru import logger
 
 from app.airvault.config import (
+    CAMPO_DESCRIPCION,
     CAMPO_FLEET,
     CAMPO_LESSOR,
+    CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
+    CAMPO_WORK_LOCATION,
+    ESTADO_NECESITA_CORRECCION,
     ESTADO_VALIDO,
 )
 from app.airvault.guards import (
@@ -37,6 +41,16 @@ from app.airvault.session import ErrorDeConexion, ErrorDeSesion
 # siguiente solo sirve para marcar cuatrocientas paginas con el mismo error.
 FALLOS_DE_CAMINO = (ErrorDeSesion, ErrorDeConexion)
 
+# Estos avisos describen calidad incompleta, no una correspondencia rota. En
+# el batch REVISAR se envia lo disponible para que AirVault la deje pendiente;
+# en un batch automatico los obligatorios vacios bloquean la escritura.
+AVISOS_DE_REVISION = {
+    "matricula_vacia",
+    "matricula_desconocida",
+    "obligatorio_vacio",
+    "log_duplicado",
+}
+
 
 @dataclass
 class PlanPagina:
@@ -48,16 +62,37 @@ class PlanPagina:
     valores: Dict[int, str]
     avisos: List[Aviso] = field(default_factory=list)
     ya_indexada: bool = False
+    solo_revision: bool = False
 
     @property
     def escribible(self) -> bool:
         """Una divisoria nunca se escribe: no es un documento que indexar."""
-        return not self.avisos and not self.registro.es_separador
+        return not self.bloqueos and not self.registro.es_separador
+
+    @property
+    def bloqueos(self) -> List[Aviso]:
+        return [
+            aviso for aviso in self.avisos
+            if aviso.codigo not in AVISOS_DE_REVISION
+            or (
+                aviso.codigo == "obligatorio_vacio"
+                and not self.solo_revision
+            )
+        ]
+
+    @property
+    def requiere_revision(self) -> bool:
+        return self.escribible and bool(self.avisos)
+
+    @property
+    def queda_incompleta(self) -> bool:
+        """AirVault no puede validarla porque falta un campo obligatorio."""
+        return any(a.codigo == "obligatorio_vacio" for a in self.avisos)
 
 
 @dataclass
 class Plan:
-    """Plan completo del lote: lo que se escribiria y lo que no."""
+    """Plan completo del batch: lo que se escribiria y lo que no."""
 
     batch_id: str
     paginas: List[PlanPagina] = field(default_factory=list)
@@ -83,6 +118,12 @@ class Plan:
             "bloqueadas": len(self.bloqueadas),
             "separadores": len(self.separadores),
             "avisos_globales": len(self.avisos_globales),
+            # Paginas cuya End Date no se leyo y se dedujo del libro. No
+            # bloquean, pero son las primeras que hay que mirar en el
+            # reporte antes de aprobar la escritura.
+            "fechas_inferidas": sum(
+                1 for p in self.paginas if p.registro.fecha_inferida
+            ),
         }
 
 
@@ -93,14 +134,16 @@ class Resultado:
     escritas: int = 0
     omitidas: int = 0
     fallidas: int = 0
+    separadores_borrados: int = 0
+    separadores_pendientes: int = 0
     detalles: List[str] = field(default_factory=list)
-    # Motivo por el que se corto el lote entero, si se corto. Lo que queda
+    # Motivo por el que se corto el batch entero, si se corto. Lo que queda
     # sin escribir sigue pendiente en el manifiesto y se retoma despues.
     interrumpido: str = ""
 
 
 class Indexador:
-    """Aplica un manifiesto sobre un lote de AirVault."""
+    """Aplica un manifiesto sobre un batch de AirVault."""
 
     def __init__(
         self,
@@ -110,13 +153,15 @@ class Indexador:
         sobrescribir: bool = False,
         al_guardar: Optional[Callable[[Manifiesto], None]] = None,
         resolutor: Optional[ResolutorFlota] = None,
+        permitir_log_distinto: bool = False,
     ):
         self.cliente = cliente
         self.manifiesto = manifiesto
         self.picklist = list(picklist_matriculas)
         self.sobrescribir = sobrescribir
+        self.permitir_log_distinto = permitir_log_distinto
         self._al_guardar = al_guardar
-        # El resolutor aprende del propio lote: AirVault ya trae la flota
+        # El resolutor aprende del propio batch: AirVault ya trae la flota
         # resuelta por su lookup en las paginas preindexadas, y eso vale
         # mucho mas que la regla de prefijos que usamos de respaldo.
         self.resolutor = resolutor or ResolutorFlota()
@@ -132,22 +177,19 @@ class Indexador:
         """
         batch_id = self.manifiesto.batch_id or ""
         if not batch_id:
-            raise ErrorDeGuarda("El manifiesto no tiene lote asignado")
+            raise ErrorDeGuarda("El manifiesto no tiene batch asignado")
 
         registros = self.manifiesto.registros
-        verificar_cantidad(registros, paginas_lote)
-
-        if self.manifiesto.solo_subir:
-            # El lote esta subido para que alguien lo resuelva a mano. No se
-            # lee ni se escribe: leerlo serian peticiones de mas y escribirlo
-            # es justo lo que no se puede hacer sin mirar la bitacora.
-            return self._plan_para_revisar(registros)
+        verificar_cantidad(
+            registros, paginas_lote,
+            self.manifiesto.separadores_borrados(),
+        )
 
         globales: List[Aviso] = []
         globales.extend(verificar_matriculas(registros, self.picklist))
         globales.extend(verificar_duplicados(registros))
 
-        # Primero se lee todo el lote y se aprende la flota que AirVault ya
+        # Primero se lee todo el batch y se aprende la flota que AirVault ya
         # tiene resuelta; asi los registros cuya flota veniamos infiriendo se
         # corrigen antes de construir los valores que se van a escribir.
         remotas: Dict[int, object] = {}
@@ -169,12 +211,12 @@ class Indexador:
                 raise
             except Exception as exc:  # noqa: BLE001 - se anota y se sigue
                 # Una pagina que no carga bloquea solo a esa pagina. Sin
-                # poder leerla no se puede comprobar que el lote y el
+                # poder leerla no se puede comprobar que el batch y el
                 # manifiesto hablan de la misma bitacora, asi que no se
-                # escribe; el resto del lote no tiene por que esperarla.
+                # escribe; el resto del batch no tiene por que esperarla.
                 ilegibles[registro.seq] = str(exc)
                 logger.warning(
-                    "No se pudo leer la pagina {} del lote {}: {}",
+                    "No se pudo leer la pagina {} del batch {}: {}",
                     pagina, batch_id, exc,
                 )
         self._aprender_flota(remotas.values())
@@ -191,6 +233,7 @@ class Indexador:
                 plan.paginas.append(PlanPagina(
                     seq=registro.seq, pagina_batch=pagina, registro=registro,
                     valores={}, avisos=[], ya_indexada=False,
+                    solo_revision=self.manifiesto.solo_subir,
                 ))
                 continue
             valores = valores_de_indice(
@@ -210,10 +253,21 @@ class Indexador:
                     f"{ilegibles.get(registro.seq, 'sin respuesta')}",
                 ))
             else:
-                avisos.extend(verificar_alineacion(registro, remota.valores))
-                avisos.extend(verificar_no_pisar(
-                    registro, remota.estado, self.sobrescribir
+                avisos.extend(verificar_alineacion(
+                    registro, remota.valores, self.permitir_log_distinto,
+                    remota.estado,
                 ))
+                work_location = str(
+                    remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
+                ).strip()
+                # Incluso una pagina Valid se vuelve a guardar si AirVault
+                # lleno Work Location. Es el unico caso en que se toca una
+                # pagina verde sin pedir sobrescritura: el flujo exige ese
+                # campo vacio y el payload conserva el resto de sus datos.
+                if not (remota.estado == ESTADO_VALIDO and work_location):
+                    avisos.extend(verificar_no_pisar(
+                        registro, remota.estado, self.sobrescribir
+                    ))
 
             plan.paginas.append(PlanPagina(
                 seq=registro.seq,
@@ -222,28 +276,18 @@ class Indexador:
                 valores=valores,
                 avisos=avisos,
                 ya_indexada=(
-                    remota is not None and remota.estado == ESTADO_VALIDO
+                    remota is not None
+                    and remota.estado == ESTADO_VALIDO
+                    and not str(
+                        remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
+                    ).strip()
                 ),
+                solo_revision=self.manifiesto.solo_subir,
             ))
 
         plan.avisos_globales = [
             a for a in globales if a.seq not in {p.seq for p in plan.paginas}
         ]
-        return plan
-
-    def _plan_para_revisar(self, registros) -> Plan:
-        """Plan de un lote que se sube pero no se indexa."""
-        plan = Plan(batch_id=self.manifiesto.batch_id or "")
-        for indice, registro in enumerate(registros, start=1):
-            avisos = [] if registro.es_separador else [Aviso(
-                registro.seq, "revisar_a_mano",
-                "sin avion confirmado; se indexa a mano en AirVault",
-            )]
-            plan.paginas.append(PlanPagina(
-                seq=registro.seq,
-                pagina_batch=registro.pagina_batch or indice,
-                registro=registro, valores={}, avisos=avisos,
-            ))
         return plan
 
     def _aprender_flota(self, remotas) -> None:
@@ -278,14 +322,16 @@ class Indexador:
     ) -> Resultado:
         """Escribe las paginas escribibles del plan.
 
-        Las paginas con avisos se saltan siempre: el plan ya decidio que no
-        se pueden tocar y aqui no se vuelve a opinar.
+        Solo se saltan las paginas con bloqueos de correspondencia o de
+        seguridad. Los avisos de calidad permiten enviar los datos
+        confirmados y dejar la pagina en amarillo para su revision.
 
         ``al_avanzar`` recibe cuantas paginas se llevan escritas de cuantas
         habia previstas, para que la interfaz pueda mover la barra sin que
         el indexador sepa que existe una interfaz.
         """
         resultado = Resultado()
+
         previstas = len(plan.escribibles)
         for entrada in plan.paginas:
             registro = entrada.registro
@@ -293,19 +339,43 @@ class Indexador:
                 # No cuenta como omitida: nunca hubo nada que escribirle.
                 continue
             if not entrada.escribible:
-                registro.estado = EstadoRegistro.OMITIDA
-                registro.avisos = [str(a) for a in entrada.avisos]
+                # Una pagina que AirVault ya confirma en Valid no se
+                # degrada en el manifiesto solo porque la guarda contra
+                # sobreescritura la bloqueo al volver a planificar.
+                if not entrada.ya_indexada:
+                    registro.estado = EstadoRegistro.OMITIDA
+                    registro.avisos = [str(a) for a in entrada.avisos]
                 resultado.omitidas += 1
                 continue
-            if registro.estado is EstadoRegistro.ESCRITA:
+            if (
+                registro.estado is EstadoRegistro.ESCRITA
+                and entrada.ya_indexada
+            ):
                 resultado.omitidas += 1
                 continue
             try:
+                valores = dict(entrada.valores)
+                vuelo = registro.flight_number.strip()
+                # La marca identifica exclusivamente la escritura por API.
+                # Con vuelo va despues de el; sin vuelo es todo el contenido.
+                # No forma parte del CSV ni del plan/reporte local.
+                valores[CAMPO_DESCRIPCION] = (
+                    f"{vuelo} AUTO INDEX" if vuelo else "AUTO INDEX"
+                )
+                # Work Location no se usa en este flujo. Se envia de forma
+                # explicita para limpiar cualquier valor que AirVault haya
+                # heredado o completado por su cuenta.
+                valores[CAMPO_WORK_LOCATION] = ""
+                estado = (
+                    ESTADO_NECESITA_CORRECCION
+                    if self.manifiesto.solo_subir or entrada.queda_incompleta
+                    else ESTADO_VALIDO
+                )
                 self.cliente.guardar_pagina(
                     plan.batch_id,
                     entrada.pagina_batch,
-                    entrada.valores,
-                    ESTADO_VALIDO,
+                    valores,
+                    estado,
                     entrada.pagina_batch,
                 )
             except FALLOS_DE_CAMINO as exc:
@@ -344,6 +414,39 @@ class Indexador:
             self._persistir()
             if al_avanzar is not None:
                 al_avanzar(resultado.escritas, previstas)
+
+        # Las divisorias conservaron hasta aqui la numeracion con la que se
+        # leyeron y escribieron las bitacoras. Ya no son documentos utiles:
+        # se marcan como borradas en el batch automatico aunque el operador
+        # no haya pedido completarlo. REVISAR se conserva entero.
+        if not resultado.interrumpido and not self.manifiesto.solo_subir:
+            for entrada in plan.separadores:
+                try:
+                    borrada = self.cliente.borrar_pagina(
+                        plan.batch_id, entrada.pagina_batch, True
+                    )
+                except FALLOS_DE_CAMINO as exc:
+                    resultado.interrumpido = str(exc)
+                    resultado.detalles.append(
+                        f"pagina {entrada.pagina_batch}: no se pudo borrar "
+                        f"el separador ({exc})"
+                    )
+                    self._persistir()
+                    break
+                except Exception as exc:  # noqa: BLE001 - se anota y sigue
+                    borrada = False
+                    logger.warning(
+                        "No se pudo borrar el separador {} del batch {}: {}",
+                        entrada.pagina_batch, plan.batch_id, exc,
+                    )
+                if borrada:
+                    resultado.separadores_borrados += 1
+                else:
+                    resultado.separadores_pendientes += 1
+                    resultado.detalles.append(
+                        f"pagina {entrada.pagina_batch}: no se pudo borrar "
+                        "el separador en AirVault"
+                    )
         return resultado
 
     def _persistir(self) -> None:
@@ -354,7 +457,7 @@ class Indexador:
 def verificar_lote(
     cliente, manifiesto: Manifiesto
 ) -> tuple[int, int, List[str]]:
-    """Relee el lote y cuenta cuantas paginas quedaron validas.
+    """Relee el batch y cuenta cuantas paginas quedaron validas.
 
     Devuelve ``(validas, revisadas, problemas)``. Se usa despues de escribir
     para confirmar contra el servidor, no contra lo que creemos haber
@@ -375,8 +478,37 @@ def verificar_lote(
             # comprobada, no como mal escrita.
             problemas.append(f"pagina {pagina}: no se pudo leer ({exc})")
             continue
+        work_location = str(
+            remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
+        ).strip()
+        log_remoto = str(
+            remota.valores.get(CAMPO_LOG_NUMBER, "") or ""
+        ).strip()
+        matricula_remota = str(
+            remota.valores.get(CAMPO_MATRICULA, "") or ""
+        ).strip().upper()
+        identidad_correcta = True
+        if log_remoto != registro.log_number:
+            identidad_correcta = False
+            problemas.append(
+                f"pagina {pagina}: AirVault tiene el log "
+                f"{log_remoto or '(vacio)'} y se esperaba "
+                f"{registro.log_number or '(vacio)'}"
+            )
+        if matricula_remota != registro.matricula.upper():
+            identidad_correcta = False
+            problemas.append(
+                f"pagina {pagina}: AirVault tiene la matricula "
+                f"{matricula_remota or '(vacia)'} y se esperaba "
+                f"{registro.matricula or '(vacia)'}"
+            )
         if remota.estado == ESTADO_VALIDO:
-            validas += 1
+            if work_location:
+                problemas.append(
+                    f"pagina {pagina}: Work Location no quedo vacio"
+                )
+            if not work_location and identidad_correcta:
+                validas += 1
         else:
             problemas.append(
                 f"pagina {pagina}: estado {remota.estado}"

@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Arma un PDF de prueba con unas pocas paginas al azar de ``input/``.
 
-Sirve para probar el recorrido completo —procesar, exportar, indexar en
-AirVault— sin arriesgar un lote de cuatrocientas paginas ni esperar el OCR
+Sirve para probar el recorrido completo (procesar, exportar, indexar en
+AirVault) sin arriesgar un batch de cuatrocientas paginas ni esperar el OCR
 de un escaneo de setecientos megas.
 
     portable\\python312\\tools\\python.exe tools\\muestra_bitacoras.py
 
 Sin argumentos toma veinte paginas al azar de los PDF que haya en
 ``input/`` y deja ``input\\MUESTRA.pdf``. Ese archivo se procesa como
-cualquier otro: es una entrada de verdad, no una corrida reconstruida, asi
+cualquier otro: es una entrada de verdad, no una ejecución reconstruida, asi
 que la prueba pasa por el mismo OCR, la misma exportacion y el mismo
-indexado que un lote real.
+indexado que un batch real.
 
 Las paginas salen al azar a proposito: entre ellas caen bitacoras buenas,
 alguna en blanco y alguna que el OCR no va a poder leer, que es justo lo
-que hay que ver antes de soltar el indexado sobre un lote de verdad.
+que hay que ver antes de soltar el indexado sobre un batch de verdad.
 
 Esto se corre en la maquina que tiene los escaneos y nunca se commitea lo
 que produce: ``input/`` esta fuera del repositorio.
@@ -62,7 +62,7 @@ def origenes(uno: str | None, salida: Path) -> list[Path]:
     """Los PDF de los que se puede sacar paginas.
 
     Se mira solo el primer nivel de ``input/``: lo de ``processed/`` ya se
-    proceso una vez y la propia muestra se excluye, o cada corrida se
+    proceso una vez y la propia muestra se excluye, o cada ejecución se
     alimentaria de la anterior.
     """
     if uno:
@@ -127,7 +127,7 @@ def main() -> int:
     for orden, (pdf, numero) in enumerate(muestra, start=1):
         print(f"  {orden:2d} <- {pdf.name}  pagina {numero + 1}")
     print(f"\nProcesar {salida.name} desde la ventana como cualquier otro "
-          "PDF, exportar en un solo PDF e indexar esa corrida.")
+          "PDF, exportar en un solo PDF e indexar esa ejecución.")
     return 0
 
 

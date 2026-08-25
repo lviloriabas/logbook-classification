@@ -50,7 +50,7 @@ def test_el_numero_de_sesion_solo_no_autentica():
     """AirVault lo pone al primer contacto, antes de saber quien eres.
 
     Darlo por bueno hacia pasar por sesion abierta una que seguia en la
-    pagina de Microsoft, y el lote moria en la primera pagina.
+    pagina de Microsoft, y el batch moria en la primera pagina.
     """
     assert not galletas.sostienen_sesion({"ASP.NET_SessionId": "x"})
     assert galletas.sostienen_sesion(

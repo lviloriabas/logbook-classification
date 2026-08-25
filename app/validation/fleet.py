@@ -98,8 +98,8 @@ def verify_reports_against_fleet(
     ``alternatives`` y la página sigue en WARNING para que la reclasificación
     sea auditable.
 
-    Cuando no hay un avión más parecido —dos quedan a la misma distancia, o
-    la lectura ni siquiera tiene formato de matrícula— la página se queda sin
+    Cuando no hay un avión más parecido (dos quedan a la misma distancia, o
+    la lectura ni siquiera tiene formato de matrícula) la página se queda sin
     matrícula. Antes conservaba la lectura, y esa lectura terminaba abriendo
     en el PDF y en las estadísticas una bitácora de un avión que no existe;
     ahora cae en «Revisar», que es donde una persona decide de qué avión era.
@@ -130,6 +130,11 @@ def verify_reports_against_fleet(
                 field.value = fleet_match
                 field.source = "fleet_validation"
                 field.inference_method = "fleet_nearest_match"
+                # Nadie leyo este avion: se eligio por parecido con lo que
+                # se leyo. Sin respaldo de lectura, aunque el consenso del
+                # libro detras fuera unanime, porque lo que el libro voto
+                # era otra matricula.
+                field.votes = 0
                 note = (
                     f"Matrícula reclasificada de {value} a {fleet_match}: "
                     "es la más parecida de la lista de flota"
