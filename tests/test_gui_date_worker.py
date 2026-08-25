@@ -36,6 +36,8 @@ def test_gui_worker_applies_book_sequence_after_all_files():
     ) as date_corrector:
         worker.run()
 
-    date_corrector.assert_called_once_with(reports)
+    date_corrector.assert_called_once_with(
+        reports, worker.config.book_fechas_file
+    )
     assert worker.reports == reports
     assert all(item["enabled"] is False for item in worker.vlm_stats)
