@@ -13,7 +13,7 @@ from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.reports.outputs import OutputOptions, write_outputs
 from app.templates.manager import TemplateManager
 
-INPUT = Path(__file__).resolve().parents[1] / "input"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 TEMPLATE = (
     Path(__file__).resolve().parents[1]
     / "template" / "aircraft_log.json"
@@ -36,7 +36,7 @@ def _page(pn: int, log, mat) -> PageResult:
 
 
 def _reporte(name: str, *pages: PageResult) -> ValidationReport:
-    return ValidationReport(pdf_path=str(INPUT / name), template_name="fixture",
+    return ValidationReport(pdf_path=str(FIXTURES / name), template_name="fixture",
                             pages=list(pages))
 
 
