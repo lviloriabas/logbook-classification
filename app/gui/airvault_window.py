@@ -61,7 +61,7 @@ from app.airvault.config import (
     guardar_paginas_por_batch,
 )
 from app.gui.csv_utils import find_csv_files, find_run_dirs
-from app.gui.responsive import fit_to_screen
+from app.gui.responsive import available_area, fit_to_screen
 from app.gui.text_copy import CopyableListWidget
 from app.gui.widgets import (
     APP_CHROME_QSS,
@@ -100,6 +100,11 @@ LIMITE_BITACORA = 300
 # El nombre distingue las divisiones y REVISAR, así que no puede quedar
 # reducido a unas pocas letras. A partir de este ancho se conserva espacio
 # para Páginas y Estado; el texto completo sigue disponible en la ayuda.
+# Suelo por debajo del cual la ventana no sirve de nada, aunque la pantalla
+# sea mas pequenya todavia. Por encima manda lo que quepa en el escritorio.
+ANCHO_MINIMO_VENTANA = 640
+ALTO_MINIMO_VENTANA = 480
+
 ANCHO_MINIMO_NOMBRE_BATCH = 220
 ANCHO_MAXIMO_NOMBRE_BATCH = 420
 
@@ -143,13 +148,55 @@ def paginas_de_corrida(carpeta: Path | str) -> Optional[int]:
     return int(total) if isinstance(total, (int, float)) else None
 
 
-def estado_de_entrega(csv: Path | str) -> tuple[str, bool]:
+def batches_de_entrega(csv: Path | str, limite: int) -> int | None:
+    """En cuántos batches se partiría la ejecución con ese máximo por batch.
+
+    Se calcula con el mismo reparto que después se sube, no dividiendo
+    páginas entre el límite: un batch que empieza a mitad de una aeronave
+    repite el separador de su sección, y esa página repetida ocupa sitio.
+    Dividiendo a mano el número sale corto justo en las ejecuciones con
+    muchas aeronaves, que son las que más batches producen.
+
+    Devuelve ``None`` si la ejecución todavía no tiene con qué calcularlo.
+    """
+    from app.airvault.flujo import (
+        ErrorDeCorrida,
+        _partir_paginas_por_seccion,
+        partes_de_corrida,
+    )
+
+    try:
+        partes = partes_de_corrida(csv)
+    except (OSError, ValueError):
+        return None
+    if not partes:
+        return None
+    total = 0
+    for parte in partes:
+        try:
+            tramos = _partir_paginas_por_seccion(parte.paginas, limite)
+        except ErrorDeCorrida:
+            # Un límite que no permite repetir el separador. El reparto real
+            # dará el mismo error y lo explicará; aquí no hay nada que decir.
+            return None
+        total += len(tramos) or 1
+    return total
+
+
+def estado_de_entrega(
+    csv: Path | str, limite: int | None = None
+) -> tuple[str, bool]:
     """Qué tiene la ejecución para subir, y si con eso alcanza.
 
     Se mira aquí para que el historial diga de un vistazo cuáles se pueden
     subir. El motivo exacto lo vuelve a comprobar ``comprobar_entrega`` al
     arrancar, que es quien manda: esto solo evita empezar un trabajo que ya
     se sabe que no va a salir.
+
+    Con ``limite`` se añade en cuántos batches queda repartida, que es lo
+    que de verdad se sube: un archivo de entrega grande se parte en varios,
+    y saberlo antes de empezar evita la sorpresa de ver diez filas en la
+    cola donde se esperaban dos.
     """
     from app.airvault.flujo import pdfs_de_corrida, ruta_indice_paginas
 
@@ -160,7 +207,12 @@ def estado_de_entrega(csv: Path | str) -> tuple[str, bool]:
         # Exportada antes de que existiera el índice de páginas: hay PDF,
         # pero nada que diga qué página del batch es cuál.
         return "Falta reexportar", False
-    return ("1 archivo" if len(pdfs) == 1 else f"{len(pdfs)} archivos"), True
+    archivos = "1 archivo" if len(pdfs) == 1 else f"{len(pdfs)} archivos"
+    batches = batches_de_entrega(csv, limite) if limite else None
+    if batches is None:
+        return archivos, True
+    reparto = "1 batch" if batches == 1 else f"{batches} batches"
+    return f"{archivos}, {reparto}", True
 
 
 class TrabajoCancelado(BaseException):
@@ -793,6 +845,8 @@ class AirVaultWindow(QDialog):
         intro = QLabel(
             "Elija la ejecución que se va a subir."
         )
+        # Sin ajuste, la frase entera es el ancho minimo de la ventana.
+        intro.setWordWrap(True)
         cuerpo.addWidget(intro)
 
         cuerpo.addWidget(self._historial(), 1)
@@ -1631,7 +1685,45 @@ class AirVaultWindow(QDialog):
         exportada tiene que estar en la lista sin cerrar nada.
         """
         super().showEvent(event)
+        self._acotar_a_la_pantalla()
         self._refrescar_historial()
+
+    def _acotar_a_la_pantalla(self) -> None:
+        """Impide que el contenido exija más ancho del que hay.
+
+        El layout pide de mínimo lo que suman sus controles puestos en fila,
+        y la fila de botones de abajo sola pide más de 1200 px. Qt aplica ese
+        mínimo por encima del tamaño con el que la ventana se abrió, así que
+        la ventana crecía sola: en una pantalla de 1366 quedaba pegada a los
+        bordes y por debajo se salía, con los botones fuera del alcance.
+
+        Aquí se acota ese mínimo a lo que da el escritorio. Lo que no quepa
+        se recorta, que es preferible a mandar media ventana a donde no se
+        puede llegar con el ratón. Se recalcula al mostrarla porque la
+        pantalla puede no ser la misma que la última vez.
+        """
+        disponible = available_area(self)
+        pedido = self.minimumSizeHint()
+        self.setMinimumSize(
+            max(ANCHO_MINIMO_VENTANA, min(pedido.width(), disponible.width())),
+            max(ALTO_MINIMO_VENTANA, min(pedido.height(), disponible.height())),
+        )
+        # Levantar el tope no encoge sola a la ventana que ya habia crecido:
+        # hay que devolverla dentro de la pantalla, y volver a entrar si se
+        # habia quedado con una esquina fuera.
+        alto = min(self.height(), disponible.height())
+        ancho = min(self.width(), disponible.width())
+        if (ancho, alto) != (self.width(), self.height()):
+            self.resize(ancho, alto)
+        marco = self.frameGeometry()
+        if not disponible.contains(marco):
+            marco.moveLeft(
+                max(disponible.left(), min(marco.left(), disponible.right() - marco.width()))
+            )
+            marco.moveTop(
+                max(disponible.top(), min(marco.top(), disponible.bottom() - marco.height()))
+            )
+            self.move(marco.topLeft())
 
     def _refrescar_historial(self) -> None:
         corridas = [
@@ -1687,15 +1779,20 @@ class AirVaultWindow(QDialog):
                 return tabla.item(fila, 0).data(Qt.ItemDataRole.UserRole)
         return tabla.item(0, 0).data(Qt.ItemDataRole.UserRole)
 
+    def _limite_vigente(self) -> int:
+        """Máximo de páginas por batch que hay puesto ahora mismo."""
+        spin = getattr(self, "limite_batch_spin", None)
+        return int(spin.value()) if spin is not None else 0
+
     def _agregar_fila(self, carpeta: Path, csv: Path) -> None:
-        entrega, listo = estado_de_entrega(csv)
+        entrega, listo = estado_de_entrega(csv, self._limite_vigente())
         paginas = paginas_de_corrida(carpeta)
         fila = self.historial.rowCount()
         self.historial.insertRow(fila)
         self._listas.append(listo)
         celdas = (
             carpeta.name,
-            "(" if paginas is None else str(paginas),
+            "-" if paginas is None else str(paginas),
             entrega,
         )
         for columna, texto in enumerate(celdas):
@@ -1757,7 +1854,7 @@ class AirVaultWindow(QDialog):
         self._soltar_lotes()
         self._parar_vigilancia()
         ruta = Path(csv)
-        self.setWindowTitle(f"Indexar en AirVault ) {ruta.parent.parent.name}")
+        self.setWindowTitle(f"Indexar en AirVault - {ruta.parent.parent.name}")
         self.corrida_edit.setText(str(ruta))
         self.lote_edit.setText(nombre_desde_corrida(ruta))
         self.boton_indexar.setEnabled(False)
@@ -2231,6 +2328,10 @@ class AirVaultWindow(QDialog):
             self._config = self._config.with_overrides(
                 paginas_por_batch=int(cantidad)
             )
+        # La columna «Entrega» cuenta los batches con este máximo, así que
+        # cambiarlo la deja diciendo un reparto que ya no es el que se va a
+        # subir. Se rehace la lista con el número nuevo.
+        self._refrescar_historial()
 
     def _guardar_completar_batch(self, marcado: bool) -> None:
         """Recuerda el check tal como quedó, sin reponer un valor fijo."""
