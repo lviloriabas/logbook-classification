@@ -891,7 +891,7 @@ def test_estado_local_no_disfraza_una_verificacion_incompleta(tmp_path):
 
 
 def test_un_lote_ya_cerrado_no_se_vuelve_a_buscar(tmp_path):
-    """Cerrado sale de la cola: buscarlo alli seria no encontrarlo nunca."""
+    """Cerrado ya no aparece listado: buscarlo alli seria no encontrarlo nunca."""
     trabajo, cliente = trabajo_subido(tmp_path)
     trabajo.manifiesto.etapa("completar").marcar(EstadoEtapa.HECHA, "29 en verde")
     cliente.lotes = []
@@ -2113,7 +2113,7 @@ def test_solo_cuenta_la_pagina_que_encabeza_cada_documento(tmp_path):
 
 
 def test_cerrar_el_lote_no_lo_deja_tomado(tmp_path):
-    """Cerrado, sale de la cola: soltarlo despues seria pedir un imposible."""
+    """Cerrado, ya no esta tomado: soltarlo despues seria pedir un imposible."""
     trabajo, cliente = trabajo_subido(tmp_path)
     trabajo.fijar_lote("003SRO")
     cliente.mapa = mapa(0, 0)

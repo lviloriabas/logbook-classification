@@ -326,7 +326,7 @@ class ClienteHttp:
         return paginas
 
     def completar_lote(self, batch_id: str) -> Mapping[str, Any]:
-        """Da el batch por terminado y lo saca de la cola del Web Index.
+        """Da el batch por terminado: lo indexa y lo manda a Web Search.
 
         Es el boton «Complete» de la pantalla. AirVault solo lo acepta con
         el batch entero en verde; por eso quien lo llama mira antes las

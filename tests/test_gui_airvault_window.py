@@ -984,7 +984,7 @@ def test_si_el_lote_se_cerro_se_dice(ventana):
         "cierres": [(TrabajoFalso(), Cierre(True))],
     })
     assert "completó en AirVault" in ventana.resumen.text()
-    assert "salió de la cola de Web Index" in ventana.resumen.text()
+    assert "se mandó a Web Search" in ventana.resumen.text()
 
 
 def test_si_airvault_no_deja_cerrarlo_se_dice_por_que(ventana):

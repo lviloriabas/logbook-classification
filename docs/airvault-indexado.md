@@ -25,7 +25,7 @@ delante.
 | `Comprobar cada N min`  | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 5 minutos, y deja de preguntar cuando no queda nada por esperar.                        |
 | `Comprobar ahora`       | La misma pregunta, en el momento.                                                                                                                             |
 | `Subir a AirVault`      | Manda los PDF de la entrega. Termina cuando termina la subida.                                                                                                |
-| `Completar batch`       | Al terminar de escribir, da el batch por terminado en AirVault (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo.                      |
+| `Completar batch`       | Al terminar de escribir, da el batch por terminado en AirVault: lo indexa y lo manda a Web Search (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo.                      |
 | `Indexar`               | Escribe en los batches que ya estan listos.                                                                                                                   |
 | `Ver reporte…`          | Abre el detalle pagina por pagina de lo que se escribiria.                                                                                                    |
 | `Cancelar`              | Detiene lo que este en marcha y suelta los batches tomados.                                                                                                   |
