@@ -12,7 +12,7 @@ Este registro es esa memoria, y es independiente de la configuracion. Vive
 en la carpeta del trabajo, junto a los manifiestos, de modo que borrar el
 registro local de la ejecucion lo borra tambien: es una sola memoria, y se
 olvida entera o no se olvida. Guarda ademas unas cuantas versiones
-anteriores, para poder mirar —o recuperar— un reparto que se descarto.
+anteriores, para poder mirar (o recuperar) un reparto que se descarto.
 
 La identidad de una bitacora es la de siempre: el archivo del que salio y
 su pagina dentro de el. Solo es unica dentro de su entrega, asi que el
@@ -102,8 +102,8 @@ class RegistroDeEntrega(BaseModel):
 def raiz_de_registro(carpeta: Path | str) -> Path:
     """La carpeta de la entrega a partir de la de un batch.
 
-    Una entrega repartida deja cada parte en su subcarpeta —``parte-02``,
-    ``revisar``— y sin repartir el trabajo vive directamente en la carpeta
+    Una entrega repartida deja cada parte en su subcarpeta (``parte-02``,
+    ``revisar``) y sin repartir el trabajo vive directamente en la carpeta
     de la ejecucion. El registro es de la entrega, asi que siempre sube a
     esa carpeta comun.
     """

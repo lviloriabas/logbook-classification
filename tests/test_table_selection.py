@@ -117,8 +117,8 @@ def test_a_cell_without_item_does_not_cut_the_band():
     """La columna vacía de la tabla de batches no puede partir el azul.
 
     La banda se pintaba a partir del estado que llegaba en cada celda. Una
-    celda sin ``QTableWidgetItem`` —el ID de un batch que todavía no lo
-    tiene— podía quedarse fuera y dejar la fila con el azul empezando en la
+    celda sin ``QTableWidgetItem`` (el ID de un batch que todavía no lo
+    tiene) podía quedarse fuera y dejar la fila con el azul empezando en la
     segunda columna. Ahora quien decide es la selección de la vista, así
     que la fila entera se pinta tenga ítems o no.
     """
