@@ -219,8 +219,8 @@ class ClienteHttp:
 
         Hay que llamarlo siempre, tambien cuando el indexado se corta a
         medias: AirVault admite un solo dueno por batch, asi que un batch que
-        queda bloqueado deja colgada la siguiente apertura —la del propio
-        programa o la de la persona que lo abre en el navegador— sin decir
+        queda bloqueado deja colgada la siguiente apertura (la del propio
+        programa o la de la persona que lo abre en el navegador) sin decir
         por que.
         """
         return self.sesion.get(
@@ -265,7 +265,7 @@ class ClienteHttp:
         mientras el batch siga en la cola, con ``borrada=False``.
 
         Devuelve si AirVault lo acepto. Quitar paginas pide un permiso
-        aparte —«Delete Batch Image»— que no toda cuenta tiene, y quedarse
+        aparte («Delete Batch Image») que no toda cuenta tiene, y quedarse
         sin el no es motivo para tirar el trabajo: lo que sigue es mirar
         las paginas otra vez y decir que el batch no se puede cerrar.
         """

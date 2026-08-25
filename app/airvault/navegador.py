@@ -1,8 +1,8 @@
 """La sesion de AirVault, tomada del navegador que el propio programa abre.
 
 El acceso esta federado con Microsoft Entra ID y pide segundo factor. Eso
-no se automatiza —ni se debe: el segundo factor existe justamente para que
-lo haga una persona—, pero lo que sigue despues si.
+no se automatiza (ni se debe: el segundo factor existe justamente para que
+lo haga una persona), pero lo que sigue despues si.
 
 El programa abre Edge con **un perfil propio**, dentro de ``portable/``,
 apuntando a AirVault. La persona entra una vez, con su usuario y su segundo
@@ -50,7 +50,7 @@ from app.utils.portable import app_root
 # instante, asi que el programa veia «Edge se cerro antes de abrir la
 # sesion» y mandaba a pegar la cookie a mano. Ademas la interfaz no siempre
 # corre desde la carpeta del proyecto, y una ruta relativa dejaria el perfil
-# —con la sesion dentro— donde cayera el directorio de trabajo.
+# (con la sesion dentro) donde cayera el directorio de trabajo.
 PERFIL_POR_DEFECTO = app_root() / "portable" / "edge-airvault"
 
 _UBICACIONES_EDGE = (
@@ -237,8 +237,8 @@ class SesionDeNavegador:
             orden.append("--headless=new")
         orden.append(url)
         # La salida de error de Edge se guarda: es lo unico que dice por que
-        # no arranco —perfil tomado, bandera rechazada, politica de la
-        # empresa— y tirarla dejaba el fallo en «Edge se cerro», que no se
+        # no arranco (perfil tomado, bandera rechazada, politica de la
+        # empresa) y tirarla dejaba el fallo en «Edge se cerro», que no se
         # puede diagnosticar.
         self._quejas = tempfile.TemporaryFile()
         self._proceso = subprocess.Popen(
@@ -317,7 +317,7 @@ class SesionDeNavegador:
         """Cierra el navegador, pidiendoselo antes de matarlo.
 
         Importa que sea por las buenas: Chromium escribe al salir lo que
-        conserva del perfil —entre otras cosas la sesion— y suelta el
+        conserva del perfil (entre otras cosas la sesion) y suelta el
         candado de la carpeta. Matarlo deja las dos cosas a medias, y la
         siguiente apertura del mismo perfil se encuentra un candado que ya
         no tiene dueno.
@@ -442,8 +442,8 @@ def obtener_cookies(
             version = navegador.abrir(entrada)
             # Las cookies no se leen de golpe: recien abierto, el navegador
             # todavía esta yendo y volviendo de Microsoft, y lo que hay en
-            # ese instante es lo de la vez anterior —caducado, si paso el
-            # rato—. Esperar a que la sesion sirva es ademas lo que la
+            # ese instante es lo de la vez anterior (caducado, si paso el
+            # rato). Esperar a que la sesion sirva es ademas lo que la
             # renueva sola: el navegador rehace el acceso federado sin que
             # nadie teclee nada.
             limite = reloj() + espera_perfil_s

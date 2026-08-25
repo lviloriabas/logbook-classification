@@ -1,7 +1,7 @@
 """Los separadores del PDF ocupan página en el batch y no se indexan.
 
 El PDF que se sube lleva páginas divisorias que el CSV no tiene. Cuentan
-para la correspondencia por posición —en AirVault son una página más— pero
+para la correspondencia por posición (en AirVault son una página más) pero
 no son documentos: nadie les escribe matrícula, ni log number, ni fecha.
 """
 
