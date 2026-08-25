@@ -566,6 +566,7 @@ TOMADO = "tomado"
 SOLO_REVISAR = "solo_revisar"
 INDEXADO = "indexado"
 COMPLETADO = "completado"
+AUTOCOMPLETADO = "autocompletado"
 
 NOMBRE_ESTADO_PARTE = {
     SIN_SUBIR: "Sin subir",
@@ -578,6 +579,7 @@ NOMBRE_ESTADO_PARTE = {
     SOLO_REVISAR: "Indexar lo disponible y revisar",
     INDEXADO: "Indexado",
     COMPLETADO: "Terminado",
+    AUTOCOMPLETADO: "Terminado por el programa",
 }
 
 
@@ -611,7 +613,9 @@ class EstadoParte:
     @property
     def se_acabo(self) -> bool:
         """Ya no hay nada que esperar de esta parte."""
-        return self.estado in (DESCUADRADO, INDEXADO, COMPLETADO)
+        return self.estado in (
+            DESCUADRADO, INDEXADO, COMPLETADO, AUTOCOMPLETADO,
+        )
 
     def __str__(self) -> str:
         titulo = NOMBRE_ESTADO_PARTE.get(self.estado, self.estado)
@@ -1279,7 +1283,9 @@ class Trabajo:
         self.guardar()
         return validas, total, problemas
 
-    def completar(self, cliente) -> "ResultadoCompletar":
+    def completar(
+        self, cliente, automatico: bool = False
+    ) -> "ResultadoCompletar":
         """Da el batch por terminado y lo saca de la cola del Web Index.
 
         AirVault solo lo acepta con **todas** las paginas en verde: basta
@@ -1420,6 +1426,7 @@ class Trabajo:
         detalle = f"{len(paginas) - len(quitadas)} paginas en verde"
         if quitadas:
             detalle += f", {len(quitadas)} separadores quitados del batch"
+        self.manifiesto.completado_automatico = bool(automatico)
         self.manifiesto.etapa("completar").marcar(EstadoEtapa.HECHA, detalle)
         self.guardar()
         logger.info("Batch {} dado por terminado en AirVault", batch_id)
@@ -1874,7 +1881,8 @@ def subir_partes(
     ninguna bitacora que se va a mandar viaja ya en un batch subido.
     """
     _validar_nombres_de_batches(trabajos)
-    _validar_sin_bitacoras_repetidas(trabajos, en_la_ejecucion or trabajos)
+    ejecucion = list(en_la_ejecucion or trabajos)
+    _validar_sin_bitacoras_repetidas(trabajos, ejecucion)
     por_subir = list(trabajos)
     if cliente is not None:
         estados = comprobar_partes(trabajos, cliente, avisar=avisar)
@@ -1882,7 +1890,7 @@ def subir_partes(
         estancados = [
             parte.trabajo
             for parte in estados
-            if reintentar_estancados and reenvio_pendiente(parte)
+            if reintentar_estancados and reenvio_pendiente(parte, ejecucion)
         ]
         claves_estancadas = {str(trabajo.carpeta) for trabajo in estancados}
         por_subir = [
@@ -1938,7 +1946,7 @@ def subir_partes(
             clave = str(trabajo.carpeta)
             permite_reenvio = (
                 clave in claves_estancadas
-                and reenvio_pendiente(estado_actual)
+                and reenvio_pendiente(estado_actual, ejecucion)
             )
             if estado_actual.estado != SIN_SUBIR and not permite_reenvio:
                 if estado_actual.batch_id and trabajo not in encontrados_antes:
@@ -2076,6 +2084,40 @@ def _reiniciar_subida_ausente(trabajo: "Trabajo") -> None:
     trabajo.guardar()
 
 
+def _momento(marca: object) -> Optional[datetime]:
+    """Lee una marca de tiempo del manifiesto, o ``None`` si no sirve."""
+    texto = str(marca or "").strip()
+    if not texto:
+        return None
+    try:
+        return datetime.fromisoformat(texto)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mismo_reloj(uno: datetime, otro: datetime) -> bool:
+    """Si dos marcas se pueden restar: las dos con zona o las dos sin ella."""
+    return (uno.tzinfo is None) == (otro.tzinfo is None)
+
+
+def momento_de_subida(trabajo: "Trabajo") -> Optional[datetime]:
+    """Cuando Quick Upload acepto este archivo, segun el manifiesto.
+
+    Es la fecha del batch, y es la que hay que comparar con la de ahora para
+    saber si una carga lleva demasiado sin publicarse. El manifiesto guarda
+    ademas cuando el programa empezo a esperarla, pero esa otra marca dice
+    cuando alguien miro, no cuando se subio.
+    """
+    subida = trabajo.manifiesto.etapas.get("subir")
+    if subida is None or subida.estado not in (
+        EstadoEtapa.HECHA,
+        EstadoEtapa.OMITIDA,
+        EstadoEtapa.EN_CURSO,
+    ):
+        return None
+    return _momento(subida.actualizada)
+
+
 def subida_estancada(
     trabajo: "Trabajo",
     limite_s: float,
@@ -2083,53 +2125,119 @@ def subida_estancada(
 ) -> bool:
     """Si una subida lleva demasiado sin aparecer en Web Index.
 
-    Quick Upload puede aceptar el archivo y aun asi no publicarlo. El reloj no
-    empieza al subir: primero deben agotarse varios ciclos que revisan nombres,
-    páginas y contenido. La función solo mide esa espera final; volver a enviar
-    requiere una acción expresa del usuario.
+    Quick Upload puede aceptar el archivo y aun asi no publicarlo. La espera
+    no arranca a la primera: antes deben agotarse varios ciclos que revisan
+    nombres, páginas y contenido, y solo entonces se mira el reloj.
+
+    El tiempo se cuenta desde que se subio el archivo, no desde que el
+    programa se dio cuenta de que no aparecia. Son cosas distintas: una
+    ejecucion que se retoma dias despues estrena la marca de espera en ese
+    momento, y con ella se quedaba otra media hora esperando por una carga
+    que llevaba dias perdida.
     """
-    marca = trabajo.manifiesto.espera_reenvio_desde
-    if not marca:
+    inicio = _momento(trabajo.manifiesto.espera_reenvio_desde)
+    if inicio is None:
+        return False
+    subida = momento_de_subida(trabajo)
+    if subida is not None and _mismo_reloj(subida, inicio) and subida < inicio:
+        inicio = subida
+    presente = ahora or (
+        datetime.now(inicio.tzinfo) if inicio.tzinfo else datetime.now()
+    )
+    if not _mismo_reloj(presente, inicio):
         return False
     try:
-        inicio = datetime.fromisoformat(str(marca))
-        presente = ahora or (
-            datetime.now(inicio.tzinfo) if inicio.tzinfo else datetime.now()
-        )
         return (presente - inicio).total_seconds() >= max(0.0, float(limite_s))
     except (TypeError, ValueError, OverflowError):
         return False
 
 
-def reenvio_pendiente(parte: EstadoParte) -> bool:
-    """Si esta carga ya se puede volver a enviar sin pedirlo a mano.
+def subida_rebasada(
+    trabajo: "Trabajo", ejecucion: Sequence["Trabajo"] = ()
+) -> bool:
+    """Si AirVault ya publico e indexo cargas posteriores a esta.
 
-    Quick Upload la acepto, agotaron las revisiones de identidad y vencio la
-    espera, asi que lo mas probable es que AirVault la haya perdido. Solo se
-    permite mientras queden reenvios: insistir siempre con una cola atascada
-    terminaria publicando el mismo archivo varias veces.
+    Quick Upload publica lo que recibe en el orden en que lo recibe. Si las
+    partes que se enviaron **despues** de esta ya aparecieron en Web Index y
+    encima quedaron indexadas, la cola paso de largo: esta carga no se
+    perdio en el camino de subida, se perdio en AirVault, y esperar mas no
+    la va a hacer aparecer.
+
+    Es la unica senal que no depende de un reloj. Con ella se resuelve el
+    caso que dejaba una parte «buscando» para siempre: la espera vencia,
+    se agotaban los reenvios y ahi se quedaba, con las siguientes ya
+    terminadas.
+    """
+    propia = momento_de_subida(trabajo)
+    if propia is None:
+        return False
+    for otro in ejecucion:
+        if otro is trabajo or str(otro.carpeta) == str(trabajo.carpeta):
+            continue
+        manifiesto = otro.manifiesto
+        if not (
+            manifiesto.etapa_hecha("verificar")
+            or manifiesto.etapa_hecha("completar")
+        ):
+            continue
+        suya = momento_de_subida(otro)
+        if suya is None or not _mismo_reloj(suya, propia):
+            continue
+        if suya > propia:
+            return True
+    return False
+
+
+def subida_perdida(
+    parte: EstadoParte, ejecucion: Sequence["Trabajo"] = ()
+) -> bool:
+    """Si una carga que Quick Upload acepto se puede dar por no publicada.
+
+    Dos motivos, y basta con uno: las partes siguientes ya se indexaron, o
+    el archivo lleva subido mas tiempo del que AirVault tarda en publicar.
+    Solo se pregunta de una carga que ya agoto las revisiones de identidad,
+    que es lo que significa ``BUSCANDO``.
     """
     if parte.estado != BUSCANDO:
         return False
     trabajo = parte.trabajo
-    if int(trabajo.manifiesto.reenvios or 0) >= MAXIMO_REENVIOS_AUTOMATICOS:
-        return False
+    if subida_rebasada(trabajo, ejecucion):
+        return True
     return subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
+
+
+def reenvio_pendiente(
+    parte: EstadoParte, ejecucion: Sequence["Trabajo"] = ()
+) -> bool:
+    """Si esta carga ya se puede volver a enviar sin pedirlo a mano.
+
+    Se da por perdida y quedan reenvios: insistir siempre con una cola
+    atascada terminaria publicando el mismo archivo varias veces.
+    """
+    if not subida_perdida(parte, ejecucion):
+        return False
+    reenvios = int(parte.trabajo.manifiesto.reenvios or 0)
+    return reenvios < MAXIMO_REENVIOS_AUTOMATICOS
 
 
 def partes_por_subir(estados: Sequence[EstadoParte]) -> List["Trabajo"]:
     """Trabajos que hay que mandar a Quick Upload, ahora o de nuevo.
 
-    Son los que nunca llegaron a subirse y los que se dieron por perdidos
-    tras la espera. Vive aqui, y no en la ventana, porque la comprobacion
-    periodica y el boton tienen que decidir exactamente lo mismo: si la
-    lista se calculara en dos sitios, uno de los dos acabaria dejando
-    archivos parados para siempre.
+    Son los que nunca llegaron a subirse y los que se dieron por perdidos.
+    Vive aqui, y no en la ventana, porque la comprobacion periodica y el
+    boton tienen que decidir exactamente lo mismo: si la lista se calculara
+    en dos sitios, uno de los dos acabaria dejando archivos parados para
+    siempre.
+
+    Recibe la ejecucion entera porque dar una carga por perdida depende de
+    las demas: son las partes siguientes, ya indexadas, las que demuestran
+    que AirVault paso de largo.
     """
+    ejecucion = [parte.trabajo for parte in estados]
     return [
         parte.trabajo
         for parte in estados
-        if parte.estado == SIN_SUBIR or reenvio_pendiente(parte)
+        if parte.estado == SIN_SUBIR or reenvio_pendiente(parte, ejecucion)
     ]
 
 
@@ -2446,6 +2554,22 @@ def reiniciar_trabajos_incompletos(
     return reiniciados
 
 
+def _cierre_de(trabajo: "Trabajo") -> EstadoParte:
+    """Como quedo un batch ya cerrado, y por mano de quien.
+
+    Un batch que cerro el programa al terminar de indexarlo no pidio nada a
+    nadie: se distingue del que ya estaba cerrado cuando se encontro, que
+    cerro otra persona o una version anterior del programa.
+    """
+    if trabajo.manifiesto.completado_automatico:
+        return EstadoParte(
+            trabajo,
+            AUTOCOMPLETADO,
+            "lo cerro el programa al terminar de indexarlo",
+        )
+    return EstadoParte(trabajo, COMPLETADO, "cerrado en AirVault")
+
+
 def estado_local(trabajo: "Trabajo") -> EstadoParte:
     """En que va una parte segun su manifiesto, sin preguntar a AirVault.
 
@@ -2456,7 +2580,7 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
     manifiesto = trabajo.manifiesto
     completar = manifiesto.etapas.get("completar")
     if completar and completar.estado is EstadoEtapa.HECHA:
-        return EstadoParte(trabajo, COMPLETADO, "cerrado en AirVault")
+        return _cierre_de(trabajo)
     if not manifiesto.etapa_hecha("subir"):
         subir = manifiesto.etapas.get("subir")
         detalle = (
@@ -3075,7 +3199,7 @@ def _estado_de(
     esperadas = len(manifiesto.registros)
     completar = manifiesto.etapas.get("completar")
     if completar and completar.estado is EstadoEtapa.HECHA:
-        return EstadoParte(trabajo, COMPLETADO, "cerrado en AirVault")
+        return _cierre_de(trabajo)
     verificar = manifiesto.etapas.get("verificar")
     if verificar and verificar.estado is EstadoEtapa.HECHA:
         # Ya quedo confirmado en una ejecucion anterior. No hace falta abrir
@@ -3402,6 +3526,7 @@ def completar_partes(
     trabajos: Sequence["Trabajo"],
     cliente,
     avisar: Optional[Aviso] = None,
+    automatico: bool = False,
 ) -> List[Tuple["Trabajo", ResultadoCompletar]]:
     """Da por terminados los batches que AirVault vaya a aceptar.
 
@@ -3420,7 +3545,9 @@ def completar_partes(
         if avisar is not None:
             avisar(f"{cabeza}Cerrando el batch en AirVault", 0, 0)
         try:
-            hechos.append((trabajo, trabajo.completar(cliente)))
+            hechos.append(
+                (trabajo, trabajo.completar(cliente, automatico=automatico))
+            )
         except Exception as exc:  # noqa: BLE001 - se anota y siguen los demas
             logger.warning(
                 "No se pudo cerrar el batch {}: {}",

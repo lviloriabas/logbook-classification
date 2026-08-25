@@ -2,6 +2,16 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-24 — Una carga que AirVault no publicó se da por perdida en cuanto las siguientes se indexan
+
+La única señal de que una carga aceptada por Quick Upload no iba a aparecer era un reloj, y el reloj empezaba tarde y en el momento equivocado. Se agotaban tres ciclos de identificación, se guardaba ahí la marca de espera y solo media hora después de esa marca se permitía reenviar. Como la marca se estrena cuando el programa se da cuenta, una ejecución que se retomaba días más tarde volvía a esperar media hora entera por un archivo que llevaba días perdido. Y agotados los dos reenvíos, la parte se quedaba en «Subido pendiente confirmación» para siempre, con las demás partes de la entrega ya terminadas y sin nada que la sacara de ahí.
+
+Ahora una carga se da por perdida por cualquiera de dos motivos, y el primero no depende de ningún reloj: si las partes que se enviaron **después** ya aparecieron en Web Index y quedaron indexadas, la cola pasó de largo. No es que AirVault vaya lento, es que esa carga no está. El segundo motivo sigue siendo el tiempo, pero contado desde la fecha del batch —el momento en que Quick Upload aceptó el archivo—, no desde que el programa miró. Una ejecución retomada días después reconoce la carga vieja en la primera comprobación en vez de estrenar la espera.
+
+Lo demás no cambia: los tres ciclos de identificación por nombre, páginas y contenido se siguen agotando antes de dar nada por perdido —la edad de un archivo no es motivo para saltarse la búsqueda de un batch publicado con otro nombre—, el reenvío sigue topado en dos veces para no acabar publicando lo mismo varias veces, y la decisión de qué falta por subir sigue viviendo en un solo sitio, de modo que el botón y la comprobación periódica deciden igual. Esa regla recibe ahora la ejecución entera, porque dar una carga por perdida depende de en qué van las demás.
+
+Los batches que el programa cierra por su cuenta al terminar de indexarlos quedan como **Terminado por el programa**, separados de los que ya estaban cerrados en AirVault cuando se encontraron. Antes ambos casos se pintaban igual y no había forma de saber, mirando la lista, qué había cerrado el programa sin que nadie interviniera.
+
 ## 2026-08-24 — Cambiar el reparto de una ejecución ya subida conserva sus batches y solo reparte lo que falta
 
 Cambiar el máximo de páginas por batch no tenía efecto sobre una ejecución que ya estaba preparada: el reparto de disco se devolvía tal cual y el número nuevo se ignoraba en silencio. La ventana lo tapaba bloqueando el control en cuanto había batches, así que la única forma de aplicar otro reparto era borrar el registro local — y entonces la ejecución se repartía entera desde cero, sin saber nada de los batches que ya estaban en AirVault. Los batches viejos seguían ahí con sus páginas, los nuevos volvían a traer esas mismas bitácoras, y cada una acababa publicada dos veces. El mismo agujero se abría solo cuando el juego de manifiestos quedaba incompleto por cualquier motivo, porque ese caso también terminaba en un reparto desde cero.
