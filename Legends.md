@@ -2,6 +2,16 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-25 - La vista previa dice en qué batches queda la ejecución antes de subirla
+
+La tabla de batches solo tenía algo que enseñar después de subir: hasta que se pulsaba **Subir a AirVault** no había manifiestos, porque el reparto se decide al preparar los archivos. Con el máximo por batch delante había que elegir un número a ciegas, subir, y solo entonces ver que la ejecución quedaba en siete batches y no en cinco. Ahora **Vista previa…**, junto al título de la tabla, adelanta ese mismo reparto: el nombre que llevaría cada batch, sus páginas (con los separadores que se repiten al cortar a mitad de una aeronave) y sus bitácoras. Los que ya están en AirVault salen con su estado, así que la lista es a la vez lo que falta por subir y lo que está esperando en la cola.
+
+El cálculo es el de `preparar_partes` sin sus efectos: lee el índice de páginas y el CSV, y no crea manifiestos, no divide PDF, no rasteriza y no crea siquiera la carpeta de trabajo. Lo único que puede escribir es la reparación que ya hace cargar la lista de batches: un manifiesto de una carpeta portable que se movió guarda su ruta nueva. Por eso se puede abrir, cambiar el máximo y volver a abrirla las veces que haga falta. Las bitácoras que ya viajaron en batches subidos se descuentan igual que en el reparto de verdad, de modo que lo previsto es exactamente lo que se subiría.
+
+De cada batch se abre además la lista de sus bitácoras: la página que ocupa cada una dentro del batch (la misma con la que se la busca en Web Index), matrícula, Log Page Number, fecha, vuelo, de qué página de la ejecución salió y qué la bloquea si algo la bloquea. Se llega desde la vista previa y con el botón derecho sobre una fila de la tabla de batches, que es la vía para un batch que ya está subido. Los separadores no entran en la lista, porque no son documentos que indexar, y se cuentan aparte.
+
+La bitácora de la ventana tenía 110 px fijos de alto. Un motivo de fallo o la lista de páginas que faltan para completar un batch se envuelve en cuatro o cinco líneas, así que se leía a trozos moviendo la barra. Ahora parte de 160 px, no tiene tope y se queda con el alto que sobre al crecer la ventana: las dos tablas siguen con el suyo, y la ventana se abre pidiendo 800 px de alto en vez de 720 para que ese sitio exista desde el principio. Lo que no quepa lo sigue recortando la pantalla.
+
 ## 2026-08-25 - Las dos bitácoras que chocan se marcan como duplicadas
 
 La columna `dup` y el color de la tabla señalaban solo la aparición posterior de un `log_number` repetido. La primera salía limpia, así que al ver una fila marcada había que recorrer el CSV buscando con cuál chocaba, y en una ejecución larga eso es media entrega. Ahora se marcan todas las apariciones del grupo: las dos filas del choque se ven a la vez.

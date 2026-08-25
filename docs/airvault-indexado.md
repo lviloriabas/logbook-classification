@@ -27,8 +27,30 @@ delante.
 | `Subir a AirVault`      | Manda los PDF de la entrega. Termina cuando termina la subida.                                                                                                |
 | `Completar batch`       | Al terminar de escribir, da el batch por terminado en AirVault: lo indexa y lo manda a Web Search (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo.                      |
 | `Indexar`               | Escribe en los batches que ya estan listos.                                                                                                                   |
+| `Vista previa…`         | Enseña en cuantos batches quedaria repartida la ejecucion, con sus paginas y sus bitacoras. No prepara ni sube nada.                                          |
 | `Ver reporte…`          | Abre el detalle pagina por pagina de lo que se escribiria.                                                                                                    |
 | `Cancelar`              | Detiene lo que este en marcha y suelta los batches tomados.                                                                                                   |
+
+### Ver lo que va en cada batch
+
+Hasta que se sube no hay ningun batch en la lista, porque el reparto se
+decide al preparar los archivos. **Vista previa…**, junto al titulo de la
+tabla, lo adelanta: calcula el mismo reparto que hara **Subir a AirVault**
+con el maximo de paginas elegido y enseña cada batch con el nombre que
+llevaria, sus paginas (separadores incluidos) y sus bitacoras. Los que ya
+estan en AirVault salen con su estado; los demas son los que se crearian.
+Solo lee el indice de paginas y el CSV: no escribe manifiestos, no divide
+PDF y no sube nada, asi que se puede cambiar el maximo y volver a mirarla
+las veces que haga falta.
+
+De cada batch se abre la lista de las bitacoras que lleva dentro, con la
+pagina que ocupa cada una (la misma que muestra Web Index), su matricula,
+su Log Page Number, su fecha, su vuelo, de que pagina de la ejecucion
+salio y que la bloquea si algo la bloquea. Se llega desde la vista previa
+y con el boton derecho sobre una fila de la tabla de batches, que es la
+via para un batch que ya esta subido. Los separadores no aparecen: ocupan
+pagina en el batch pero no son documentos que indexar, y se cuentan
+aparte en la linea de arriba.
 
 ### Los tres tiempos
 
