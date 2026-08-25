@@ -1685,7 +1685,11 @@ class AirVaultWindow(QDialog):
         ]
 
     def _aviso_para_volver_a_subir(self) -> str:
-        from app.airvault.flujo import reenvio_pendiente, subida_rebasada
+        from app.airvault.flujo import (
+            busqueda_amplia_sin_hallar,
+            reenvio_pendiente,
+            subida_rebasada,
+        )
 
         perdidas = self._subidas_perdidas()
         if not perdidas:
@@ -1694,19 +1698,30 @@ class AirVaultWindow(QDialog):
         nombres = ", ".join(parte.nombre for parte in perdidas)
         cuantos = "ese batch" if len(perdidas) == 1 else "esos batches"
         minutos = max(1, round(self._config_actual().espera_reenvio_s / 60))
+        sin_hallar = [
+            parte for parte in perdidas
+            if busqueda_amplia_sin_hallar(parte.trabajo)
+        ]
         rebasadas = [
             parte for parte in perdidas
-            if subida_rebasada(parte.trabajo, ejecucion)
+            if parte not in sin_hallar
+            and subida_rebasada(parte.trabajo, ejecucion)
         ]
-        if len(rebasadas) == len(perdidas):
+        if len(sin_hallar) == len(perdidas):
+            razon = (
+                "Se recorrió la cola entera y no están con ningún nombre, "
+                "ni por páginas ni por Log Page Number."
+            )
+        elif len(rebasadas) == len(perdidas):
             razon = (
                 "Las partes que se enviaron después ya están indexadas, "
                 "así que la cola pasó de largo."
             )
-        elif rebasadas:
+        elif sin_hallar or rebasadas:
             razon = (
-                "De unas ya se indexaron las partes siguientes y de otras "
-                f"pasó el tiempo de espera de {minutos} minutos."
+                "Unos no están en la cola con ningún nombre, de otros ya se "
+                "indexaron las partes siguientes y de los demás pasó el "
+                f"tiempo de espera de {minutos} minutos."
             )
         else:
             razon = (
