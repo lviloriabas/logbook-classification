@@ -2,6 +2,18 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-24 — Cambiar el reparto de una ejecución ya subida conserva sus batches y solo reparte lo que falta
+
+Cambiar el máximo de páginas por batch no tenía efecto sobre una ejecución que ya estaba preparada: el reparto de disco se devolvía tal cual y el número nuevo se ignoraba en silencio. La ventana lo tapaba bloqueando el control en cuanto había batches, así que la única forma de aplicar otro reparto era borrar el registro local — y entonces la ejecución se repartía entera desde cero, sin saber nada de los batches que ya estaban en AirVault. Los batches viejos seguían ahí con sus páginas, los nuevos volvían a traer esas mismas bitácoras, y cada una acababa publicada dos veces. El mismo agujero se abría solo cuando el juego de manifiestos quedaba incompleto por cualquier motivo, porque ese caso también terminaba en un reparto desde cero.
+
+Ahora el reparto se rehace, pero lo que ya viajó manda. Cada bitácora se identifica por el archivo del que salió y su página dentro de él, que es lo único estable entre un reparto y otro. Los batches que Quick Upload ya aceptó se conservan intactos —su PDF, su nombre, su ID y sus páginas— y solo se reparten, con el número nuevo, las bitácoras que ningún batch subido se llevó. Las partes nuevas siguen la numeración desde la última que ya existe: un número que viajó con su nombre no se reutiliza aunque su hueco haya quedado libre. Si el corte deja una aeronave partida, el batch siguiente abre con una copia de su separador, igual que en un reparto normal.
+
+El reparto que solo estaba en disco sí se rehace entero, porque no hay nada que respetar. Su manifiesto no se borra: se aparta como `manifiesto-reemplazado-<fecha>.json`, de modo que deja de ofrecerse como un batch pendiente de subir —que era otra vía para acabar cargando dos veces lo mismo— pero sigue ahí por si hay que mirarlo.
+
+Antes de mandar nada a Quick Upload se comprueba que ningún batch repita una bitácora que ya viaja en otro. Es la última red y cubre lo único que no tiene arreglo cómodo: una vez publicada dos veces, hay que deshacerlo en AirVault a mano. Si al empezar ya hubiera bitácoras en dos batches subidos, no se reparte nada y se dice cuáles son.
+
+Con esto el control de páginas por batch deja de estar bloqueado: se puede cambiar con la ejecución a medio subir, y la ventana dice cuántos batches conserva y cuántas bitácoras vuelve a repartir.
+
 ## 2026-08-24 — Los batches se reparten con la cantidad exacta de páginas y lo que no llegó a AirVault se reenvía solo
 
 El **Máximo por batch** de la ventana de AirVault no era la cantidad que se subía. El reparto cortaba entre aeronaves y nunca partía una: una sección que no cabía entera cerraba el batch antes de tiempo, así que con el mismo número elegido salían batches de tamaños distintos y bastante por debajo de él. Con 200 páginas por batch y aviones de 30, un batch se cerraba en 180 y el siguiente en 150; el reparto que se había pedido y el que se subía no se parecían, y las cuentas que dependen de esa cantidad dejaban de cuadrar.
