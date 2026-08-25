@@ -255,8 +255,10 @@ def test_airvault_reparte_una_entrega_que_supera_el_limite(tmp_path):
         paginas_por_batch=5,
     )
 
-    assert len(trabajos) == 4
-    assert [len(t.manifiesto.registros) for t in trabajos] == [3, 3, 3, 3]
+    # Todos del tamaño pedido; solo el ultimo se queda con el resto. Antes se
+    # cortaba entre aviones y con el mismo limite salian cuatro batches de 3.
+    assert len(trabajos) == 3
+    assert [len(t.manifiesto.registros) for t in trabajos] == [5, 5, 3]
     assert all(t.manifiesto.paginas_por_batch == 5 for t in trabajos)
     for trabajo in trabajos:
         assert trabajo.manifiesto.registros[0].es_separador
@@ -350,8 +352,8 @@ def test_la_compresion_se_hace_antes_de_repartir_los_batches(
         paginas_por_batch=5, compresion=True,
     )
 
-    assert len(trabajos) == 4
-    assert [llamada[0] for llamada in llamadas] == [True, False, False, False, False]
+    assert len(trabajos) == 3
+    assert [llamada[0] for llamada in llamadas] == [True, False, False, False]
     comprimido = llamadas[0][3]
     assert llamadas[0][2] == list(range(12))
     assert all(llamada[1] == comprimido for llamada in llamadas[1:])
