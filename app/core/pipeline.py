@@ -206,8 +206,8 @@ def _calibrate_page_worker(
 ) -> Tuple[TransformResult, Optional[float]]:
     """Calibra una página dentro de un proceso worker.
 
-    Es la misma secuencia que la ruta en serie —render a DPI de calibración,
-    deskew y estimación de similitud contra la referencia— sin nada del motor
+    Es la misma secuencia que la ruta en serie (render a DPI de calibración,
+    deskew y estimación de similitud contra la referencia) sin nada del motor
     OCR: la calibración no lee texto, solo mide dónde está la página.
     """
     state = _load_calibration_job(state_path)
@@ -911,7 +911,7 @@ def _accept_line_reading(
 
     Los campos ``ocr_mode='line'`` se leen sin detector porque su recorte ya
     contiene un único valor. Cuando esa lectura rápida no produce un valor
-    canónico —o no cumple la regla del campo— se relee con el pipeline
+    canónico (o no cumple la regla del campo) se relee con el pipeline
     completo, así que la optimización solo puede ahorrar tiempo y nunca
     perder una lectura que el detector sí habría resuelto.
     """
@@ -1814,7 +1814,7 @@ class Pipeline:
         indexadas desde ``first``. Con la alineación deshabilitada devuelve
         (None, None).
 
-        Coste: bajo (~75), ≈ 0.2-0.4 s por página — sin OCR ni warp.
+        Coste: bajo (~75), ≈ 0.2-0.4 s por página, sin OCR ni warp.
         """
         t_calib = time.perf_counter()
         try:
@@ -1848,9 +1848,9 @@ class Pipeline:
         # cuando la plantilla declara alguna) y el mapa de ranuras de fecha
         # (``build_slot_maps``, solo con ``date_slot_ocr``). Construirla sin
         # consumidor costaba una imagen en grises por página retenida durante
-        # toda la calibración —0,89 MB cada una, 0,34 GB en un libro de 393
+        # toda la calibración (0,89 MB cada una, 0,34 GB en un libro de 393
         # páginas, fuera del presupuesto de memoria por proceso que calcula
-        # ``app.core.parallelism``— más un warp y una acumulación por página.
+        # ``app.core.parallelism``) más un warp y una acumulación por página.
         collect_background = (
             self.config.remove_printed
             and total >= 3
@@ -2005,8 +2005,8 @@ class Pipeline:
         """Calibra el tramo repartiendo las páginas entre el pool OCR.
 
         La calibración corría en el proceso principal, página a página,
-        mientras los procesos del pool —ya arrancados, con los modelos
-        cargados— esperaban sin hacer nada. Medido: 202 ms por página
+        mientras los procesos del pool (ya arrancados, con los modelos
+        cargados) esperaban sin hacer nada. Medido: 202 ms por página
         (render 70 + deskew 41 + ORB 90), que en un libro de 50 páginas son
         10,1 s de un reloj de unos 65.
 
@@ -2095,8 +2095,8 @@ class Pipeline:
     def _printed_mask_has_consumer(self) -> bool:
         """¿Alguien va a leer la máscara de fondo impreso en esta ejecución?
 
-        Sus dos consumidores son las casillas —que solo la aplican si la
-        plantilla declara alguna— y el mapa de ranuras de fecha, que depende
+        Sus dos consumidores son las casillas (que solo la aplican si la
+        plantilla declara alguna) y el mapa de ranuras de fecha, que depende
         de ``date_slot_ocr``. Sin ninguno de los dos, construirla es trabajo
         y memoria que nadie mira.
         """
@@ -2322,8 +2322,8 @@ class Pipeline:
         (ver ``app/vision/book_background.py``).
 
         Solo se tocan los campos que quedaron en ``unclear``: los veredictos
-        firmes no se revisan. Y solo se renderizan las páginas necesarias —una
-        muestra para el fondo, más las dudosas—, no el libro entero.
+        firmes no se revisan. Y solo se renderizan las páginas necesarias (una
+        muestra para el fondo, más las dudosas), no el libro entero.
 
         Cualquier fallo aquí deja los resultados como estaban: es una segunda
         opinión, no un eslabón del que dependa la ejecución.
@@ -2396,7 +2396,7 @@ class Pipeline:
             # El recorte se reescala a la escala de calibración, pero
             # interpolar no devuelve el detalle que no se renderizó: los
             # trazos flojos pierden profundidad y se resuelven menos dudas.
-            # No es un error —sigue sin equivocarse—, pero conviene saberlo.
+            # No es un error (sigue sin equivocarse), pero conviene saberlo.
             logger.info(
                 f"[Pipeline] Firmas inciertas: la ejecución va a "
                 f"{self.config.dpi} DPI y la revisión está calibrada a "
@@ -2519,7 +2519,7 @@ class Pipeline:
         ``skew_angle`` es el ángulo que el procesado ya dejó en
         ``PageResult.skew_angle``. Reutilizarlo no solo ahorra la detección
         (103-139 ms por página, sobre decenas de páginas y en serie): también
-        garantiza que el recorte que ve el fondo del libro —o el VLM— sea el
+        garantiza que el recorte que ve el fondo del libro (o el VLM) sea el
         mismo que vio el detector, en vez de uno enderezado por una segunda
         medición que puede diferir de la primera.
         """
@@ -2616,8 +2616,8 @@ def _page_counter_writer(path: Path) -> ProgressCallback:
     """Publica el avance del worker en un archivo que el padre puede leer.
 
     Un proceso del pool no puede emitir señales a la GUI, así que deja su
-    contador de páginas en el directorio temporal del pool —el mismo sitio
-    donde ya vive la bandera de cancelación— y el planificador lo consulta
+    contador de páginas en el directorio temporal del pool (el mismo sitio
+    donde ya vive la bandera de cancelación) y el planificador lo consulta
     mientras espera. Es una línea de texto por página: más barato que una
     cola compartida y sin proceso extra de ``Manager``.
     """
@@ -2760,7 +2760,7 @@ def process_pdf_batch(
                     on_progress(
                         _offset + done,
                         total_pages,
-                        f"Archivo {_index + 1}/{total_files}: {_name} — "
+                        f"Archivo {_index + 1}/{total_files}: {_name} - "
                         f"{message}",
                     )
 
@@ -2867,7 +2867,7 @@ def process_pdf_batch(
             published = max(published, min(done_pages + live, total_pages))
             message = (
                 f"{len(pending)} archivo(s) en paralelo, "
-                f"{ready}/{total_files} listos — {PAGES_STAGE}"
+                f"{ready}/{total_files} listos - {PAGES_STAGE}"
                 if pending
                 else f"Procesados {ready}/{total_files} archivos"
             )

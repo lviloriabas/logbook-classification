@@ -2,8 +2,8 @@
 
 El visor abre una ejecución sin tener que buscarla a mano: lista las últimas y
 carga la elegida. Y el cuadro «Salidas» arranca marcado como se entrega
-habitualmente —un solo PDF separado por matrícula, con las posibles
-discrepancias al final— para no tener que marcarlo en cada ejecución.
+habitualmente (un solo PDF separado por matrícula, con las posibles
+discrepancias al final) para no tener que marcarlo en cada ejecución.
 """
 
 from __future__ import annotations

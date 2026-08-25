@@ -139,7 +139,7 @@ class TestClasificacion(unittest.TestCase):
 
     def test_mantenimiento_con_firma_de_capitan_no_es_discrepancia(self):
         # El formulario F-MNT-001 lleva el bloque de mantenimiento y el de
-        # aceptación de la aeronave —que firma el capitán— en la misma hoja.
+        # aceptación de la aeronave (que firma el capitán) en la misma hoja.
         # Que estén los dos es lo normal: en la ejecución de referencia le
         # pasa a 114 de las 350 páginas de mantenimiento.
         pagina = _mant_ok(captain_signature=("true", PRESENTE))

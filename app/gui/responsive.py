@@ -1,8 +1,8 @@
 """Adaptación de las ventanas a la pantalla en la que se abren.
 
-La carpeta se copia a equipos con pantallas muy distintas —portátiles de
+La carpeta se copia a equipos con pantallas muy distintas (portátiles de
 1366x768, monitores 1080p con el escalado de Windows al 125% o 150%, pantallas
-4K— y la interfaz tiene que caber en todas: ni abrirse más grande que el área
+4K) y la interfaz tiene que caber en todas: ni abrirse más grande que el área
 de trabajo ni recortar controles por abajo.
 
 Aquí viven las dos piezas que lo resuelven:
@@ -70,8 +70,8 @@ QSpinBox, QComboBox, QLineEdit { padding: 1px; }
 class Density:
     """Medidas de la ventana para un tamaño de pantalla dado.
 
-    Las que no caben en una hoja de estilo —márgenes de layout, altos y anchos
-    mínimos, el ancho de la columna de nombres del panel de avance— viajan como
+    Las que no caben en una hoja de estilo (márgenes de layout, altos y anchos
+    mínimos, el ancho de la columna de nombres del panel de avance) viajan como
     números, porque el código de construcción las pide una a una.
     """
 
@@ -185,7 +185,7 @@ def fitted_geometry(
 def available_area(widget=None) -> QRect:
     """Área de trabajo de la pantalla donde está ``widget``.
 
-    Sin ``widget`` —o antes de que la ventana tenga pantalla asignada— se usa
+    Sin ``widget`` (o antes de que la ventana tenga pantalla asignada) se usa
     la principal, que es donde el sistema va a abrirla.
     """
     screen = None

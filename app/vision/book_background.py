@@ -3,13 +3,13 @@
 Una bitácora son 50 páginas del mismo formulario, y el pipeline ya las alinea
 todas contra la misma referencia. La **mediana píxel a píxel** de un campo a lo
 largo del libro es, por tanto, ese campo *vacío*: el recuadro impreso, el
-rótulo, la línea de firma, el sello fijo y el gris de la fotocopia — todo lo
+rótulo, la línea de firma, el sello fijo y el gris de la fotocopia, todo lo
 que se repite. Lo que no se repite, la escritura de cada página, desaparece de
 la mediana porque en cada página cae en un sitio distinto.
 
 Restar ese fondo deja exactamente lo que se escribió en *esta* página. Es la
-misma pregunta que responde ``_paper_level`` en ``signature.py`` —¿cuál sería
-el blanco del papel debajo de esta tinta?— pero contestada con evidencia del
+misma pregunta que responde ``_paper_level`` en ``signature.py`` (¿cuál sería
+el blanco del papel debajo de esta tinta?) pero contestada con evidencia del
 documento en lugar de con morfología: el cierre morfológico no puede saber que
 "(XII) CAPTAIN SIGNATURE" está impreso, y la mediana del libro sí.
 
@@ -18,8 +18,8 @@ cinco campos de firma quedan separados sin zona incierta, con márgenes entre
 0.07 y 0.20 de densidad. Con el detector sin fondo, la ventana de umbral que
 sirve a los cinco campos a la vez mide 0.0018.
 
-El fondo no siempre está disponible —hacen falta varias páginas del mismo
-libro y que se hayan podido alinear—, así que todo aquí devuelve ``None``
+El fondo no siempre está disponible (hacen falta varias páginas del mismo
+libro y que se hayan podido alinear), así que todo aquí devuelve ``None``
 cuando no hay evidencia suficiente y quien llama se queda con el detector
 clásico.
 """
@@ -41,8 +41,8 @@ MIN_BACKGROUND_PAGES = 8
 #
 # El valor sale de barrer 40..115 sobre 200 recortes etiquetados. Importa más
 # de lo que parece: por debajo de 70, las bandas verticales pálidas que deja el
-# escáner —y los dobleces del papel, que son propios de cada página y por tanto
-# no están en el fondo— cuentan como tinta e inflan la densidad de las casillas
+# escáner (y los dobleces del papel, que son propios de cada página y por tanto
+# no están en el fondo) cuentan como tinta e inflan la densidad de las casillas
 # vacías hasta el nivel de una firma floja. A 85 la banda desaparece y el trazo
 # de bolígrafo sigue entero, y es el único valor del barrido con el que los
 # cinco campos separan firmadas de vacías.
@@ -126,8 +126,8 @@ def ink_mask(region: np.ndarray, background: np.ndarray,
     gray = _fit(_ink_channel(region), background.shape)
     gray = cv2.medianBlur(gray, 3)
     residual = cv2.subtract(background, gray)
-    # Una página entera más oscura que el resto del libro —la fotocopia salió
-    # cargada, el escáner cambió de exposición— tiene residuo positivo en todos
+    # Una página entera más oscura que el resto del libro (la fotocopia salió
+    # cargada, el escáner cambió de exposición) tiene residuo positivo en todos
     # sus píxeles y se leería como una casilla llena de tinta. La mediana del
     # residuo es ese desnivel global (la mayoría de los píxeles son papel, no
     # tinta), y restarla deja la medida donde debe estar: en lo que sobresale
@@ -143,8 +143,8 @@ def ink_mask(region: np.ndarray, background: np.ndarray,
 
 
 # Una componente que cruza la casilla de lado a lado y deja su recuadro casi
-# vacío es una raya que atraviesa la página —la X de "anulado", el trazo de un
-# tachón—, no una firma. Los dos números tienen holgura de sobra: sobre dos
+# vacío es una raya que atraviesa la página (la X de "anulado", el trazo de un
+# tachón), no una firma. Los dos números tienen holgura de sobra: sobre dos
 # bitácoras reales el resultado no cambia entre relleno 0.10 y 0.18, ni entre
 # cruce 0.55 y 0.75, lo que dice que las dos poblaciones están lejos y no se
 # está afinando un parámetro contra los datos.
@@ -157,8 +157,8 @@ def drop_crossing_strokes(mask: np.ndarray) -> np.ndarray:
 
     Una firma llena su recuadro: aunque se extienda a lo ancho, sus trazos se
     cruzan y vuelven sobre sí mismos. Una raya que atraviesa la hoja lo cruza
-    y se va, dejando un rectángulo enorme casi vacío. Esa diferencia —cuánto
-    del recuadro ocupa la componente— separa las dos cosas sin tener que
+    y se va, dejando un rectángulo enorme casi vacío. Esa diferencia (cuánto
+    del recuadro ocupa la componente) separa las dos cosas sin tener que
     reconocer la escritura.
 
     Probado a la inversa también: filtrar además los fragmentos sueltos (motas
@@ -203,7 +203,7 @@ def peak_density(mask: np.ndarray) -> float:
 MIN_CONFIDENT_PAGES = 3
 
 # Páginas extremas que se pueden descartar de cada clase para encontrar la
-# franja. Una sola firma casi invisible —o una casilla vacía con un borrón—
+# franja. Una sola firma casi invisible (o una casilla vacía con un borrón)
 # basta para que las dos poblaciones se toquen y el libro se quede sin franja,
 # desperdiciando la evidencia de las otras treinta páginas (medido: pasaba en
 # ``technician_license`` de test3, donde la firma confirmada más floja daba
@@ -212,8 +212,8 @@ MIN_CONFIDENT_PAGES = 3
 # no opinar.
 MAX_OUTLIERS = 2
 
-# Ancho mínimo que se le exige a la franja de duda. Una franja pegada —"por
-# encima de 0.0095 es firma, por debajo de 0.0059 no"— resuelve más casos,
+# Ancho mínimo que se le exige a la franja de duda. Una franja pegada ("por
+# encima de 0.0095 es firma, por debajo de 0.0059 no") resuelve más casos,
 # pero deja el veredicto a merced de un borrón: cualquier mancha que pase de
 # 0.0095 pasaría por firma. Cuando la franja sale más estrecha que esto se
 # descartan más extremos para ensancharla, que es preferible aunque cueste
@@ -237,7 +237,7 @@ def confident_band(
     Así que las páginas que el clásico resolvió etiquetan las dos poblaciones
     en la escala del residuo, y de ellas sale la franja: por debajo del máximo
     de las vacías, es vacío; por encima del mínimo de las firmadas, es firma.
-    Lo de en medio —donde no cae ninguna página resuelta— sigue siendo duda,
+    Lo de en medio (donde no cae ninguna página resuelta) sigue siendo duda,
     que es justo lo que impide convertir una duda honesta en un error grave.
 
     Args:
@@ -267,7 +267,7 @@ def confident_band(
     # Se prueban primero las poblaciones enteras y solo se van descartando
     # extremos si hace falta: porque se tocan, o porque la franja que dejan es
     # tan estrecha que no protege de nada. Con las poblaciones ya separadas y
-    # holgadas —el caso normal— esto no descarta nada.
+    # holgadas (el caso normal) esto no descarta nada.
     widest: Optional[tuple] = None
     for dropped in range(2 * MAX_OUTLIERS + 1):
         for from_signed in range(min(dropped, MAX_OUTLIERS) + 1):

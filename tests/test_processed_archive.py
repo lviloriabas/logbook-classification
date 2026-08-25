@@ -2,7 +2,7 @@
 
 La entrada solo debe mostrar lo que falta por procesar. Lo ya procesado se
 guarda en ``input/processed``, y todo lo que la ventana tenía apuntando al
-archivo —los reportes, la vista previa, las filas de la tabla— tiene que
+archivo (los reportes, la vista previa, las filas de la tabla) tiene que
 apuntar a la ruta nueva: si no, la ejecución recién terminada se queda sin
 vista previa y sin poder exportarse otra vez.
 """

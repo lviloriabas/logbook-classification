@@ -9,8 +9,8 @@ Reglas:
 - Si la licencia del técnico es ilegible/incierta, el tipo de página es
   **incierto** (INCIERTO): no se acusa a los campos que solo aplican a una
   de las dos interpretaciones (capitán/licencia de capitán y técnico), se
-  reportan solo las anomalías robustas —firma de piloto, exigida en ambos
-  casos— y la propia licencia ilegible. Evita tanto las discrepancias
+  reportan solo las anomalías robustas (firma de piloto, exigida en ambos
+  casos) y la propia licencia ilegible. Evita tanto las discrepancias
   falsas de vuelo como las de mantenimiento cuando no se puede decidir.
 - **Vuelo**: deben estar presentes las firmas de piloto, de capitán y la
   licencia del capitán.

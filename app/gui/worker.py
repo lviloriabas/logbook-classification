@@ -234,7 +234,7 @@ class PipelineWorker(QThread):
         if self._current_file_index and self._active_paths:
             name = self._active_paths[self._current_file_index - 1].name
             prefix = (f"Archivo {self._current_file_index}/"
-                      f"{len(self._active_paths)}: {name} — ")
+                      f"{len(self._active_paths)}: {name} - ")
         self.progress.emit(self._progress_offset + done,
                            self._progress_offset + self._prev_total,
                            prefix + message)
@@ -252,7 +252,7 @@ class PreprocessWorker(QThread):
     """
 
     progress = Signal(int, int, str)
-    # (pdf, número de página, geometría) — ver ``_geometry``.
+    # (pdf, número de página, geometría); ver ``_geometry``.
     page_ready = Signal(str, int, object)
     succeeded = Signal(bool)
     failed = Signal(str)

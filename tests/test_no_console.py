@@ -97,8 +97,8 @@ def test_certificados_de_windows_se_instalan_una_sola_vez(monkeypatch):
 def test_portable_environment_installs_the_patch(popen_calls):
     """El motor OCR llama a ``ensure_portable_env`` antes de importar paddle.
 
-    Ese es el punto por el que pasan todos los procesos —la GUI, el CLI y
-    cada worker del pool—, así que basta con instalarlo ahí.
+    Ese es el punto por el que pasan todos los procesos (la GUI, el CLI y
+    cada worker del pool), así que basta con instalarlo ahí.
     """
     from app.utils.portable import ensure_portable_env
 

@@ -277,8 +277,8 @@ class CsvReporter:
         tiempo de la ejecución sino varias veces ese tiempo: 50 páginas que el
         reloj midió en 150 s sumaban 693 s en el CSV.
 
-        Se conserva la proporción entre páginas —una página lenta sigue
-        destacando frente a las demás— y se escala el conjunto para que la
+        Se conserva la proporción entre páginas (una página lenta sigue
+        destacando frente a las demás) y se escala el conjunto para que la
         suma sea lo que tardó realmente la ejecución. ``factor`` viene de
         ``run_time_factor`` y cubre el batch completo; sin él se normaliza
         contra el reloj de la propia bitácora, que es lo correcto cuando el

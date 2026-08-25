@@ -1,8 +1,8 @@
 """Conjunto de recortes de firma etiquetados a mano (suite temporal).
 
 Aquí vive todo lo que comparten las tres herramientas de la suite: dónde se
-guardan los recortes, cómo se nombran, qué etiquetas existen y —lo más
-importante— cómo se reproduce un recorte con un margen distinto sin volver a
+guardan los recortes, cómo se nombran, qué etiquetas existen y (lo más
+importante) cómo se reproduce un recorte con un margen distinto sin volver a
 abrir el PDF.
 
 El recorte se guarda con un margen generoso (``EXTRACT_PAD_*``) y con el

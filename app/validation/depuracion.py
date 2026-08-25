@@ -5,8 +5,8 @@ ya están procesados: quitar de la ejecución las páginas que no aportan nada a
 la entrega. Como el criterio tiene que ser el mismo en las dos, vive aquí y
 no en ninguna de ellas.
 
-Duplicada es toda aparición posterior de un ``log_number`` ya visto —la
-primera se conserva, que es la que se entrega—, y en blanco la que el
+Duplicada es toda aparición posterior de un ``log_number`` ya visto (la
+primera se conserva, que es la que se entrega), y en blanco la que el
 pipeline marcó como tal al procesarla.
 """
 

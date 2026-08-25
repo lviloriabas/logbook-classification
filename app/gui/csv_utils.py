@@ -138,7 +138,7 @@ def find_run_dirs(root: Path, limit: int | None = None) -> list[Path]:
 
     Una ejecución es una carpeta con su reporte dentro: en ``datos/`` las
     actuales y en la propia carpeta las históricas. Lo demás que vive junto a
-    ellas —los logs, los recortes de firmas— no es una ejecución y no aparece.
+    ellas (los logs, los recortes de firmas) no es una ejecución y no aparece.
     El recorrido se queda en el primer nivel de cada carpeta: recorrerlas
     enteras solo para saber si son ejecuciones costaría más que abrir la que se
     elija.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Arma un PDF de prueba con unas pocas paginas al azar de ``input/``.
 
-Sirve para probar el recorrido completo —procesar, exportar, indexar en
-AirVault— sin arriesgar un batch de cuatrocientas paginas ni esperar el OCR
+Sirve para probar el recorrido completo (procesar, exportar, indexar en
+AirVault) sin arriesgar un batch de cuatrocientas paginas ni esperar el OCR
 de un escaneo de setecientos megas.
 
     portable\\python312\\tools\\python.exe tools\\muestra_bitacoras.py
