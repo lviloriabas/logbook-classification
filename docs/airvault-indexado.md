@@ -39,7 +39,7 @@ delante.
    quedar indexable: aparece antes de tener todas sus paginas. Mientras le
    falte alguna no esta listo, porque escribir con las paginas corridas
    dejaria cada dato en la bitacora de al lado. La ventana pregunta cada
-   cinco minutos —o cuando se pulse **Comprobar ahora**— y va pasando los
+   cinco minutos (o cuando se pulse **Comprobar ahora**) y va pasando los
    batches a **Listo para indexar** segun quedan. Cuando ya no queda nada que
    esperar deja de preguntar sola.
 3. **Indexar.** Con la automatizacion inicial, en cuanto un batch aparece
@@ -123,8 +123,8 @@ Una ejecución completa son unas 900 páginas y casi dos gigas. Eso en AirVault
 es un solo batch: incómodo de revisar, y una subida que si se corta hay que
 rehacer entera.
 
-Marcando **Repartir en** en el cuadro «Salidas» —o `--paginas-por-parte N`
-en la línea de comandos— la entrega se escribe en varios PDF de a lo sumo
+Marcando **Repartir en** en el cuadro «Salidas» (o `--paginas-por-parte N`
+en la línea de comandos) la entrega se escribe en varios PDF de a lo sumo
 esas páginas:
 
 ```
@@ -133,8 +133,8 @@ BITS 18 AUG 2026 05 42 (2 de 5).pdf
 ...
 ```
 
-Cada archivo es un batch propio en AirVault, con su nombre —`DP | BIT 18 AUG
-2026 05 42 (2 de 5)`—, su manifiesto en `output/airvault/<corrida>/parte-02/`
+Cada archivo es un batch propio en AirVault, con su nombre (`DP | BIT 18 AUG
+2026 05 42 (2 de 5)`), su manifiesto en `output/airvault/<corrida>/parte-02/`
 y sus guardas. Una parte que falle o se corte no arrastra a las demás, y al
 volver a revisar se retoma solo lo que falta.
 
@@ -207,8 +207,8 @@ En la ejecución de referencia son 17 páginas de 884.
 ## Separadores del PDF
 
 El PDF de entrega no es solo bitacoras: entre las secciones lleva paginas
-divisorias —la matricula o el mes de cada grupo, `POSIBLES DISCREPANCIAS`,
-`REVISAR`— que el CSV no tiene. En AirVault cada una ocupa una pagina del
+divisorias (la matricula o el mes de cada grupo, `POSIBLES DISCREPANCIAS`,
+`REVISAR`) que el CSV no tiene. En AirVault cada una ocupa una pagina del
 batch igual que cualquier otra.
 
 Contarlas mal no deja un hueco: desplaza todo lo que va detras, y la
@@ -283,12 +283,12 @@ pagina: un vuelo numerado (`703`, `CM137`) o un codigo de mantenimiento
 el vuelo, `Description` lleva solamente `AUTO INDEX`. La marca se agrega
 solo al payload que se guarda en AirVault: el CSV y el reporte de revision
 conservan el vuelo tal como lo dejo la lectura. Es un campo por pagina, no
-del batch: el batch no lo lleva —Quick Upload ni siquiera expone
-`Description`—.
+del batch: el batch no lo lleva (Quick Upload ni siquiera expone
+`Description`).
 
 **La fecha.** `End Date` es obligatorio: una bitacora sin fecha deja su
 pagina bloqueada, y basta una para que el batch no se pueda cerrar. Cuando la
-lectura no dejo fecha pero si el log number —que es el que ordena el libro—
+lectura no dejo fecha pero si el log number (que es el que ordena el libro)
 se deduce con las mismas reglas que el corrector de fechas del
 procesamiento, de la que mas evidencia tiene a la que menos:
 
@@ -367,7 +367,7 @@ comodidad:
 Por eso el trato es otro: **se entra una sola vez** en el perfil del
 programa y esa sesion se queda. Lo que lo sostiene es
 `--restore-last-session`, que no esta para reabrir pestanas: Chromium solo
-guarda en disco las cookies **de sesion** —y la de federacion lo es— cuando
+guarda en disco las cookies **de sesion** (y la de federacion lo es) cuando
 el perfil arranca restaurando la sesion anterior. Sin esa bandera habria
 que entrar con segundo factor en cada ejecución.
 
@@ -392,9 +392,9 @@ moria en la primera pagina.
 
 **La cookie que autentica en esta instalacion se llama `Critical`.** Se
 midio pidiendo el listado de batches con cada cookie por separado: `Critical`
-sola abre la sesion y ninguna de las otras seis —`ProdSSO`, `ProdSSO1`,
+sola abre la sesion y ninguna de las otras seis (`ProdSSO`, `ProdSSO1`,
 `AirVaultContext`, `SessionInfo_AV`, `Production-AirVaultAntiForgery`,
-`ASP.NET_SessionId`— lo hace. Antes solo se reconocian los nombres
+`ASP.NET_SessionId`) lo hace. Antes solo se reconocian los nombres
 habituales de ASP.NET (`FedAuth`, `.ASPXAUTH`), que aqui no aparecen: el
 programa esperaba cinco minutos con la sesion ya abierta delante y despues
 acusaba a la ventana de haberse quedado en la pagina de Microsoft. Los dos
@@ -405,9 +405,9 @@ recien abierto, el navegador todavía va y viene de Microsoft, y lo que hay
 en el perfil en ese instante es lo de la vez anterior. Se prueba contra el
 servidor hasta que una funciona. Eso es tambien lo que renueva la sesion
 sola, sin ventana ni segundo factor: si AirVault contesta a mitad del
-trabajo que hay que volver a entrar —un 401, o el 440 «Login Timeout» de
+trabajo que hay que volver a entrar (un 401, o el 440 «Login Timeout» de
 IIS, que llega con la pagina de error generica y antes se leia como un
-rechazo del sitio—, se vuelve a leer el perfil y se repite la peticion.
+rechazo del sitio), se vuelve a leer el perfil y se repite la peticion.
 
 ## El token del sitio
 
@@ -578,15 +578,15 @@ respuesta decidida de antemano.
 ### El batch se abre y se cierra
 
 AirVault admite **un solo dueño por batch**. Abrirlo lo bloquea a nombre de
-quien lo abre, y mientras siga bloqueado cualquier otra apertura —la del
-programa la próxima vez, o la de la persona que lo abre en el navegador—
+quien lo abre, y mientras siga bloqueado cualquier otra apertura (la del
+programa la próxima vez, o la de la persona que lo abre en el navegador)
 se queda esperando: el servidor **no contesta y no da error**. Por eso
 todas las peticiones llevan tiempo límite.
 
 De ahí que el batch se tome **lo menos posible**. Leerlo para calcular el
 plan lo suelta en cuanto acaba, y escribirlo lo vuelve a tomar y lo suelta
 al terminar. Antes se quedaba tomado entre revisar y escribir, y entre una
-cosa y otra puede pasar un rato largo —o no pulsarse nunca **Indexar**—:
+cosa y otra puede pasar un rato largo (o no pulsarse nunca **Indexar**):
 todo ese tiempo nadie más podía abrirlo, ni la persona que iba a revisarlo
 ni el propio programa al volver. Un batch sin nada que escribir ni se toma,
 que es el caso del de «Revisar».
@@ -605,7 +605,7 @@ descubrirlo al principio.
 ## Cerrar el batch: «Completar batch»
 
 Indexar deja el batch escrito, pero **en la cola** del Web Index. Darlo por
-terminado —el boton «Complete» de la pantalla— lo saca de ahi y lo manda al
+terminado (el boton «Complete» de la pantalla) lo saca de ahi y lo manda al
 repositorio. Eso es lo que hace la casilla **Completar batch**, o
 `indexar --completar` en la linea de comandos.
 
@@ -659,8 +659,8 @@ páginas al azar de las que haya en `input/`:
 portable\python312\tools\python.exe tools\muestra_bitacoras.py
 ```
 
-Deja `input\MUESTRA.pdf` con veinte páginas —unos 40 MB, frente a los
-setecientos de un escaneo entero— y dice de dónde salió cada una. Es una
+Deja `input\MUESTRA.pdf` con veinte páginas (unos 40 MB, frente a los
+setecientos de un escaneo entero) y dice de dónde salió cada una. Es una
 entrada de verdad, no una ejecución reconstruida: se procesa desde la ventana
 como cualquier otro PDF, así que la prueba pasa por el mismo OCR, la misma
 exportación y el mismo indexado que un batch de verdad.
@@ -677,8 +677,8 @@ Después:
 
 1. Procesar `MUESTRA.pdf` y exportar con la salida en **un solo PDF**.
 2. Abrir **Indexar en AirVault…** y pulsar **Subir a AirVault**.
-3. Esperar a que el batch pase a **Listo para indexar** —se comprueba solo
-   cada cinco minutos— y mirar `revision.html`.
+3. Esperar a que el batch pase a **Listo para indexar** (se comprueba solo
+   cada cinco minutos) y mirar `revision.html`.
 4. **Indexar**, y comprobar en el Web Index que las páginas separadoras
    quedaron sin tocar y las bitácoras con sus datos.
 

@@ -325,7 +325,7 @@ El índice de páginas `<corrida>_paginas.json` representa cada hoja del PDF, in
 
 El flujo es:
 
-1. repartir para Quick Upload los PDF que excedan la cantidad elegida en la ventana, en tramos de ese tamaño exacto —solo el último lleva el resto— y repitiendo el separador cuando una aeronave queda partida. Si la ejecución ya tenía batches subidos, se conservan y solo se reparten las bitácoras que ninguno cubre, identificadas por `(archivo_origen, pagina_origen)`; la copia portable trae 200 páginas inicialmente y luego persiste la última cantidad elegida en `airvault.json` para los controles **Repartir en** y **Máximo por batch**;
+1. repartir para Quick Upload los PDF que excedan la cantidad elegida en la ventana, en tramos de ese tamaño exacto (solo el último lleva el resto) y repitiendo el separador cuando una aeronave queda partida. Si la ejecución ya tenía batches subidos, se conservan y solo se reparten las bitácoras que ninguno cubre, identificadas por `(archivo_origen, pagina_origen)`; la copia portable trae 200 páginas inicialmente y luego persiste la última cantidad elegida en `airvault.json` para los controles **Repartir en** y **Máximo por batch**;
 2. cargar cada PDF mediante Quick Upload;
 3. detectar el batch nuevo y asignarle nombre;
 4. leer páginas y construir un plan sin escribir;
@@ -336,9 +336,9 @@ El flujo es:
 9. liberar el batch al terminar, cancelar o abandonar.
 
 La recuperación de Quick Upload agota primero tres ciclos de identificación
-por nombre, páginas y contenido, salvo que la búsqueda amplia —la que recorre
+por nombre, páginas y contenido, salvo que la búsqueda amplia (la que recorre
 la cola entera, incluido el `Empty-Batch` sin nombre, contrastando páginas y
-Log Page Number— falle sobre una carga cuya edad ya supera la espera
+Log Page Number) falle sobre una carga cuya edad ya supera la espera
 configurada (`_carga_vieja_sin_publicar`). Ese caso se resuelve en la primera
 comprobación: no queda nombre bajo el que la carga pueda estar y no viene en
 camino. Sobre una carga reciente la misma búsqueda no concluye nada, porque que
@@ -348,8 +348,8 @@ Agotados los ciclos se pregunta si la carga se
 perdió, y basta con uno de dos motivos. El primero no depende de ningún reloj:
 las partes que se enviaron **después** ya aparecieron en Web Index y quedaron
 indexadas, así que la cola pasó de largo (`subida_rebasada`). El segundo son
-1800 segundos sin publicarse, contados desde la fecha del batch —el momento en
-que Quick Upload aceptó el archivo— y no desde que el programa se dio cuenta:
+1800 segundos sin publicarse, contados desde la fecha del batch (el momento en
+que Quick Upload aceptó el archivo) y no desde que el programa se dio cuenta:
 una ejecución retomada días después estrena esa marca al abrirla y volvía a
 esperar media hora por una carga perdida hacía días (`subida_estancada`).
 `partes_por_subir` reúne ambos motivos con las partes que nunca llegaron a

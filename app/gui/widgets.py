@@ -309,7 +309,7 @@ class FlatSelectionDelegate(QStyledItemDelegate):
     Quien decide si hay que pintar es la selección de la vista, no el estado
     que llegue en la celda. En una tabla que selecciona por filas las dos
     cosas deberían coincidir, pero basta que una celda no reciba ese estado
-    —porque no tiene ítem, porque el estilo la trata aparte— para que la
+    (porque no tiene ítem, porque el estilo la trata aparte) para que la
     banda salga cortada justo ahí.
     """
 
@@ -604,8 +604,8 @@ class ElidedLabel(QLabel):
     """Etiqueta informativa que se recorta con «…» en vez de ensanchar.
 
     Una ``QLabel`` normal pide de ancho mínimo todo su texto, así que cada
-    frase larga —la estimación de tiempo, el reparto de hilos, el estado del
-    procesamiento— se convertía en ancho mínimo de la ventana, y encima uno
+    frase larga (la estimación de tiempo, el reparto de hilos, el estado del
+    procesamiento) se convertía en ancho mínimo de la ventana, y encima uno
     que crecía en marcha en cuanto se escribía un mensaje más largo que el
     anterior. Aquí el texto se pinta recortado a lo que haya de sitio y queda
     entero en el tooltip, igual que ya hacen los nombres de archivo del panel
