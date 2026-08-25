@@ -1016,3 +1016,49 @@ def test_dos_ejecuciones_distintas_no_se_estorban_al_subir(tmp_path):
     subir_partes(juntos, object(), en_la_ejecucion=juntos)
 
     assert enviados == [t.manifiesto.nombre_batch for t in juntos]
+
+
+def test_la_columna_entrega_dice_en_cuantos_batches_se_parte(tmp_path):
+    """El historial adelanta el reparto, no solo cuántos PDF hay."""
+    from app.airvault.flujo import partes_de_corrida
+    from app.gui.airvault_window import batches_de_entrega, estado_de_entrega
+
+    csv_path, _entregas = corrida(tmp_path)
+    partes = partes_de_corrida(csv_path)
+    paginas = sum(len(parte.paginas) for parte in partes)
+    assert paginas > 2, "el fixture no da para repartir"
+
+    # Sin límite cabe todo en un batch por archivo de entrega.
+    texto, listo = estado_de_entrega(csv_path, paginas)
+    assert listo
+    assert texto.endswith(f"{len(partes)} batches") or texto.endswith("1 batch")
+
+    # Con un límite de una página por batch, cada página es su propio batch.
+    assert batches_de_entrega(csv_path, paginas) == len(partes)
+    troceado = batches_de_entrega(csv_path, 1)
+    assert troceado is None or troceado >= paginas
+
+
+def test_sin_limite_la_columna_entrega_solo_cuenta_los_archivos(tmp_path):
+    from app.gui.airvault_window import estado_de_entrega
+
+    csv_path, _entregas = corrida(tmp_path)
+
+    texto, listo = estado_de_entrega(csv_path)
+
+    assert listo
+    assert "batch" not in texto, "sin máximo no hay reparto que anunciar"
+
+
+def test_una_ejecucion_sin_exportar_no_anuncia_reparto(tmp_path):
+    from app.gui.airvault_window import estado_de_entrega
+
+    run_dir = tmp_path / "BITS 19 AUG 2026 10 00"
+    (run_dir / "datos").mkdir(parents=True)
+    csv_path = run_dir / "datos" / f"{run_dir.name}.CSV"
+    csv_path.write_text("file,page\n", encoding="utf-8-sig")
+
+    texto, listo = estado_de_entrega(csv_path, 200)
+
+    assert not listo
+    assert texto == "Sin exportar"
