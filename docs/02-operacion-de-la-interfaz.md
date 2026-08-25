@@ -181,18 +181,23 @@ los sube y los indexa todos, y cuenta el avance sobre el total.
    Microsoft; se cierra sola al terminar y las veces siguientes no vuelve a
    aparecer. El campo es el respaldo por si eso falla: se pega ahí la cookie
    de la sesión copiada del navegador, y no se guarda.
-6. Pulse **Subir a AirVault**. Manda los PDF y termina ahí. Nada se indexa
+6. Si quiere ver antes en qué va a quedar la ejecución, pulse **Vista
+   previa…**, junto al título de la tabla de batches: enseña cada batch con
+   el nombre que llevaría, sus páginas y sus bitácoras, y desde ahí abre la
+   lista de las bitácoras que van dentro de cada uno. Mirarla no prepara ni
+   sube nada, así que puede cambiar el máximo por batch y volver a mirarla.
+7. Pulse **Subir a AirVault**. Manda los PDF y termina ahí. Nada se indexa
    todavía.
-7. Espere. AirVault mete el batch en su cola y tarda en dejarlo indexable:
+8. Espere. AirVault mete el batch en su cola y tarda en dejarlo indexable:
    minutos, a veces mucho más. La ventana pregunta sola cada cinco minutos
    (se cambia en **Comprobar cada**, o se apaga) y con **Comprobar ahora**
    pregunta en el momento. El estado y el resumen indican cuándo los batches
    ya están listos para indexar. Cuando no queda nada que esperar, deja de
    preguntar.
-8. Pulse **Ver reporte…** y revise las páginas bloqueadas.
-9. Si quiere que el batch quede cerrado y fuera de la cola, marque
+9. Pulse **Ver reporte…** y revise las páginas bloqueadas.
+10. Si quiere que el batch quede cerrado y fuera de la cola, marque
    **Completar batch**.
-10. Pulse **Indexar**. Escribe en los batches que estén listos. El avance sale
+11. Pulse **Indexar**. Escribe en los batches que estén listos. El avance sale
    por la barra de esta ventana; la principal queda libre para seguir
    trabajando.
 
