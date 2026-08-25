@@ -44,6 +44,7 @@ from app.validation.book_corrector import (
     _storage_key,
 )
 from app.validation.grouping import group_books, log_number
+from app.validation.page_status import AUTO_INDEX_MIN_VOTES
 
 DATE_FIELD_IDS = ("day", "month", "year")
 YEAR_FIELD_ID = "year"
@@ -829,6 +830,11 @@ def _flag_unresolved(book: Sequence[PageResult]) -> int:
 # valor posible para las páginas intermedias que no se dejaron leer. Fuera
 # de ese tramo no se infiere nada: una página posterior a la última ancla
 # solo tiene garantizado que su fecha no es anterior, y eso no fija el mes.
+#
+# El registro se pone al día en los dos sentidos. Crece cuando aparecen
+# páginas nuevas del mismo libro, y se rehace cuando lo que se lee lo
+# contradice con respaldo suficiente: una entrada equivocada que nadie
+# corrige envenena la inferencia de todas las ejecuciones siguientes.
 BOOK_DATES_FILENAME = "book_fechas.json"
 
 # Una entrada del registro es "logpage": "AAAA-MM-DD".
@@ -836,6 +842,10 @@ _REGISTRY_LOGPAGE_RE = re.compile(r"^\d{2}$")
 _REGISTRY_DATE_RE = re.compile(r"^(20\d{2})-(\d{2})-(\d{2})$")
 # Un libro nunca aporta más de dos anclas al registro: sus extremos.
 _MAX_REGISTRY_ANCHORS = 2
+# Lecturas directas que debe traer una ejecución para corregir una entrada
+# que la contradice. Es el respaldo de dos páginas independientes que ya
+# exige el registro de matrículas para dar por buena una lectura.
+MIN_REGISTRY_OVERRIDE_READINGS = AUTO_INDEX_MIN_VOTES
 
 RegistryAnchor = Tuple[int, date]
 
@@ -1032,53 +1042,102 @@ def _fill_from_registry(
     return filled
 
 
+def _extremes(anchors: Sequence[RegistryAnchor]) -> List[RegistryAnchor]:
+    """Primera y última ancla; una sola se guarda tal cual."""
+    ordered = sorted(anchors)
+    return [ordered[0], ordered[-1]] if len(ordered) > 1 else [ordered[0]]
+
+
+def _describe_anchors(anchors: Sequence[RegistryAnchor]) -> str:
+    """Anclas en una línea, para el log de una corrección."""
+    return ", ".join(
+        f"{logpage:02d}={value.isoformat()}"
+        for logpage, value in sorted(anchors)
+    ) or "nada"
+
+
 def _merge_registry_anchors(
     key: str,
     previous: Sequence[RegistryAnchor],
     observed: Sequence[RegistryAnchor],
-) -> Optional[List[RegistryAnchor]]:
-    """Extiende las anclas guardadas con las de esta ejecución.
+) -> Tuple[Optional[List[RegistryAnchor]], str]:
+    """Concilia lo guardado con lo que se acaba de leer del libro.
 
-    Devuelve ``None`` cuando lo observado contradice lo guardado: la misma
-    página con otra fecha, o una fecha que obligaría al libro a retroceder.
-    Igual que con las matrículas, una contradicción no se resuelve sola.
+    Devuelve las anclas que quedan guardadas y qué se hizo con ellas:
+    ``"nuevo"``, ``"ampliado"``, ``"corregido"``, o ``""`` cuando nada
+    cambia.
+
+    Mientras lo guardado y lo leído se sostengan a la vez, la entrada solo
+    crece hacia los extremos. Si se contradicen (la misma página con otra
+    fecha, o una fecha que obligaría al libro a retroceder) uno de los dos
+    describe un libro que no existe, y dejarlo estar significa seguir
+    infiriendo desde un dato falso en todas las ejecuciones que vengan. Gana
+    entonces la ejecución actual, siempre que traiga por lo menos
+    ``MIN_REGISTRY_OVERRIDE_READINGS`` lecturas directas del libro
+    coherentes entre sí: son páginas que se acaban de leer y de validar,
+    mientras que lo guardado pudo salir de una lectura equivocada que nadie
+    volvió a mirar. La entrada se rehace con esas lecturas y el cambio queda
+    en el log.
+
+    Con una sola lectura en contra no se toca nada: un OCR suelto no basta
+    para borrar lo que ya estaba, y el conflicto queda para revisión.
     """
     merged: Dict[int, date] = dict(previous)
+    conflicts: List[str] = []
     for logpage, value in observed:
         known = merged.get(logpage)
         if known is not None and known != value:
-            logger.warning(
-                f"Registro del libro {key}: la página {logpage:02d} pasa de "
-                f"{known.isoformat()} a {value.isoformat()}, no se reemplaza"
+            conflicts.append(
+                f"la página {logpage:02d} pasa de {known.isoformat()} a "
+                f"{value.isoformat()}"
             )
-            return None
         merged[logpage] = value
     ordered = sorted(merged.items())
     if any(
         later < earlier
         for (_a, earlier), (_b, later) in zip(ordered, ordered[1:])
     ):
+        conflicts.append("la fecha del libro retrocedería")
+    if not conflicts:
+        anchors = _extremes(ordered)
+        if list(previous) == anchors:
+            return anchors, ""
+        return anchors, "ampliado" if previous else "nuevo"
+    if len(observed) < MIN_REGISTRY_OVERRIDE_READINGS:
         logger.warning(
-            f"Registro del libro {key}: la fecha retrocede, se descarta"
+            f"Registro del libro {key}: {'; '.join(conflicts)}. Una lectura "
+            f"suelta no reemplaza lo guardado; queda para revisión"
         )
-        return None
-    return [ordered[0], ordered[-1]] if len(ordered) > 1 else [ordered[0]]
+        return None, ""
+    corrected = _extremes(observed)
+    logger.warning(
+        f"Registro del libro {key}: {'; '.join(conflicts)}. Mandan las "
+        f"{len(observed)} lecturas directas de esta ejecución: "
+        f"{_describe_anchors(previous)} pasa a "
+        f"{_describe_anchors(corrected)}"
+    )
+    return corrected, "corregido"
 
 
 def learn_book_dates(reports: List[ValidationReport], path: Path) -> int:
-    """Guarda los extremos de fecha confirmados de cada libro.
+    """Pone al día los extremos de fecha confirmados de cada libro.
 
     Solo aprende de lecturas directas en OK, con la página bien alineada y
     el ``log_number`` legible. El archivo guarda por libro un par de
     entradas como ``"23159B":{"52":"2025-05-14","97":"2025-06-02"}``: ni
     páginas, ni imágenes, ni historial de ejecuciones.
 
+    Una entrada no solo crece: si lo que se acaba de leer la contradice y
+    hay respaldo suficiente, se rehace con las lecturas nuevas. Las entradas
+    imposibles o dañadas del archivo se descartan al leerlo y no vuelven a
+    escribirse.
+
     Returns:
-        Cuántos libros dejaron una entrada nueva o ampliada.
+        Cuántos libros dejaron una entrada nueva, ampliada o corregida.
     """
     path = Path(path)
     stored = _load_book_dates(path)
-    learned = 0
+    counters = {"nuevo": 0, "ampliado": 0, "corregido": 0}
     for book in group_books(reports):
         key = _storage_key(book)
         if key is None:
@@ -1101,15 +1160,13 @@ def learn_book_dates(reports: List[ValidationReport], path: Path) -> int:
                 f"Libro {key}: las fechas leídas retroceden, no se aprenden"
             )
             continue
-        candidate = (
-            [observed[0], observed[-1]] if len(observed) > 1 else [observed[0]]
-        )
         previous = stored.get(key, [])
-        merged = _merge_registry_anchors(key, previous, candidate)
-        if merged is None or merged == previous:
+        merged, action = _merge_registry_anchors(key, previous, observed)
+        if merged is None or not action:
             continue
         stored[key] = merged
-        learned += 1
+        counters[action] += 1
+    learned = sum(counters.values())
     if learned:
         try:
             _save_book_dates(path, stored)
@@ -1119,7 +1176,9 @@ def learn_book_dates(reports: List[ValidationReport], path: Path) -> int:
             )
             return 0
         logger.info(
-            f"Registro de fechas: {learned} libro(s) nuevo(s) o ampliado(s), "
+            f"Registro de fechas: {counters['nuevo']} libro(s) nuevo(s), "
+            f"{counters['ampliado']} ampliado(s), "
+            f"{counters['corregido']} corregido(s), "
             f"{len(stored)} total, {path.stat().st_size} bytes"
         )
     return learned
