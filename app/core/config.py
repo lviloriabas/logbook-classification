@@ -176,6 +176,13 @@ class AppConfig(BaseModel):
             "confirmada de cada libro."
         ),
     )
+    book_fechas_file: Path = Field(
+        default=Path("book_fechas.json"),
+        description=(
+            "Archivo JSON compacto y portable que recuerda la primera y la "
+            "última fecha confirmadas de cada libro."
+        ),
+    )
 
 
 def config_for_pdf(config: AppConfig, pdf_path: Path) -> AppConfig:

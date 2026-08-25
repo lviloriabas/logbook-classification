@@ -2685,6 +2685,7 @@ class MainWindow(QMainWindow):
             verify_fleet=self.fleet_check.isChecked(),
             fleet_file=SCRIPT_DIR / FLEET_FILENAME,
             book_matriculas_file=SCRIPT_DIR / "book_matriculas.json",
+            book_fechas_file=SCRIPT_DIR / "book_fechas.json",
         )
 
     def _start_preprocessing(self) -> None:
