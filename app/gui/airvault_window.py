@@ -221,6 +221,13 @@ def estado_de_entrega(
     return f"{archivos}, {reparto}", True
 
 
+TOOLTIP_ELIMINAR_REGISTRO = (
+    "Envía a la Papelera el estado local de AirVault de esta ejecución para "
+    "empezar nuevamente. No borra el CSV, los PDF exportados ni los batches "
+    "que ya existan en AirVault."
+)
+
+
 class TrabajoCancelado(BaseException):
     """Alguien pulsó Cancelar; el trabajo se deshace y se sale.
 
@@ -914,9 +921,51 @@ class AirVaultWindow(QDialog):
             2, QHeaderView.ResizeMode.ResizeToContents
         )
         tabla.itemSelectionChanged.connect(self._al_elegir_del_historial)
+        # Cada ejecución se puede reiniciar o quitar de en medio sin tocar a
+        # las demás, así que las dos acciones viven en su fila.
+        tabla.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        tabla.customContextMenuRequested.connect(self._menu_del_historial)
         self._ajustar_tabla(tabla)
         self.historial = tabla
         return tabla
+
+    def _menu_del_historial(self, punto) -> None:
+        """Lo que se puede hacer con la ejecución sobre la que se hizo clic.
+
+        Son dos cosas distintas y por eso salen separadas: olvidar lo que la
+        aplicación recuerda de esa ejecución en AirVault (para volver a
+        empezar con ella) y deshacerse de la ejecución entera, que es lo que
+        vacía la lista de lo que ya no hace falta. Ninguna de las dos toca
+        los batches que ya estén en AirVault.
+        """
+        fila = self.historial.rowAt(punto.y())
+        item = self.historial.item(fila, 0) if fila >= 0 else None
+        if item is None:
+            return
+        menu = self._acciones_del_historial(
+            Path(str(item.data(Qt.ItemDataRole.UserRole))), item.text()
+        )
+        menu.exec(self.historial.viewport().mapToGlobal(punto))
+
+    def _acciones_del_historial(self, csv: Path, nombre: str) -> QMenu:
+        """Lo que el menú ofrece para una ejecución de la lista."""
+        menu = QMenu(self)
+        registro = menu.addAction("Eliminar el registro de AirVault")
+        registro.setToolTip(TOOLTIP_ELIMINAR_REGISTRO)
+        registro.triggered.connect(lambda: self._eliminar_registro(csv))
+        menu.addSeparator()
+        ejecucion = menu.addAction("Eliminar la ejecución…")
+        ejecucion.setToolTip(
+            "Manda a la Papelera la carpeta de esta ejecución en output/, "
+            "con su CSV, su JSON y sus PDF de entrega. Los batches que ya "
+            "estén en AirVault se quedan como están."
+        )
+        ejecucion.triggered.connect(
+            lambda: self._eliminar_ejecucion(csv, nombre)
+        )
+        return menu
 
     def _campos(self) -> QGridLayout:
         """Los datos de la carga, en rejilla para que se alineen.
@@ -952,13 +1001,9 @@ class AirVaultWindow(QDialog):
 
         self.boton_eliminar_registro = QPushButton("Eliminar registro")
         self.boton_eliminar_registro.setEnabled(False)
-        self.boton_eliminar_registro.setToolTip(
-            "Envía a la Papelera el estado local de AirVault de esta "
-            "ejecución para empezar nuevamente. No borra el CSV, los PDF "
-            "exportados ni los batches que ya existan en AirVault."
-        )
+        self.boton_eliminar_registro.setToolTip(TOOLTIP_ELIMINAR_REGISTRO)
         self.boton_eliminar_registro.clicked.connect(
-            self._eliminar_registro
+            lambda: self._eliminar_registro()
         )
         grid.addWidget(self.boton_eliminar_registro, 0, 3)
 
@@ -1083,7 +1128,7 @@ class AirVaultWindow(QDialog):
                 "viajaron ya a AirVault.",
             )
             return
-        VistaPreviaBatches(previstos, self).exec()
+        VistaPreviaBatches(previstos, csv=csv, parent=self).exec()
 
     def _lotes(self) -> QTableWidget:
         """En qué va cada batch de esta ejecución dentro de AirVault.
@@ -1285,11 +1330,16 @@ class AirVaultWindow(QDialog):
 
     def _ver_bitacoras(self, parte) -> None:
         """Abre la lista de las bitácoras que lleva dentro un batch."""
+        from app.airvault.flujo import AUTOCOMPLETADO, COMPLETADO
         from app.gui.airvault_previa import BitacorasDelBatch
 
         manifiesto = parte.trabajo.manifiesto
         BitacorasDelBatch(
-            manifiesto.nombre_batch, manifiesto.registros, self
+            manifiesto.nombre_batch,
+            manifiesto.registros,
+            csv=manifiesto.csv_origen or self.corrida_edit.text().strip(),
+            completado=parte.estado in (COMPLETADO, AUTOCOMPLETADO),
+            parent=self,
         ).exec()
 
     def _copiar_al_portapapeles(self, texto: str) -> None:
@@ -2034,15 +2084,22 @@ class AirVaultWindow(QDialog):
         self.boton_reiniciar.setEnabled(bool(self._trabajos))
         self._ajustar_vigilancia()
 
-    def _carpeta_del_registro(self) -> Optional[Path]:
-        """Carpeta local exacta de la ejecución elegida, si es segura."""
+    def _carpeta_del_registro(
+        self, corrida: Path | str = ""
+    ) -> Optional[Path]:
+        """Carpeta local exacta de una ejecución, si es segura.
+
+        Sin ``corrida`` vale la que la ventana tiene abierta, que es lo que
+        pide el botón; el menú del historial nombra la fila sobre la que se
+        hizo clic, que puede no ser esa.
+        """
         from app.airvault.flujo import (
             CARPETA_TRABAJOS,
             carpeta_de_corrida,
             carpeta_de_trabajo,
         )
 
-        csv = self.corrida_edit.text().strip()
+        csv = str(corrida or self.corrida_edit.text()).strip()
         if not csv:
             return None
         raiz_trabajos = (self._raiz / CARPETA_TRABAJOS).resolve()
@@ -2057,8 +2114,8 @@ class AirVaultWindow(QDialog):
             return None
         return carpeta
 
-    def _rutas_del_registro(self) -> list[Path]:
-        """Memoria local de la ejecución elegida, nunca de otra.
+    def _rutas_del_registro(self, corrida: Path | str = "") -> list[Path]:
+        """Memoria local de la ejecución indicada, nunca de otra.
 
         Son los manifiestos vivos, el registro de batches de la entrega y
         los manifiestos que se apartaron al rehacer un reparto. Es una sola
@@ -2068,7 +2125,7 @@ class AirVaultWindow(QDialog):
         from app.airvault.manifest import MANIFIESTO_FILENAME
         from app.airvault.registro import rutas_del_registro
 
-        carpeta = self._carpeta_del_registro()
+        carpeta = self._carpeta_del_registro(corrida)
         if carpeta is None:
             return []
         rutas = {
@@ -2081,9 +2138,18 @@ class AirVaultWindow(QDialog):
         )
         return sorted(rutas)
 
-    def _eliminar_registro(self) -> None:
-        """Reinicia la ejecución borrando solo su memoria local de AirVault."""
-        rutas = self._rutas_del_registro()
+    def _eliminar_registro(self, corrida: Path | str = "") -> None:
+        """Reinicia una ejecución borrando solo su memoria local de AirVault.
+
+        Sin ``corrida`` es la ejecución abierta, que es lo que pulsa el
+        botón; el menú del historial nombra la fila elegida, que puede ser
+        cualquier otra de la lista.
+        """
+        csv = Path(str(corrida or self.corrida_edit.text()).strip())
+        if not str(csv).strip():
+            return
+        abierta = self._es_la_ejecucion_abierta(csv)
+        rutas = self._rutas_del_registro(csv)
         if not rutas:
             QMessageBox.information(
                 self,
@@ -2097,7 +2163,7 @@ class AirVaultWindow(QDialog):
         respuesta = QMessageBox.warning(
             self,
             "Eliminar registro de AirVault",
-            "Se enviará a la Papelera el registro local de esta ejecución "
+            f"Se enviará a la Papelera el registro local de «{csv.stem}» "
             f"({cuenta}).\n\n"
             "No se borrarán el CSV, los PDF ni los batches existentes en "
             "AirVault. Al volver a subir, se reconstruirá el proceso y se "
@@ -2108,15 +2174,14 @@ class AirVaultWindow(QDialog):
         if respuesta != QMessageBox.StandardButton.Yes:
             return
 
-        carpeta = self._carpeta_del_registro()
+        carpeta = self._carpeta_del_registro(csv)
         if carpeta is None:
             return
         movidos, fallidos = send_to_trash(rutas)
-        if movidos:
+        if movidos and abierta:
             self._parar_vigilancia()
             self._indexado_incompleto = False
             self.boton_reporte.setEnabled(False)
-            csv = Path(self.corrida_edit.text())
             self._cargar_trabajos(carpeta, csv)
             self.estado_label.setText("Registro local eliminado")
             self.resumen.setText(
@@ -2124,7 +2189,10 @@ class AirVaultWindow(QDialog):
                 "puede iniciarse nuevamente; los batches remotos no se "
                 "modificaron."
             )
-            self._anotar("Registro local de AirVault eliminado")
+        if movidos:
+            self._anotar(
+                f"Registro local de AirVault eliminado: {csv.stem}"
+            )
 
         if fallidos:
             detalle = "\n".join(
@@ -2136,6 +2204,108 @@ class AirVaultWindow(QDialog):
                 f"Se eliminaron {len(movidos)} de {len(rutas)} registros.\n\n"
                 "No se pudieron eliminar:\n" + detalle,
             )
+
+    def _es_la_ejecucion_abierta(self, csv: Path | str) -> bool:
+        """Si esa ejecución es la que la ventana tiene cargada ahora."""
+        abierta = self.corrida_edit.text().strip()
+        if not abierta:
+            return False
+        return str(Path(csv)).casefold() == str(Path(abierta)).casefold()
+
+    def _carpeta_de_la_ejecucion(self, csv: Path | str) -> Optional[Path]:
+        """Carpeta de output de esa ejecución, si está donde debe estar.
+
+        Se exige que cuelgue de ``output/`` y que no sea la propia carpeta:
+        lo que se va a la Papelera es una ejecución concreta, y un CSV
+        elegido a mano con «Otra ejecución…» puede vivir en cualquier sitio.
+        """
+        from app.airvault.flujo import carpeta_de_corrida
+
+        raiz = (self._raiz / "output").resolve()
+        try:
+            carpeta = carpeta_de_corrida(Path(csv)).resolve()
+        except OSError:
+            return None
+        if carpeta == raiz or not carpeta.is_relative_to(raiz):
+            return None
+        return carpeta
+
+    def _eliminar_ejecucion(self, csv: Path | str, nombre: str) -> None:
+        """Manda a la Papelera la ejecución entera, con su registro.
+
+        Es lo que vacía el historial de lo que ya no hace falta. Va a la
+        Papelera y no al vacío porque una ejecución son horas de proceso, y
+        equivocarse de fila tiene que poder deshacerse. Lo que ya esté en
+        AirVault no se toca: eso no vive aquí.
+        """
+        csv = Path(csv)
+        carpeta = self._carpeta_de_la_ejecucion(csv)
+        if carpeta is None:
+            QMessageBox.information(
+                self,
+                "Eliminar la ejecución",
+                "Esta ejecución no está en la carpeta output/ del programa, "
+                "así que no se elimina desde aquí.",
+            )
+            return
+        if self._es_la_ejecucion_abierta(csv) and self.hilo() is not None:
+            QMessageBox.information(
+                self,
+                "Eliminar la ejecución",
+                "Esta ejecución se está subiendo o indexando ahora mismo. "
+                "Cancele el trabajo antes de eliminarla.",
+            )
+            return
+        respuesta = QMessageBox.warning(
+            self,
+            "Eliminar la ejecución",
+            f"Se enviará a la Papelera la ejecución «{nombre}» entera: su "
+            "CSV, su JSON, sus estadísticas y los PDF de entrega, junto con "
+            "el registro local de AirVault.\n\n"
+            "Los batches que ya estén en AirVault no se modifican.\n\n"
+            "¿Desea continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if respuesta != QMessageBox.StandardButton.Yes:
+            return
+
+        # Primero la memoria de AirVault y después la ejecución: al revés,
+        # un fallo al mover la carpeta dejaría un registro que habla de una
+        # ejecución que ya no está.
+        registro = self._carpeta_del_registro(csv)
+        objetivos = [carpeta]
+        if registro is not None and registro.is_dir():
+            objetivos.insert(0, registro)
+        movidos, fallidos = send_to_trash(objetivos)
+        if fallidos:
+            detalle = "\n".join(
+                f"- {ruta.name}: {error}" for ruta, error in fallidos
+            )
+            QMessageBox.warning(
+                self,
+                "No se pudo eliminar la ejecución",
+                "No se pudieron enviar a la Papelera:\n" + detalle,
+            )
+        if carpeta not in movidos:
+            return
+
+        self._anotar(f"Ejecución eliminada: {nombre}")
+        if self._es_la_ejecucion_abierta(csv):
+            # La ventana se queda apuntando a una carpeta que ya no existe:
+            # se suelta lo que hubiera tomado y se parte de cero.
+            self._soltar_lotes()
+            self._parar_vigilancia()
+            self.corrida_edit.clear()
+            self.lote_edit.clear()
+            self._trabajos = []
+            self._estados = []
+            self._pintar_lotes()
+            self.boton_subir.setEnabled(False)
+            self.boton_indexar.setEnabled(False)
+            self.boton_reporte.setEnabled(False)
+            self.boton_previa.setEnabled(False)
+        self._refrescar_historial()
 
     def _sincronizar_entrega(self, csv: Path) -> None:
         """Dice si la ejecución elegida se puede subir, antes de intentarlo."""

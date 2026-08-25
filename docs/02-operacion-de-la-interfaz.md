@@ -115,7 +115,9 @@ La barra cuenta páginas terminadas del batch. Las páginas pueden finalizar fue
 
 Antes de procesar, la vista previa recorre todos los PDF como una sola secuencia. Después del OCR, conserva solo los documentos que aportaron páginas al rango. Escriba un número de página global para saltar directamente a ella. La ventana indica además el archivo y la página local.
 
-La tabla contiene una fila por página y usa las columnas del CSV completo. El selector de vista alterna entre todas las columnas y las importantes sin cambiar el archivo guardado. El orden de una columna sigue un ciclo de tres pasos: descendente, ascendente y orden original.
+La tabla contiene una fila por página y usa las columnas del CSV completo. El selector de vista alterna entre todas las columnas y las importantes sin cambiar el archivo guardado. El orden de una columna sigue un ciclo de tres pasos: descendente, ascendente y orden original. La fila bajo el cursor y la fila seleccionada se sombrean enteras.
+
+La página y la tabla se reparten el ancho a medias. Arrastre el separador para darle más a una de las dos; desde entonces se respeta esa medida, también al cambiar el tamaño de la ventana.
 
 El indicador **Duplicados** cuenta las páginas marcadas desde la segunda aparición de un `log_number`; la primera queda sin marca. El detalle muestra el grupo completo. Haga doble clic en una fila para llevar la vista previa a la página correspondiente.
 
@@ -254,6 +256,10 @@ se vuelve a subir solo por llevar tiempo con el nombre provisional.
 Si el trabajo se corta, vuelva a pulsar **Comprobar ahora**: las páginas ya
 escritas no se repiten y el PDF no se vuelve a subir.
 
+El botón derecho sobre una fila del historial ofrece dos eliminaciones. **Eliminar el registro de AirVault** manda a la Papelera lo que el programa recuerda de esa ejecución (sus manifiestos y el registro de batches de la entrega) para empezarla de nuevo. **Eliminar la ejecución…** manda a la Papelera su carpeta de `output/` entera, con su CSV, su JSON, sus estadísticas y sus PDF de entrega, y la quita de la lista. Ninguna de las dos modifica los batches que ya estén en AirVault. No se elimina la ejecución que se esté subiendo o indexando, ni un CSV abierto con **Otra ejecución…** que viva fuera de `output/`.
+
+**Vista previa…**, junto al título de la tabla de batches, adelanta el reparto sin preparar ni subir nada. De cada batch se abre la lista de sus bitácoras, que se mira como el visor de CSV: la hoja escaneada a la izquierda, la tabla a la derecha, un buscador encima y las columnas ordenables con un clic en su cabecera. Elija una fila (o haga doble clic) para ver su hoja. La columna **Estado** dice «Por indexar» mientras falte, «Indexada» cuando ya se escribió en AirVault y «Completada» cuando además se cerró el batch; si algo bloquea la página, dice qué.
+
 La descripción técnica está en [el manual del indexado](airvault-indexado.md).
 
 ## 2.14 Visor de CSV e historial
@@ -268,7 +274,7 @@ Pulse **Visor de CSV…** para abrir una ejecución anterior.
    y al terminar un archivo las flechas continúan en el siguiente.
 5. Use **Exportar** solo si la ejecución conserva su JSON, plantilla y PDF fuente requeridos.
 
-Para quitar páginas sueltas, selecciónelas en la tabla (con `Ctrl` o `Mayús` para varias) y pulse `Supr`. Para quitar de una vez las repetidas o las vacías, pulse **Depurar**: el cuadro es el mismo de la ventana principal y escribe lo mismo. Tras confirmar, el visor reescribe el CSV mínimo, el CSV completo, el JSON y `stats.json` sin ellas. Los PDF ya exportados conservan esas páginas hasta que pulse **Exportar**. La eliminación necesita una ejecución completa con su JSON y su plantilla, y no puede dejar la ejecución sin ninguna página.
+Para quitar páginas sueltas, selecciónelas en la tabla (con `Ctrl` o `Mayús` para varias) y pulse `Supr`. Para juntar páginas que no están seguidas, marque su casilla en la primera columna o pulse la barra espaciadora sobre las filas elegidas: la fila marcada queda sombreada y, mientras haya alguna, son esas las que se eliminan. Para quitar de una vez las repetidas o las vacías, pulse **Depurar**: el cuadro es el mismo de la ventana principal y escribe lo mismo. Tras confirmar, el visor reescribe el CSV mínimo, el CSV completo, el JSON y `stats.json` sin ellas. Los PDF ya exportados conservan esas páginas hasta que pulse **Exportar**. La eliminación necesita una ejecución completa con su JSON y su plantilla, y no puede dejar la ejecución sin ninguna página.
 
 El visor puede regenerar salidas de una ejecución sin repetir el OCR. Desactiva **Exportar** si falta el JSON consolidado o si el CSV no pertenece a una carpeta de ejecución reconocible. Si falta la plantilla o un PDF fuente, lo informa después de pulsar **Exportar**.
 

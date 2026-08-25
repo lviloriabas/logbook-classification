@@ -1,0 +1,194 @@
+"""El clic derecho sobre el historial de «Indexar en AirVault».
+
+Son dos cosas distintas y por eso son dos acciones: olvidar lo que la
+aplicación recuerda de una ejecución en AirVault (para empezarla de nuevo) y
+deshacerse de la ejecución entera, que es lo que vacía la lista de lo que ya
+no hace falta. Ninguna de las dos toca los batches que ya estén en AirVault.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+from app.gui.airvault_window import AirVaultWindow
+
+from test_gui_airvault_window import corrida, registrar_en_airvault
+
+
+@pytest.fixture(scope="module")
+def app():
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture
+def papelera(monkeypatch):
+    """Recoge lo que se mandaría a la Papelera y lo borra de verdad."""
+    import shutil
+
+    enviados: list[Path] = []
+
+    def enviar(rutas):
+        enviados.extend(rutas)
+        for ruta in rutas:
+            if ruta.is_dir():
+                shutil.rmtree(ruta)
+            else:
+                ruta.unlink()
+        return list(rutas), []
+
+    monkeypatch.setattr("app.gui.airvault_window.send_to_trash", enviar)
+    monkeypatch.setattr(
+        "app.gui.airvault_window.QMessageBox.warning",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    return enviados
+
+
+def _acciones(ventana, fila: int = 0) -> list[str]:
+    """Textos del menú que abriría un clic derecho sobre esa fila."""
+    item = ventana.historial.item(fila, 0)
+    menu = ventana._acciones_del_historial(
+        Path(str(item.data(Qt.ItemDataRole.UserRole))), item.text()
+    )
+    return [accion.text() for accion in menu.actions()]
+
+
+def test_el_menu_ofrece_las_dos_eliminaciones(app, tmp_path):
+    corrida(tmp_path)
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        ventana._refrescar_historial()
+        assert ventana.historial.rowCount() == 1
+
+        assert _acciones(ventana) == [
+            "Eliminar el registro de AirVault",
+            "",  # el separador entre las dos
+            "Eliminar la ejecución…",
+        ]
+    finally:
+        ventana.close()
+        app.processEvents()
+
+
+def test_fuera_de_las_filas_no_hay_menu(app, tmp_path):
+    """Un clic derecho en el hueco de abajo no debe ofrecer nada."""
+    corrida(tmp_path)
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        ventana._refrescar_historial()
+        hueco = QPoint(5, ventana.historial.viewport().height() + 40)
+
+        # No abre nada y, sobre todo, no actúa sobre la primera fila por
+        # descarte: sin fila no hay ejecución que nombrar.
+        assert ventana.historial.rowAt(hueco.y()) < 0
+        assert ventana._menu_del_historial(hueco) is None
+    finally:
+        ventana.close()
+        app.processEvents()
+
+
+def test_eliminar_el_registro_de_una_fila_que_no_es_la_abierta(
+    app, tmp_path, papelera
+):
+    """Cada fila lleva su propia ejecución; el menú no actúa sobre otra."""
+    primera = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
+    segunda = corrida(tmp_path, "BITS 19 AUG 2026 06 10")
+    manifiesto = registrar_en_airvault(tmp_path, primera)
+    registrar_en_airvault(tmp_path, segunda)
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        ventana.fijar_corrida(segunda)
+
+        ventana._eliminar_registro(primera)
+
+        # Se fue el de la fila elegida, no el de la ejecución abierta.
+        assert papelera == [manifiesto]
+        assert not manifiesto.exists()
+        # Y la ventana sigue donde estaba, con su ejecución cargada.
+        assert Path(ventana.corrida_edit.text()) == segunda
+        assert primera.exists()
+    finally:
+        ventana.close()
+        app.processEvents()
+
+
+def test_eliminar_la_ejecucion_la_manda_entera_a_la_papelera(
+    app, tmp_path, papelera
+):
+    csv = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
+    carpeta = csv.parent.parent
+    manifiesto = registrar_en_airvault(tmp_path, csv)
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        ventana._refrescar_historial()
+
+        ventana._eliminar_ejecucion(csv, carpeta.name)
+
+        # Primero su memoria de AirVault y después la ejecución: al revés,
+        # un fallo dejaría un registro hablando de lo que ya no está.
+        assert papelera == [manifiesto.parent, carpeta]
+        assert not carpeta.exists()
+        assert ventana.historial.rowCount() == 0
+    finally:
+        ventana.close()
+        app.processEvents()
+
+
+def test_no_se_elimina_la_ejecucion_que_se_esta_subiendo(
+    app, tmp_path, papelera, monkeypatch
+):
+    csv = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        ventana.fijar_corrida(csv)
+        monkeypatch.setattr(type(ventana), "hilo", lambda self: object())
+        avisos = []
+        monkeypatch.setattr(
+            "app.gui.airvault_window.QMessageBox.information",
+            lambda *args, **kwargs: avisos.append(args[2]),
+        )
+
+        ventana._eliminar_ejecucion(csv, csv.parent.parent.name)
+
+        assert papelera == []
+        assert csv.exists()
+        assert avisos and "Cancele el trabajo" in avisos[0]
+    finally:
+        # El hilo falso solo vale mientras dura la comprobación: cerrar la
+        # ventana le pediría cancelar y ese objeto no sabe hacerlo.
+        monkeypatch.undo()
+        ventana.close()
+        app.processEvents()
+
+
+def test_una_ejecucion_de_fuera_de_output_no_se_elimina_desde_aqui(
+    app, tmp_path, papelera, monkeypatch
+):
+    """«Otra ejecución…» abre CSV de cualquier sitio; eso no se borra aquí."""
+    suelto = tmp_path / "por_ahi" / "datos" / "suelta.csv"
+    suelto.parent.mkdir(parents=True)
+    suelto.write_text("file,page\n", encoding="utf-8")
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        avisos = []
+        monkeypatch.setattr(
+            "app.gui.airvault_window.QMessageBox.information",
+            lambda *args, **kwargs: avisos.append(args[2]),
+        )
+
+        ventana._eliminar_ejecucion(suelto, "suelta")
+
+        assert papelera == []
+        assert suelto.exists()
+        assert avisos and "output/" in avisos[0]
+    finally:
+        ventana.close()
+        app.processEvents()

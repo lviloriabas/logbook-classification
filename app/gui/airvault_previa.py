@@ -7,25 +7,31 @@ iba a quedar la ejecución ni qué bitácoras caían en cada uno. Aquí se
 calcula ese mismo reparto sin escribir nada y se enseña antes de subir,
 junto con los batches que ya están esperando en la cola.
 
-De cada batch se puede abrir la lista de sus bitácoras: la página que
-ocupará dentro del batch, su matrícula, su Log Page Number y su fecha. Es
-lo que permite comprobar que una bitácora concreta va donde se espera sin
-tener que abrir el PDF.
+De cada batch se puede abrir la lista de sus bitácoras. Esa lista se mira
+como el visor de CSV, en compacto: la página de la bitácora a la izquierda,
+la tabla a la derecha, un buscador encima y las columnas ordenables con un
+clic en su cabecera. Comprobar que una bitácora concreta va donde se espera
+no obliga entonces a abrir el PDF por fuera: se elige su fila y la hoja
+escaneada aparece al lado.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Sequence
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
+    QSizePolicy,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -34,6 +40,7 @@ from PySide6.QtWidgets import (
 
 from app.airvault.model import EstadoRegistro, Registro
 from app.gui.responsive import fit_to_screen
+from app.gui.table_sort import ColumnSortController
 from app.gui.widgets import (
     PANE_STATUS_COLORS,
     align_vertical_scrollbar_to_header,
@@ -44,12 +51,20 @@ from app.gui.widgets import (
 COLOR_AYUDA = "#57606a"
 COLOR_HECHO = PANE_STATUS_COLORS["OK"]
 
+# Reparto del ancho entre la página y la tabla, el mismo del visor de CSV.
+_PANEL_PDF = 2
+_TABLA = 3
+
 NOMBRE_ESTADO_REGISTRO = {
-    EstadoRegistro.PENDIENTE: "Por escribir",
-    EstadoRegistro.ESCRITA: "Escrita",
+    EstadoRegistro.PENDIENTE: "Por indexar",
+    EstadoRegistro.ESCRITA: "Indexada",
     EstadoRegistro.OMITIDA: "Omitida",
     EstadoRegistro.ERROR: "Error",
 }
+# Lo que se escribió y además se dio por cerrado en AirVault. El batch
+# completado ya salió de la cola y se fue a Web Search, así que decir de sus
+# bitácoras que están «indexadas» se queda corto: no queda nada por hacerles.
+NOMBRE_COMPLETADA = "Completada"
 
 
 def _plural(cantidad: int, singular: str, plural: str) -> str:
@@ -63,12 +78,12 @@ def _origen(registro: Registro) -> str:
     return f"{registro.archivo_origen}, p. {registro.pagina_origen}"
 
 
-def _estado_de(registro: Registro) -> str:
+def _estado_de(registro: Registro, completado: bool = False) -> str:
     """Lo que hay que saber de la bitácora antes de escribirla.
 
     Manda lo que impide escribirla: un aviso deja la página bloqueada, así
     que decirlo importa más que repetir que sigue pendiente. Sin avisos vale
-    su estado, que en una vista previa siempre es «por escribir» y en un
+    su estado, que en una vista previa siempre es «por indexar» y en un
     batch ya trabajado dice cómo quedó.
     """
     partes = list(registro.avisos)
@@ -76,11 +91,11 @@ def _estado_de(registro: Registro) -> str:
         partes.append("duplicada")
     if registro.discrepancia:
         partes.append("discrepancia")
-    if not partes:
-        return NOMBRE_ESTADO_REGISTRO.get(
-            registro.estado, str(registro.estado)
-        )
-    return "; ".join(partes)
+    if partes:
+        return "; ".join(partes)
+    if completado and registro.estado is EstadoRegistro.ESCRITA:
+        return NOMBRE_COMPLETADA
+    return NOMBRE_ESTADO_REGISTRO.get(registro.estado, str(registro.estado))
 
 
 def _tabla(columnas: Sequence[str], ayuda: str) -> QTableWidget:
@@ -98,29 +113,179 @@ def _tabla(columnas: Sequence[str], ayuda: str) -> QTableWidget:
     return tabla
 
 
-class BitacorasDelBatch(QDialog):
-    """Las bitácoras que van dentro de un batch, en el orden del PDF."""
+class _ListaBuscable(QDialog):
+    """Cuadro con una tabla que se busca y se ordena, como el visor de CSV.
+
+    Las dos ventanas de la vista previa enseñan listas largas (los batches
+    de una entrega, las bitácoras de un batch), así que las dos necesitan lo
+    mismo: escribir un texto y que la fila aparezca, y ordenar por la
+    columna que se quiera. Se resuelve aquí una vez para que las dos se
+    manejen igual y con los mismos atajos.
+    """
+
+    #: Columnas donde busca el texto. Vacío significa todas.
+    COLUMNAS_BUSCABLES: tuple[int, ...] = ()
+
+    def _fila_de_busqueda(self, pista: str, ayuda: str) -> QHBoxLayout:
+        self._coincidencias: list[int] = []
+        self._posicion = -1
+        self._texto_buscado = ""
+        self._pista_busqueda = pista
+
+        fila = QHBoxLayout()
+        fila.addWidget(QLabel("Buscar:"))
+        self.buscar_edit = QLineEdit()
+        self.buscar_edit.setPlaceholderText(pista)
+        self.buscar_edit.setToolTip(ayuda)
+        self.buscar_edit.setAccessibleName("Texto que se busca en la lista")
+        self.buscar_edit.returnPressed.connect(self._buscar)
+        fila.addWidget(self.buscar_edit, 1)
+        boton = QPushButton("Buscar")
+        boton.setToolTip(
+            "Buscar el texto; repetido, pasa a la coincidencia siguiente"
+        )
+        boton.clicked.connect(self._buscar)
+        fila.addWidget(boton)
+        self.buscar_anterior = QPushButton("‹")
+        self.buscar_anterior.setToolTip("Coincidencia anterior")
+        self.buscar_anterior.setEnabled(False)
+        self.buscar_anterior.clicked.connect(lambda: self._mover_busqueda(-1))
+        fila.addWidget(self.buscar_anterior)
+        self.buscar_siguiente = QPushButton("›")
+        self.buscar_siguiente.setToolTip("Coincidencia siguiente")
+        self.buscar_siguiente.setEnabled(False)
+        self.buscar_siguiente.clicked.connect(lambda: self._mover_busqueda(1))
+        fila.addWidget(self.buscar_siguiente)
+        self.busqueda_ayuda = QLabel(pista)
+        self.busqueda_ayuda.setStyleSheet(f"color: {COLOR_AYUDA};")
+        # Una frase larga pide de ancho mínimo la frase entera: se recorta
+        # antes que empujar el separador y estrechar la página.
+        self.busqueda_ayuda.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.busqueda_ayuda.setMinimumWidth(0)
+        fila.addWidget(self.busqueda_ayuda, 1)
+        # Ctrl+F desde cualquier punto del cuadro, como en el resto.
+        QShortcut(
+            QKeySequence.StandardKey.Find, self,
+            activated=self.buscar_edit.setFocus,
+        )
+        return fila
+
+    def _columnas_buscables(self) -> range | tuple[int, ...]:
+        return self.COLUMNAS_BUSCABLES or range(self.tabla.columnCount())
+
+    def _buscar(self) -> None:
+        """Busca el texto escrito y lleva la tabla a la primera coincidencia.
+
+        Repetirlo con el mismo texto avanza a la siguiente, igual que ›: es
+        lo que se espera al volver a pulsar Intro sobre lo que ya se buscó.
+        """
+        texto = self.buscar_edit.text().strip()
+        if (
+            texto
+            and texto.casefold() == self._texto_buscado
+            and self._coincidencias
+        ):
+            self._mover_busqueda(1)
+            return
+        self._texto_buscado = texto.casefold()
+        self._coincidencias = []
+        self._posicion = -1
+        if not texto:
+            self.busqueda_ayuda.setText(self._pista_busqueda)
+            self._sincronizar_busqueda()
+            return
+        self._coincidencias = self._filas_con(self._texto_buscado)
+        if not self._coincidencias:
+            self.busqueda_ayuda.setText(f"«{texto}»: sin coincidencias.")
+            self._sincronizar_busqueda()
+            return
+        self._posicion = 0
+        self._mostrar_coincidencia()
+
+    def _filas_con(self, texto: str) -> list[int]:
+        """Filas que contienen el texto, las exactas primero."""
+        exactas: list[int] = []
+        parciales: list[int] = []
+        for fila in range(self.tabla.rowCount()):
+            for columna in self._columnas_buscables():
+                item = self.tabla.item(fila, columna)
+                valor = item.text().strip().casefold() if item else ""
+                if valor == texto:
+                    exactas.append(fila)
+                    break
+                if texto in valor:
+                    parciales.append(fila)
+                    break
+        return exactas + parciales
+
+    def _mover_busqueda(self, salto: int) -> None:
+        if not self._coincidencias:
+            return
+        self._posicion = (self._posicion + salto) % len(self._coincidencias)
+        self._mostrar_coincidencia()
+
+    def _mostrar_coincidencia(self) -> None:
+        fila = self._coincidencias[self._posicion]
+        self.tabla.selectRow(fila)
+        self.tabla.scrollToItem(self.tabla.item(fila, 0))
+        self.busqueda_ayuda.setText(
+            f"Coincidencia {self._posicion + 1} de "
+            f"{len(self._coincidencias)}."
+        )
+        self._sincronizar_busqueda()
+
+    def _sincronizar_busqueda(self) -> None:
+        varias = len(self._coincidencias) > 1
+        self.buscar_anterior.setEnabled(varias)
+        self.buscar_siguiente.setEnabled(varias)
+
+    def _olvidar_busqueda(self) -> None:
+        """Las coincidencias son posiciones, y ordenar las mueve de sitio."""
+        self._coincidencias = []
+        self._posicion = -1
+        self._texto_buscado = ""
+        self.busqueda_ayuda.setText(self._pista_busqueda)
+        self._sincronizar_busqueda()
+
+
+class BitacorasDelBatch(_ListaBuscable):
+    """Las bitácoras que van dentro de un batch, con su hoja al lado."""
 
     COLUMNAS = (
         "Página", "Matrícula", "Log Page", "Fecha", "Vuelo", "Origen",
         "Estado",
     )
+    # El estado es una frase, no un dato que se busque; el resto sí.
+    COLUMNAS_BUSCABLES = (0, 1, 2, 3, 4, 5)
+
+    _PISTA = "Log Page, matrícula, fecha, archivo de origen…"
 
     def __init__(
         self,
         nombre: str,
         registros: Sequence[Registro],
+        csv: Path | str = "",
+        completado: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._registros = list(registros)
+        self._csv = Path(csv) if csv else None
+        self._completado = bool(completado)
+        # Bitácora que muestra cada fila de la tabla, en el orden en que se
+        # llenó. Es lo que le pide el visor a la página que enseña.
+        self._bitacoras: list[Registro] = []
         self.setWindowTitle(f"Bitácoras de {nombre or 'el batch'}")
         # Como el resto de los cuadros: el tamaño lo pone la pantalla, que
         # en un portátil bajo dejaría los botones fuera del borde.
-        fit_to_screen(self, 760, 520)
-        self._build_ui(nombre)
+        densidad = fit_to_screen(self, 1180, 700)
+        self._build_ui(nombre, densidad)
 
-    def _build_ui(self, nombre: str) -> None:
+    def _build_ui(self, nombre: str, densidad) -> None:
+        from app.gui.csv_viewer import EmbeddedPdfViewer
+
         cuerpo = QVBoxLayout(self)
 
         bitacoras = [r for r in self._registros if not r.es_separador]
@@ -142,7 +307,8 @@ class BitacorasDelBatch(QDialog):
         self.tabla = _tabla(
             self.COLUMNAS,
             "Cada bitácora con la página que ocupa dentro del batch, que es "
-            "la misma que muestra Web Index.",
+            "la misma que muestra Web Index. Al elegir una fila se abre su "
+            "hoja escaneada al lado; el doble clic la lleva al visor.",
         )
         cabecera = self.tabla.horizontalHeader()
         for columna in range(len(self.COLUMNAS) - 1):
@@ -153,7 +319,37 @@ class BitacorasDelBatch(QDialog):
             len(self.COLUMNAS) - 1, QHeaderView.ResizeMode.Stretch
         )
         self._llenar(bitacoras)
-        cuerpo.addWidget(self.tabla, 1)
+
+        divisor = QSplitter(Qt.Orientation.Horizontal)
+        divisor.setChildrenCollapsible(False)
+        divisor.setHandleWidth(6)
+        self.visor = EmbeddedPdfViewer(density=densidad)
+        divisor.addWidget(self.visor)
+
+        panel = QWidget()
+        columna = QVBoxLayout(panel)
+        columna.setContentsMargins(0, 0, 0, 0)
+        columna.addLayout(
+            self._fila_de_busqueda(
+                self._PISTA,
+                "Busca el texto en la lista de bitácoras. Cada coincidencia "
+                "selecciona su fila y abre su hoja en el visor; se recorren "
+                "con ‹ y ›, o repitiendo la búsqueda.",
+            )
+        )
+        columna.addWidget(self.tabla, 1)
+        divisor.addWidget(panel)
+        divisor.setStretchFactor(0, _PANEL_PDF)
+        divisor.setStretchFactor(1, _TABLA)
+        cuerpo.addWidget(divisor, 1)
+        self._divisor = divisor
+
+        self.orden = ColumnSortController(self.tabla)
+        self.orden.sortChanged.connect(self._olvidar_busqueda)
+        self.tabla.itemSelectionChanged.connect(self._mostrar_la_elegida)
+        self.tabla.itemDoubleClicked.connect(self._abrir_la_elegida)
+
+        self._cargar_paginas(bitacoras)
 
         fila = QHBoxLayout()
         fila.addStretch()
@@ -162,9 +358,38 @@ class BitacorasDelBatch(QDialog):
         fila.addWidget(self.boton_cerrar)
         cuerpo.addLayout(fila)
 
+        if self.tabla.rowCount():
+            self.tabla.selectRow(0)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().showEvent(event)
+        self._repartir_ancho()
+
+    def _repartir_ancho(self) -> None:
+        """El mismo reparto del visor de CSV: dos quintos para la página.
+
+        Los factores de estiramiento solo gobiernan el espacio sobrante, y
+        la tabla pide de ancho lo que suman sus columnas: sin repartirlo a
+        mano la página se quedaba en su mínimo.
+        """
+        libre = max(0, self._divisor.width() - self._divisor.handleWidth())
+        panel = libre * _PANEL_PDF // (_PANEL_PDF + _TABLA)
+        self._divisor.setSizes([panel, libre - panel])
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        """Para el hilo de render antes de destruir el cuadro."""
+        self.visor.shutdown()
+        super().closeEvent(event)
+
+    def done(self, result: int) -> None:  # noqa: D102 - API Qt
+        # «Cerrar» y Escape terminan el diálogo sin evento de cierre.
+        self.visor.shutdown()
+        super().done(result)
+
     def _llenar(self, bitacoras: Sequence[Registro]) -> None:
         self.tabla.setRowCount(0)
-        for registro in bitacoras:
+        self._bitacoras = list(bitacoras)
+        for indice, registro in enumerate(self._bitacoras):
             fila = self.tabla.rowCount()
             self.tabla.insertRow(fila)
             celdas = (
@@ -174,10 +399,13 @@ class BitacorasDelBatch(QDialog):
                 registro.fecha,
                 registro.flight_number,
                 _origen(registro),
-                _estado_de(registro),
+                _estado_de(registro, self._completado),
             )
             for columna, texto in enumerate(celdas):
                 item = QTableWidgetItem(texto)
+                # La fila lleva encima a qué bitácora corresponde: ordenar
+                # la mueve de sitio y el visor tiene que seguir acertando.
+                item.setData(Qt.ItemDataRole.UserRole, indice)
                 if columna == 0:
                     item.setTextAlignment(
                         Qt.AlignmentFlag.AlignRight
@@ -189,8 +417,48 @@ class BitacorasDelBatch(QDialog):
                     item.setForeground(QColor(COLOR_HECHO))
                 self.tabla.setItem(fila, columna, item)
 
+    def _cargar_paginas(self, bitacoras: Sequence[Registro]) -> None:
+        """Ubica en disco las hojas escaneadas de las que salió cada fila."""
+        from app.gui.csv_viewer import resolve_source_documents
 
-class VistaPreviaBatches(QDialog):
+        if self._csv is None:
+            self.visor.load_paths([], [])
+            return
+        filas = [
+            {
+                "file": registro.archivo_origen,
+                "page": str(registro.pagina_origen),
+            }
+            for registro in bitacoras
+        ]
+        rutas, documentos, faltan = resolve_source_documents(self._csv, filas)
+        self.visor.load_paths(
+            documentos,
+            faltan,
+            [
+                (ruta, registro.pagina_origen)
+                for ruta, registro in zip(rutas, bitacoras)
+            ],
+        )
+
+    def _indice_elegido(self) -> int:
+        """Bitácora que corresponde a la fila resaltada, ordenada o no."""
+        fila = self.tabla.currentRow()
+        item = self.tabla.item(fila, 0) if fila >= 0 else None
+        indice = item.data(Qt.ItemDataRole.UserRole) if item else None
+        return indice if isinstance(indice, int) else -1
+
+    def _mostrar_la_elegida(self) -> None:
+        indice = self._indice_elegido()
+        if 0 <= indice < len(self._bitacoras):
+            self.visor.show_page(indice + 1)
+
+    def _abrir_la_elegida(self, *_args) -> None:
+        """El doble clic vuelve a traer la hoja, aunque ya fuera la actual."""
+        self._mostrar_la_elegida()
+
+
+class VistaPreviaBatches(_ListaBuscable):
     """En cuántos batches queda la entrega y qué lleva cada uno.
 
     Los que ya están en AirVault salen con su estado; los demás son los que
@@ -200,13 +468,19 @@ class VistaPreviaBatches(QDialog):
 
     COLUMNAS = ("Batch", "Páginas", "Bitácoras", "Estado")
 
+    _PISTA = "Nombre del batch, número de páginas, estado…"
+
     def __init__(
-        self, previstos: Sequence, parent: QWidget | None = None
+        self,
+        previstos: Sequence,
+        csv: Path | str = "",
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._previstos = list(previstos)
+        self._csv = Path(csv) if csv else None
         self.setWindowTitle("Vista previa de los batches")
-        fit_to_screen(self, 720, 480)
+        fit_to_screen(self, 780, 520)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -241,7 +515,17 @@ class VistaPreviaBatches(QDialog):
         self.tabla.itemDoubleClicked.connect(self._abrir_bitacoras)
         self.tabla.itemSelectionChanged.connect(self._ajustar_boton)
         self._llenar()
+        cuerpo.addLayout(
+            self._fila_de_busqueda(
+                self._PISTA,
+                "Busca el texto en la lista de batches. Cada coincidencia "
+                "selecciona su fila; se recorren con ‹ y ›, o repitiendo la "
+                "búsqueda.",
+            )
+        )
         cuerpo.addWidget(self.tabla, 1)
+        self.orden = ColumnSortController(self.tabla)
+        self.orden.sortChanged.connect(self._olvidar_busqueda)
 
         self.ayuda = QLabel(
             "Elija un batch para ver las bitácoras que lleva dentro."
@@ -255,7 +539,7 @@ class VistaPreviaBatches(QDialog):
         self.boton_bitacoras.setEnabled(False)
         self.boton_bitacoras.setToolTip(
             "Abre la lista de las bitácoras del batch elegido, con la página "
-            "que ocupa cada una dentro del batch."
+            "que ocupa cada una dentro del batch y su hoja escaneada al lado."
         )
         self.boton_bitacoras.clicked.connect(self._abrir_bitacoras)
         fila.addWidget(self.boton_bitacoras)
@@ -270,7 +554,7 @@ class VistaPreviaBatches(QDialog):
 
     def _llenar(self) -> None:
         self.tabla.setRowCount(0)
-        for previsto in self._previstos:
+        for indice, previsto in enumerate(self._previstos):
             fila = self.tabla.rowCount()
             self.tabla.insertRow(fila)
             celdas = (
@@ -281,6 +565,7 @@ class VistaPreviaBatches(QDialog):
             )
             for columna, texto in enumerate(celdas):
                 item = QTableWidgetItem(texto)
+                item.setData(Qt.ItemDataRole.UserRole, indice)
                 if columna == 0:
                     item.setToolTip(previsto.nombre)
                 if columna in (1, 2):
@@ -299,9 +584,11 @@ class VistaPreviaBatches(QDialog):
 
     def _elegido(self):
         fila = self.tabla.currentRow()
-        if fila < 0 or fila >= len(self._previstos):
+        item = self.tabla.item(fila, 0) if fila >= 0 else None
+        indice = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not isinstance(indice, int) or indice >= len(self._previstos):
             return None
-        return self._previstos[fila]
+        return self._previstos[indice]
 
     def _ajustar_boton(self) -> None:
         self.boton_bitacoras.setEnabled(self._elegido() is not None)
@@ -310,4 +597,10 @@ class VistaPreviaBatches(QDialog):
         previsto = self._elegido()
         if previsto is None:
             return
-        BitacorasDelBatch(previsto.nombre, previsto.registros, self).exec()
+        BitacorasDelBatch(
+            previsto.nombre,
+            previsto.registros,
+            csv=self._csv or "",
+            completado=bool(previsto.completado),
+            parent=self,
+        ).exec()
