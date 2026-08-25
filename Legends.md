@@ -2,6 +2,14 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-24 — La cola admite varios batches a la vez y no exige esperar a que termine
+
+La cola nació resolviendo una fila cada vez y con la ventana parada: el menú del botón derecho desactivaba todas sus acciones mientras había algo en vuelo, así que elegir un batch mientras subía otro no hacía nada. Ahora se eligen varias filas con Ctrl o Mayúsculas y la acción vale para todas —cada una hace lo que le corresponde, y el menú dice a cuántas se aplicaría antes de pulsarla—; y lo que se pida mientras el programa trabaja no se pierde: queda apuntado y arranca solo en cuanto el hilo queda libre. Cancelar un batch descarta además lo que estuviera esperando turno para él, que si no acabaría subiéndose igual un rato después.
+
+La banda azul de la fila seleccionada se decidía con el estado que llegaba en cada celda. Bastaba que una no lo recibiera —una celda sin contenido, como el ID de un batch que todavía no lo tiene— para que la banda saliera cortada justo ahí. Ahora quien decide es la selección de la vista: en una tabla que selecciona por filas, se pinta la fila entera tenga ítems o no.
+
+Y «Completar batch» vuelve a ser una sola casilla. Había dos que decidían lo mismo —una en el menú principal, que se recuerda entre ejecuciones, y otra en Automatización, que además forzaba a la primera—, de modo que cuál mandaba dependía de cuál se hubiera tocado la última. Queda la del menú principal.
+
 ## 2026-08-24 — La tabla de batches es una cola de trabajo, con su registro durable detrás
 
 Tres cosas dejaban batches parados sin forma de sacarlos de ahí.

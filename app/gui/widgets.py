@@ -305,11 +305,35 @@ class FlatSelectionDelegate(QStyledItemDelegate):
     pasa como fondo del ítem, que el estilo rellena a ras del rectángulo, tal
     como ya rellena los colores de estado de la tabla. La fila queda entonces
     como una banda de un solo color, sin esquinas redondas ni huecos.
+
+    Quien decide si hay que pintar es la selección de la vista, no el estado
+    que llegue en la celda. En una tabla que selecciona por filas las dos
+    cosas deberían coincidir, pero basta que una celda no reciba ese estado
+    —porque no tiene ítem, porque el estilo la trata aparte— para que la
+    banda salga cortada justo ahí.
     """
+
+    def _fila_seleccionada(self, index) -> bool:
+        vista = self.parent()
+        seleccion = getattr(vista, "selectionModel", None)
+        if not callable(seleccion):
+            return False
+        modelo = seleccion()
+        if modelo is None or vista.model() is not index.model():
+            return False
+        if (
+            vista.selectionBehavior()
+            is QAbstractItemView.SelectionBehavior.SelectItems
+        ):
+            return modelo.isSelected(index)
+        return modelo.isRowSelected(index.row(), index.parent())
 
     def initStyleOption(self, option, index) -> None:  # noqa: N802 - API Qt
         super().initStyleOption(option, index)
-        if not (option.state & QStyle.StateFlag.State_Selected):
+        if not (
+            option.state & QStyle.StateFlag.State_Selected
+            or self._fila_seleccionada(index)
+        ):
             return
         option.state &= ~QStyle.StateFlag.State_Selected
         option.backgroundBrush = QBrush(QColor(TABLE_SELECTION_BG))

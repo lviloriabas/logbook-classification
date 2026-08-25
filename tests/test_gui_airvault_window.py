@@ -201,12 +201,12 @@ def test_el_menu_de_automatizacion_empieza_oculto_y_es_secuencial(ventana):
     assert ventana.auto_subir_check.isChecked()
     assert ventana.auto_esperar_check.isChecked()
     assert ventana.auto_indexar_check.isChecked()
-    assert ventana.auto_completar_check.isEnabled()
+    # Cerrar el batch se elige una sola vez, en el menú principal.
+    assert not hasattr(ventana, "auto_completar_check")
 
     ventana.auto_esperar_check.setChecked(False)
     assert not ventana.auto_indexar_check.isChecked()
     assert not ventana.auto_indexar_check.isEnabled()
-    assert not ventana.auto_completar_check.isEnabled()
 
 
 def test_la_ventana_usa_batch_en_sus_campos_y_tabla(ventana):
@@ -1337,9 +1337,10 @@ def test_un_batch_que_cerro_el_programa_se_pinta_como_terminado(ventana):
     assert ventana.lotes.item(0, 0).foreground().color() == QColor(COLOR_INDEXADO)
 
 
-def _acciones(ventana, fila=0):
-    """El menú de esa fila de la cola, por acción."""
-    menu = ventana._acciones_de_la_cola(ventana._estados[fila])
+def _acciones(ventana, *filas):
+    """El menú de esas filas de la cola, por acción."""
+    elegidas = [ventana._estados[f] for f in (filas or (0,))]
+    menu = ventana._acciones_de_la_cola(elegidas)
     return {
         accion.text(): accion for accion in menu.actions()
         if not accion.isSeparator()
@@ -1356,7 +1357,7 @@ def test_la_cola_ofrece_subir_solo_el_batch_que_falta(ventana):
     ]
     ventana._pintar_lotes()
 
-    acciones = _acciones(ventana, fila=0)
+    acciones = _acciones(ventana, 0)
 
     assert acciones["Subir a AirVault ahora"].isEnabled()
     assert not acciones["Completar el batch"].isEnabled()
@@ -1425,3 +1426,87 @@ def test_copiar_el_nombre_del_batch_lo_deja_en_el_portapapeles(ventana):
     ventana._copiar_al_portapapeles(fila.nombre)
 
     assert QGuiApplication.clipboard().text() == "DP | BITS -4"
+
+
+def test_varios_batches_se_mandan_a_la_cola_de_una_vez(ventana):
+    """Elegir cinco filas mezcladas hace en cada una lo que corresponde."""
+    from app.airvault.flujo import INDEXADO, SIN_SUBIR
+
+    ventana._estados = [
+        parte(SIN_SUBIR, "DP | BITS -1", carpeta="job-1"),
+        parte(SIN_SUBIR, "DP | BITS -2", carpeta="job-2"),
+        parte(INDEXADO, "DP | BITS -3", carpeta="job-3"),
+    ]
+    ventana._pintar_lotes()
+    lanzados = []
+    ventana._ejecutar_accion = lambda modo, trabajos: (
+        lanzados.append((modo, [t.manifiesto.nombre_batch for t in trabajos]))
+        or True
+    )
+
+    acciones = _acciones(ventana, 0, 1, 2)
+    # La acción dice a cuántos se aplicaría, que no son todos los elegidos.
+    assert "Subir a AirVault ahora (2)" in acciones
+    assert "Completar el batch" in acciones
+    acciones["Subir a AirVault ahora (2)"].trigger()
+
+    assert lanzados == [
+        ("subir_pendientes", ["DP | BITS -1", "DP | BITS -2"]),
+    ]
+
+
+def test_la_tabla_permite_elegir_varias_filas(ventana):
+    from PySide6.QtWidgets import QAbstractItemView
+
+    assert ventana.lotes.selectionMode() is (
+        QAbstractItemView.SelectionMode.ExtendedSelection
+    )
+    assert ventana.lotes.selectionBehavior() is (
+        QAbstractItemView.SelectionBehavior.SelectRows
+    )
+
+
+def test_una_accion_pedida_mientras_trabaja_espera_su_turno(ventana):
+    """La tabla es una cola: lo que se pide no se pierde, se apunta."""
+    from app.airvault.flujo import SIN_SUBIR
+
+    fila = parte(SIN_SUBIR, "DP | BITS -1", carpeta="job-1")
+    ventana._estados = [fila]
+    lanzados = []
+    ventana._ejecutar_accion = lambda modo, trabajos: (
+        lanzados.append(modo) or True
+    )
+    ventana.hilo = lambda: object()   # hay algo en vuelo
+
+    ventana._subir_estas([fila])
+
+    assert lanzados == []
+    assert len(ventana._cola_de_acciones) == 1
+    anotado = [
+        ventana.bitacora.item(i).text()
+        for i in range(ventana.bitacora.count())
+    ]
+    assert any("en cola" in linea for linea in anotado)
+
+    # Al quedar libre, arranca sola.
+    ventana.hilo = lambda: None
+    assert ventana._siguiente_de_la_cola()
+    assert lanzados == ["subir_pendientes"]
+    assert ventana._cola_de_acciones == []
+
+
+def test_cancelar_saca_tambien_lo_que_esperaba_turno(ventana):
+    """Encolar y después cancelar no puede acabar subiéndolo igual."""
+    from app.airvault.flujo import SIN_SUBIR
+
+    fila = parte(SIN_SUBIR, "DP | BITS -1", carpeta="job-1")
+    ventana._estados = [fila]
+    ventana.hilo = lambda: object()
+    ventana._subir_estas([fila])
+    assert ventana._cola_de_acciones
+
+    ventana._cancelar_una(ventana._estados[0], True)
+
+    assert ventana._cola_de_acciones == []
+    ventana.hilo = lambda: None
+    assert not ventana._siguiente_de_la_cola()
