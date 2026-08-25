@@ -13,7 +13,8 @@ pipeline marcó como tal al procesarla.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Sequence
+from pathlib import Path
+from typing import Iterable, List, Sequence
 
 from app.models.schemas import ValidationReport
 from app.validation.book_corrector import _recompute_summary
@@ -40,6 +41,110 @@ class ResumenDepuracion:
 def _marcas_duplicadas(reports: Sequence[ValidationReport]) -> List[bool]:
     """Un indicador por página, en el orden en que están en los reportes."""
     return [item.duplicate for item in detect_duplicate_log_pages(reports)]
+
+
+@dataclass(frozen=True)
+class PaginaDepurable:
+    """Una página de la ejecución con lo que hace falta para elegirla.
+
+    ``clave`` la identifica dentro de la ejecución que se está mirando: el
+    reporte por su posición en la lista y la página por su número. No sirve
+    entre ejecuciones distintas, y no falta que sirva: quien elige tiene
+    delante una sola.
+    """
+
+    reporte: int
+    pagina: int
+    archivo: str
+    log_number: int | None
+    duplicada: bool
+    en_blanco: bool
+
+    @property
+    def clave(self) -> tuple[int, int]:
+        return (self.reporte, self.pagina)
+
+
+def paginas_depurables(
+    reports: Sequence[ValidationReport],
+) -> List[PaginaDepurable]:
+    """Todas las páginas de la ejecución, en el orden de los reportes."""
+    marcas = _marcas_duplicadas(reports)
+    numeros = [item.log_number for item in detect_duplicate_log_pages(reports)]
+    paginas: List[PaginaDepurable] = []
+    posicion = 0
+    for indice, report in enumerate(reports):
+        archivo = Path(report.pdf_path).name
+        for page in report.pages:
+            paginas.append(
+                PaginaDepurable(
+                    reporte=indice,
+                    pagina=page.page_number,
+                    archivo=archivo,
+                    log_number=numeros[posicion],
+                    duplicada=marcas[posicion],
+                    en_blanco=bool(page.blank),
+                )
+            )
+            posicion += 1
+    return paginas
+
+
+def grupos_duplicados(
+    reports: Sequence[ValidationReport],
+) -> List[tuple[int, List[PaginaDepurable]]]:
+    """Cada ``log_number`` repetido con todas sus apariciones.
+
+    Se devuelve el grupo entero, no solo las apariciones sobrantes: para
+    decidir cuál se va hay que ver también la que se conservaría. El orden
+    es el de la ejecución, así que la primera de cada lista es la que el
+    borrado automático deja en pie.
+    """
+    grupos: dict[int, List[PaginaDepurable]] = {}
+    for pagina in paginas_depurables(reports):
+        if pagina.log_number is None:
+            continue
+        grupos.setdefault(pagina.log_number, []).append(pagina)
+    return [
+        (numero, paginas)
+        for numero, paginas in sorted(grupos.items())
+        if len(paginas) > 1
+    ]
+
+
+def paginas_en_blanco(
+    reports: Sequence[ValidationReport],
+) -> List[PaginaDepurable]:
+    """Las páginas que el procesamiento marcó como vacías."""
+    return [pagina for pagina in paginas_depurables(reports) if pagina.en_blanco]
+
+
+def depurar_claves(
+    reports: Sequence[ValidationReport],
+    claves: Iterable[tuple[int, int]],
+) -> tuple[List[ValidationReport], int]:
+    """Quita exactamente las páginas indicadas y dice cuántas se fueron.
+
+    Es la puerta que usa el cuadro cuando la elección se hizo página por
+    página. ``depurar`` sigue existiendo para quien solo quiere aplicar los
+    dos criterios enteros, y se apoya en esta.
+    """
+    elegidas = set(claves)
+    quedan: List[ValidationReport] = []
+    quitadas = 0
+    for indice, report in enumerate(reports):
+        conservadas = [
+            page
+            for page in report.pages
+            if (indice, page.page_number) not in elegidas
+        ]
+        quitadas += len(report.pages) - len(conservadas)
+        if len(conservadas) != len(report.pages):
+            report.pages = conservadas
+            _recompute_summary(report)
+        if conservadas:
+            quedan.append(report)
+    return quedan, quitadas
 
 
 def contar_depuracion(

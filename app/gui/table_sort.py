@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Sequence
 
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QTableWidget
 
 HEADER_TOOLTIP = (
@@ -42,6 +42,14 @@ class ColumnSortController(QObject):
     CSV. Aquí las filas se reubican a mano para conservar colores, tooltips y
     datos de cada celda, y ``_order`` recuerda a qué fila original corresponde
     cada fila mostrada.
+    """
+
+    sortChanged = Signal()
+    """Se emite cuando quien mira la tabla cambia el orden, no al rellenarla.
+
+    Llenar la tabla la devuelve a su orden original, y eso no es una
+    decisión de nadie: quien escuche esta señal para recordar el criterio
+    no debe olvidarlo cada vez que la ejecución se vuelve a leer del disco.
     """
 
     def __init__(self, table: QTableWidget) -> None:
@@ -99,6 +107,20 @@ class ColumnSortController(QObject):
             self._descending = False
         else:
             self._column, self._descending = -1, False
+        self._apply()
+        self.sortChanged.emit()
+
+    def restore(self, column: int, descending: bool) -> None:
+        """Vuelve a ordenar por ``column`` sin pasar por el ciclo de clics.
+
+        La usa quien rellena la tabla otra vez con los mismos datos —al
+        borrar páginas, por ejemplo— para devolverla al criterio que ya
+        estaba puesto. Una columna fuera de rango deja la tabla como está,
+        que es lo que corresponde cuando el CSV nuevo no la trae.
+        """
+        if not self._ready or not 0 <= column < self._table.columnCount():
+            return
+        self._column, self._descending = column, descending
         self._apply()
 
     def _apply(self) -> None:

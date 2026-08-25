@@ -115,7 +115,7 @@ from app.utils.io import (
     ensure_dir,
     send_to_trash,
 )
-from app.validation.depuracion import depurar
+from app.validation.depuracion import depurar_claves
 from app.validation.duplicates import DuplicateLogPage, detect_duplicate_log_pages
 
 SCRIPT_DIR = Path(__file__).resolve().parents[2]
@@ -3434,10 +3434,11 @@ class MainWindow(QMainWindow):
         dialog = DepurarPaginasDialog(self._reports, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        remaining, resumen = depurar(
-            self._reports, dialog.duplicados(), dialog.en_blanco()
-        )
-        if not resumen.total:
+        # Se borra lo que quedó marcado página por página, no el criterio
+        # entero: el cuadro deja conservar una aparición distinta de la
+        # primera, y esa elección se perdería al recontar por criterio.
+        remaining, quitadas = depurar_claves(self._reports, dialog.claves())
+        if not quitadas:
             return
         if not remaining:
             QMessageBox.information(
@@ -3454,11 +3455,11 @@ class MainWindow(QMainWindow):
         # las páginas que acaban de salir de la ejecución.
         self._refresh_after_depuracion()
         logger.info(
-            f"Depuradas {resumen.total} página(s) de la ejecución "
+            f"Depuradas {quitadas} página(s) de la ejecución "
             f"{Path(self._corrida_dir).name}"
         )
         self.status_label.setText(
-            f"Eliminando {resumen.total} página(s) de la ejecución…"
+            f"Eliminando {quitadas} página(s) de la ejecución…"
         )
         self._timer.start()
         self._start_outputs(remaining, context="depurar", skip_pdfs=True)
