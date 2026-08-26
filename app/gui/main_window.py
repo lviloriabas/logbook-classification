@@ -2998,7 +2998,10 @@ class MainWindow(QMainWindow):
 
         Es el mismo criterio que el cuadro propone al abrirlo: de cada
         bitácora repetida se van las apariciones sobrantes, nunca la
-        primera, y se van todas las páginas en blanco. Devuelve si dejó una
+        primera, y se van todas las páginas en blanco. Que de un grupo se
+        vaya una sola aparición, la más nueva, no depende de cómo se arme
+        aquí la lista: lo garantiza ``depurar_claves``, por donde pasan
+        igual el borrado automático y el del cuadro. Devuelve si dejó una
         escritura en marcha; si no había nada que quitar, la cadena sigue
         derecho a exportar.
         """

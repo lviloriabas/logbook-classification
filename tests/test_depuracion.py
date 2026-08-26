@@ -10,7 +10,11 @@ from __future__ import annotations
 import pytest
 
 from app.models.schemas import FieldResult, PageResult, ValidationReport
-from app.validation.depuracion import contar_depuracion, depurar
+from app.validation.depuracion import (
+    contar_depuracion,
+    depurar,
+    depurar_claves,
+)
 from app.validation.duplicates import detect_duplicate_log_pages
 
 
@@ -147,3 +151,54 @@ def test_marcar_las_dos_repetidas_no_borra_las_dos():
 
     assert resumen.total == 1
     assert [p.page_number for p in quedan[0].pages] == [1]
+
+
+def test_marcar_las_dos_apariciones_a_mano_solo_quita_la_mas_nueva():
+    """La elección página por página tampoco puede vaciar un grupo.
+
+    Es lo que se puede pedir desde el cuadro marcando las dos casillas de
+    una misma bitácora. Se va la aparición más nueva y se queda la primera:
+    de las dos cae una sola.
+    """
+    reports = [
+        reporte("A.pdf", [pagina(1, "1000010"), pagina(2, "1000011")]),
+        reporte("B.pdf", [pagina(1, "1000010")]),
+    ]
+
+    quedan, quitadas = depurar_claves(reports, {(0, 1), (1, 1)})
+
+    assert quitadas == 1
+    assert [p.page_number for p in quedan[0].pages] == [1, 2]
+    assert [r.pdf_path for r in quedan] == ["C:/input/A.pdf"]
+
+
+def test_de_tres_apariciones_se_conserva_la_primera():
+    reports = [
+        reporte(
+            "A.pdf",
+            [pagina(1, "1000010"), pagina(2, "1000010"), pagina(3, "1000010")],
+        )
+    ]
+
+    quedan, resumen = depurar(reports, duplicados=True, en_blanco=False)
+
+    assert resumen.total == 2
+    assert [p.page_number for p in quedan[0].pages] == [1]
+
+
+def test_los_dos_criterios_juntos_no_borran_la_bitacora_repetida():
+    """La repetida que además está en blanco no se lleva al grupo entero.
+
+    Una aparición cae por duplicada y la otra por vacía, así que sin la
+    protección la ejecución se quedaría sin esa bitácora. Se conserva la
+    que tiene algo escrito.
+    """
+    reports = [
+        reporte("A.pdf", [pagina(1, "1000010", blank=True), pagina(2, "1000010")])
+    ]
+
+    resumen = contar_depuracion(reports, duplicados=True, en_blanco=True)
+    quedan, _ = depurar(reports, duplicados=True, en_blanco=True)
+
+    assert resumen.total == 1
+    assert [p.page_number for p in quedan[0].pages] == [2]
