@@ -8,6 +8,10 @@ no en ninguna de ellas.
 Duplicada es toda aparición posterior de un ``log_number`` ya visto (la
 primera se conserva, que es la que se entrega), y en blanco la que el
 pipeline marcó como tal al procesarla.
+
+De una bitácora repetida se va una sola aparición, la más nueva, lo pida el
+cuadro o lo haga el proceso automático: marcar el grupo entero no la borra
+de la ejecución, se queda la primera.
 """
 
 from __future__ import annotations
@@ -120,6 +124,47 @@ def grupos_duplicados(
     ]
 
 
+def claves_depurables(
+    reports: Sequence[ValidationReport],
+    claves: Iterable[tuple[int, int]],
+) -> set[tuple[int, int]]:
+    """Las claves elegidas menos la que salva a cada bitácora repetida.
+
+    De un ``log_number`` repetido se va la aparición más nueva y se queda la
+    primera: de dos apariciones cae una sola. Si la elección se lleva el
+    grupo entero (marcando las dos a mano, o porque una está además en
+    blanco y cae por el otro criterio) se descarta de la elección la más
+    antigua, que es la que la ejecución conserva: sin ella esa bitácora no
+    quedaría en ninguna parte de la entrega.
+
+    Pasa por aquí todo lo que se borra, venga del cuadro o del proceso
+    automático, así que la ejecución no puede perder una bitácora repetida
+    por ninguno de los dos caminos.
+    """
+    elegidas = set(claves)
+    for _numero, paginas in grupos_duplicados(reports):
+        if all(pagina.clave in elegidas for pagina in paginas):
+            # La que se salva es la primera con algo escrito. Conservar una
+            # página en blanco y borrar la que sí se lee sería cumplir la
+            # regla y perder la bitácora igual.
+            legibles = [pagina for pagina in paginas if not pagina.en_blanco]
+            elegidas.discard((legibles or paginas)[0].clave)
+    return elegidas
+
+
+def _claves_por_criterio(
+    reports: Sequence[ValidationReport],
+    duplicados: bool,
+    en_blanco: bool,
+) -> set[tuple[int, int]]:
+    """Lo que marcan las dos casillas, antes de proteger ninguna bitácora."""
+    return {
+        pagina.clave
+        for pagina in paginas_depurables(reports)
+        if (duplicados and pagina.duplicada) or (en_blanco and pagina.en_blanco)
+    }
+
+
 def paginas_en_blanco(
     reports: Sequence[ValidationReport],
 ) -> List[PaginaDepurable]:
@@ -131,13 +176,17 @@ def depurar_claves(
     reports: Sequence[ValidationReport],
     claves: Iterable[tuple[int, int]],
 ) -> tuple[List[ValidationReport], int]:
-    """Quita exactamente las páginas indicadas y dice cuántas se fueron.
+    """Quita las páginas indicadas y dice cuántas se fueron.
 
     Es la puerta que usa el cuadro cuando la elección se hizo página por
     página. ``depurar`` sigue existiendo para quien solo quiere aplicar los
     dos criterios enteros, y se apoya en esta.
+
+    De cada bitácora repetida se respeta una aparición aunque lleguen
+    marcadas todas: lo que se quita es la más nueva. Por eso el número que
+    devuelve puede ser menor que las claves que recibió.
     """
-    elegidas = set(claves)
+    elegidas = claves_depurables(reports, claves)
     quedan: List[ValidationReport] = []
     quitadas = 0
     for indice, report in enumerate(reports):
@@ -163,27 +212,24 @@ def contar_depuracion(
     """Cuenta lo que se quitaría, sin tocar los reportes.
 
     Se usa para llenar el diálogo antes de confirmar: el número que ve quien
-    decide sale de los mismos reportes sobre los que después se borra.
+    decide sale de los mismos reportes sobre los que después se borra y con
+    la misma protección, así que una bitácora repetida que los dos criterios
+    marcan entera cuenta una página menos: la que se conserva.
     """
-    marcas = _marcas_duplicadas(reports)
-    repetidas = 0
-    blancas = 0
-    total = 0
-    posicion = 0
-    for report in reports:
-        for page in report.pages:
-            es_duplicada = marcas[posicion]
-            posicion += 1
-            if es_duplicada:
-                repetidas += 1
-            if page.blank:
-                blancas += 1
-            if (duplicados and es_duplicada) or (en_blanco and page.blank):
-                total += 1
+    paginas = paginas_depurables(reports)
+    elegidas = claves_depurables(
+        reports, _claves_por_criterio(reports, duplicados, en_blanco)
+    )
+    repetidas = sum(
+        1 for pagina in paginas if pagina.duplicada and pagina.clave in elegidas
+    )
+    blancas = sum(
+        1 for pagina in paginas if pagina.en_blanco and pagina.clave in elegidas
+    )
     return ResumenDepuracion(
         duplicadas=repetidas if duplicados else 0,
         en_blanco=blancas if en_blanco else 0,
-        total=total,
+        total=len(elegidas),
     )
 
 
@@ -204,20 +250,7 @@ def depurar(
     if not resumen.total:
         return list(reports), resumen
 
-    marcas = _marcas_duplicadas(reports)
-    quedan: List[ValidationReport] = []
-    posicion = 0
-    for report in reports:
-        conservadas = []
-        for page in report.pages:
-            es_duplicada = marcas[posicion]
-            posicion += 1
-            fuera = (duplicados and es_duplicada) or (en_blanco and page.blank)
-            if not fuera:
-                conservadas.append(page)
-        if len(conservadas) != len(report.pages):
-            report.pages = conservadas
-            _recompute_summary(report)
-        if conservadas:
-            quedan.append(report)
+    quedan, _quitadas = depurar_claves(
+        reports, _claves_por_criterio(reports, duplicados, en_blanco)
+    )
     return quedan, resumen

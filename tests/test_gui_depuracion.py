@@ -292,3 +292,48 @@ def test_depurar_borra_solo_la_aparicion_elegida():
     assert quitadas == 1
     assert [p.page_number for p in quedan[0].pages] == [2]
     assert [p.page_number for p in quedan[1].pages] == [7]
+
+
+def test_no_se_pueden_marcar_todas_las_apariciones_de_una_bitacora(app):
+    """Marcar la última libre no borra el grupo: la marca vuelve atrás.
+
+    Con el criterio encendido ya está marcada la segunda aparición; marcar
+    también la primera dejaría la ejecución sin esa bitácora, así que el
+    cuadro la devuelve a su sitio y lo dice en el pie.
+    """
+    dialog = DepurarPaginasDialog(corrida())
+    try:
+        dialog.check_duplicados.setChecked(True)
+        grupo = dialog.arbol_duplicados.topLevelItem(0)
+
+        grupo.child(0).setCheckState(0, Qt.CheckState.Checked)
+
+        assert grupo.child(0).checkState(0) == Qt.CheckState.Unchecked
+        assert grupo.child(1).checkState(0) == Qt.CheckState.Checked
+        assert dialog.claves() == {(1, 7)}
+        assert "tiene que quedar una página" in dialog.total_label.text()
+    finally:
+        dialog.deleteLater()
+
+
+def test_marcar_todas_las_blancas_sigue_permitido(app):
+    """El tope es de las bitácoras repetidas: las vacías se van todas."""
+    dialog = DepurarPaginasDialog(corrida())
+    try:
+        dialog.check_blancas.setChecked(True)
+
+        assert dialog.claves() == {(0, 2)}
+        assert "tiene que quedar una página" not in dialog.total_label.text()
+    finally:
+        dialog.deleteLater()
+
+
+def test_el_borrado_conserva_una_aparicion_aunque_lleguen_las_dos_marcadas(app):
+    """Si la elección llegara con el grupo entero, se va solo la más nueva."""
+    reports = corrida()
+
+    quedan, quitadas = depurar_claves(reports, {(0, 1), (1, 7)})
+
+    assert quitadas == 1
+    assert [p.page_number for p in quedan[0].pages] == [1, 2]
+    assert [r.pdf_path for r in quedan] == ["primero.pdf"]
