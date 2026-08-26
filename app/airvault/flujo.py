@@ -57,7 +57,9 @@ from app.airvault.mapping import (
     normalizar_matricula,
     valores_de_indice,
 )
+from app.airvault import duplicados as libro_de_envios
 from app.airvault import registro as registro_entrega
+from app.airvault import websearch
 from app.airvault.model import (
     EstadoEtapa,
     EstadoRegistro,
@@ -320,6 +322,31 @@ def _paginas_del_pdf(ruta: Path) -> int:
         documento.close()
 
 
+def _sello(ruta: Path) -> str:
+    """Que version de un archivo es esta, para no confundirla con otra.
+
+    Los tramos que se mandan a Quick Upload se guardan en ``cargas/`` y se
+    reaprovechan si ya estan hechos, que es lo que evita volver a cortar (y
+    a comprimir) la entrega entera en cada intento. Reconocerlos por la
+    ruta y por que paginas se pidieron **no basta**: al depurar y volver a
+    exportar, la entrega conserva su nombre y las paginas siguen
+    numerandose desde uno, pero detras de cada numero hay otra pagina. El
+    tramo viejo encajaba en el nombre y en la cantidad, asi que se subia
+    tal cual y el batch salia con paginas que no eran las suyas.
+
+    Con el tamaño y la fecha del archivo en la huella, una entrega
+    reexportada estrena nombre de tramo y se corta de nuevo. Si nada
+    cambio, el nombre es el mismo y el trabajo se ahorra igual que antes.
+    """
+    try:
+        datos = ruta.stat()
+    except OSError:
+        # Sin poder mirarlo no se puede afirmar que sea el mismo de antes,
+        # y dar por bueno un tramo viejo es justo lo que hay que evitar.
+        return "sin-sello"
+    return f"{datos.st_size}:{datos.st_mtime_ns}"
+
+
 def _pdf_de_carga(
     origen: ParteDeEntrega,
     numero_origen: int,
@@ -342,11 +369,13 @@ def _pdf_de_carga(
     numeros = list(paginas)
     seleccion = ",".join(str(numero) for numero in numeros)
     huella = hashlib.sha1(
-        (str(origen.pdf.resolve()).casefold() + "|" + seleccion).encode("utf-8")
+        "|".join(
+            (str(origen.pdf.resolve()).casefold(), _sello(fuente), seleccion)
+        ).encode("utf-8")
     ).hexdigest()[:10]
     clase = "revisar" if origen.revisar else "automatico"
     destino = (
-        carpeta / "cargas" / f"{clase}-{numero_origen:02d}-{huella}-"
+        carpeta / "cargas" / f"{clase}-{numero_origen:02d}-"
         f"p{numeros[0] + 1:05d}-{numeros[-1] + 1:05d}-{huella}"
         f"{'-200dpi' if comprimir or fuente_pdf is not None else ''}.pdf"
     )
@@ -654,9 +683,14 @@ INDEXADO = "indexado"
 COMPLETADO = "completado"
 AUTOCOMPLETADO = "autocompletado"
 CANCELADO = "cancelado"
+# Sus bitacoras ya estan en AirVault, subidas por otro batch o por otra
+# persona. No se sube, no se reenvia y no se completa solo hasta que
+# alguien mire AirVault y quite la marca.
+POSIBLE_DUPLICADO = "posible_duplicado"
 
 NOMBRE_ESTADO_PARTE = {
     SIN_SUBIR: "Sin subir",
+    POSIBLE_DUPLICADO: "Posible duplicado",
     BUSCANDO: "Subido pendiente confirmación",
     PROCESANDO: "Procesándose en AirVault",
     DESCUADRADO: "Cantidad de páginas incorrecta",
@@ -720,6 +754,7 @@ class EstadoParte:
         """
         return self.lote is None and self.estado not in (
             INDEXADO, COMPLETADO, AUTOCOMPLETADO, CANCELADO,
+            POSIBLE_DUPLICADO,
         )
 
     @property
@@ -926,6 +961,24 @@ class Trabajo:
         if self.manifiesto.etapa_hecha("subir"):
             logger.info("El batch ya estaba subido; no se vuelve a subir")
             return
+        # Por aqui pasan **todas** las cargas, venga la orden de donde
+        # venga, asi que aqui esta la ultima red. Es la comprobacion local:
+        # no necesita red ni sesion y siempre responde. La consulta a Web
+        # Search la hace el coordinador, que tiene una sola conexion para
+        # toda la ejecucion, y lo que decida llega hasta aqui en la marca.
+        motivo = self.manifiesto.posible_duplicado
+        if not motivo:
+            repetidas = libro_de_envios.repetidas(carpeta_del_libro(self), self)
+            if repetidas:
+                motivo = _motivo_de_repetidas(repetidas)
+                marcar_posible_duplicado(self, motivo)
+        if motivo:
+            raise ErrorDeCorrida(
+                f"No se sube «{self.manifiesto.nombre_batch}»: {motivo}. "
+                "Publicarlas otra vez dejaria el mismo documento dos veces "
+                "en AirVault y eso solo se deshace a mano. Si en AirVault "
+                "no esta, quite la marca de posible duplicado en la cola."
+            )
         archivo = Path(pdf or self.manifiesto.pdf_origen)
         if not archivo.is_file():
             raise ErrorDeCorrida(f"No esta el archivo de entrega {archivo.name}")
@@ -1525,6 +1578,11 @@ class Trabajo:
         self.manifiesto.etapa("completar").marcar(EstadoEtapa.HECHA, detalle)
         self.guardar()
         registro_entrega.anotar(self.carpeta, [self])
+        # Completar es lo que manda el batch a Web Search. A partir de aqui
+        # sus bitacoras son ademas el control con el que se comprueba que
+        # una consulta a Web Search esta preguntando donde tiene que
+        # preguntar: si no encuentra estas, no encuentra nada.
+        libro_de_envios.anotar(carpeta_del_libro(self), [self])
         logger.info("Batch {} dado por terminado en AirVault", batch_id)
         return ResultadoCompletar(True, [], len(paginas), detalle, quitadas)
 
@@ -2179,6 +2237,125 @@ def _validar_nombres_de_batches(trabajos: Sequence["Trabajo"]) -> None:
         vistos[normalizado] = trabajo
 
 
+# ── que nada se suba dos veces ─────────────────────────────────────
+#
+# Todo lo que sigue existe por un solo motivo: una bitacora publicada dos
+# veces en AirVault no se deshace desde aqui, hay que ir a borrarla a mano.
+# Las comprobaciones de mas arriba (la cola, los manifiestos, el registro de
+# la entrega) cubren el caso normal, pero todas miran lo que esta **en la
+# cola de Web Index**, y un batch completado ya no esta ahi. Estas dos si
+# llegan a ese caso: el libro de envios recuerda lo que mando el programa
+# aunque se borre la memoria de la ejecucion, y Web Search sabe lo que hay
+# publicado aunque lo subiera otra persona.
+
+
+# Reenvios automaticos de una carga que Quick Upload acepto y AirVault no
+# publico. El modelo ya decia que se cuentan «para no acabar con batches
+# duplicados», pero nada usaba la cuenta. Dos son suficientes: si tras dos
+# reenvios el batch sigue sin aparecer, el problema no es el envio, y seguir
+# mandando el mismo PDF es exactamente como se acaba con tres copias del
+# mismo batch el dia que AirVault los publica todos de golpe.
+MAXIMO_REENVIOS = 2
+
+
+def carpeta_del_libro(trabajo: "Trabajo") -> Path:
+    """Donde vive el libro de envios de esta instalacion.
+
+    Es la carpeta que contiene los trabajos de todas las ejecuciones, un
+    nivel por encima de la de esta entrega: el libro es de la instalacion,
+    no de la ejecucion, y tiene que sobrevivir a borrar el registro local.
+    """
+    return registro_entrega.raiz_de_registro(trabajo.carpeta).parent
+
+
+def marcar_posible_duplicado(trabajo: "Trabajo", motivo: str) -> None:
+    """Deja anotado en el manifiesto por que no se sigue con este batch."""
+    if trabajo.manifiesto.posible_duplicado == motivo:
+        return
+    trabajo.manifiesto.posible_duplicado = motivo
+    trabajo.guardar()
+    logger.warning(
+        "Batch «{}» marcado como posible duplicado: {}",
+        trabajo.manifiesto.nombre_batch,
+        motivo,
+    )
+
+
+def limpiar_posible_duplicado(trabajo: "Trabajo") -> None:
+    """Quita la sospecha porque alguien miro AirVault y dijo que no lo es."""
+    if not trabajo.manifiesto.posible_duplicado:
+        return
+    trabajo.manifiesto.posible_duplicado = ""
+    trabajo.guardar()
+
+
+def es_posible_duplicado(trabajo: "Trabajo") -> bool:
+    return bool(trabajo.manifiesto.posible_duplicado)
+
+
+def buscador_de(
+    sesion,
+    config: AirVaultConfig,
+    ruta_config: Optional[Path] = None,
+) -> Optional[websearch.Buscador]:
+    """El consultor de Web Search de una ejecucion, con sus controles.
+
+    Los controles salen del libro de envios: bitacoras que este programa
+    completo y que por lo tanto tienen que estar publicadas. Sin ninguna no
+    se puede distinguir «no esta» de «pregunte donde no era», asi que el
+    buscador se construye igual pero dira que no puede responder.
+    """
+    if sesion is None:
+        return None
+    raiz = Path(ruta_config).parent if ruta_config else None
+    return websearch.Buscador(
+        sesion=sesion,
+        config=config,
+        ruta_config=Path(ruta_config) if ruta_config else None,
+        controles=libro_de_envios.leer(raiz).controles() if raiz else (),
+    )
+
+
+def revisar_duplicado(
+    trabajo: "Trabajo",
+    buscador: Optional[websearch.Buscador] = None,
+) -> str:
+    """Por que este batch no se debe mandar a Quick Upload, si lo hay.
+
+    Dos preguntas, en este orden. La primera es local y siempre responde:
+    ¿alguna de estas bitacoras ya viajo en **otro** batch? La segunda
+    necesita red: ¿alguna esta ya publicada en Web Search? La primera
+    detecta el reparto rehecho y la ejecucion reprocesada; la segunda, el
+    batch que ya se completo y salio de la cola, que es el unico caso que
+    ninguna consulta a la cola puede ver.
+
+    Devuelve cadena vacia cuando no hay nada que impida subir. Una consulta
+    que no se pudo hacer no inventa un motivo: sin respuesta se sube, que
+    es lo que hacia antes, pero con el libro local ya decidiendo.
+    """
+    numeros = websearch.numeros_de(trabajo)
+    if not numeros:
+        return ""
+    repetidas = libro_de_envios.repetidas(carpeta_del_libro(trabajo), trabajo)
+    if repetidas:
+        return _motivo_de_repetidas(repetidas)
+    if buscador is None:
+        return ""
+    veredicto = websearch.revisar_batch(buscador, numeros)
+    return veredicto.resumen() if veredicto.ya_publicado else ""
+
+
+def _motivo_de_repetidas(repetidas: Sequence[str]) -> str:
+    """Como se cuenta que unas bitacoras ya se mandaron antes."""
+    lista = ", ".join(repetidas[:3])
+    resto = len(repetidas) - 3
+    cola = f" y {resto} mas" if resto > 0 else ""
+    return (
+        f"{len(repetidas)} de sus bitacoras ({lista}{cola}) ya se mandaron "
+        "a AirVault en otro batch"
+    )
+
+
 def subir_partes(
     trabajos: Sequence["Trabajo"],
     sesion,
@@ -2190,6 +2367,7 @@ def subir_partes(
     reintentar_estancados: bool = False,
     en_la_ejecucion: Sequence["Trabajo"] = (),
     forzados: Collection[str] = (),
+    buscador: Optional[websearch.Buscador] = None,
 ) -> List[Tuple["Trabajo", str]]:
     """Confirma todos los batches y sube solamente los que falten.
 
@@ -2211,6 +2389,12 @@ def subir_partes(
     ``en_la_ejecucion`` son todas las partes de la entrega cuando ``trabajos``
     es solo el subconjunto que falta por subir. Sirve para comprobar que
     ninguna bitacora que se va a mandar viaja ya en un batch subido.
+
+    ``buscador`` consulta Web Search antes de cada carga. Es la unica
+    comprobacion que ve un batch ya completado, porque completar lo saca de
+    la cola de Web Index y a partir de ahi ninguna consulta a la cola lo
+    encuentra. Sin buscador queda el libro de envios, que es local y
+    tambien decide.
 
     ``forzados`` son las carpetas que alguien mando subir a mano. Esas se
     saltan la comprobacion completa (que es la que tarda, por abrir cada
@@ -2378,13 +2562,49 @@ def subir_partes(
                         0,
                     )
                 continue
+        # Ultimo filtro, y el unico por el que pasan las tres formas de
+        # llegar aqui: la carga nueva, la orden dada a mano y el reenvio de
+        # una que se dio por perdida. Todo lo anterior mira la cola de Web
+        # Index; esto mira lo que ya esta publicado.
+        motivo = trabajo.manifiesto.posible_duplicado or revisar_duplicado(
+            trabajo, buscador
+        )
+        if motivo:
+            marcar_posible_duplicado(trabajo, motivo)
+            fallos.append((
+                trabajo,
+                f"No se subio porque {motivo}. Si en AirVault no esta, "
+                "quite la marca de posible duplicado en la cola y vuelva a "
+                "dar la orden.",
+            ))
+            if avisar is not None:
+                avisar(
+                    f"{cabeza}Posible duplicado: {motivo}; no se sube",
+                    0,
+                    0,
+                )
+            continue
+
         if permite_reenvio:
+            hechos = int(trabajo.manifiesto.reenvios or 0)
+            if hechos >= MAXIMO_REENVIOS:
+                # Dos reenvios y sigue sin aparecer: lo que falla no es el
+                # envio. Insistir es como acaban tres copias del mismo
+                # batch en la cola el dia que AirVault los publica todos.
+                detalle = (
+                    f"ya se reenvio {hechos} veces sin que AirVault lo "
+                    "publique; no se manda otra vez solo. Mirelo en Web "
+                    "Index y, si de verdad no esta, ordene la subida desde "
+                    "la cola."
+                )
+                fallos.append((trabajo, detalle))
+                if avisar is not None:
+                    avisar(f"{cabeza}{detalle}", 0, 0)
+                continue
             # Se da por perdida una carga que Quick Upload si acepto. Se
             # cuenta antes de reenviarla para que el tope valga aunque el
             # envio se corte a mitad.
-            trabajo.manifiesto.reenvios = (
-                int(trabajo.manifiesto.reenvios or 0) + 1
-            )
+            trabajo.manifiesto.reenvios = hechos + 1
             trabajo.guardar()
         if cliente is not None or forzado:
             # Tambien en las forzadas: el manifiesto puede seguir creyendo
@@ -2419,6 +2639,9 @@ def subir_partes(
         # comprometidas y no se vuelven a repartir aunque cambie la
         # configuracion o se pierda el manifiesto.
         registro_entrega.anotar(trabajo.carpeta, [trabajo])
+        # Y en el libro de la instalacion, que es el que sigue estando
+        # cuando el registro de esta ejecucion ya no este.
+        libro_de_envios.anotar(carpeta_del_libro(trabajo), [trabajo])
         if al_finalizar_subidas is not None:
             # La UI debe reflejar que Quick Upload ya acepto este archivo
             # incluso si AirVault tarda o falla antes de publicar su ID.
@@ -2774,12 +2997,19 @@ def reenvio_pendiente(
 ) -> bool:
     """Si esta carga ya se puede volver a enviar sin pedirlo a mano.
 
-    Basta con darla por perdida. No hay un numero de intentos tras el cual
-    el programa se rinda: un batch que no llego a AirVault no se arregla
-    por dejar de mandarlo. Lo que evita insistir contra una cola lenta es
-    que cada reenvio exige mas espera que el anterior
-    (:func:`espera_de_reenvio`).
+    Hacen falta dos cosas: darla por perdida y no haber agotado el tope de
+    reenvios. Las tres senales que la dan por perdida
+    (:func:`subida_perdida`) son buenas pero no infalibles, y todas pueden
+    dispararse mientras AirVault todavia esta procesando la carga. Al
+    tercer intento lo que falla ya no es el envio, y seguir mandando el
+    mismo PDF es como aparecen tres copias del mismo batch el dia que
+    AirVault los publica todos.
+
+    Lo que evita insistir contra una cola solo lenta es que cada reenvio
+    exige mas espera que el anterior (:func:`espera_de_reenvio`).
     """
+    if int(parte.trabajo.manifiesto.reenvios or 0) >= MAXIMO_REENVIOS:
+        return False
     return subida_perdida(parte, ejecucion)
 
 
@@ -2800,7 +3030,10 @@ def partes_por_subir(estados: Sequence[EstadoParte]) -> List["Trabajo"]:
     return [
         parte.trabajo
         for parte in estados
-        if parte.estado == SIN_SUBIR or reenvio_pendiente(parte, ejecucion)
+        # Un batch marcado como posible duplicado no entra ni por «sin
+        # subir»: mientras la marca este puesta no lo manda nadie solo.
+        if not es_posible_duplicado(parte.trabajo)
+        and (parte.estado == SIN_SUBIR or reenvio_pendiente(parte, ejecucion))
     ]
 
 
@@ -3160,6 +3393,12 @@ def estado_local(trabajo: "Trabajo") -> EstadoParte:
         return _cierre_de(trabajo)
     if manifiesto.cancelado:
         return _cancelado_de(trabajo)
+    if manifiesto.posible_duplicado:
+        # Por delante de «sin subir»: es justo lo que hay que ver en la
+        # fila de un batch que el programa se nego a mandar.
+        return EstadoParte(
+            trabajo, POSIBLE_DUPLICADO, manifiesto.posible_duplicado
+        )
     if not manifiesto.etapa_hecha("subir"):
         subir = manifiesto.etapas.get("subir")
         detalle = (
@@ -3792,9 +4031,9 @@ def espera_de_reenvio(trabajo: "Trabajo") -> float:
     """Cuanto tiene que llevar sin publicarse antes de volver a mandarla.
 
     La primera vez es la espera configurada; con cada reenvio ya hecho, un
-    multiplo mas. Es lo que sustituye al tope de reenvios: en vez de dejar
-    de intentarlo (lo que dejaba el batch fuera de AirVault para siempre),
-    se intenta cada vez mas espaciado.
+    multiplo mas. Espaciar los intentos es lo que evita insistir contra una
+    cola que solo va lenta; el tope de :data:`MAXIMO_REENVIOS` es lo que
+    evita que insistir acabe en varias copias del mismo batch.
     """
     base = max(0.0, float(trabajo.config.espera_reenvio_s))
     return base * (1 + max(0, int(trabajo.manifiesto.reenvios or 0)))
@@ -3857,6 +4096,13 @@ def _estado_de(
         return EstadoParte(trabajo, INDEXADO, verificar.detalle)
     if manifiesto.cancelado:
         return _cancelado_de(trabajo)
+    if manifiesto.posible_duplicado and not manifiesto.batch_id:
+        # Con batch confirmado la fila dice lo que de verdad pasa con ese
+        # batch; sin el, lo unico que hay que contar es por que no se
+        # subio.
+        return EstadoParte(
+            trabajo, POSIBLE_DUPLICADO, manifiesto.posible_duplicado
+        )
     if identidad_fallida:
         return EstadoParte(
             trabajo,
@@ -4202,9 +4448,32 @@ def completar_partes(
     El que tenga una sola pagina fuera de verde se queda en la cola con el
     motivo anotado. Un batch que no se deja cerrar no corta a los demas:
     son batches distintos y lo escrito en cada uno ya esta escrito.
+
+    El marcado como posible duplicado tampoco se cierra. Completar lo manda
+    a Web Search, y si esas bitacoras ya estaban publicadas eso deja dos
+    copias del mismo documento en el archivo, que es lo que cuesta deshacer.
     """
     hechos: List[Tuple["Trabajo", ResultadoCompletar]] = []
     for trabajo in trabajos:
+        if es_posible_duplicado(trabajo):
+            motivo = trabajo.manifiesto.posible_duplicado
+            if avisar is not None:
+                avisar(
+                    f"{_prefijo(trabajo)}Posible duplicado: {motivo}; "
+                    "no se cierra",
+                    0,
+                    0,
+                )
+            hechos.append((
+                trabajo,
+                ResultadoCompletar(
+                    False,
+                    [],
+                    len(trabajo.manifiesto.registros),
+                    f"no se cierra porque {motivo}",
+                ),
+            ))
+            continue
         if trabajo.manifiesto.solo_subir:
             # El programa ya escribe todo lo confirmado. El batch se conserva
             # abierto para que una persona corrija solamente lo dudoso;
