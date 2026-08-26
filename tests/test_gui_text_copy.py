@@ -66,23 +66,58 @@ def test_la_bitacora_copia_varias_lineas_en_orden():
     assert QApplication.clipboard().text() == "10:01  Error\n10:02  Fin"
 
 
-def test_la_tabla_del_csv_copia_las_celdas_elegidas():
-    app = _app()
-    table = QTableWidget(2, 2)
-    for fila, valores in enumerate((("A320", "12"), ("B737", "13"))):
+def _tabla_por_filas(filas: tuple[tuple[str, ...], ...]) -> QTableWidget:
+    """Una tabla como las del CSV: elegir una fila la elige entera."""
+    table = QTableWidget(len(filas), len(filas[0]))
+    table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+    for fila, valores in enumerate(filas):
         for columna, valor in enumerate(valores):
             table.setItem(fila, columna, QTableWidgetItem(valor))
-    table.selectRow(0)
+    return table
+
+
+def test_el_csv_copia_la_celda_bajo_el_cursor_y_no_la_fila():
+    """Se pulsa una celda para copiar ese dato, no los diez de su fila."""
+    app = _app()
+    table = _tabla_por_filas((("A320", "2312238"), ("B737", "2312239")))
+    table.setCurrentCell(0, 1)
     table.show()
     app.processEvents()
 
     QApplication.clipboard().clear()
     QTest.keyClick(table, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
 
-    assert QApplication.clipboard().text() == "A320\t12"
+    assert QApplication.clipboard().text() == "2312238"
 
 
-def test_la_copia_omite_las_columnas_que_la_vista_resumida_oculta():
+def test_el_menu_del_csv_copia_la_celda_sobre_la_que_se_hizo_clic():
+    """Y no la que estuviera activa de antes, que casi nunca es esa."""
+    app = _app()
+    table = _tabla_por_filas((("A320", "2312238"), ("B737", "2312239")))
+    # Con menu propio: se comprueba que la celda sigue al clic sin abrir
+    # ningun menu, que en una prueba se quedaria esperando para siempre.
+    table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    table.setCurrentCell(0, 0)
+    table.show()
+    app.processEvents()
+
+    viewport = table.viewport()
+    destino = table.visualRect(table.model().index(1, 1)).center()
+    app.sendEvent(
+        viewport,
+        QContextMenuEvent(
+            QContextMenuEvent.Reason.Mouse,
+            destino,
+            viewport.mapToGlobal(destino),
+        ),
+    )
+
+    assert table.currentIndex().row() == 1
+    assert table.currentIndex().column() == 1
+
+
+def test_una_tabla_que_elige_por_celdas_copia_el_bloque_elegido():
+    """Ahi elegir varias es una decision, no un efecto de pulsar la fila."""
     app = _app()
     table = QTableWidget(1, 3)
     for columna, valor in enumerate(("A320", "oculta", "12")):
@@ -95,6 +130,7 @@ def test_la_copia_omite_las_columnas_que_la_vista_resumida_oculta():
     QApplication.clipboard().clear()
     QTest.keyClick(table, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
 
+    # Y sigue omitiendo lo que la vista resumida esconde.
     assert QApplication.clipboard().text() == "A320\t12"
 
 
