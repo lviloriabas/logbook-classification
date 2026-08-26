@@ -1293,6 +1293,73 @@ def test_cancelar_corta_la_espera_del_lote(app):
         worker._dormir(600.0)
 
 
+def test_cancelar_corta_tambien_la_sesion_que_esta_esperando(app):
+    """Entre dos pasos puede haber tres minutos de espera al servidor.
+
+    La bandera del hilo se mira entre paso y paso. Si el paso es una
+    petición, entre uno y otro caben sesenta segundos por intento, tres
+    intentos y sus esperas: cancelar no se notaba hasta entonces.
+    """
+    from app.gui.airvault_window import TrabajoAirVaultWorker
+
+    class SesionFalsa:
+        def __init__(self):
+            self.cancelada = False
+
+        def cancelar(self):
+            self.cancelada = True
+
+    sesion = SesionFalsa()
+    worker = TrabajoAirVaultWorker("comprobar", {"sesion": sesion})
+
+    worker.cancelar()
+
+    assert sesion.cancelada
+    assert worker.hay_que_parar()
+
+
+def test_cancelar_sin_sesion_abierta_no_falla(app):
+    """Se puede cancelar antes de que llegue a entrar a AirVault."""
+    from app.gui.airvault_window import TrabajoAirVaultWorker
+
+    worker = TrabajoAirVaultWorker("comprobar", {})
+    worker.cancelar()
+    assert worker.hay_que_parar()
+
+
+def test_soltar_los_batches_reanuda_la_sesion_cancelada(app, tmp_path):
+    """Soltar es trabajo que existe *porque* se canceló.
+
+    Con la sesión cortada, cada petición se negaría y los batches se
+    quedarían tomados en AirVault, que es justo lo que soltarlos evita.
+    """
+    class SesionFalsa:
+        def __init__(self):
+            self.cancelada = True
+
+        def reanudar(self):
+            self.cancelada = False
+
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        sesion = SesionFalsa()
+        soltados = []
+        ventana._estado["sesion"] = sesion
+        ventana._estado["cliente"] = object()
+        ventana._trabajos = [object()]
+        with patch(
+            "app.gui.airvault_window._soltar",
+            lambda trabajos, cliente: soltados.append(trabajos),
+        ):
+            ventana._soltar_lotes(esperar=True)
+
+        assert not sesion.cancelada
+        assert len(soltados) == 1
+    finally:
+        ventana._trabajos = []
+        ventana.close()
+
+
 def test_una_cancelacion_no_se_confunde_con_el_fallo_de_una_pagina(app):
     """Por eso no es una ``Exception``.
 
@@ -1745,13 +1812,17 @@ def test_la_vista_previa_abre_los_batches_de_la_ejecucion(app, tmp_path):
 
     abiertos = []
     with patch.object(
-        airvault_previa.VistaPreviaBatches, "exec",
+        airvault_previa.VistaPreviaBatches, "mostrar",
         lambda self: abiertos.append(self),
     ):
         ventana._vista_previa()
 
     assert len(abiertos) == 1
     cuadro = abiertos[0]
+    # Es una ventana aparte, no un cuadro que bloquee esta: la referencia la
+    # conserva la ventana que la abrió, que es lo que la mantiene viva.
+    assert cuadro in ventana._ventanas_de_consulta
+    assert cuadro.parent() is None
     assert cuadro.tabla.rowCount() > 1, "12 paginas con tope de 6 son varios"
     assert all(
         cuadro.tabla.item(fila, 3).text() == "Por subir"
@@ -1759,6 +1830,7 @@ def test_la_vista_previa_abre_los_batches_de_la_ejecucion(app, tmp_path):
     )
     # Mirar no prepara: la carpeta de trabajo sigue sin existir.
     assert not (tmp_path / "output" / "airvault").exists()
+    ventana.close()
 
 
 def test_la_vista_previa_avisa_de_la_ejecucion_sin_exportar(app, tmp_path, monkeypatch):

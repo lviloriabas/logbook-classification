@@ -223,9 +223,11 @@ espera de AirVault se distingue de un cuelgue. En las etapas sin cuenta
 marcha continua.
 
 **Cancelar** detiene lo que esté en marcha y suelta los batches que se hayan
-tomado en AirVault. Está disponible siempre que haya trabajo en vuelo, que
-puede ser largo: entrar a AirVault espera hasta cinco minutos y un batch
-tarda lo suyo en salir de la cola del servidor.
+tomado en AirVault. Está disponible siempre que haya trabajo en vuelo y
+corta en el acto: deja de reintentar, no espera a que el servidor conteste
+la petición en curso y abandona la ventana de acceso si estaba esperando
+a que alguien entrara. Lo ya escrito se conserva y al volver a comprobar
+se retoma sin repetirlo.
 
 **Cerrar** con un trabajo en marcha lo cancela y la ventana se va en cuanto
 AirVault suelte los batches. Cerrarla mientras se espera no pierde nada: al
@@ -258,7 +260,7 @@ escritas no se repiten y el PDF no se vuelve a subir.
 
 El botón derecho sobre una fila del historial ofrece dos eliminaciones. **Eliminar el registro de AirVault** manda a la Papelera lo que el programa recuerda de esa ejecución (sus manifiestos y el registro de batches de la entrega) para empezarla de nuevo. **Eliminar la ejecución…** manda a la Papelera su carpeta de `output/` entera, con su CSV, su JSON, sus estadísticas y sus PDF de entrega, y la quita de la lista. Ninguna de las dos modifica los batches que ya estén en AirVault. No se elimina la ejecución que se esté subiendo o indexando, ni un CSV abierto con **Otra ejecución…** que viva fuera de `output/`.
 
-**Vista previa…**, junto al título de la tabla de batches, adelanta el reparto sin preparar ni subir nada. De cada batch se abre la lista de sus bitácoras, que se mira como el visor de CSV: la hoja escaneada a la izquierda, la tabla a la derecha, un buscador encima y las columnas ordenables con un clic en su cabecera. Elija una fila (o haga doble clic) para ver su hoja. La columna **Estado** dice «Por indexar» mientras falte, «Indexada» cuando ya se escribió en AirVault y «Completada» cuando además se cerró el batch; si algo bloquea la página, dice qué.
+**Vista previa…**, junto al título de la tabla de batches, adelanta el reparto sin preparar ni subir nada. De cada batch se abre la lista de sus bitácoras, que se mira como el visor de CSV: la hoja escaneada a la izquierda, la tabla a la derecha, un buscador encima y las columnas ordenables con un clic en su cabecera. Las dos son ventanas aparte, con su entrada en la barra de tareas: no bloquean la ventana de AirVault, que puede seguir subiendo mientras se las mira, y se pueden tener varias abiertas comparando batches. Cerrar la ventana de AirVault las cierra. Elija una fila (o haga doble clic) para ver su hoja. La columna **Estado** dice «Por indexar» mientras falte, «Indexada» cuando ya se escribió en AirVault y «Completada» cuando además se cerró el batch; si algo bloquea la página, dice qué.
 
 La descripción técnica está en [el manual del indexado](airvault-indexado.md).
 

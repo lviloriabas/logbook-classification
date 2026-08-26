@@ -2,6 +2,20 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-25 - Ver las bitácoras de un batch responde, y es una ventana aparte
+
+Ordenar por una columna la lista de bitácoras de un batch tardaba 218 segundos. No era el reordenamiento: las columnas estaban en «ajustar al contenido», y ese modo no mide una vez sino cada vez que cambia una celda. Reubicar las 2.800 celdas de un batch de 400 páginas obligaba a Qt a repasar la columna entera 2.800 veces. Ahora se miden una sola vez, con la tabla ya llena y mirando las primeras 64 filas, y las columnas quedan en modo ajustable: el mismo ancho de partida, más la posibilidad de arrastrar el borde, que con el modo anterior no existía. Ordenar pasa a tardar 12 milisegundos y elegir una fila, 10. Abrir la lista baja de un segundo a un cuarto.
+
+La lista se abría además como un cuadro modal colgado de la ventana de AirVault: bloqueaba la ventana desde la que salía, que puede estar subiendo una entrega, y Windows no le daba entrada propia en la barra de tareas. Ahora es una ventana como las demás (el visor de CSV, la de AirVault): sin dueño a nivel del sistema, con su botón en la barra de tareas y su botón de minimizar, y con su propia hoja de estilo, que sin dueño ya no se hereda. Lo mismo vale para la vista previa de batches, de la que sale. Se pueden tener varias abiertas a la vez comparando batches. Cerrar la ventana de la que salieron las cierra: son consultas sobre esa entrega y sueltas mantendrían el programa abierto sin nada que mirar.
+
+## 2026-08-25 - Cancelar en AirVault se nota en el acto
+
+Cancelar ponía una bandera que el hilo miraba entre paso y paso. El problema es lo que cabe entre dos pasos: una petición espera hasta 60 segundos, se reintenta tres veces y entre intento e intento espera 5 y 10 segundos, así que pulsar Cancelar y no ver nada durante tres minutos era lo normal. Con la ventana de acceso de Edge abierta la espera llegaba a cinco minutos.
+
+Ahora la cancelación llega también a la sesión HTTP. Deja de reintentar (no hay nada que insistirle a un servidor del que ya nadie espera respuesta), corta la espera entre intentos en el momento, y cierra el pool de conexiones, que es lo único capaz de abortar una petición que ya está esperando respuesta: `requests` no ofrece forma de interrumpirla desde otro hilo. El corte que eso provoca no se cuenta como un fallo de red, porque no lo es. Las esperas del navegador entre dos lecturas de las cookies pasan por el mismo sitio, así que la ventana de acceso también se puede abandonar.
+
+Cerrar el pool no inutiliza la sesión: soltar en AirVault los batches que quedaron tomados son peticiones que existen precisamente porque se canceló, y se hacen con la misma sesión reanudada. Cualquier acción nueva la reanuda igual. Las sesiones paralelas (subir e indexar avanzan por carriles distintos) comparten la cancelación, porque cancelar es una decisión del trabajo y no de un carril.
+
 ## 2026-08-25 - La tabla del visor deja de copiarse celda a celda, y la fila entera se sombrea
 
 El visor de CSV guardaba un `QTableWidgetItem` por celda. Una ejecución de dos mil cuatrocientas páginas por ochenta y seis columnas son doscientas siete mil celdas: abrir el CSV costaba más de cuatro segundos y cada clic en una cabecera movía esas doscientas siete mil celdas de sitio, medio segundo con la ventana muerta en el que el orden parecía no aplicarse. Ahora la tabla no guarda nada: lee del CSV que ya está en memoria y pinta solo lo que se ve. Ordenar es reordenar una lista de índices, así que el mismo clic tarda veinticinco milisegundos, y abrir la ejecución baja de cuatro segundos y medio a menos de uno.
