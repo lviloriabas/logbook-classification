@@ -23,6 +23,10 @@ from app.gui.airvault_previa import BitacorasDelBatch, VistaPreviaBatches
 from app.airvault.flujo import BatchPrevisto
 
 
+#: Columna «Log Page» de la lista de páginas de un batch.
+LOG_PAGE = 3
+
+
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication([])
@@ -136,11 +140,45 @@ def test_ordenar_por_una_columna_no_despista_al_visor(
     cuadro = _cuadro(tmp_path)
     try:
         # Log Page, de mayor a menor: la segunda bitácora pasa a la primera.
-        cuadro.orden.cycle_column(2)
-        assert cuadro.tabla.item(0, 2).text() == "2271621"
+        cuadro.orden.cycle_column(LOG_PAGE)
+        assert cuadro.tabla.item(0, LOG_PAGE).text() == "2271621"
 
         cuadro.tabla.selectRow(0)
         assert cuadro.visor._page == 7
+    finally:
+        cuadro.visor.shutdown()
+        cuadro.close()
+        app.processEvents()
+
+
+def test_la_separadora_no_deja_a_la_vista_la_hoja_de_otra(
+    app, tmp_path: Path, sin_rasterizar
+):
+    """No sale de ningún escaneo, y el panel tiene que decirlo.
+
+    Su fila entra igual en la secuencia del visor: es lo que mantiene la
+    numeración del panel pegada a la del batch, que es la que se busca en
+    Web Index.
+    """
+    csv = _ejecucion(tmp_path)
+    cuadro = BitacorasDelBatch(
+        "DP | BITS",
+        [
+            Registro(seq=1, separador="HP-1848CMP"),
+            _bitacora(2, 4, "2271620"),
+            _bitacora(3, 7, "2271621"),
+        ],
+        csv=csv,
+    )
+    try:
+        # Se abre en la separadora, que es la primera página del batch.
+        assert cuadro.visor._path is None
+        assert "hoja escaneada" in cuadro.visor.image.text()
+
+        cuadro.tabla.selectRow(1)
+        assert cuadro.visor._page == 4
+        # Segunda página del batch, no primera bitácora de la lista.
+        assert cuadro.visor._global_index == 2
     finally:
         cuadro.visor.shutdown()
         cuadro.close()

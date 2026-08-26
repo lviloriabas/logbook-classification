@@ -25,6 +25,10 @@ from app.airvault.model import Registro
 from app.gui.airvault_previa import BitacorasDelBatch, VistaPreviaBatches
 
 
+#: Columna «Log Page» de la lista de páginas de un batch.
+LOG_PAGE = 3
+
+
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication([])
@@ -148,17 +152,20 @@ def test_las_columnas_se_miden_una_vez_y_quedan_ajustables(app):
 
 
 def test_ordenar_un_batch_entero_es_inmediato(app):
-    """Cuatrocientas bitácoras por siete columnas tardaban 218 segundos."""
+    """Cuatrocientas bitácoras por ocho columnas: eran 218 segundos."""
     cuadro = BitacorasDelBatch("DP | BITS", _batch(400))
     try:
         assert cuadro.tabla.rowCount() == 400
 
         inicio = time.monotonic()
-        cuadro.orden.cycle_column(2)  # Log Page, de mayor a menor
+        cuadro.orden.cycle_column(LOG_PAGE)  # de mayor a menor
         app.processEvents()
         tardanza = time.monotonic() - inicio
 
-        assert cuadro.tabla.item(0, 2).text() >= cuadro.tabla.item(1, 2).text()
+        assert (
+            cuadro.tabla.item(0, LOG_PAGE).text()
+            >= cuadro.tabla.item(1, LOG_PAGE).text()
+        )
         # Margen enorme a propósito: lo que se vigila es el orden de
         # magnitud, no el rendimiento del equipo que corra la prueba.
         assert tardanza < 5.0, f"ordenar tardó {tardanza:.1f} s"

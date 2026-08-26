@@ -1,9 +1,10 @@
-"""Los cuadros de la vista previa: los batches y las bitácoras de cada uno.
+"""Los cuadros de la vista previa: los batches y las páginas de cada uno.
 
 No tocan la red ni el disco: reciben lo que el módulo ya calculó y solo
 tienen que enseñarlo entero. Lo que se comprueba es que no se pierda ni se
-invente ninguna fila, que los separadores no pasen por bitácoras y que
-elegir un batch lleve a su lista.
+invente ninguna fila, que la lista de un batch enseñe sus páginas con los
+valores que van a quedar escritos en AirVault, que los separadores ocupen su
+fila sin pasar por bitácoras y que elegir un batch lleve a su lista.
 """
 
 from __future__ import annotations
@@ -57,41 +58,75 @@ def previsto(nombre="DP | BITS", registros=None, **extra):
 
 # ── la lista de bitácoras de un batch ──────────────────────────────
 
-def test_los_separadores_no_cuentan_como_bitacoras(app):
-    """Ocupan página en el batch, pero no son documentos que indexar."""
+# Columnas de la lista de páginas de un batch, por si cambian de sitio.
+PAGINA, ORIGEN, MATRICULA, LOG_PAGE = 0, 1, 2, 3
+VUELO, END_DATE, ESTADO, AVISOS = 4, 5, 6, 7
+
+
+def test_los_separadores_ocupan_su_fila_sin_ser_bitacoras(app):
+    """Corren la numeración del batch: sin ellos la página no cuadra."""
     registros = [separador(1), bitacora(2), bitacora(3, log="2271621")]
 
     cuadro = BitacorasDelBatch("DP | BITS", registros)
 
-    assert cuadro.tabla.rowCount() == 2
-    assert cuadro.tabla.item(0, 2).text() == "2271620"
-    assert cuadro.tabla.item(1, 2).text() == "2271621"
+    assert cuadro.tabla.rowCount() == 3
+    # La divisoria no es un documento: no lleva datos de índice, y lo único
+    # suyo es la etiqueta con la que se imprimió.
+    assert cuadro.tabla.item(0, MATRICULA).text() == "HP-1848CMP"
+    assert cuadro.tabla.item(0, ORIGEN).text() == ""
+    assert cuadro.tabla.item(0, LOG_PAGE).text() == ""
+    assert cuadro.tabla.item(0, ESTADO).text() == "Separador"
+    assert cuadro.tabla.item(1, LOG_PAGE).text() == "2271620"
+    assert cuadro.tabla.item(2, LOG_PAGE).text() == "2271621"
 
 
-def test_cada_bitacora_dice_la_pagina_que_ocupa_en_el_batch(app):
+def test_cada_pagina_dice_el_numero_que_ocupa_en_el_batch(app):
     """Es el número con el que se la busca en Web Index."""
     registros = [separador(1), bitacora(2), bitacora(3, log="2271621")]
 
     cuadro = BitacorasDelBatch("DP | BITS", registros)
 
-    assert cuadro.tabla.item(0, 0).text() == "2"
-    assert cuadro.tabla.item(1, 0).text() == "3"
-    assert cuadro.tabla.item(0, 5).text() == "paginas.pdf, p. 2"
+    assert cuadro.tabla.item(0, PAGINA).text() == "1"
+    assert cuadro.tabla.item(1, PAGINA).text() == "2"
+    assert cuadro.tabla.item(2, PAGINA).text() == "3"
+    assert cuadro.tabla.item(1, ORIGEN).text() == "paginas.pdf, p. 2"
 
 
-def test_un_aviso_manda_sobre_el_estado(app):
-    """Lo que importa de una página bloqueada es por qué lo está."""
+def test_las_columnas_son_los_campos_importantes(app):
+    """Los que el programa marca, no todo lo que lleva el registro.
+
+    Lo que se le escribe a la página además de esto (Doc Type, Fleet,
+    Lessor, Audit Status) está en el reporte de revisión: aquí sobra.
+    """
+    cuadro = BitacorasDelBatch("DP | BITS", [bitacora(1, fleet="737")])
+
+    assert cuadro.COLUMNAS == (
+        "Página", "Origen", "Matrícula", "Log Page", "Vuelo", "End Date",
+        "Estado", "Avisos",
+    )
+    assert cuadro.tabla.item(0, MATRICULA).text() == "HP-1848CMP"
+    assert cuadro.tabla.item(0, VUELO).text() == "703"
+    # La fecha sale en el formato de AirVault, no en el del CSV.
+    assert cuadro.tabla.item(0, END_DATE).text() == "08/11/2026"
+
+
+def test_el_aviso_no_tapa_el_estado_de_la_pagina(app):
+    """Son dos preguntas: cómo quedó y qué le impide escribirse."""
     registros = [
         bitacora(1),
         bitacora(2, log="2271621", avisos=["sin matricula"]),
         bitacora(3, log="2271622", estado=EstadoRegistro.ESCRITA),
+        bitacora(4, log="2271623", duplicado=True, discrepancia=True),
     ]
 
     cuadro = BitacorasDelBatch("DP | BITS", registros)
 
-    assert cuadro.tabla.item(0, 6).text() == "Por indexar"
-    assert cuadro.tabla.item(1, 6).text() == "sin matricula"
-    assert cuadro.tabla.item(2, 6).text() == "Indexada"
+    assert cuadro.tabla.item(0, ESTADO).text() == "Por indexar"
+    assert cuadro.tabla.item(0, AVISOS).text() == ""
+    assert cuadro.tabla.item(1, ESTADO).text() == "Por indexar"
+    assert cuadro.tabla.item(1, AVISOS).text() == "sin matricula"
+    assert cuadro.tabla.item(2, ESTADO).text() == "Indexada"
+    assert cuadro.tabla.item(3, AVISOS).text() == "duplicada; discrepancia"
 
 
 def test_un_batch_completado_dice_que_sus_bitacoras_lo_estan(app):
@@ -103,9 +138,9 @@ def test_un_batch_completado_dice_que_sus_bitacoras_lo_estan(app):
 
     cuadro = BitacorasDelBatch("DP | BITS", registros, completado=True)
 
-    assert cuadro.tabla.item(0, 6).text() == "Completada"
+    assert cuadro.tabla.item(0, ESTADO).text() == "Completada"
     # Lo que no se escribió no se completó con el batch.
-    assert cuadro.tabla.item(1, 6).text() == "Omitida"
+    assert cuadro.tabla.item(1, ESTADO).text() == "Omitida"
 
 
 # ── la vista previa de los batches ─────────────────────────────────
