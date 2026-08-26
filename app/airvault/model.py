@@ -155,6 +155,16 @@ class Manifiesto(BaseModel):
     # Se saco de la cola a mano. No se sube, no se busca y no se indexa
     # hasta que alguien lo reanude; lo que ya este hecho se conserva.
     cancelado: bool = False
+    # Por que se sospecha que este batch ya esta en AirVault. Vacio es lo
+    # normal; con texto, el batch no se sube, no se reenvia y no se
+    # completa solo, y ese mismo texto es lo que se enseña en la cola.
+    #
+    # Es una sospecha y no una certeza a proposito: las senales que la
+    # levantan (una bitacora suya ya anotada en otro batch, o publicada en
+    # Web Search) demuestran que el documento esta arriba, no que este
+    # batch sea el que lo subio. Decidirlo es de quien mira AirVault, y por
+    # eso se puede quitar a mano; lo que el programa no hace es seguir solo.
+    posible_duplicado: str = ""
     # El propio programa cerro el batch al terminar de indexarlo. Distingue
     # lo que quedo terminado sin que nadie interviniera de lo que ya estaba
     # cerrado en AirVault cuando se encontro.
