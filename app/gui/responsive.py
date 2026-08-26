@@ -136,7 +136,13 @@ COMPACT = Density(
     group_row_spacing=3,
     group_column_spacing=4,
     bottom_pane_height=140,
-    bottom_min_height=92,
+    # Veinte píxeles menos que antes, que son los que ocupa la línea de
+    # pasos del proceso automático. En una pantalla de 768 la ventana ya
+    # estaba en su techo y no cabía una fila más; de las dos, la que puede
+    # ceder es esta, que solo enseña menos archivos a la vez y se desplaza,
+    # mientras que la línea de pasos o se ve entera o no dice nada. Con
+    # sitio de sobra el separador le da bastante más que su suelo.
+    bottom_min_height=72,
     log_min_width=200,
     name_column_width=150,
     preview_min_width=200,

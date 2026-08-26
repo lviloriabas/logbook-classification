@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -32,11 +33,13 @@ from PySide6.QtWidgets import (
 )
 
 from app.airvault.config import AirVaultConfig
+from app.gui.automatizacion import OpcionesAutomatizacion
 from app.gui.airvault_window import (
     ANCHO_MAXIMO_NOMBRE_BATCH,
     ANCHO_MINIMO_NOMBRE_BATCH,
     COLOR_INDEXADO,
     AirVaultWindow,
+    TrabajoAirVaultWorker,
     csv_de_corrida,
 )
 
@@ -49,8 +52,15 @@ def app():
 
 
 @pytest.fixture
-def ventana(app):
-    return AirVaultWindow(RAIZ)
+def ventana(app, tmp_path):
+    """La ventana sobre el historial real, con sus opciones en un aparte.
+
+    Los pasos del proceso automático tienen memoria en disco, y esa memoria
+    es el ``airvault.json`` del repositorio: sin darle uno propio, cada
+    prueba que toca «Comprobar cada» o «Completar batch» le cambia la
+    configuración a quien ejecuta el programa, y a la prueba siguiente.
+    """
+    return AirVaultWindow(RAIZ, OpcionesAutomatizacion(tmp_path))
 
 
 def corrida(
@@ -196,17 +206,42 @@ def test_la_espera_automatica_empieza_en_dos_minutos(ventana):
     assert ventana.minutos_spin.parentWidget() is ventana.minutos_control
 
 
-def test_el_menu_de_automatizacion_empieza_oculto_y_es_secuencial(ventana):
-    assert ventana.menu_automatizacion.isHidden()
-    assert ventana.auto_subir_check.isChecked()
-    assert ventana.auto_esperar_check.isChecked()
-    assert ventana.auto_indexar_check.isChecked()
-    # Cerrar el batch se elige una sola vez, en el menú principal.
-    assert not hasattr(ventana, "auto_completar_check")
+def test_los_pasos_automaticos_son_un_menu_y_no_un_panel(ventana):
+    """Empotrados ocupaban media ventana; ahora se abren encima de ella."""
+    from app.gui.automatizacion import INDEXAR, MenuAutomatizacion
 
-    ventana.auto_esperar_check.setChecked(False)
-    assert not ventana.auto_indexar_check.isChecked()
-    assert not ventana.auto_indexar_check.isEnabled()
+    assert not hasattr(ventana, "auto_subir_check")
+    assert not hasattr(ventana, "auto_esperar_check")
+    assert not hasattr(ventana, "auto_indexar_check")
+    assert isinstance(ventana.menu_automatizacion, MenuAutomatizacion)
+    # Un menú no forma parte del reparto de la ventana: no ocupa alto.
+    assert ventana.menu_automatizacion.parentWidget() is ventana
+    assert not ventana.menu_automatizacion.isVisible()
+    assert ventana.menu_automatizacion.accion(INDEXAR).isCheckable()
+    # Continuar y reiniciar estaban escondidos detrás de ese botón; son
+    # acciones de esta ventana y se quedan a la vista.
+    assert ventana.boton_continuar is not None
+    assert ventana.boton_reiniciar is not None
+
+
+def test_comprobar_cada_es_la_misma_espera_que_la_ventana_principal(
+    app, tmp_path,
+):
+    """Una casilla en cada ventana, un solo valor y con memoria."""
+    opciones = OpcionesAutomatizacion(tmp_path)
+    ventana = AirVaultWindow(RAIZ, opciones)
+
+    assert ventana.auto_check.isChecked()
+
+    ventana.auto_check.setChecked(False)
+    assert not opciones.esperar
+    # Y sin espera no queda nada que indexar solo: la cadena se apaga entera.
+    assert not opciones.indexar
+    assert not opciones.completar
+
+    opciones.fijar("esperar", True)
+    assert ventana.auto_check.isChecked()
+    ventana.close()
 
 
 def test_la_ventana_usa_batch_en_sus_campos_y_tabla(ventana):
@@ -514,6 +549,7 @@ class ManifiestoFalso:
         self.busquedas_amplias_sin_hallar = 0
         self.completado_automatico = False
         self.cancelado = False
+        self.posible_duplicado = ""
         # Que una parte este verificada es lo que demuestra que AirVault
         # publico lo que se subio despues de otra, asi que la regla de
         # reenvio lo pregunta.
@@ -599,7 +635,7 @@ def test_cada_click_en_subir_confirma_los_batches_en_airvault(
     monkeypatch.setattr(
         ventana, "_comprobar", lambda: comprobaciones.append(True)
     )
-    ventana.auto_esperar_check.setChecked(False)
+    ventana.auto_check.setChecked(False)
     ventana._comprobar_al_terminar = False
 
     ventana._al_subir({"trabajos": [TrabajoFalso()], "cliente": object()})
@@ -856,24 +892,41 @@ def test_sin_comprobacion_automatica_la_resubida_se_pide_a_mano(ventana):
     assert not ventana._subir_al_terminar
 
 
-def test_cada_reenvio_espera_mas_pero_no_se_deja_de_insistir(ventana):
-    """Rendirse dejaba el batch fuera de AirVault para siempre.
+def test_cada_reenvio_espera_mas_que_el_anterior(ventana):
+    """Una cola que solo va lenta no recibe el mismo archivo cada vuelta."""
+    from app.airvault.flujo import MAXIMO_REENVIOS
 
-    Un archivo que no llegó no se arregla por dejar de mandarlo. Lo que
-    crece es el margen entre un intento y el siguiente, así que una cola
-    que solo va lenta no recibe el mismo archivo cada vuelta del reloj.
-    """
     ventana._al_comprobar({
-        "estados": [estancada(reenvios=5)],
+        "estados": [estancada(reenvios=MAXIMO_REENVIOS - 1)],
         "planes": {}, "partes": [], "reporte": None,
     })
 
     assert "sin pulsar nada" in ventana.resumen.text()
     assert "espera más que el anterior" in ventana.resumen.text()
     assert ventana._subir_al_terminar
-    # Seis veces la espera configurada, en minutos, en el propio aviso.
-    assert "180 minutos" in ventana.resumen.text()
+    # Dos veces la espera configurada, en minutos, en el propio aviso.
+    assert "60 minutos" in ventana.resumen.text()
     assert ventana._vigilante is not None and ventana._vigilante.isActive()
+
+
+def test_agotado_el_tope_de_reenvios_deja_de_mandarlo_solo(ventana):
+    """Insistir es como acaban varias copias del mismo batch en la cola.
+
+    Las tres señales que dan una carga por perdida pueden dispararse
+    mientras AirVault todavía la está procesando. Al tercer intento lo que
+    falla ya no es el envío, así que la decisión pasa a quien mira Web
+    Index, que es el único que distingue «no llegó» de «va lento».
+    """
+    from app.airvault.flujo import MAXIMO_REENVIOS
+
+    ventana._al_comprobar({
+        "estados": [estancada(reenvios=MAXIMO_REENVIOS)],
+        "planes": {}, "partes": [], "reporte": None,
+    })
+
+    assert "no se vuelven a mandar solos" in ventana.resumen.text()
+    assert "Subir a AirVault ahora" in ventana.resumen.text()
+    assert not ventana._subir_al_terminar
 
 
 def test_un_archivo_sin_subir_no_se_queda_esperando(ventana):
@@ -1847,3 +1900,100 @@ def test_la_vista_previa_avisa_de_la_ejecucion_sin_exportar(app, tmp_path, monke
     ventana._vista_previa()
 
     assert avisos and "exportar" in avisos[0]
+
+
+# ── que lo automático no salga de la ejecución elegida ─────────────
+#
+# La ventana puede retomar batches que quedaron a medias en ejecuciones de
+# días anteriores. Eso vale cuando alguien lo pide, porque está mirando;
+# hacerlo solo, en mitad de la cadena automática o en una vuelta del reloj,
+# mandaba a AirVault batches de otro día que nadie había pedido, y es por
+# donde acababan subidos dos veces.
+
+class WorkerDePrueba(TrabajoAirVaultWorker):
+    """El worker sin hilo: solo se le pregunta a qué ejecuciones llega."""
+
+    def __init__(self, estado):
+        super().__init__("comprobar", estado)
+
+
+def _worker_que_puede_recuperar(tmp_path, monkeypatch, recuperar):
+    """Un worker con un batch pendiente de otro día esperando ahí fuera."""
+    from app.airvault import flujo
+
+    ajeno = TrabajoFalso(nombre="DP | AYER", carpeta=str(tmp_path / "ayer"))
+    ajeno.carpeta = Path(ajeno.carpeta)
+    monkeypatch.setattr(
+        flujo, "cargar_trabajos_pendientes", lambda *a, **k: [ajeno]
+    )
+    monkeypatch.setattr(flujo, "estado_local", lambda t: parte("buscando"))
+    estado = {
+        "config": AirVaultConfig(),
+        "raiz": tmp_path,
+        "trabajos": [],
+        "recuperar_pendientes": recuperar,
+    }
+    return WorkerDePrueba(estado), estado
+
+
+def test_la_cadena_automatica_no_recoge_batches_de_otros_dias(
+    app, tmp_path, monkeypatch
+):
+    worker, estado = _worker_que_puede_recuperar(tmp_path, monkeypatch, False)
+
+    worker._detectar_pendientes()
+
+    assert estado["trabajos"] == []
+
+
+def test_el_boton_de_subir_si_recoge_lo_que_quedo_a_medias(
+    app, tmp_path, monkeypatch
+):
+    """Pulsarlo significa «ponte al día», y quien lo pulsa está mirando."""
+    worker, estado = _worker_que_puede_recuperar(tmp_path, monkeypatch, True)
+
+    worker._detectar_pendientes()
+
+    assert [t.manifiesto.nombre_batch for t in estado["trabajos"]] == [
+        "DP | AYER"
+    ]
+
+
+def test_solo_el_boton_pide_recuperar_y_solo_por_una_vez(ventana, tmp_path):
+    csv = corrida(RAIZ, nombre="BITS 26 AUG 2026 05 00")
+    try:
+        ventana.corrida_edit.setText(str(csv))
+        ventana.lote_edit.setText("DP | BIT")
+
+        ventana._recuperar_pendientes = True
+        assert ventana._base_del_estado()["recuperar_pendientes"]
+        # Y la siguiente acción, que puede ser una vuelta del reloj, ya no.
+        assert not ventana._base_del_estado()["recuperar_pendientes"]
+    finally:
+        shutil.rmtree(csv.parent.parent, ignore_errors=True)
+
+
+# ── el posible duplicado ───────────────────────────────────────────
+
+def test_quitar_la_marca_devuelve_la_fila_a_la_cola(ventana):
+    """La sospecha prueba que las bitácoras están en AirVault.
+
+    No prueba quién las subió: pueden haber llegado por otro batch, por
+    otra persona o por una carga anterior de esta misma ejecución. Eso lo
+    decide quien mira AirVault, y aquí solo se quita la marca.
+    """
+    from app.airvault.flujo import POSIBLE_DUPLICADO
+
+    fila = parte(POSIBLE_DUPLICADO, "DP | BIT -2", "ya se mandaron")
+    fila.trabajo.manifiesto.posible_duplicado = "ya se mandaron"
+    ventana._estados = [fila]
+    ventana._trabajos = [fila.trabajo]
+
+    ventana._quitar_sospecha([fila])
+
+    assert not fila.trabajo.manifiesto.posible_duplicado
+    assert ventana._estados[0].estado != POSIBLE_DUPLICADO
+    assert any(
+        "posible duplicado" in ventana.bitacora.item(i).text()
+        for i in range(ventana.bitacora.count())
+    )

@@ -86,6 +86,12 @@ from app.gui.fleet_editor import FLEET_FILENAME, FleetEditorDialog, FleetStore
 from app.gui.responsive import COMPACT, Density, density_for, fit_to_screen
 from app.gui.table_sort import ColumnSortController
 from app.gui.airvault_window import AIRVAULT_TOOLTIP, AirVaultWindow
+from app.gui import automatizacion as pasos_automaticos
+from app.gui.automatizacion import (
+    CadenaAutomatica,
+    MenuAutomatizacion,
+    OpcionesAutomatizacion,
+)
 from app.gui.depuracion_dialog import DEPURAR_TOOLTIP, DepurarPaginasDialog
 from app.gui.widgets import (
     APP_CHROME_QSS,
@@ -410,6 +416,12 @@ class MainWindow(QMainWindow):
         self._outputs_context: str | None = None
         self._corrida_dir: Path | None = None
         self._pending_export = False
+        # Los pasos que encadena «Automático». Se leen del JSON portable al
+        # arrancar y los comparten las ventanas de AirVault que se abran.
+        self._automatizacion = OpcionesAutomatizacion(SCRIPT_DIR, self)
+        # Si la ejecución en curso la lanzó ese botón. Es lo único que
+        # distingue una exportación normal de un eslabón de la cadena.
+        self._auto_en_marcha = False
         self._pending_csv_refresh = False
         self._preview_page = 1
         self._preview_total = 0
@@ -759,6 +771,12 @@ class MainWindow(QMainWindow):
         root.addWidget(controls, 0)
 
         root.addLayout(self._build_progress_row())
+        # Debajo de la barra porque cuenta lo mismo a otra escala: la barra
+        # dice cuánto falta del paso en curso y la cadena, cuántos pasos
+        # faltan de la entrega. Los cuatro últimos ocurren en la ventana de
+        # AirVault y llegan aquí por su señal de avance.
+        self.cadena = CadenaAutomatica(self._automatizacion)
+        root.addWidget(self.cadena)
         root.addWidget(self._build_splitter(), stretch=1)
 
         bottom = self._build_bottom_splitter()
@@ -1209,6 +1227,27 @@ class MainWindow(QMainWindow):
         self.btn_airvault.setToolTip(AIRVAULT_TOOLTIP)
         self.btn_airvault.clicked.connect(lambda: self._open_airvault())
         self._desplegables_row.insertWidget(1, self.btn_airvault)
+
+        # Los pasos de «Automático». Estaban en la ventana de AirVault, donde
+        # solo se veían después de procesar y solo decidían el tramo final;
+        # aquí deciden la cadena entera, que es lo que el botón ejecuta.
+        # Van en un menú y no en un panel desplegable: empotrados le quitaban
+        # alto a la vista previa y a la tabla, y en una pantalla baja los
+        # últimos pasos quedaban fuera del borde de la ventana.
+        self.btn_automatizacion = QPushButton("Automatización…")
+        self.btn_automatizacion.setToolTip(
+            "Hasta dónde continúa «Automático»: qué pasos encadena después "
+            "de procesar y cuáles se saltan."
+        )
+        self.menu_automatizacion = MenuAutomatizacion(
+            self._automatizacion, self
+        )
+        self.btn_automatizacion.clicked.connect(
+            lambda: self.menu_automatizacion.abrir_sobre(
+                self.btn_automatizacion
+            )
+        )
+        self._desplegables_row.insertWidget(2, self.btn_automatizacion)
         return panel
 
     def _open_airvault(self) -> None:
@@ -1225,11 +1264,12 @@ class MainWindow(QMainWindow):
             # no recibe una entrada propia en la barra de tareas. La
             # referencia de esta clase basta para conservarla viva y el
             # cierre ordenado se hace en ``_teardown``.
-            ventana = AirVaultWindow(SCRIPT_DIR)
+            ventana = AirVaultWindow(SCRIPT_DIR, self._automatizacion)
             ventana.setWindowIcon(self.windowIcon())
             ventana.abrir_corrida_paralela.connect(
                 self._open_airvault_corrida
             )
+            ventana.avance_automatico.connect(self._al_avanzar_airvault)
             self._airvault_windows.append(ventana)
             self._airvault_window = ventana
             if self._airvault_corrida is not None:
@@ -1237,6 +1277,23 @@ class MainWindow(QMainWindow):
         ventana.show()
         ventana.raise_()
         ventana.activateWindow()
+
+    def _al_avanzar_airvault(self, paso: str, estado: str) -> None:
+        """Lleva a la línea de pasos lo que ocurre en AirVault.
+
+        Solo de la ejecución que esta ventana mandó subir. Se pueden tener
+        varias ventanas de AirVault abiertas a la vez, cada una con su
+        ejecución, y contar el avance de otra en esta línea diría que la
+        entrega de aquí va por donde va la de al lado.
+        """
+        ventana = self.sender()
+        if (
+            self._airvault_corrida is None
+            or ventana is None
+            or ventana.corrida() != self._airvault_corrida
+        ):
+            return
+        self.cadena.marcar(paso, estado)
 
     def _open_airvault_corrida(self, csv: str) -> None:
         """Abre otra ejecución sin tocar la ventana que ya está ocupada."""
@@ -1317,7 +1374,6 @@ class MainWindow(QMainWindow):
         row.addWidget(time_summary)
 
         self.btn_process = QPushButton("Procesar")
-        self.btn_process.setObjectName("primaryButton")
         self.btn_process.setDefault(True)
         self.btn_process.clicked.connect(self._start_processing)
 
@@ -1351,6 +1407,20 @@ class MainWindow(QMainWindow):
         self.btn_depurar.setToolTip(DEPURAR_TOOLTIP)
         self.btn_depurar.clicked.connect(self._depurar_paginas)
         row.addWidget(self.btn_depurar)
+
+        # El de siempre, pero sin volver a pulsar nada entre paso y paso.
+        # Se lleva el azul porque es el que hace la entrega entera; los
+        # demás siguen ahí para hacer un solo tramo cuando hace falta.
+        self.btn_automatico = QPushButton("Automático")
+        self.btn_automatico.setObjectName("primaryButton")
+        self.btn_automatico.setToolTip(
+            "Hace de una sola vez todo lo que esté marcado en "
+            "«Automatización…»: procesa, exporta y, si se pidió, depura, "
+            "sube la entrega a AirVault y la escribe allí. Cada paso arranca "
+            "solo al terminar el anterior; «Cancelar» corta la cadena."
+        )
+        self.btn_automatico.clicked.connect(self._start_automatico)
+        row.addWidget(self.btn_automatico)
         return row
 
     def _set_time_summary(
@@ -2234,6 +2304,7 @@ class MainWindow(QMainWindow):
         for boton in (
             getattr(self, "btn_process", None),
             getattr(self, "btn_preprocess", None),
+            getattr(self, "btn_automatico", None),
         ):
             if boton is not None:
                 boton.setEnabled(listo)
@@ -2765,6 +2836,7 @@ class MainWindow(QMainWindow):
 
         self.btn_process.setEnabled(False)
         self.btn_preprocess.setEnabled(False)
+        self.btn_automatico.setEnabled(False)
         self.btn_export.setEnabled(False)
         self._rearmar_cancelar()
         total = total_pages(slices)
@@ -2823,6 +2895,158 @@ class MainWindow(QMainWindow):
         self.csv_columns_toggle.setEnabled(False)
         self.csv_columns_toggle.setVisible(False)
         self._clear_times()
+
+    def _start_automatico(self) -> None:
+        """Procesa y sigue solo hasta donde diga «Automatización…».
+
+        No repite lo que ya hacen los botones sueltos: arranca el mismo
+        procesamiento y se limita a marcar que, al terminar cada paso, el
+        siguiente empieza sin esperar a que nadie pulse nada. Si el
+        procesamiento no llega a arrancar (falta la entrada, la plantilla, o
+        se rechaza descartar la ejecución anterior) la marca se retira y
+        todo queda como estaba.
+        """
+        self._auto_en_marcha = True
+        self.cadena.reiniciar()
+        self._start_processing()
+        if self._worker is None or not self._worker.isRunning():
+            self._auto_en_marcha = False
+            return
+        self.cadena.marcar(pasos_automaticos.PROCESAR, pasos_automaticos.EN_CURSO)
+        pasos = self._pasos_automaticos()
+        logger.info(f"Proceso automático: {pasos}")
+        self.status_label.setText(f"Procesando… ({pasos})")
+
+    def _pasos_automaticos(self) -> str:
+        """Los pasos elegidos, en una línea, para la bitácora y el estado."""
+        opciones = self._automatizacion
+        pasos = ["procesar"]
+        if opciones.depurar:
+            pasos.append("depurar")
+        pasos.append("exportar")
+        if opciones.subir:
+            pasos.append("subir")
+        if opciones.esperar:
+            pasos.append("esperar")
+        if opciones.indexar:
+            pasos.append("indexar")
+        if opciones.completar:
+            pasos.append("completar")
+        return " > ".join(pasos)
+
+    def _cortar_automatico(self, motivo: str = "") -> None:
+        """Suelta la cadena para que el paso siguiente no arranque solo."""
+        if not self._auto_en_marcha:
+            return
+        self._auto_en_marcha = False
+        # La línea de pasos se queda con el paso cortado en rojo. Es la
+        # única forma de saber después dónde se detuvo: el estado de abajo
+        # lo pisa el mensaje siguiente y la bitácora hay que ir a leerla.
+        self.cadena.cortar()
+        if motivo:
+            logger.info(f"Proceso automático interrumpido: {motivo}")
+
+    def _seguir_automatico(self, contexto: str | None) -> None:
+        """Arranca el eslabón que toca tras una escritura de salidas.
+
+        Se llama con el hilo de salidas ya libre, no al escribirlas: el
+        paso siguiente vuelve a escribir sobre la misma ejecución y con el
+        anterior todavía en marcha se habría descartado sin hacer nada.
+        """
+        if not self._auto_en_marcha:
+            return
+        if self._last_run_cancelled or not self._reports:
+            self._cortar_automatico("la ejecución quedó cancelada")
+            return
+        if contexto == "proceso":
+            self.cadena.marcar(
+                pasos_automaticos.PROCESAR, pasos_automaticos.HECHO
+            )
+            if self._automatizacion.depurar and self._depurar_automatico():
+                self.cadena.marcar(
+                    pasos_automaticos.DEPURAR, pasos_automaticos.EN_CURSO
+                )
+                return
+            self.cadena.marcar(
+                pasos_automaticos.EXPORTAR, pasos_automaticos.EN_CURSO
+            )
+            self._exportar()
+            return
+        if contexto == "depurar":
+            self.cadena.marcar(
+                pasos_automaticos.DEPURAR, pasos_automaticos.HECHO
+            )
+            self.cadena.marcar(
+                pasos_automaticos.EXPORTAR, pasos_automaticos.EN_CURSO
+            )
+            self._exportar()
+            return
+        if contexto == "export":
+            # Aquí se acaba lo que hace esta ventana. Lo que siga es de
+            # AirVault, y esa ventana tiene su propia cadena y su bitácora,
+            # pero manda aquí su avance para que la línea de pasos siga
+            # contando hasta el final.
+            self.cadena.marcar(
+                pasos_automaticos.EXPORTAR, pasos_automaticos.HECHO
+            )
+            self._auto_en_marcha = False
+            if self._automatizacion.subir:
+                self._subir_automatico()
+
+    def _depurar_automatico(self) -> bool:
+        """Quita repetidas y en blanco sin abrir el cuadro.
+
+        Es el mismo criterio que el cuadro propone al abrirlo: de cada
+        bitácora repetida se van las apariciones sobrantes, nunca la
+        primera, y se van todas las páginas en blanco. Devuelve si dejó una
+        escritura en marcha; si no había nada que quitar, la cadena sigue
+        derecho a exportar.
+        """
+        from app.validation.depuracion import grupos_duplicados, paginas_en_blanco
+
+        if self._corrida_dir is None:
+            return False
+        claves = {
+            pagina.clave
+            for _numero, paginas in grupos_duplicados(self._reports)
+            for pagina in paginas
+            if pagina.duplicada
+        }
+        claves |= {pagina.clave for pagina in paginas_en_blanco(self._reports)}
+        if not claves:
+            return False
+        remaining, quitadas = depurar_claves(self._reports, claves)
+        # Una ejecución entera de repetidas y en blanco no se puede depurar
+        # sola: quedaría sin ninguna página y sin nada que entregar.
+        if not quitadas or not remaining:
+            return False
+        self._reports = remaining
+        self._refresh_after_depuracion()
+        logger.info(
+            f"Depuradas {quitadas} página(s) de la ejecución "
+            f"{Path(self._corrida_dir).name}"
+        )
+        self.status_label.setText(
+            f"Eliminando {quitadas} página(s) de la ejecución…"
+        )
+        self._timer.start()
+        self._start_outputs(remaining, context="depurar", skip_pdfs=True)
+        return True
+
+    def _subir_automatico(self) -> None:
+        """Manda la entrega recién exportada a la ventana de AirVault."""
+        if self._airvault_corrida is None:
+            logger.info(
+                "Proceso automático: no hay ejecución exportada que subir"
+            )
+            return
+        self._open_airvault()
+        ventana = self._airvault_window
+        if ventana is None:
+            return
+        if ventana.corrida() != self._airvault_corrida:
+            ventana.fijar_corrida(self._airvault_corrida)
+        ventana.subir_automaticamente()
 
     def _start_processing(self) -> None:
         if not self._pdf_paths:
@@ -2890,6 +3114,7 @@ class MainWindow(QMainWindow):
 
         self.btn_process.setEnabled(False)
         self.btn_preprocess.setEnabled(False)
+        self.btn_automatico.setEnabled(False)
         self.btn_export.setEnabled(False)
         self._rearmar_cancelar()
         total = total_pages(slices)
@@ -2961,6 +3186,10 @@ class MainWindow(QMainWindow):
             )
             return
         self._cancel_pedido = True
+        # Cancelar es cancelar la entrega, no solo el paso en curso: sin
+        # esto la cadena habría seguido exportando y subiendo lo que se
+        # acababa de pedir detener.
+        self._cortar_automatico("se canceló el procesamiento")
         worker.requestInterruption()
         self.btn_cancel.setText("Cancelar sin esperar")
         self.btn_cancel.setToolTip(
@@ -3010,6 +3239,7 @@ class MainWindow(QMainWindow):
         self.busy_label.setText("")
         self.btn_process.setEnabled(True)
         self.btn_preprocess.setEnabled(True)
+        self.btn_automatico.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self.btn_export.setEnabled(bool(self._reports))
         self._sync_depurar_button()
@@ -3040,6 +3270,7 @@ class MainWindow(QMainWindow):
         self.busy_label.setText("")
         self.btn_process.setEnabled(True)
         self.btn_preprocess.setEnabled(True)
+        self.btn_automatico.setEnabled(True)
         self.btn_cancel.setEnabled(False)
         self._set_time_summary(elapsed, None, None)
         self.status_label.setText("Preprocesamiento con errores.")
@@ -3156,6 +3387,7 @@ class MainWindow(QMainWindow):
         # es independiente y se encola si ya hay una generación en curso.
         self.btn_process.setEnabled(False)
         self.btn_preprocess.setEnabled(False)
+        self.btn_automatico.setEnabled(False)
         self.btn_export.setEnabled(True)
         self._sync_depurar_button()
         self.btn_cancel.setEnabled(False)
@@ -3269,6 +3501,7 @@ class MainWindow(QMainWindow):
         worker.finished.connect(worker.deleteLater)
         self.btn_process.setEnabled(False)
         self.btn_preprocess.setEnabled(False)
+        self.btn_automatico.setEnabled(False)
         self.btn_export.setEnabled(False)
         # No pasa por _sync_depurar_button: el hilo todavía no arrancó y
         # desde ahí seguiría pareciendo que no hay ninguna escritura en curso.
@@ -3429,6 +3662,7 @@ class MainWindow(QMainWindow):
     def _on_outputs_failed(self, message: str) -> None:
         """Registra un error de salidas sin interrumpir la interfaz."""
         context = self._outputs_context
+        self._cortar_automatico("falló la generación de salidas")
         logger.error(f"Error generando outputs: {message}")
         if context in ("export", "depurar"):
             depurando = context == "depurar"
@@ -3447,6 +3681,9 @@ class MainWindow(QMainWindow):
     def _on_outputs_thread_finished(self) -> None:
         """Libera los controles cuando el hilo de salidas ya terminó."""
         self._outputs_worker = None
+        # Qué acababa de escribirse decide cuál es el eslabón siguiente de
+        # la cadena, y el atributo se limpia aquí mismo.
+        contexto = self._outputs_context
         self._outputs_context = None
         self._timer.stop()
         self._spinner_active = False
@@ -3457,10 +3694,12 @@ class MainWindow(QMainWindow):
             # encola otra exportación, que dejaría el cierre sin terminar.
             self._pending_export = False
             self._pending_csv_refresh = False
+            self._cortar_automatico("se está cerrando la ventana")
             return
         self.btn_cancel.setEnabled(False)
         self.btn_process.setEnabled(True)
         self.btn_preprocess.setEnabled(True)
+        self.btn_automatico.setEnabled(True)
         # Tras una ejecución cancelada no hay Exportar: da la opción de
         # procesar los archivos restantes en vez de hacer PDFs parciales.
         self.btn_export.setEnabled(bool(self._reports) and not self._last_run_cancelled)
@@ -3476,6 +3715,10 @@ class MainWindow(QMainWindow):
         elif self._pending_csv_refresh:
             self._pending_csv_refresh = False
             self._rewrite_current_csv()
+        else:
+            # La re-exportación encolada ya es el paso que la cadena pedía,
+            # así que solo se encadena cuando no había ninguna esperando.
+            self._seguir_automatico(contexto)
 
     def _update_performance(
         self, reports: list[ValidationReport], elapsed_seconds: float | None
@@ -3602,7 +3845,9 @@ class MainWindow(QMainWindow):
         self.busy_label.setText("")
         self.btn_process.setEnabled(True)
         self.btn_preprocess.setEnabled(True)
+        self.btn_automatico.setEnabled(True)
         self.btn_cancel.setEnabled(False)
+        self._cortar_automatico("el procesamiento terminó con errores")
         self._set_time_summary(elapsed, None, None)
         self.status_label.setText("Procesamiento con errores.")
         # Conserva en el panel de tiempos lo que alcanzó a procesarse.
