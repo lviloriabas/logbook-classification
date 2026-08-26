@@ -3,7 +3,7 @@
 Detectar la inclinacion (Canny + Hough) cuesta 103-139 ms sobre la pagina a
 DPI completo, y la calibracion ya la midio sobre la misma pagina a la mitad
 de resolucion. Estas pruebas fijan que el angulo viaje desde la calibracion
-hasta las tres etapas que lo necesitan -OCR, repaso de firmas y VLM- y que
+hasta las dos etapas que lo necesitan -OCR y repaso de firmas- y que
 ninguna vuelva a buscarlo por su cuenta.
 """
 
@@ -41,7 +41,7 @@ def _page(height: int = 60, width: int = 80) -> np.ndarray:
 
 class TestProcessPageImageUsesGivenAngle(unittest.TestCase):
     def setUp(self):
-        self.config = AppConfig(deskew=True, align=False, vlm_enabled=False)
+        self.config = AppConfig(deskew=True, align=False)
         self.template = Template(name="fixture")
 
     def test_given_angle_skips_detection(self):
@@ -156,7 +156,7 @@ class TestWorkerReceivesAngles(unittest.TestCase):
 
 
 class TestAlignedImageReusesTheAngle(unittest.TestCase):
-    """El repaso de firmas y el VLM heredan el enderezado del procesado.
+    """El repaso de firmas hereda el enderezado del procesado.
 
     Ademas de ahorrar la deteccion, esto garantiza que el recorte medido
     contra el fondo del libro salga del mismo marco que vio el detector.

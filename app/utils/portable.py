@@ -3,7 +3,7 @@
 La aplicación debe funcionar copiando la carpeta completa a cualquier
 máquina Windows, sin instalar nada ni tocar el perfil del usuario. Este
 módulo redirige los caches que por defecto escriben fuera de la carpeta:
-modelos PaddleOCR/paddlex, TESSDATA de Tesseract y variables de red. Tambien
+modelos PaddleOCR/paddlex y variables de red. Tambien
 conecta TLS al almacen de certificados confiables de Windows.
 """
 
@@ -62,7 +62,6 @@ def ensure_portable_env() -> Path:
       (omite el chequeo de conectividad a los servidores de modelos).
     - PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=0
       (evita el bug de oneDNN en Windows: ConvertPirAttribute2Runtime...).
-    - TESSDATA_PREFIX → <raíz>/portable/tesseract/tessdata si existe.
     - TLS → almacen de certificados de Windows mediante truststore.
 
     También instala la supresión de consolas de los subprocesos: la GUI
@@ -78,7 +77,4 @@ def ensure_portable_env() -> Path:
     os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "1")
     os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
     os.environ.setdefault("FLAGS_use_mkldnn", "0")
-    tessdata = root / "portable" / "tesseract" / "tessdata"
-    if tessdata.is_dir():
-        os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
     return root

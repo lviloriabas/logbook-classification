@@ -421,9 +421,6 @@ class MainWindow(QMainWindow):
         self._pdf_paths: list[Path] = []
         self._template_path: Path | None = None
         self._reports: list[ValidationReport] | None = None
-        # Estadísticas de la ejecución, copiadas al terminar: el worker se libera
-        # en cuanto acaba y una re-exportación posterior las sigue necesitando.
-        self._vlm_stats: list[dict] = []
         self._worker: PipelineWorker | None = None
         self._preprocess_worker: PreprocessWorker | None = None
         self._outputs_worker: OutputsWorker | None = None
@@ -2844,10 +2841,8 @@ class MainWindow(QMainWindow):
             ocr_det_model="PP-OCRv6_medium_det",
             remove_printed=True,  # mapa del fondo impreso: siempre activo
             crop_preprocess=self.crop_preprocess_check.isChecked(),
-            date_ocr_fallback=False,
             date_slot_ocr=False,
             date_dynamic_geometry=True,
-            vlm_enabled=False,
             verify_fleet=self.fleet_check.isChecked(),
             fleet_file=SCRIPT_DIR / FLEET_FILENAME,
             book_matriculas_file=SCRIPT_DIR / "book_matriculas.json",
@@ -3458,7 +3453,6 @@ class MainWindow(QMainWindow):
         )
         self._timer.stop()
         self._reports = reports
-        self._vlm_stats = list(getattr(self._worker, "vlm_stats", []) or [])
         self._preview_results = {
             (str(Path(report.pdf_path).resolve()), page.page_number): page
             for report in reports
@@ -3577,12 +3571,7 @@ class MainWindow(QMainWindow):
             self._on_outputs_thread_finished()
             return
 
-        worker = OutputsWorker(
-            reports,
-            options,
-            vlm_stats=self._vlm_stats,
-            parent=self,
-        )
+        worker = OutputsWorker(reports, options, parent=self)
         self._outputs_worker = worker
         worker.succeeded.connect(self._on_outputs_written)
         worker.failed.connect(self._on_outputs_failed)

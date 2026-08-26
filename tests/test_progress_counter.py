@@ -141,7 +141,6 @@ def test_batch_message_counts_the_pages_of_the_whole_run(tmp_path):
 
     class _FakePipeline:
         def __init__(self, *_args, **_kwargs):
-            self.vlm_stats = {"enabled": False}
             self.on_progress = None
 
         def process(self, path, page_range=None, should_cancel=None):
@@ -202,13 +201,10 @@ def test_file_strategy_message_carries_the_page_counter(tmp_path):
         for page in range(1, count + 1):
             counter.write_text(f"{page}/{count}", encoding="ascii")
             time.sleep(delay)
-        return (
-            ValidationReport(
-                pdf_path=str(path),
-                template_name="empty",
-                pages=[PageResult(page_number=n) for n in range(1, count + 1)],
-            ),
-            {"enabled": False},
+        return ValidationReport(
+            pdf_path=str(path),
+            template_name="empty",
+            pages=[PageResult(page_number=n) for n in range(1, count + 1)],
         )
 
     with patch("app.core.pipeline.PdfPageRenderer", _FakeRenderer), patch(

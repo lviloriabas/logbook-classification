@@ -23,7 +23,7 @@
 ## Plataforma
 
 - **Solo CPU:** crea cada motor con `device="cpu"`; no detectes GPU ni aceleradores. Se permiten oneDNN/MKL-DNN, hilos, batches y cuantización int8.
-- **Portable:** la carpeta completa debe funcionar en cualquier PC Windows sin administrador ni instalación. No dependas de rutas del sistema, registro o descargas en ejecución. Intérprete, dependencias, Tesseract y modelos viven en `portable/`; dirige allí `PADDLE_PDX_CACHE_HOME`.
+- **Portable:** la carpeta completa debe funcionar en cualquier PC Windows sin administrador ni instalación. No dependas de rutas del sistema, registro o descargas en ejecución. Intérprete, dependencias y modelos viven en `portable/`; dirige allí `PADDLE_PDX_CACHE_HOME`.
 - Precarga modelos nuevos en `portable/` con `tools/precache_paddle.py` y comprueba su uso sin internet.
 
 ## Bitácoras

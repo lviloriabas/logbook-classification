@@ -67,7 +67,7 @@ def test_other_creation_flags_are_preserved(popen_calls):
 
 
 def test_an_explicit_console_choice_is_respected(popen_calls):
-    """``llama-server`` y Tesseract ya eligen su consola; no se les toca."""
+    """Un subproceso que ya elige su consola no se toca."""
     suppress_child_consoles()
     detached_process = 0x00000008
     subprocess.Popen(["cmd"], creationflags=detached_process)

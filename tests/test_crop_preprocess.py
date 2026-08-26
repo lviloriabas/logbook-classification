@@ -12,7 +12,6 @@ import numpy as np
 from app.core.config import AppConfig
 from app.core.pipeline import process_page_image
 from app.models.schemas import OcrResult
-from app.ocr import date_ocr as date_ocr_mod
 from app.ocr.date_ocr import read_date_slots
 from app.ocr.regional import _preprocess_date_region, ocr_regions
 from app.templates.schema import FieldTemplate, Template
@@ -114,7 +113,7 @@ def test_ocr_regions_preserves_field_order_with_separate_date_engine():
     ]
 
 
-def test_slots_raw_when_preprocess_off(monkeypatch):
+def test_slots_raw_when_preprocess_off():
     seen: list = []
 
     class FakeSlotEngine:  # noqa: N801
@@ -124,16 +123,14 @@ def test_slots_raw_when_preprocess_off(monkeypatch):
             seen.append((image.shape, config))
             return [OcrResult(text="2", confidence=0.9)]
 
-    monkeypatch.setattr(date_ocr_mod, "_fallback_engine", lambda: FakeSlotEngine())
     slot = np.full((40, 60, 3), 255, dtype=np.uint8)
-    text, conf = read_date_slots("day", "day", [slot],
-                                          preprocess=False)
+    text, _conf = read_date_slots("day", "day", [slot], preprocess=False,
+                                  engine=FakeSlotEngine())
     assert text == "2"
     assert seen[0][0][:2] == (40, 60)
-    assert "whitelist=0123456789" in seen[0][1]
 
 
-def test_slots_upscaled_when_preprocess_on(monkeypatch):
+def test_slots_upscaled_when_preprocess_on():
     seen = []
 
     class FakeSlotEngine:  # noqa: N801
@@ -143,9 +140,9 @@ def test_slots_upscaled_when_preprocess_on(monkeypatch):
             seen.append(image.shape)
             return [OcrResult(text="2", confidence=0.9)]
 
-    monkeypatch.setattr(date_ocr_mod, "_fallback_engine", lambda: FakeSlotEngine())
     slot = np.full((40, 60, 3), 255, dtype=np.uint8)
-    read_date_slots("day", "day", [slot], preprocess=True)
+    read_date_slots("day", "day", [slot], preprocess=True,
+                    engine=FakeSlotEngine())
     assert max(seen[0]) >= 60
 
 
@@ -166,7 +163,8 @@ def test_printed_mask_does_not_mutate_ocr_image():
 
     process_page_image(
         page, 1, AppConfig(dpi=150, deskew=False, align=False,
-                           vlm_enabled=False), engine, template, None,
+                           ),
+        engine, template, None,
         printed_mask=np.ones((100, 100), dtype=bool),
     )
 

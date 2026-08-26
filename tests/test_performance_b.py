@@ -11,11 +11,27 @@ import pymupdf as fitz
 from app.core.config import AppConfig, config_for_pdf
 from app.core.pipeline import OcrProcessPool, Pipeline
 from app.models.schemas import OcrResult
-from app.ocr.engine import TesseractOcrEngine
 from app.templates.schema import Template
 from app.vision.alignment import TransformResult, apply_transform
 from app.vision.pdf_loader import PdfPageRenderer
 from app.vision.preprocessing import rotate
+
+
+class _MotorDePrueba:
+    """Motor OCR de mentira: el pool real no necesita leer nada.
+
+    Las páginas de las fixtures salen en blanco, así que el motor nunca
+    llega a mirar una imagen: al pipeline le basta con que cumpla el
+    protocolo ``OcrEngine``.
+    """
+
+    name = "prueba"
+
+    def recognize(self, image, config=None):
+        return []
+
+    def recognize_batch(self, images, config=None):
+        return [[] for _ in images]
 
 
 def _fixture_pdf(path) -> None:
@@ -79,34 +95,6 @@ def test_high_resolution_region_matches_full_page_transform(tmp_path):
     assert region.image.nbytes < full.nbytes * 0.25
 
 
-def test_tesseract_batch_uses_one_imagelist_and_keeps_config():
-    engine = TesseractOcrEngine(lang="eng", tesseract_cmd="tesseract.exe")
-    images = [
-        np.full((30, 40, 3), 255, np.uint8),
-        np.full((30, 40, 3), 255, np.uint8),
-    ]
-    calls = []
-
-    def fake_image_to_data(source, **kwargs):
-        calls.append((source, kwargs["config"]))
-        return {
-            "page_num": [1, 2],
-            "text": ["2", "7"],
-            "conf": ["91", "87"],
-        }
-
-    config = "--psm 10 -c tessedit_char_whitelist=0123456789"
-    with patch("pytesseract.image_to_data", side_effect=fake_image_to_data):
-        results = engine.recognize_batch(images, config=config)
-
-    assert len(calls) == 1
-    assert calls[0][1] == config
-    assert results == [
-        [OcrResult(text="2", confidence=0.91)],
-        [OcrResult(text="7", confidence=0.87)],
-    ]
-
-
 def test_ocr_process_pool_is_reused_across_pdfs(tmp_path):
     pdfs = [tmp_path / "first.pdf", tmp_path / "second.pdf"]
     for pdf in pdfs:
@@ -118,13 +106,12 @@ def test_ocr_process_pool_is_reused_across_pdfs(tmp_path):
         deskew=False,
         align=False,
         remove_printed=False,
-        date_ocr_fallback=False,
         date_slot_ocr=False,
     )
-    engine = TesseractOcrEngine(lang="eng", tesseract_cmd="tesseract.exe")
+    engine = _MotorDePrueba()
     template = Template(name="empty")
 
-    with OcrProcessPool(2, config, "tesseract", "eng", 1) as process_pool:
+    with OcrProcessPool(2, config, "paddle", "en", 1) as process_pool:
         reports = [
             Pipeline(
                 config,

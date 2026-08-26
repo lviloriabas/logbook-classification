@@ -17,7 +17,6 @@ def test_config_defaults_to_validated_single_engine():
     assert config.ocr_engine == "paddle"
     assert config.ocr_rec_model == "PP-OCRv5_mobile_rec"
     assert config.ocr_det_model == "PP-OCRv6_medium_det"
-    assert config.date_ocr_fallback is False
     assert config.date_slot_ocr is False
 
 
@@ -34,7 +33,6 @@ def test_gui_has_no_engine_selectors_and_uses_validated_models():
         assert config.date_engine_name == ""
         assert config.ocr_rec_model == "PP-OCRv5_mobile_rec"
         assert config.ocr_det_model == "PP-OCRv6_medium_det"
-        assert config.date_ocr_fallback is False
         assert config.date_slot_ocr is False
     finally:
         window.close()

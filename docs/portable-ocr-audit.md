@@ -9,7 +9,7 @@ La GUI y `run_cli.py` fijan internamente:
 - detector `PP-OCRv6_medium_det` (59.4 MiB);
 - reconocedor `PP-OCRv5_mobile_rec` (16.4 MiB);
 - sin segundo motor de fechas;
-- sin fallback ni lectura por ranuras con Tesseract.
+- sin motores alternativos: Tesseract se eliminó del programa el 2026-08-26.
 
 La selección se basa en el benchmark reproducible descrito en
 `docs/ocr-engine-decision.md`. Las opciones de motor/modelo se eliminaron de
@@ -28,12 +28,14 @@ benchmark, pero no depende de estas copias: Paddle puede resolverlos/descargarlo
 explícitamente en un entorno de evaluación. Ningún flujo de la aplicación los
 selecciona.
 
-## No eliminar todavía
+## Ya eliminados
 
-`portable/tesseract` ocupa 237.9 MiB y ya no participa en GUI ni CLI. Sin
-embargo, `tools/evaluate_date_images.py` todavía permite ejecutar el benchmark
-de comparación Tesseract. Por tanto no se marca como “sin uso en ningún flujo”
-hasta decidir si esa herramienta diagnóstica debe conservar comparación offline.
+`portable/tesseract` (237.9 MiB) puede borrarse: desde el 2026-08-26 el
+programa tiene un solo motor y ni la aplicación ni las herramientas de
+diagnóstico lo invocan. Lo mismo vale para `portable/llama`, los modelos del
+verificador VLM que se retiró en la misma fecha.
 
-Tampoco se deben eliminar `paddleocr`, `paddlepaddle`, `paddlex` ni sus
+## No eliminar
+
+No se deben eliminar `paddleocr`, `paddlepaddle`, `paddlex` ni sus
 dependencias Python: son necesarias para cargar los dos modelos seleccionados.
