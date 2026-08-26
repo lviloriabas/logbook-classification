@@ -29,7 +29,7 @@ from app.airvault.config import (
     guardar_paginas_por_batch,
 )
 from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
-from app.gui.widgets import SpinBoxWithButtons
+from app.gui.widgets import SpinBoxWithButtons, fit_combo_to_items
 
 
 class ExportOptionsGroup(QGroupBox):
@@ -175,6 +175,7 @@ class ExportOptionsGroup(QGroupBox):
             "Cambia la fecha representada en el CSV sin volver a ejecutar OCR. "
             "El resultado OCR original se conserva."
         )
+        fit_combo_to_items(self.csv_date_mode_combo)
         date_row.addWidget(self.csv_date_mode_combo)
         date_row.addStretch()
         layout.addLayout(date_row)

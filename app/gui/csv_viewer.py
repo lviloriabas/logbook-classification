@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableView,
     QToolButton,
     QVBoxLayout,
@@ -83,6 +84,7 @@ from app.gui.widgets import (
     ZOOM_OVERLAY_QSS,
     ZoomableScrollArea,
     ZoomOverlay,
+    hide_overlay_when_tight,
     scrollbars_qss,
     style_data_table,
     style_dark_pane,
@@ -944,6 +946,11 @@ class EmbeddedPdfViewer(QFrame):
         zoom_holder_layout = QVBoxLayout(zoom_holder)
         zoom_holder_layout.setContentsMargins(8, 8, 8, 8)
         zoom_holder_layout.addWidget(zoom_overlay)
+        # El recuadro de zoom flota sobre la página: ni decide el mínimo
+        # del panel ni se dibuja a medias. Ver ``hide_overlay_when_tight``.
+        zoom_holder.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+        )
         viewer_frame_layout.addWidget(
             zoom_holder,
             0,
@@ -951,6 +958,7 @@ class EmbeddedPdfViewer(QFrame):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
         )
         zoom_holder.raise_()
+        hide_overlay_when_tight(zoom_holder)
         layout.addWidget(viewer_frame, 1)
 
         self.pagination = QWidget()
