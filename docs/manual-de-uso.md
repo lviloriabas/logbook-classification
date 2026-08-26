@@ -171,6 +171,41 @@ Los recuadros de **Visualizar campos** aparecen solo en pantalla. No se imprimen
 
 Al finalizar, BITS guarda CSV, JSON y estadísticas. Los PDF de entrega se generan después con **Exportar**. Los originales que estaban directamente en `input/` pasan a `input/processed/`; los seleccionados fuera de `input/` no se mueven.
 
+### 4.5.1 Automático
+
+**Automático**, en la misma fila que **Procesar**, hace la cadena entera sin
+volver a pulsar nada: procesa, exporta y, si se pidió, depura la ejecución,
+sube la entrega a AirVault y la escribe allí.
+
+Hasta dónde llega se elige en **Automatización…**, junto a **Opciones
+avanzadas**. Es un menú que se abre encima de la ventana, como el del botón
+derecho, y se queda abierto entre clic y clic: marque los pasos que quiera y
+salga con un clic fuera o con `Esc`. La ventana de AirVault tiene el mismo
+botón y el mismo menú. Procesar y exportar aparecen marcados y apagados
+porque siempre se hacen. **Depurar páginas repetidas y en blanco** es opcional y va suelto:
+quita las apariciones sobrantes de cada bitácora repetida (nunca la primera)
+y las páginas en blanco antes de exportar, así que los PDF salen ya sin
+ellas. Los cuatro pasos de AirVault (subir, esperar, indexar y completar el
+batch) ocurren uno detrás de otro y se marcan juntos: marcar uno enciende los
+que van antes, y apagar uno apaga los que van después.
+
+La elección se conserva al cerrar el programa. **Esperar a que AirVault los
+deje listos** y **Completar batch** son las mismas casillas que **Comprobar
+cada** y **Completar batch** en la ventana de AirVault: marcarlas en un sitio
+las marca en el otro.
+
+**Cancelar** corta la cadena entera, no solo el paso en curso.
+
+Debajo de la barra de progreso, una línea con los siete pasos dice hasta
+dónde se llegó: gris claro los que faltan, azul el que está en curso, verde
+los terminados, rojo el que se cortó y gris apagado los que no se eligieron.
+Los cuatro de AirVault ocurren en la otra ventana y se marcan igual, así que
+la línea sirve para saber si la entrega terminó de subirse sin ir a buscarla.
+
+La cadena trabaja solo sobre la ejecución en marcha. Los batches que
+quedaron a medias en ejecuciones anteriores se retoman únicamente al pulsar
+**Subir a AirVault** en la ventana de AirVault.
+
 ### 4.6 Revisar los resultados
 
 La tabla contiene una fila por página. Haga doble clic en una fila para mostrar esa página en la vista previa.
@@ -234,11 +269,28 @@ El CSV principal contiene las columnas seleccionadas. El CSV completo añade con
 2. Confirme que el CSV mínimo conserve matrícula, `log_number` y fecha. Conserve también `flight_number` si debe enviarse a **Description**.
 3. Abra **Indexar en AirVault…**.
 4. Elija una de las últimas 25 ejecuciones o pulse **Otra ejecución…**.
-5. Confirme el nombre del batch y el **Máximo por batch**. La copia portable empieza en 200 páginas y después recuerda la última cantidad elegida aquí o en **Repartir en**; los PDF que la superen se dividen para Quick Upload sin modificar la entrega ni el CSV. El reparto respeta esa cantidad al pie de la letra: todos los batches llevan las mismas páginas y solo el último se queda con el resto. Si una aeronave queda partida entre dos batches, el siguiente abre con una copia de su separador para que ninguno empiece con bitácoras sueltas. Puede cambiar esta cantidad aunque la ejecución ya tenga batches en AirVault: esos se conservan como están y solo se vuelven a repartir las bitácoras que ninguno se llevó, de modo que no se suba nada dos veces ni se quede nada fuera. Deje **Sesión** vacío. En el primer acceso, complete el inicio de sesión y el segundo factor en Edge. Si una carga no aparece con el nombre esperado, la ventana recorre la cola entera buscándola por nombre, por páginas y por Log Page Number. Cuando esa búsqueda no la encuentra y además el archivo lleva subido más de 30 minutos, la da por perdida ahí mismo: ya no queda nombre bajo el que pueda estar y no viene en camino. Si la carga es reciente no se toca nada, porque que AirVault todavía no la haya publicado es lo normal: la ventana revisa tres veces nombres, páginas y contenido y solo después la da por perdida, con uno de dos motivos: que las partes enviadas después ya estén indexadas (la cola pasó de largo, no hay nada que esperar) o que hayan pasado 30 minutos desde que se subió el archivo. Ese tiempo se cuenta desde la fecha del batch, así que una ejecución que retome días más tarde no vuelve a esperar media hora. Dada por perdida, y mientras **Comprobar cada** esté marcado, la vuelve a enviar sola junto con cualquier archivo que no haya llegado a subirse. No deja de intentarlo: lo que crece es la espera entre un envío y el siguiente (media hora, una hora, hora y media), de modo que una cola que solo va lenta no recibe el mismo archivo cada vuelta del reloj. La tabla de batches es la cola de trabajo: con el botón derecho sobre una fila puede subirla, comprobarla, indexarla, cerrarla o sacarla de la cola sin tocar a las demás. Subir a mano vale sobre cualquier fila que no tenga todavía un batch confirmado en AirVault, y no repite la búsqueda larga: consulta la cola una sola vez para no duplicar una carga que el servidor acabara de publicar, y manda el archivo. Si el batch dejaría páginas amarillas (las que AirVault pinta así porque les falta un campo obligatorio) la ventana lo dice antes de subir, con cuántas son y qué les falta, y usted decide: lo limpio es volver a exportar para que esas bitácoras vayan al batch REVISAR, pero con el archivo ya hecho puede salir más barato completarlas a mano en Web Index. Si autoriza, ese batch no se cerrará solo hasta que estén completas. El batch REVISAR nunca pregunta: existe justo para recoger lo dudoso. Con Ctrl o Mayúsculas elige varias y la acción vale para todas: cada una hace lo que le corresponde, y el menú dice a cuántas se aplicaría. No hace falta esperar a que termine lo que esté haciendo: lo que pida mientras tanto queda en cola y arranca solo al quedar libre. Un batch cancelado conserva su ID y lo que ya se le escribió; solo deja de subirse, buscarse e indexarse hasta que lo reanude, y lo que estuviera esperando turno para él se descarta. **Completar batch** se elige una sola vez, en el menú principal, y se recuerda entre ejecuciones. Un batch que el programa cierre por su cuenta al terminar de indexarlo queda como **Terminado por el programa**, para distinguirlo del que ya estaba cerrado en AirVault cuando se encontró. Puede elegir otra ejecución mientras una está trabajando: se abre en otra ventana y las dos avanzan simultáneamente. Antes de subir nada, **Vista previa…** (junto al título de la tabla de batches) enseña en cuántos batches quedaría repartida la ejecución con el máximo elegido, cuántas páginas y cuántas bitácoras lleva cada uno, y cuáles ya están en AirVault; mirarla no prepara ni sube nada, así que puede cambiar el máximo y volver a mirarla. Desde ahí, y con el botón derecho sobre una fila de la tabla de batches, abre la lista de las bitácoras que van dentro de un batch, con la página que ocupa cada una, su matrícula, su `log_number`, su fecha y su vuelo.
-6. La automatización viene con **Indexar páginas** marcada. Pulse **Subir a AirVault**: el programa intenta primero todos los PDF, identifica cada ID y corrige el nombre provisional `Empty-Batch`. No empieza a indexar una parte hasta que el Web Index confirma ese mismo ID con el título esperado. Si no puede distinguir un candidato, muestra sus IDs y cantidades de páginas sin elegir ninguno.
+5. Confirme el nombre del batch y el **Máximo por batch**. La copia portable empieza en 200 páginas y después recuerda la última cantidad elegida aquí o en **Repartir en**; los PDF que la superen se dividen para Quick Upload sin modificar la entrega ni el CSV. El reparto respeta esa cantidad al pie de la letra: todos los batches llevan las mismas páginas y solo el último se queda con el resto. Si una aeronave queda partida entre dos batches, el siguiente abre con una copia de su separador para que ninguno empiece con bitácoras sueltas. Puede cambiar esta cantidad aunque la ejecución ya tenga batches en AirVault: esos se conservan como están y solo se vuelven a repartir las bitácoras que ninguno se llevó, de modo que no se suba nada dos veces ni se quede nada fuera. Deje **Sesión** vacío. En el primer acceso, complete el inicio de sesión y el segundo factor en Edge. Si una carga no aparece con el nombre esperado, la ventana recorre la cola entera buscándola por nombre, por páginas y por Log Page Number. Cuando esa búsqueda no la encuentra y además el archivo lleva subido más de 30 minutos, la da por perdida ahí mismo: ya no queda nombre bajo el que pueda estar y no viene en camino. Si la carga es reciente no se toca nada, porque que AirVault todavía no la haya publicado es lo normal: la ventana revisa tres veces nombres, páginas y contenido y solo después la da por perdida, con uno de dos motivos: que las partes enviadas después ya estén indexadas (la cola pasó de largo, no hay nada que esperar) o que hayan pasado 30 minutos desde que se subió el archivo. Ese tiempo se cuenta desde la fecha del batch, así que una ejecución que retome días más tarde no vuelve a esperar media hora. Dada por perdida, y mientras **Comprobar cada** esté marcado, la vuelve a enviar sola junto con cualquier archivo que no haya llegado a subirse. La espera crece entre un envío y el siguiente (media hora, una hora, hora y media), de modo que una cola que solo va lenta no recibe el mismo archivo cada vuelta del reloj, y se reenvía como mucho dos veces: al tercer intento lo que falla ya no es el envío, y seguir mandando el mismo PDF es como acaban varias copias del mismo batch en la cola el día que AirVault las publica todas. Agotado el tope, el resumen lo dice y queda la orden a mano desde la tabla, que sí sube. La tabla de batches es la cola de trabajo: con el botón derecho sobre una fila puede subirla, comprobarla, indexarla, cerrarla o sacarla de la cola sin tocar a las demás. Subir a mano vale sobre cualquier fila que no tenga todavía un batch confirmado en AirVault, y no repite la búsqueda larga: consulta la cola una sola vez para no duplicar una carga que el servidor acabara de publicar, y manda el archivo. Si el batch dejaría páginas amarillas (las que AirVault pinta así porque les falta un campo obligatorio) la ventana lo dice antes de subir, con cuántas son y qué les falta, y usted decide: lo limpio es volver a exportar para que esas bitácoras vayan al batch REVISAR, pero con el archivo ya hecho puede salir más barato completarlas a mano en Web Index. Si autoriza, ese batch no se cerrará solo hasta que estén completas. El batch REVISAR nunca pregunta: existe justo para recoger lo dudoso. Con Ctrl o Mayúsculas elige varias y la acción vale para todas: cada una hace lo que le corresponde, y el menú dice a cuántas se aplicaría. No hace falta esperar a que termine lo que esté haciendo: lo que pida mientras tanto queda en cola y arranca solo al quedar libre. Un batch cancelado conserva su ID y lo que ya se le escribió; solo deja de subirse, buscarse e indexarse hasta que lo reanude, y lo que estuviera esperando turno para él se descarta. **Completar batch** se elige una sola vez y se recuerda entre ejecuciones; la casilla de esta ventana y la de **Automatización…** son la misma. Un batch que el programa cierre por su cuenta al terminar de indexarlo queda como **Terminado por el programa**, para distinguirlo del que ya estaba cerrado en AirVault cuando se encontró. Puede elegir otra ejecución mientras una está trabajando: se abre en otra ventana y las dos avanzan simultáneamente. Antes de subir nada, **Vista previa…** (junto al título de la tabla de batches) enseña en cuántos batches quedaría repartida la ejecución con el máximo elegido, cuántas páginas y cuántas bitácoras lleva cada uno, y cuáles ya están en AirVault; mirarla no prepara ni sube nada, así que puede cambiar el máximo y volver a mirarla. Desde ahí, y con el botón derecho sobre una fila de la tabla de batches, abre la lista de las bitácoras que van dentro de un batch, con la página que ocupa cada una, su matrícula, su `log_number`, su fecha y su vuelo.
+6. La automatización viene con **Indexar páginas** marcada, en **Automatización…**. Pulse **Subir a AirVault**: el programa intenta primero todos los PDF, identifica cada ID y corrige el nombre provisional `Empty-Batch`. No empieza a indexar una parte hasta que el Web Index confirma ese mismo ID con el título esperado. Si no puede distinguir un candidato, muestra sus IDs y cantidades de páginas sin elegir ninguno.
 7. Si necesita aprobar el reporte antes de escribir, desmarque **Indexar páginas** en **Automatización…**, pulse **Subir a AirVault** y después abra **Ver reporte…**.
 8. Confirme `pagina_lote`, `archivo_origen`, `pagina_origen`, matrícula, flota, `log_number`, fecha, acción y avisos. Revise toda fila con `fleet_inferido=si`. Las discrepancias de firmas no aparecen en este reporte y no bloquean AirVault; revíselas antes en la ejecución.
 9. En el recorrido manual, pulse **Indexar** solo después de aprobar el reporte completo. El programa escribirá todas las filas cuya acción sea **escribir**; no hay aprobación individual por página. Si una fila habilitada es incorrecta, no indexe: corrija o reprocese la ejecución, expórtela y repita la revisión.
+
+Antes de mandar cada archivo, BITS comprueba que sus bitácoras no estén ya
+en AirVault. Además de la cola del Web Index, mira dos cosas que la cola no
+puede ver: un **libro de envíos** propio de la instalación (que no se borra
+con **Eliminar el registro local** ni desaparece al reprocesar los mismos
+escaneos en otra carpeta) y una consulta a **Web Search** por el número de
+tres bitácoras del batch, repartidas de principio a fin. Hace falta porque
+completar un batch lo saca de la cola y lo manda a Web Search: desde ese
+momento ninguna consulta a la cola lo encuentra, y sin estas dos nada
+impedía volver a subirlo.
+
+Si alguna de las dos dice que esas bitácoras ya están arriba, el batch **no
+se sube y tampoco se cierra**, y su fila queda como **Posible duplicado**
+con el motivo al lado. Es una sospecha, no una certeza: lo que se demuestra
+es que el documento está publicado, no que este batch sea el que lo subió.
+Mírelo en Web Index y, si de verdad no está, use el botón derecho sobre la
+fila y **No es duplicado: volver a permitirlo**.
 
 Las acciones del reporte significan:
 
