@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QLabel,
     QListWidget,
@@ -27,14 +28,41 @@ def _table_for(widget) -> QTableView | None:
     return None
 
 
-def selected_cells_as_text(table: QTableView) -> str:
-    """Las celdas elegidas como texto, en filas y columnas.
+def _celda_bajo_el_cursor(table: QTableView) -> str:
+    """El dato de la celda activa, o cadena vacia si no hay ninguna."""
+    actual = table.currentIndex()
+    if not actual.isValid():
+        return ""
+    if table.isColumnHidden(actual.column()) or table.isRowHidden(actual.row()):
+        return ""
+    return actual.data() or ""
 
-    Se separan con tabulaciones y saltos de linea, que es lo que esperan la
-    hoja de calculo y el editor de texto donde se pega. Sin seleccion vale la
-    celda activa: copiar un solo campo es lo mas frecuente, y obligar a
-    seleccionar antes lo unico que hace es estorbar.
+
+def _selecciona_filas(table: QTableView) -> bool:
+    return (
+        table.selectionBehavior()
+        is QAbstractItemView.SelectionBehavior.SelectRows
+    )
+
+
+def selected_cells_as_text(table: QTableView) -> str:
+    """Lo que se lleva el portapapeles de una tabla.
+
+    En una tabla que selecciona por **filas** (el CSV procesado, el visor,
+    la cola de AirVault) elegir una fila selecciona de paso todas sus
+    celdas, asi que copiar la seleccion se llevaba la fila entera separada
+    por tabuladores. Nadie pide eso: se pulsa una celda para copiar **ese**
+    dato, casi siempre un numero de bitacora o una matricula que hay que
+    pegar en otro sitio, y llevarse la fila obliga a limpiar lo pegado.
+    Ahi se copia la celda que esta bajo el cursor, que es la que se pulso.
+
+    Donde la seleccion es por celdas se conserva el bloque: ahi elegir
+    varias es una decision, no un efecto de haber pulsado una fila. Se
+    separan con tabulaciones y saltos de linea, que es lo que esperan la
+    hoja de calculo y el editor de texto donde se pega.
     """
+    if _selecciona_filas(table):
+        return _celda_bajo_el_cursor(table)
     indexes = list(table.selectedIndexes())
     if not indexes:
         actual = table.currentIndex()
@@ -75,6 +103,21 @@ class _CopyableTextFilter(QObject):
                     QApplication.clipboard().setText(texto)
                 event.accept()
                 return True
+            if (
+                event.type() == QEvent.Type.ContextMenu
+                and watched is table.viewport()
+            ):
+                # Abrir el menu sobre una celda la deja bajo el cursor. Sin
+                # esto, «Copiar» se llevaba la celda que estuviera activa de
+                # antes, que casi nunca es sobre la que se hizo clic. Va
+                # antes de mirar la politica del menu para que valga tambien
+                # en las tablas con menu propio, como la cola de AirVault.
+                # Solo desde el viewport, que es donde la posicion del
+                # evento son coordenadas de celdas; con el teclado no hay
+                # posicion y la celda activa ya es la que corresponde.
+                bajo = table.indexAt(event.pos())
+                if bajo.isValid():
+                    table.setCurrentIndex(bajo)
             # Una tabla con menu propio se queda con el suyo: el filtro de
             # la aplicacion corre antes que el widget, y quedarse con el
             # evento dejaria sin abrir menus como el de la cola de AirVault.
