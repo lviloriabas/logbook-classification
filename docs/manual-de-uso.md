@@ -236,7 +236,7 @@ Use **Depurar** antes de la entrega para quitar páginas repetidas o en blanco.
 3. Pulse **Eliminar**.
 4. Exporte de nuevo si ya existían PDF de entrega.
 
-Se conserva la primera aparición de cada `log_number`. Las páginas en blanco ya se excluyen del PDF de entrega; **Depurar** también las quita del CSV, JSON y estadísticas. Los duplicados permanecen en el PDF hasta depurarlos. La operación reescribe los datos de la ejecución y no puede dejarla sin páginas. Los PDF anteriores nunca se modifican; cada exportación crea otra copia con sufijo `-2`, `-3` o posterior.
+Se conserva la primera aparición de cada `log_number`: de una bitácora repetida se va una sola página, la más nueva, y de las que aparecen más de dos veces queda igualmente la primera. Vale lo mismo si marca las casillas a mano y si depura el proceso automático: el cuadro no deja marcar todas las apariciones de una bitácora, y el borrado respeta una aunque se le pidan todas. Las páginas en blanco ya se excluyen del PDF de entrega; **Depurar** también las quita del CSV, JSON y estadísticas. Los duplicados permanecen en el PDF hasta depurarlos. La operación reescribe los datos de la ejecución y no puede dejarla sin páginas. Los PDF anteriores nunca se modifican; cada exportación crea otra copia con sufijo `-2`, `-3` o posterior.
 
 ### 4.8 Exportar
 
