@@ -49,7 +49,7 @@ Cada campo define un modo:
 
 El preprocesado opcional localiza tinta y ajusta el tamaño del recorte. Las fechas usan la retícula detectada en cada página; por ello, el sistema no depende únicamente de las coordenadas fijas del JSON.
 
-La configuración de producción de GUI y CLI no encadena Tesseract ni VLM. Ambos mecanismos existen como soporte técnico, pero permanecen desactivados en los puntos de entrada normales.
+La aplicación usa un solo motor OCR (PaddleOCR) y no encadena motores alternativos.
 
 ## 3.5 Firmas y casillas
 
@@ -186,4 +186,4 @@ Cada campo conserva:
 - método de inferencia;
 - alternativas consideradas.
 
-Fuentes habituales: `ocr`, `date_cells`, `book_correction`, `book_registry`, `fleet_validation`, `ocr_fallback`, `vlm` e `inferred`. El JSON consolidado conserva estos datos para auditoría.
+Fuentes habituales: `ocr`, `date_cells`, `book_correction`, `book_registry`, `fleet_validation`, `ocr_fallback` e `inferred`. El JSON consolidado conserva estos datos para auditoría.

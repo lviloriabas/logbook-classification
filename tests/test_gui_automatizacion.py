@@ -34,7 +34,9 @@ from app.gui.automatizacion import (
     INDEXAR,
     OMITIDO,
     PENDIENTE,
+    PREPROCESAR,
     PROCESAR,
+    RECORRIDO,
     SUBIR,
     CadenaAutomatica,
     MenuAutomatizacion,
@@ -163,8 +165,8 @@ def test_los_pasos_elegidos_sobreviven_al_cierre(tmp_path):
     assert guardado["auto_indexar"] is False
 
 
-def test_el_menu_enseña_los_dos_pasos_que_no_se_eligen(app, tmp_path):
-    """Procesar y exportar siempre se hacen, y la lista lo dice."""
+def test_el_menu_enseña_los_tres_pasos_que_no_se_eligen(app, tmp_path):
+    """Preprocesar, procesar y exportar siempre se hacen, y la lista lo dice."""
     menu = MenuAutomatizacion(OpcionesAutomatizacion(tmp_path))
     try:
         fijos = [
@@ -172,6 +174,7 @@ def test_el_menu_enseña_los_dos_pasos_que_no_se_eligen(app, tmp_path):
             if accion.isCheckable() and not accion.isEnabled()
         ]
         assert [accion.text() for accion in fijos] == [
+            "Preprocesar (enderezar y alinear)",
             "Procesar (OCR)",
             "Exportar CSV, JSON y PDF",
         ]
@@ -295,14 +298,15 @@ def ventana(app, tmp_path):
 def test_el_boton_dice_lo_que_va_a_hacer(ventana):
     assert ventana.btn_automatico.text() == "Automático"
     assert ventana._pasos_automaticos() == (
-        "procesar > exportar > subir > esperar > indexar"
+        "preprocesar > procesar > exportar > subir > esperar > indexar"
     )
 
     ventana._automatizacion.fijar(DEPURAR, True)
     ventana._automatizacion.fijar(COMPLETAR, True)
 
     assert ventana._pasos_automaticos() == (
-        "procesar > depurar > exportar > subir > esperar > indexar > completar"
+        "preprocesar > procesar > depurar > exportar > subir > esperar > "
+        "indexar > completar"
     )
 
 
@@ -407,8 +411,8 @@ def test_los_pasos_que_no_se_eligieron_no_cuentan(app, tmp_path):
     assert cadena.estado(DEPURAR) == OMITIDO
     assert cadena.estado(COMPLETAR) == OMITIDO
     assert cadena.estado(PROCESAR) == PENDIENTE
-    # Procesar, exportar, subir, esperar e indexar.
-    assert cadena.resumen() == "Automático: 0 de 5 pasos"
+    # Preprocesar, procesar, exportar, subir, esperar e indexar.
+    assert cadena.resumen() == "Automático: 0 de 6 pasos"
 
 
 def test_cambiar_los_pasos_rehace_la_cuenta(app, tmp_path):
@@ -418,7 +422,7 @@ def test_cambiar_los_pasos_rehace_la_cuenta(app, tmp_path):
     opciones.fijar(COMPLETAR, True)
 
     assert cadena.estado(COMPLETAR) == PENDIENTE
-    assert cadena.resumen() == "Automático: 0 de 6 pasos"
+    assert cadena.resumen() == "Automático: 0 de 7 pasos"
 
 
 def test_empezar_un_paso_da_por_hecho_el_anterior(app, tmp_path):
@@ -429,11 +433,13 @@ def test_empezar_un_paso_da_por_hecho_el_anterior(app, tmp_path):
     """
     cadena = CadenaAutomatica(OpcionesAutomatizacion(tmp_path))
 
+    cadena.marcar(PREPROCESAR, EN_CURSO)
     cadena.marcar(PROCESAR, EN_CURSO)
     cadena.marcar(SUBIR, EN_CURSO)
 
+    assert cadena.estado(PREPROCESAR) == HECHO
     assert cadena.estado(PROCESAR) == HECHO
-    assert cadena.resumen() == "Automático: subir (1 de 5 pasos)"
+    assert cadena.resumen() == "Automático: subir (2 de 6 pasos)"
 
 
 def test_la_cadena_completa_lo_dice_sin_contar(app, tmp_path):
@@ -442,7 +448,7 @@ def test_la_cadena_completa_lo_dice_sin_contar(app, tmp_path):
     opciones.fijar(SUBIR, False)
     cadena = CadenaAutomatica(opciones)
 
-    for paso in (PROCESAR, EXPORTAR):
+    for paso in (PREPROCESAR, PROCESAR, EXPORTAR):
         cadena.marcar(paso, HECHO)
 
     assert cadena.resumen() == "Automático: completo"
@@ -450,6 +456,7 @@ def test_la_cadena_completa_lo_dice_sin_contar(app, tmp_path):
 
 def test_cortar_deja_escrito_donde_se_detuvo(app, tmp_path):
     cadena = CadenaAutomatica(OpcionesAutomatizacion(tmp_path))
+    cadena.marcar(PREPROCESAR, HECHO)
     cadena.marcar(PROCESAR, HECHO)
     cadena.marcar(EXPORTAR, EN_CURSO)
 
@@ -457,7 +464,7 @@ def test_cortar_deja_escrito_donde_se_detuvo(app, tmp_path):
 
     assert cadena.estado(EXPORTAR) == CORTADO
     assert cadena.resumen() == (
-        "Automático: se cortó en «Exportar» (1 de 5 pasos)"
+        "Automático: se cortó en «Exportar» (2 de 6 pasos)"
     )
 
 
@@ -479,3 +486,46 @@ def test_cancelar_deja_el_paso_en_curso_marcado_como_cortado(ventana):
 
     assert ventana.cadena.estado(PROCESAR) == CORTADO
     assert "se cortó en «Procesar»" in ventana.cadena.resumen()
+
+
+# ── el primer paso: preprocesar ────────────────────────────────────
+#
+# El pipeline recorre el batch entero enderezando y alineando cada página
+# antes de leer ninguna. Ese tramo se contaba como si ya estuviera
+# procesando, así que el primer paso parecía atascado mientras duraba.
+
+def test_la_linea_empieza_por_preprocesar(app, tmp_path):
+    cadena = CadenaAutomatica(OpcionesAutomatizacion(tmp_path))
+
+    assert RECORRIDO[0] == PREPROCESAR
+    assert RECORRIDO[1] == PROCESAR
+    assert cadena.elegido(PREPROCESAR)
+    assert cadena.estado(PREPROCESAR) == PENDIENTE
+
+
+def test_la_calibracion_es_el_paso_de_preprocesar(ventana):
+    """Mientras se calibra manda «Preprocesar»; con la primera página, no."""
+    ventana._auto_en_marcha = True
+    ventana.cadena.marcar(PREPROCESAR, EN_CURSO)
+
+    # La calibración avisa como etapa, sin páginas leídas.
+    ventana._on_progress(0, 40, "Calibrando alineación (página 3/40)")
+
+    assert ventana.cadena.estado(PREPROCESAR) == EN_CURSO
+    assert ventana.cadena.estado(PROCESAR) == PENDIENTE
+
+    ventana._on_progress(1, 40, "Procesando página 1/40")
+
+    assert ventana.cadena.estado(PREPROCESAR) == HECHO
+    assert ventana.cadena.estado(PROCESAR) == EN_CURSO
+
+
+def test_un_batch_sin_calibracion_no_deja_el_primer_paso_colgado(ventana):
+    """Sin alineación no hay tramo que calibrar: el paso queda hecho igual."""
+    ventana._auto_en_marcha = True
+    ventana.cadena.marcar(PREPROCESAR, EN_CURSO)
+
+    ventana._seguir_automatico("proceso")
+
+    assert ventana.cadena.estado(PREPROCESAR) == HECHO
+    assert ventana.cadena.estado(PROCESAR) == HECHO

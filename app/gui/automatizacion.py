@@ -18,9 +18,10 @@ ella, así que cabe entero sin robarle sitio a nada. Se queda abierto entre
 clic y clic: son varias casillas y cerrarlo en la primera obligaba a
 volver a abrirlo por cada paso.
 
-Dos pasos no se eligen: procesar y exportar. Sin OCR no hay datos y sin
-salidas no hay nada que subir, así que aparecen marcados y apagados, para
-que la lista diga todo lo que va a pasar y no solo la parte opcional.
+Tres pasos no se eligen: preprocesar, procesar y exportar. Sin enderezar y
+alinear las páginas el OCR no lee, sin OCR no hay datos y sin salidas no hay
+nada que subir, así que aparecen marcados y apagados, para que la lista diga
+todo lo que va a pasar y no solo la parte opcional.
 
 Los cuatro de AirVault van uno detrás de otro y se marcan juntos: marcar
 «Indexar páginas» enciende subir y esperar, porque no se puede indexar lo
@@ -59,21 +60,33 @@ COMPLETAR = "completar"
 CADENA = (SUBIR, ESPERAR, INDEXAR, COMPLETAR)
 PASOS = (DEPURAR, *CADENA)
 
-# Los dos que siempre se hacen. No son opciones (no se pueden desmarcar),
+# Los tres que siempre se hacen. No son opciones (no se pueden desmarcar),
 # pero sí son pasos, y la cadena que se enseña mientras corre tiene que
 # contarlos: sin ellos, «va por 2 de 5» no diría por dónde va de verdad.
+#
+# «Preprocesar» es la primera parte del procesamiento, no un botón aparte:
+# el pipeline recorre el batch entero enderezando y alineando cada página
+# (la calibración) antes de leer ninguna. Es un tramo largo —en un libro de
+# 50 páginas son unos diez segundos— y hasta ahora la línea de pasos lo
+# contaba como si ya estuviera procesando, así que el primer paso parecía
+# atascado. Como paso propio se ve dónde está de verdad.
+PREPROCESAR = "preprocesar"
 PROCESAR = "procesar"
 EXPORTAR = "exportar"
 
 # La cadena entera, en el orden en que ocurre. Es el orden del recorrido,
 # no el del menú: depurar va entre procesar y exportar porque quita páginas
 # de la ejecución antes de que se escriba la entrega.
-RECORRIDO = (PROCESAR, DEPURAR, EXPORTAR, SUBIR, ESPERAR, INDEXAR, COMPLETAR)
+RECORRIDO = (
+    PREPROCESAR, PROCESAR, DEPURAR, EXPORTAR, SUBIR, ESPERAR, INDEXAR,
+    COMPLETAR,
+)
 
-# Cómo se llama cada paso cuando hay siete en una sola línea. En el menú
+# Cómo se llama cada paso cuando hay ocho en una sola línea. En el menú
 # cada uno tiene sitio para explicarse; aquí no, y lo que importa es
 # reconocerlo de un vistazo.
 NOMBRES_CORTOS = {
+    PREPROCESAR: "Preprocesar",
     PROCESAR: "Procesar",
     DEPURAR: "Depurar",
     EXPORTAR: "Exportar",
@@ -131,8 +144,13 @@ AYUDAS = {
     ),
 }
 
-# Los dos que no se eligen, con el motivo por el que no se eligen.
+# Los tres que no se eligen, con el motivo por el que no se eligen.
 FIJOS = (
+    (
+        "Preprocesar (enderezar y alinear)",
+        "Siempre se hace: es la primera parte del procesamiento, la que "
+        "endereza y alinea cada página para que el OCR lea donde debe.",
+    ),
     (
         "Procesar (OCR)",
         "Siempre se hace: es de donde salen los datos de la entrega.",
@@ -332,7 +350,7 @@ OMITIDO = "omitido"
 
 
 class CadenaAutomatica(QWidget):
-    """Los siete pasos en una línea, cada uno con lo que le pasó.
+    """Los ocho pasos en una línea, cada uno con lo que le pasó.
 
     Va debajo de la barra de progreso porque cuenta lo mismo que ella pero
     a otra escala: la barra dice cuánto falta del paso en curso, y esta,
@@ -375,7 +393,7 @@ class CadenaAutomatica(QWidget):
         fila = QHBoxLayout(self)
         fila.setContentsMargins(0, 0, 0, 0)
         fila.setSpacing(6)
-        # Siete nombres seguidos suman más ancho que muchos de los cuadros
+        # Ocho nombres seguidos suman más ancho que muchos de los cuadros
         # de arriba, y el ancho mínimo de la ventana es el del contenido más
         # ancho que tenga: sin esto, esta línea decidía sola que la ventana
         # no se puede abrir en una pantalla de 1024. Es un rótulo, no un
@@ -407,7 +425,7 @@ class CadenaAutomatica(QWidget):
 
     def elegido(self, paso: str) -> bool:
         """Si ese paso se va a hacer con las opciones de ahora."""
-        if paso in (PROCESAR, EXPORTAR):
+        if paso in (PREPROCESAR, PROCESAR, EXPORTAR):
             return True
         return self._opciones.valor(paso)
 

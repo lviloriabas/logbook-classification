@@ -44,9 +44,7 @@ def test_single_digit_day_uses_slot_recovery():
         date_dpi=200,
         deskew=False,
         align=False,
-        date_ocr_fallback=False,
         date_slot_ocr=True,
-        vlm_enabled=False,
     )
     slot_map = {"day": {"boundaries": [24, 36, 48], "slots": 2}}
 
@@ -73,9 +71,7 @@ def test_clean_two_digit_day_is_still_checked_by_slots():
         date_dpi=200,
         deskew=False,
         align=False,
-        date_ocr_fallback=False,
         date_slot_ocr=True,
-        vlm_enabled=False,
     )
     slot_map = {"day": {"boundaries": [24, 36, 48], "slots": 2}}
 
@@ -102,9 +98,7 @@ def test_high_resolution_date_image_receives_scaled_alignment():
         date_dpi=400,
         deskew=False,
         align=True,
-        date_ocr_fallback=False,
         date_slot_ocr=False,
-        vlm_enabled=False,
     )
     transform = pipeline_module.TransformResult(
         tx=3, ty=-2, reliable=True

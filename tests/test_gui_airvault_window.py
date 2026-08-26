@@ -1822,11 +1822,15 @@ def test_cancelar_saca_tambien_lo_que_esperaba_turno(ventana):
 # ── la bitácora y la lista de bitácoras del batch ──────────────────
 
 def test_la_bitacora_crece_con_la_ventana_y_no_se_queda_en_tres_lineas(ventana):
-    """Un mensaje largo se envuelve; con el tope de 110 px se leía a trozos."""
-    from app.gui.airvault_window import ALTO_MINIMO_BITACORA
+    """Un mensaje largo se envuelve; con el tope de 110 px se leía a trozos.
 
-    assert ventana.bitacora.minimumHeight() == ALTO_MINIMO_BITACORA
-    assert ventana.bitacora.maximumHeight() > ALTO_MINIMO_BITACORA * 2
+    El suelo lo pone la densidad: en una pantalla baja la bitácora cede
+    cuarenta píxeles, que son los que hacen que la ventana entre entera.
+    """
+    minimo = ventana._densidad.airvault_log_min_height
+
+    assert ventana.bitacora.minimumHeight() == minimo
+    assert ventana.bitacora.maximumHeight() > minimo * 2
     assert ventana.bitacora.wordWrap()
 
 

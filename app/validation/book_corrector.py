@@ -70,9 +70,10 @@ _DERIVED_SOURCES = frozenset({
     "book_registry",
     "inferred",
 })
-# Valores resueltos por una segunda pasada (Tesseract restringido o VLM):
-# valen más que el texto crudo de la pasada principal, que ya falló.
-_VERIFIED_SOURCES = frozenset({"ocr_fallback", "vlm", "fleet_validation"})
+# Valores resueltos por una comprobación posterior (el respaldo de fecha o
+# la lista de la flota): valen más que el texto crudo de la pasada
+# principal, que ya falló.
+_VERIFIED_SOURCES = frozenset({"ocr_fallback", "fleet_validation"})
 
 _ORDER = {Status.OK: 0, Status.WARNING: 1, Status.ERROR: 2}
 _CANONICAL_MATRICULA_RE = re.compile(r"^HP-(\d{4})(CMP|WWP)$")

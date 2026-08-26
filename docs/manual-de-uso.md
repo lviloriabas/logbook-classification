@@ -196,9 +196,12 @@ las marca en el otro.
 
 **Cancelar** corta la cadena entera, no solo el paso en curso.
 
-Debajo de la barra de progreso, una línea con los siete pasos dice hasta
+Debajo de la barra de progreso, una línea con los ocho pasos dice hasta
 dónde se llegó: gris claro los que faltan, azul el que está en curso, verde
 los terminados, rojo el que se cortó y gris apagado los que no se eligieron.
+El primero, **Preprocesar**, es el tramo con el que arranca el
+procesamiento: endereza y alinea el batch entero antes de leer la primera
+página.
 Los cuatro de AirVault ocurren en la otra ventana y se marcan igual, así que
 la línea sirve para saber si la entrega terminó de subirse sin ir a buscarla.
 

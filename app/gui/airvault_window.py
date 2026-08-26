@@ -104,11 +104,11 @@ INTENTOS_INDEXADO = 3
 # toda una tarde, sin tope crecería sin fin.
 LIMITE_BITACORA = 300
 
-# Alto mínimo de la bitácora. Con 110 px fijos cabían tres líneas, y un
-# mensaje largo (el motivo por el que una carga no salió, las páginas que
-# faltan para completar un batch) había que leerlo a trozos moviendo la
-# barra. Ahora crece con la ventana y nunca baja de esto.
-ALTO_MINIMO_BITACORA = 160
+# El alto mínimo de la bitácora, el de las dos tablas y el del resumen de
+# abajo salen de la densidad (``airvault_log_min_height`` y compañía): con
+# 110 px fijos la bitácora cabía en tres líneas y un mensaje largo había que
+# leerlo a trozos, y con el mínimo holgado la ventana no entraba en un
+# escritorio de 1366x768 sin montar unos controles sobre otros.
 
 # El nombre distingue las divisiones y REVISAR, así que no puede quedar
 # reducido a unas pocas letras. A partir de este ancho se conserva espacio
@@ -925,8 +925,13 @@ class AirVaultWindow(QDialog):
         # en un portátil bajo dejaría los botones fuera del borde.
         # El alto pedido deja sitio a la bitácora, que es lo que se lee
         # mientras trabaja; lo que no quepa lo recorta la pantalla.
-        densidad = fit_to_screen(self, 780, 800)
-        self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS + densidad.qss)
+        # La densidad viaja como atributo porque la piden las piezas que se
+        # construyen luego: lo que ocupan las tablas, la bitácora y el
+        # resumen es lo que decide si la ventana entra en un escritorio bajo.
+        self._densidad = fit_to_screen(self, 780, 800)
+        self.setStyleSheet(
+            APP_CHROME_QSS + DATA_TABLE_QSS + self._densidad.qss
+        )
         self._build_ui()
 
     # ── construcción ───────────────────────────────────────────────
@@ -957,7 +962,9 @@ class AirVaultWindow(QDialog):
         self.resumen.setStyleSheet(f"color: {COLOR_AYUDA};")
         # Sitio para tres líneas: los motivos de fallo son largos, y sin
         # reservarlo la ventana daba un salto cada vez que aparecía uno.
-        self.resumen.setMinimumHeight(48)
+        self.resumen.setMinimumHeight(
+            self._densidad.airvault_summary_min_height
+        )
         self.resumen.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
@@ -1721,11 +1728,10 @@ class AirVaultWindow(QDialog):
             "la cola"
         )
 
-    @staticmethod
-    def _ajustar_tabla(tabla: QTableWidget) -> None:
+    def _ajustar_tabla(self, tabla: QTableWidget) -> None:
         """Iguala las dos tablas y deja la barra debajo de la cabecera."""
         style_data_table(tabla)
-        tabla.setMinimumHeight(132)
+        tabla.setMinimumHeight(self._densidad.airvault_table_min_height)
         tabla.setMaximumHeight(360)
         align_vertical_scrollbar_to_header(tabla)
 
@@ -1848,7 +1854,7 @@ class AirVaultWindow(QDialog):
         lista.setToolTip("Lo que el indexado va haciendo, con la hora de cada paso")
         # Sin tope y con suelo: un mensaje largo se envuelve en varias
         # líneas y con 110 px fijos solo se veía el principio.
-        lista.setMinimumHeight(ALTO_MINIMO_BITACORA)
+        lista.setMinimumHeight(self._densidad.airvault_log_min_height)
         lista.setWordWrap(True)
         lista.setTextElideMode(Qt.TextElideMode.ElideNone)
         lista.setResizeMode(QListView.ResizeMode.Adjust)
