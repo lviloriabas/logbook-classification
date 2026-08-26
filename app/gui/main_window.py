@@ -2912,7 +2912,13 @@ class MainWindow(QMainWindow):
         if self._worker is None or not self._worker.isRunning():
             self._auto_en_marcha = False
             return
-        self.cadena.marcar(pasos_automaticos.PROCESAR, pasos_automaticos.EN_CURSO)
+        # El pipeline empieza por la calibración: endereza y alinea el batch
+        # entero antes de leer la primera página. Ese tramo es «preprocesar»,
+        # y el paso siguiente lo enciende ``_on_progress`` en cuanto llega la
+        # primera página contada.
+        self.cadena.marcar(
+            pasos_automaticos.PREPROCESAR, pasos_automaticos.EN_CURSO
+        )
         pasos = self._pasos_automaticos()
         logger.info(f"Proceso automático: {pasos}")
         self.status_label.setText(f"Procesando… ({pasos})")
@@ -2920,7 +2926,7 @@ class MainWindow(QMainWindow):
     def _pasos_automaticos(self) -> str:
         """Los pasos elegidos, en una línea, para la bitácora y el estado."""
         opciones = self._automatizacion
-        pasos = ["procesar"]
+        pasos = ["preprocesar", "procesar"]
         if opciones.depurar:
             pasos.append("depurar")
         pasos.append("exportar")
@@ -2959,6 +2965,12 @@ class MainWindow(QMainWindow):
             self._cortar_automatico("la ejecución quedó cancelada")
             return
         if contexto == "proceso":
+            # Un batch que se lee entero sin pasar por la calibración (sin
+            # alineación, o tan corto que no llega ningún aviso de página)
+            # deja el primer paso en curso: aquí ya está terminado.
+            self.cadena.marcar(
+                pasos_automaticos.PREPROCESAR, pasos_automaticos.HECHO
+            )
             self.cadena.marcar(
                 pasos_automaticos.PROCESAR, pasos_automaticos.HECHO
             )
