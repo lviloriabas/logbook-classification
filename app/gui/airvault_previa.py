@@ -7,12 +7,19 @@ iba a quedar la ejecución ni qué bitácoras caían en cada uno. Aquí se
 calcula ese mismo reparto sin escribir nada y se enseña antes de subir,
 junto con los batches que ya están esperando en la cola.
 
-De cada batch se puede abrir la lista de sus bitácoras. Esa lista se mira
+De cada batch se puede abrir la lista de sus páginas. Esa lista se mira
 como el visor de CSV, en compacto: la página de la bitácora a la izquierda,
 la tabla a la derecha, un buscador encima y las columnas ordenables con un
 clic en su cabecera. Comprobar que una bitácora concreta va donde se espera
 no obliga entonces a abrir el PDF por fuera: se elige su fila y la hoja
 escaneada aparece al lado.
+
+La lista enseña el batch entero: las separadoras ocupan su fila, porque son
+las que corren la numeración del batch y sin ellas la página que dice la
+tabla no es la que enseña Web Index. Las columnas son los campos que el
+programa da por importantes, los mismos de la vista resumida del visor de
+CSV, y no todo lo que se le escribe a la página: repasar el índice entero
+es lo que hace el reporte de revisión.
 """
 
 from __future__ import annotations
@@ -37,6 +44,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.airvault.mapping import fecha_airvault
 from app.airvault.model import EstadoRegistro, Registro
 from app.gui.responsive import Density, fit_to_screen
 from app.gui.table_sort import ColumnSortController
@@ -49,6 +57,7 @@ from app.gui.widgets import (
     size_columns_once,
     style_data_table,
 )
+from app.utils.important_fields import default_important_columns
 
 # El mismo gris con el que las dos ventanas escriben sus líneas de ayuda.
 COLOR_AYUDA = "#57606a"
@@ -68,6 +77,36 @@ NOMBRE_ESTADO_REGISTRO = {
 # completado ya salió de la cola y se fue a Web Search, así que decir de sus
 # bitácoras que están «indexadas» se queda corto: no queda nada por hacerles.
 NOMBRE_COMPLETADA = "Completada"
+# La página divisoria del PDF de entrega. Ocupa su sitio en el batch para
+# que la correspondencia por posición siga en pie, pero no es un documento:
+# no se le escribe nada y se borra al cerrar el batch.
+NOMBRE_SEPARADOR = "Separador"
+
+
+# Columna de datos de la lista y campo de la ejecución del que sale. Cuáles
+# se enseñan no se decide aquí: se quedan las que el programa da por
+# importantes (``app/utils/important_fields.py``), que son las mismas que el
+# visor de CSV deja en su vista resumida. Lo demás que se le escribe a la
+# página (Doc Type, Fleet, Lessor, Audit Status y las marcas de lo deducido)
+# no cabe en una lista que se mira de un vistazo: está en el reporte de
+# revisión, que es donde se repasa el índice entero.
+_CAMPO_DE_COLUMNA = {
+    "Origen": "file",
+    "Matrícula": "matricula",
+    "Log Page": "log_number",
+    "Vuelo": "flight_number",
+    "End Date": "date",
+}
+
+
+def _columnas_de_datos() -> tuple[str, ...]:
+    """Las columnas de campo que el programa marca como importantes."""
+    importantes = default_important_columns(_CAMPO_DE_COLUMNA.values())
+    return tuple(
+        nombre
+        for nombre, campo in _CAMPO_DE_COLUMNA.items()
+        if campo in importantes
+    )
 
 
 def _plural(cantidad: int, singular: str, plural: str) -> str:
@@ -82,23 +121,28 @@ def _origen(registro: Registro) -> str:
 
 
 def _estado_de(registro: Registro, completado: bool = False) -> str:
-    """Lo que hay que saber de la bitácora antes de escribirla.
+    """Cómo quedó la página: en una vista previa, «por indexar».
 
-    Manda lo que impide escribirla: un aviso deja la página bloqueada, así
-    que decirlo importa más que repetir que sigue pendiente. Sin avisos vale
-    su estado, que en una vista previa siempre es «por indexar» y en un
-    batch ya trabajado dice cómo quedó.
+    En un batch ya trabajado dice cómo terminó cada bitácora, y en uno
+    completado, que ya no queda nada por hacerle. Lo que le impide
+    escribirse va aparte, en los avisos: son dos preguntas distintas y
+    responder una tapando la otra dejaba sin estado a la página bloqueada.
     """
+    if registro.es_separador:
+        return NOMBRE_SEPARADOR
+    if completado and registro.estado is EstadoRegistro.ESCRITA:
+        return NOMBRE_COMPLETADA
+    return NOMBRE_ESTADO_REGISTRO.get(registro.estado, str(registro.estado))
+
+
+def _avisos_de(registro: Registro) -> str:
+    """Lo que deja la página bloqueada, que es lo que hay que resolver."""
     partes = list(registro.avisos)
     if registro.duplicado:
         partes.append("duplicada")
     if registro.discrepancia:
         partes.append("discrepancia")
-    if partes:
-        return "; ".join(partes)
-    if completado and registro.estado is EstadoRegistro.ESCRITA:
-        return NOMBRE_COMPLETADA
-    return NOMBRE_ESTADO_REGISTRO.get(registro.estado, str(registro.estado))
+    return "; ".join(partes)
 
 
 def _tabla(columnas: Sequence[str], ayuda: str) -> QTableWidget:
@@ -291,14 +335,19 @@ class _ListaBuscable(QDialog):
 
 
 class BitacorasDelBatch(_ListaBuscable):
-    """Las bitácoras que van dentro de un batch, con su hoja al lado."""
+    """Las páginas que van dentro de un batch, con su hoja al lado.
 
-    COLUMNAS = (
-        "Página", "Matrícula", "Log Page", "Fecha", "Vuelo", "Origen",
-        "Estado",
-    )
-    # El estado es una frase, no un dato que se busque; el resto sí.
-    COLUMNAS_BUSCABLES = (0, 1, 2, 3, 4, 5)
+    De cada una se enseñan los campos importantes, y la fecha ya convertida
+    al formato de AirVault: lo que se busca aquí es comprobar de un vistazo
+    que la bitácora va donde debe, no repasar su índice entero.
+    """
+
+    #: La posición en el batch y cómo quedó la página no salen de ningún
+    #: campo de la ejecución: son del batch, y por eso van siempre.
+    COLUMNAS = ("Página", *_columnas_de_datos(), "Estado", "Avisos")
+    # El estado y los avisos son frases, no datos que se busquen; el resto
+    # sí, y se buscan por el mismo valor que la fila enseña.
+    COLUMNAS_BUSCABLES = tuple(range(len(COLUMNAS) - 2))
 
     _PISTA = "Log Page, matrícula, fecha, archivo de origen…"
 
@@ -314,9 +363,9 @@ class BitacorasDelBatch(_ListaBuscable):
         self._registros = list(registros)
         self._csv = Path(csv) if csv else None
         self._completado = bool(completado)
-        # Bitácora que muestra cada fila de la tabla, en el orden en que se
-        # llenó. Es lo que le pide el visor a la página que enseña.
-        self._bitacoras: list[Registro] = []
+        # Página del batch que muestra cada fila de la tabla, en el orden en
+        # que se llenó. Es lo que le pide el visor a la hoja que enseña.
+        self._paginas: list[Registro] = []
         self.setWindowTitle(f"Bitácoras de {nombre or 'el batch'}")
         # Como el resto de las ventanas: el tamaño lo pone la pantalla, que
         # en un portátil bajo dejaría los botones fuera del borde.
@@ -336,7 +385,8 @@ class BitacorasDelBatch(_ListaBuscable):
         )
         if separadores:
             resumen += (
-                f" Las otras {separadores} son páginas separadoras: no se "
+                f" Las otras {separadores} son páginas separadoras: van en "
+                "la lista porque ocupan página en el batch, pero no se "
                 "indexan y se borran al terminar."
             )
         intro = QLabel(resumen)
@@ -345,11 +395,12 @@ class BitacorasDelBatch(_ListaBuscable):
 
         self.tabla = _tabla(
             self.COLUMNAS,
-            "Cada bitácora con la página que ocupa dentro del batch, que es "
-            "la misma que muestra Web Index. Al elegir una fila se abre su "
-            "hoja escaneada al lado; el doble clic la lleva al visor.",
+            "Cada página del batch con el número que ocupa dentro de él, que "
+            "es el mismo que muestra Web Index, y con los campos importantes "
+            "de la bitácora. Al elegir una fila se abre su hoja escaneada al "
+            "lado; el doble clic la lleva al visor.",
         )
-        self._llenar(bitacoras)
+        self._llenar(self._registros)
         # Después de llenarla, no antes: medir por contenido mientras entran
         # las filas obliga a Qt a repasar la columna entera en cada celda.
         size_columns_once(self.tabla, stretch_last=True)
@@ -383,7 +434,7 @@ class BitacorasDelBatch(_ListaBuscable):
         self.tabla.itemSelectionChanged.connect(self._mostrar_la_elegida)
         self.tabla.itemDoubleClicked.connect(self._abrir_la_elegida)
 
-        self._cargar_paginas(bitacoras)
+        self._cargar_paginas(self._registros)
 
         fila = QHBoxLayout()
         fila.addStretch()
@@ -420,44 +471,84 @@ class BitacorasDelBatch(_ListaBuscable):
         self.visor.shutdown()
         super().done(result)
 
-    def _llenar(self, bitacoras: Sequence[Registro]) -> None:
+    def _valores(self, registro: Registro) -> dict[str, str]:
+        """Lo que la página tiene que decir, por columna.
+
+        Se arma entero y la tabla se queda con lo que enseña: qué columnas
+        son eso lo decide la lista de campos importantes, y esto no tiene
+        por qué saberlo. La fecha se convierte con la misma función que la
+        manda a AirVault, así que la lista no puede prometer una distinta de
+        la que se va a escribir.
+        """
+        pagina = str(registro.pagina_batch or registro.seq)
+        if registro.es_separador:
+            # No se le escribe nada, así que no tiene datos de índice: lo
+            # único suyo es la etiqueta con la que se imprimió la divisoria.
+            return {
+                "Página": pagina,
+                "Matrícula": registro.separador,
+                "Estado": NOMBRE_SEPARADOR,
+            }
+        return {
+            "Página": pagina,
+            "Origen": _origen(registro),
+            "Matrícula": registro.matricula,
+            "Log Page": registro.log_number,
+            "Vuelo": registro.flight_number,
+            "End Date": fecha_airvault(registro.fecha),
+            "Estado": _estado_de(registro, self._completado),
+            "Avisos": _avisos_de(registro),
+        }
+
+    def _celdas(self, registro: Registro) -> tuple[str, ...]:
+        """La fila de una página del batch, en el orden de las columnas."""
+        valores = self._valores(registro)
+        return tuple(valores.get(nombre, "") for nombre in self.COLUMNAS)
+
+    def _llenar(self, paginas: Sequence[Registro]) -> None:
         self.tabla.setRowCount(0)
-        self._bitacoras = list(bitacoras)
-        for indice, registro in enumerate(self._bitacoras):
+        self._paginas = list(paginas)
+        for indice, registro in enumerate(self._paginas):
             fila = self.tabla.rowCount()
             self.tabla.insertRow(fila)
-            celdas = (
-                str(registro.pagina_batch or registro.seq),
-                registro.matricula,
-                registro.log_number,
-                registro.fecha,
-                registro.flight_number,
-                _origen(registro),
-                _estado_de(registro, self._completado),
-            )
-            for columna, texto in enumerate(celdas):
+            for columna, texto in enumerate(self._celdas(registro)):
                 item = QTableWidgetItem(texto)
-                # La fila lleva encima a qué bitácora corresponde: ordenar
-                # la mueve de sitio y el visor tiene que seguir acertando.
+                # La fila lleva encima a qué página del batch corresponde:
+                # ordenar la mueve de sitio y el visor tiene que seguir
+                # acertando.
                 item.setData(Qt.ItemDataRole.UserRole, indice)
                 if columna == 0:
                     item.setTextAlignment(
                         Qt.AlignmentFlag.AlignRight
                         | Qt.AlignmentFlag.AlignVCenter
                     )
-                if registro.estado is EstadoRegistro.ESCRITA:
+                if registro.es_separador:
+                    # El mismo gris con el que la lista de batches marca lo
+                    # que no llega a existir en AirVault: la divisoria se
+                    # borra al cerrar el batch.
+                    item.setForeground(Qt.GlobalColor.gray)
+                elif registro.estado is EstadoRegistro.ESCRITA:
                     # El mismo verde de la tabla de batches, y significa lo
                     # mismo: eso ya está escrito en AirVault.
                     item.setForeground(QColor(COLOR_HECHO))
                 self.tabla.setItem(fila, columna, item)
 
-    def _cargar_paginas(self, bitacoras: Sequence[Registro]) -> None:
-        """Ubica en disco las hojas escaneadas de las que salió cada fila."""
+    def _cargar_paginas(self, paginas: Sequence[Registro]) -> None:
+        """Ubica en disco las hojas escaneadas de las que salió cada fila.
+
+        La secuencia que recibe el visor tiene una entrada por página del
+        batch, separadoras incluidas, para que su numeración sea la del
+        batch. La separadora no sale de ninguna hoja escaneada: entra sin
+        documento y el panel lo dice en vez de dejar a la vista la hoja de
+        la fila anterior. Al buscador de documentos se le siguen dando solo
+        las bitácoras, que son las únicas que el CSV registra.
+        """
         from app.gui.csv_viewer import resolve_source_documents
 
         if self._csv is None:
             self.visor.load_paths([], [])
             return
+        bitacoras = [r for r in paginas if not r.es_separador]
         filas = [
             {
                 "file": registro.archivo_origen,
@@ -466,17 +557,16 @@ class BitacorasDelBatch(_ListaBuscable):
             for registro in bitacoras
         ]
         rutas, documentos, faltan = resolve_source_documents(self._csv, filas)
-        self.visor.load_paths(
-            documentos,
-            faltan,
-            [
-                (ruta, registro.pagina_origen)
-                for ruta, registro in zip(rutas, bitacoras)
-            ],
-        )
+        encontradas = iter(rutas)
+        secuencia = [
+            (None, 0) if registro.es_separador
+            else (next(encontradas), registro.pagina_origen)
+            for registro in paginas
+        ]
+        self.visor.load_paths(documentos, faltan, secuencia)
 
     def _indice_elegido(self) -> int:
-        """Bitácora que corresponde a la fila resaltada, ordenada o no."""
+        """Página del batch de la fila resaltada, esté ordenada o no."""
         fila = self.tabla.currentRow()
         item = self.tabla.item(fila, 0) if fila >= 0 else None
         indice = item.data(Qt.ItemDataRole.UserRole) if item else None
@@ -484,7 +574,7 @@ class BitacorasDelBatch(_ListaBuscable):
 
     def _mostrar_la_elegida(self) -> None:
         indice = self._indice_elegido()
-        if 0 <= indice < len(self._bitacoras):
+        if 0 <= indice < len(self._paginas):
             self.visor.show_page(indice + 1)
 
     def _abrir_la_elegida(self, *_args) -> None:

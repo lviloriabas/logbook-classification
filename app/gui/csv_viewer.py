@@ -1177,7 +1177,14 @@ class EmbeddedPdfViewer(QFrame):
             self._path = path
             self._page = int(page)
             self._pending_render = None
-            self._show_placeholder("No se encontró el PDF de esta página.")
+            self._show_placeholder(
+                # Sin documento y sin página no hay hoja que buscar: la
+                # posición existe en la secuencia, pero no salió de ningún
+                # escaneo (la página separadora de un batch, por ejemplo).
+                "Esta página no viene de ninguna hoja escaneada."
+                if path is None and int(page) <= 0
+                else "No se encontró el PDF de esta página."
+            )
             self._sync_controls()
             return
         document_total = self._page_total(path)
