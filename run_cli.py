@@ -262,19 +262,9 @@ def _important_columns(
     return tuple(column for column in columns if column in elegidas)
 
 
-def _print_pdf_result(
-    pdf_path: Path, report, vlm_stats: dict, pages: PageRange
-) -> None:
+def _print_pdf_result(pdf_path: Path, report, pages: PageRange) -> None:
     tramo = "" if pages.is_full else f" ({pages.label()} del archivo)"
     print(f"\n>>> {pdf_path.name}{tramo}")
-    if vlm_stats.get("enabled"):
-        print(
-            f"  VLM: {vlm_stats.get('crops', 0)} recorte(s), "
-            f"{vlm_stats.get('signatures_resolved', 0)} firma(s) y "
-            f"{vlm_stats.get('fields_resolved', 0)} campo(s) resueltos"
-            + (f" [{vlm_stats.get('model')}]"
-               if vlm_stats.get("model") else "")
-        )
     summary = report.summary
     print(f"  Resumen {pdf_path.name}: {summary.get('total_pages', 0)} "
           f"páginas | OK: {summary.get('ok_pages', 0)} "
@@ -307,9 +297,7 @@ def _run(args: argparse.Namespace) -> int:
         ocr_rec_model="PP-OCRv5_mobile_rec",
         ocr_det_model="PP-OCRv6_medium_det",
         date_engine_name="",
-        date_ocr_fallback=False,
         date_slot_ocr=False,
-        vlm_enabled=False,
         verify_fleet=args.verificar_flota,
         fleet_file=(
             Path(args.lista_flota) if args.lista_flota
@@ -387,7 +375,6 @@ def _run(args: argparse.Namespace) -> int:
     )
 
     reports = []
-    vlm_stats = []
     process_pool = (
         OcrProcessPool(
             workers,
@@ -404,7 +391,7 @@ def _run(args: argparse.Namespace) -> int:
             f"Perfil C activo: {workers} workers persistentes, "
             f"planificación adaptativa y colas acotadas"
         )
-        reports, vlm_stats = process_pdf_batch(
+        reports = process_pdf_batch(
             entrada,
             config,
             template,
@@ -415,8 +402,8 @@ def _run(args: argparse.Namespace) -> int:
             reference_page=args.reference_page,
             on_progress=on_progress,
         )
-        for item, report, stats in zip(slices, reports, vlm_stats):
-            _print_pdf_result(item.path, report, stats, item.pages)
+        for item, report in zip(slices, reports):
+            _print_pdf_result(item.path, report, item.pages)
     else:
         print("Perfil C activo: ejecución secuencial con un worker")
         for item in slices:
@@ -441,10 +428,7 @@ def _run(args: argparse.Namespace) -> int:
             )
             report = pipeline.process(pdf_path, page_range=item.pages)
             reports.append(report)
-            vlm_stats.append(pipeline.vlm_stats)
-            _print_pdf_result(
-                pdf_path, report, pipeline.vlm_stats, item.pages
-            )
+            _print_pdf_result(pdf_path, report, item.pages)
 
     if process_pool is not None:
         process_pool.close()
@@ -508,7 +492,6 @@ def _run(args: argparse.Namespace) -> int:
                 template, args.campos_importantes
             ),
         ),
-        vlm_stats=vlm_stats,
         on_stage=on_stage,
     )
 

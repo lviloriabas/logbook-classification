@@ -66,7 +66,6 @@ class PipelineWorker(QThread):
         # Archivos que el rango deja dentro; se fija al arrancar la ejecución.
         self._active_paths: List[Path] = list(self.pdf_paths)
         self.reports: List[ValidationReport] = []
-        self.vlm_stats: List[dict] = []
 
     def run(self) -> None:
         """Punto de entrada del hilo."""
@@ -116,7 +115,7 @@ class PipelineWorker(QThread):
             )
             with pool_context as process_pool:
                 if process_pool is not None:
-                    reports, self.vlm_stats = process_pdf_batch(
+                    reports = process_pdf_batch(
                         self.pdf_paths,
                         self.config,
                         template,
@@ -179,7 +178,6 @@ class PipelineWorker(QThread):
                             should_cancel=self.isInterruptionRequested,
                         )
                         reports.append(report)
-                        self.vlm_stats.append(pipeline.vlm_stats)
                         self.reports = list(reports)
                         self.file_progress.emit(
                             index + 1, len(report.pages), len(report.pages)
@@ -361,13 +359,11 @@ class OutputsWorker(QThread):
         self,
         reports: List[ValidationReport],
         options: "OutputOptions",
-        vlm_stats: List[dict] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.reports = reports
         self.options = options
-        self.vlm_stats = vlm_stats or []
 
     def run(self) -> None:
         """Punto de entrada del hilo de generación de salidas."""
@@ -377,7 +373,6 @@ class OutputsWorker(QThread):
             output_dir = write_outputs(
                 self.reports,
                 self.options,
-                vlm_stats=self.vlm_stats,
                 on_stage=self._on_stage,
             )
         except Exception as exc:  # noqa: BLE001 - la GUI muestra el error

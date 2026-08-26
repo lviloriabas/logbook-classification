@@ -145,22 +145,3 @@ def send_to_trash(
         except Exception as exc:  # noqa: BLE001 - se informa por archivo
             failed.append((path, exc))
     return moved, failed
-
-
-def resolve_tesseract_path() -> Optional[str]:
-    """Localiza tesseract.exe (portable o en el sistema)."""
-    import os
-    import shutil
-
-    if shutil.which("tesseract"):
-        return "tesseract"
-
-    candidates = [
-        Path(__file__).resolve().parents[2] / "portable" / "tesseract",
-        Path("portable/tesseract"),
-    ]
-    for base in candidates:
-        exe = base / ("tesseract.exe" if os.name == "nt" else "tesseract")
-        if exe.exists():
-            return str(exe)
-    return None

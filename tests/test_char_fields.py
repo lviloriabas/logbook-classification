@@ -77,9 +77,7 @@ def _config() -> AppConfig:
         date_dpi=200,
         deskew=False,
         align=False,
-        date_ocr_fallback=False,
         date_slot_ocr=False,
-        vlm_enabled=False,
     )
 
 

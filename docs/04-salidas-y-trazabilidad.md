@@ -77,7 +77,6 @@ Los metadatos exclusivos de la vista previa no se guardan.
 - conteo por matrícula y por mes;
 - páginas sin matrícula o sin fecha;
 - posibles discrepancias, categorías y razones;
-- actividad del verificador VLM, aunque esté desactivado;
 - distribución de páginas entre PDF, cuando se aplicó separación.
 
 El campo histórico `total_bitacoras` cuenta reportes de entrada, es decir, PDF fuente. No representa el número de libros físicos cuando un libro cruza archivos o un PDF contiene más de un libro.

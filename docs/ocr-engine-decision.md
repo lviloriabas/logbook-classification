@@ -21,17 +21,19 @@ fechas y alcanzó 80% de exactitud completa sin encadenar motores. El error
 restante se trata mediante la heurística secuencial por libro, no ejecutando
 otro OCR sobre cada página.
 
-La GUI no expone selectores de motor general ni de fechas. También mantiene
-desactivadas la segunda pasada Tesseract y la lectura Tesseract por ranuras.
-Las opciones del CLI quedan reservadas a diagnóstico y reproducción de esta
-comparación; no son configuración del usuario del portable.
+La GUI no expone selectores de motor general ni de fechas. Tesseract, que
+en esta comparación no acertó ninguna fecha, se eliminó del programa el
+2026-08-26 junto con la segunda pasada y la lectura por ranuras que dependían
+de él (ver `Legends.md`). Las opciones del CLI quedan reservadas a diagnóstico
+y reproducción de esta comparación; no son configuración del usuario del
+portable.
 
 ## Reproducción
 
 ```powershell
 portable\python312\tools\python.exe tools\evaluate_date_images.py --run `
-  --engine paddle --rec-model PP-OCRv5_mobile_rec `
-  --det-model PP-OCRv6_medium_det --no-fallback --no-slot-ocr
+  --rec-model PP-OCRv5_mobile_rec `
+  --det-model PP-OCRv6_medium_det --no-slot-ocr
 ```
 
 PaddleX 3.7.2 requiere instalar su extra `ocr`; tener solamente `paddlex` y

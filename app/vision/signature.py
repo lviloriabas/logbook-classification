@@ -41,15 +41,15 @@ La decisión tiene tres estados:
   ninguna evidencia ni siquiera con el umbral de tinta relajado.
 - ``unclear`` (WARNING): todo lo demás, escritura que se sale del campo,
   sellos, calcas. No se acusa una falta: la clasificación de discrepancias
-  lo marca como REVISAR y el verificador VLM puede arbitrarlo.
+  lo marca como REVISAR y la revisión queda a la vista.
 
 Los umbrales están elegidos con margen hacia el lado seguro: un falso
 positivo esconde una firma que falta de verdad, mientras que un ``unclear``
 solo cuesta una revisión manual.
 
-Lo que queda en ``unclear`` tiene una segunda oportunidad antes de llegar al
-verificador VLM: el pipeline lo contrasta con el resto de la bitácora
-(``review_with_background``, apoyado en ``app/vision/book_background.py``).
+Lo que queda en ``unclear`` tiene una segunda oportunidad: el pipeline lo
+contrasta con el resto de la bitácora (``review_with_background``, apoyado
+en ``app/vision/book_background.py``).
 Este módulo mira cada recorte aislado y estima el papel con morfología; aquel
 resta la mediana del mismo campo a lo largo del libro, que es ese campo
 realmente vacío.

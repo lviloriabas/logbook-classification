@@ -68,10 +68,8 @@ def evaluate(truth: dict[str, dict], predictions: dict[str, Optional[str]]) -> d
 def _run_reader(
     truth: dict[str, dict],
     *,
-    engine_name: str,
     rec_model: Optional[str],
     det_model: Optional[str],
-    fallback: bool,
     slot_ocr: bool,
 ) -> tuple[dict[str, Optional[str]], float]:
     import cv2
@@ -93,10 +91,8 @@ def _run_reader(
         deskew=False,
         align=False,
         remove_printed=False,
-        vlm_enabled=False,
-        ocr_engine=engine_name,
-        ocr_lang="eng" if engine_name == "tesseract" else "en",
-        date_ocr_fallback=fallback,
+        ocr_engine="paddle",
+        ocr_lang="en",
         date_slot_ocr=slot_ocr,
         ocr_rec_model=rec_model,
         ocr_det_model=det_model,
@@ -106,7 +102,7 @@ def _run_reader(
         kwargs["rec_model"] = rec_model
     if det_model:
         kwargs["det_model"] = det_model
-    engine = create_engine(engine_name, lang=config.ocr_lang, **kwargs)
+    engine = create_engine(config.ocr_engine, lang=config.ocr_lang, **kwargs)
     predictions: dict[str, Optional[str]] = {}
     started = time.perf_counter()
     for page_number, name in enumerate(truth, start=1):
@@ -146,19 +142,11 @@ def main() -> int:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--run", action="store_true", help="ejecutar el lector actual")
     source.add_argument("--predictions", type=Path, help="JSON {archivo: fecha|null}")
-    parser.add_argument(
-        "--engine", choices=["paddle", "tesseract"], default="paddle",
-        help="motor que se desea comparar",
-    )
     parser.add_argument("--rec-model", help="modelo Paddle de reconocimiento")
     parser.add_argument("--det-model", help="modelo Paddle de detección")
     parser.add_argument(
-        "--fallback", action=argparse.BooleanOptionalAction, default=False,
-        help="activar la segunda pasada Tesseract",
-    )
-    parser.add_argument(
         "--slot-ocr", action=argparse.BooleanOptionalAction, default=False,
-        help="activar la lectura Tesseract por ranuras",
+        help="activar la lectura por ranuras de la casilla",
     )
     parser.add_argument("--truth", type=Path, default=GROUND_TRUTH)
     parser.add_argument("--save", type=Path, help="guardar predicciones JSON")
@@ -169,10 +157,8 @@ def main() -> int:
     if args.run:
         predictions, elapsed = _run_reader(
             truth,
-            engine_name=args.engine,
             rec_model=args.rec_model,
             det_model=args.det_model,
-            fallback=args.fallback,
             slot_ocr=args.slot_ocr,
         )
     else:

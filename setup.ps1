@@ -1,16 +1,14 @@
 <#
 .SYNOPSIS
     Reconstruye el entorno portable descargando todo lo que el repositorio no
-    versiona: Python 3.12, las dependencias, Tesseract y los modelos OCR.
+    versiona: Python 3.12, las dependencias y los modelos OCR.
 
 .DESCRIPTION
     El repositorio guarda solo codigo fuente. La carpeta portable\ (unos 2 GB)
     queda fuera de git por peso, asi que en una maquina nueva hay que traerla:
 
         portable\python312   interprete Python 3.12 + dependencias (pip)
-        portable\tesseract   Tesseract 5.4 con tessdata eng/osd
         portable\paddlex     modelos PaddleOCR (detector + reconocedor)
-        portable\llama       modelos del verificador VLM (opcional)
 
     El script es idempotente: lo que ya esta completo no se vuelve a bajar.
     Necesita internet solo mientras corre; despues la aplicacion trabaja
@@ -18,13 +16,6 @@
 
 .PARAMETER Check
     No descarga nada: solo informa que componentes estan presentes.
-
-.PARAMETER SkipTesseract
-    Omite Tesseract (237 MB). La GUI y el CLI no lo usan; hace falta para el
-    OCR de respaldo por campo y para tools\evaluate_date_images.py.
-
-.PARAMETER Vlm
-    Descarga tambien los modelos del verificador VLM (varios GB).
 
 .PARAMETER Launcher
     Regenera LogbookClassification.exe con PyInstaller al terminar.
@@ -44,8 +35,6 @@
 [CmdletBinding()]
 param(
     [switch]$Check,
-    [switch]$SkipTesseract,
-    [switch]$Vlm,
     [switch]$Launcher,
     [switch]$Force,
     [switch]$CleanCache
@@ -61,10 +50,6 @@ $PythonVersion = '3.12.10'
 $PythonUrl = "https://globalcdn.nuget.org/packages/python.$PythonVersion.nupkg"
 $PythonSha = '0EB85C2DFCCCCF1B17352DE4C397F69194035B7D37149EACC16F1147D93DE3B8'
 
-$TesseractVersion = '5.4.0.20240606'
-$TesseractUrl = "https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-$TesseractVersion.exe"
-$TesseractSha = 'C885FFF6998E0608BA4BB8AB51436E1C6775C2BAFC2559A19B423E18678B60C9'
-
 # Los mismos nombres que fija app/ocr/engine.py y descarga tools\precache_paddle.py.
 $PaddleModels = @('PP-OCRv6_medium_det', 'PP-OCRv5_mobile_rec')
 
@@ -74,10 +59,7 @@ $Portable = Join-Path $Root 'portable'
 $Cache = Join-Path $Portable '.cache'
 $PythonDir = Join-Path $Portable 'python312'
 $PythonExe = Join-Path $PythonDir 'tools\python.exe'
-$TessDir = Join-Path $Portable 'tesseract'
-$TessExe = Join-Path $TessDir 'tesseract.exe'
 $ModelsDir = Join-Path $Portable 'paddlex\official_models'
-$LlamaDir = Join-Path $Portable 'llama'
 $LauncherExe = Join-Path $Root 'LogbookClassification.exe'
 
 # --- Salida ----------------------------------------------------------------
@@ -167,15 +149,6 @@ function Test-Modelos {
         if (-not (Test-Path $pesos)) { return $false }
     }
     return $true
-}
-
-function Test-Vlm {
-    $modelos = Join-Path $LlamaDir 'models'
-    if (-not (Test-Path $modelos)) { return $false }
-    $gguf = @(Get-ChildItem -Path $modelos -Filter '*.gguf' -File -ErrorAction SilentlyContinue)
-    $texto = @($gguf | Where-Object { $_.Name -notmatch 'mmproj' })
-    $proyector = @($gguf | Where-Object { $_.Name -match 'mmproj' })
-    return ($texto.Count -gt 0 -and $proyector.Count -gt 0)
 }
 
 function Get-TamanoMB {
@@ -302,56 +275,6 @@ function Install-Dependencias {
     Write-Listo 'dependencias instaladas'
 }
 
-function Install-Tesseract {
-    Write-Paso "Tesseract $TesseractVersion"
-    if ((Test-Path $TessExe) -and -not $Force) {
-        Write-Listo 'ya esta en portable\tesseract'
-        return
-    }
-    $instalador = Join-Path $Cache "tesseract-ocr-w64-setup-$TesseractVersion.exe"
-    Get-Descarga -Url $TesseractUrl -Destino $instalador -Sha256 $TesseractSha
-
-    if (Test-Path $TessDir) { Remove-Item -LiteralPath $TessDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $TessDir -Force | Out-Null
-
-    # El instalador es NSIS: 7-Zip lo abre como archivo comprimido y deja los
-    # binarios sin tocar el registro ni el menu inicio. Si no hay 7-Zip se cae
-    # al modo silencioso del propio instalador, que tampoco pide permisos de
-    # administrador cuando el destino es escribible.
-    $sevenZip = Find-SevenZip
-    if ($sevenZip) {
-        Write-Detalle 'extrayendo con 7-Zip'
-        Get-SalidaPrograma -Ruta $sevenZip `
-            -Argumentos @('x', $instalador, "-o$TessDir", '-y') | Out-Null
-        # 1 son advertencias (el instalador trae entradas que 7-Zip no reconoce).
-        if ($LASTEXITCODE -gt 1) { throw "7-Zip fallo al extraer ($LASTEXITCODE)." }
-        # Restos del instalador que no forman parte de Tesseract.
-        foreach ($sobra in @('$PLUGINSDIR', '[NSIS].nsi', 'Uninstall.exe')) {
-            $ruta = Join-Path $TessDir $sobra
-            if (Test-Path -LiteralPath $ruta) {
-                Remove-Item -LiteralPath $ruta -Recurse -Force
-            }
-        }
-    }
-    else {
-        Write-Detalle 'sin 7-Zip: instalacion silenciosa en portable\tesseract'
-        # /D debe ir al final y sin comillas: NSIS toma el resto de la linea.
-        $proceso = Start-Process -FilePath $instalador `
-            -ArgumentList "/S /D=$TessDir" -Wait -PassThru
-        if ($proceso.ExitCode -ne 0) {
-            throw "El instalador de Tesseract fallo ($($proceso.ExitCode))."
-        }
-    }
-
-    if (-not (Test-Path $TessExe)) {
-        throw ("No aparecio tesseract.exe en portable\tesseract. Instale 7-Zip " +
-            'y repita, o copie la carpeta desde otro portable.')
-    }
-    $version = Get-SalidaPrograma -Ruta $TessExe -Argumentos @('--version')
-    if ($version) { Write-Detalle ($version | Select-Object -First 1) }
-    Write-Listo 'listo en portable\tesseract'
-}
-
 function Install-Modelos {
     Write-Paso 'Modelos PaddleOCR'
     if ((Test-Modelos) -and -not $Force) {
@@ -371,23 +294,6 @@ function Install-Modelos {
         throw 'La precarga termino pero faltan pesos en portable\paddlex.'
     }
     Write-Listo 'modelos listos en portable\paddlex'
-}
-
-function Install-Vlm {
-    Write-Paso 'Modelos del verificador VLM'
-    if ((Test-Vlm) -and -not $Force) {
-        Write-Listo 'ya estan en portable\llama\models'
-        return
-    }
-    Write-Detalle 'tools\precache_vlm.py (varios GB)'
-    & $PythonExe (Join-Path $Root 'tools\precache_vlm.py')
-    if ($LASTEXITCODE -ne 0) { throw 'Fallo la descarga de los modelos VLM.' }
-    $binario = Join-Path $LlamaDir 'bin\llama-server.exe'
-    if (-not (Test-Path $binario)) {
-        Write-Aviso ('falta portable\llama\bin\llama-server.exe: fije ' +
-            'BITS_LLAMA_BIN_ZIP con la URL del release de llama.cpp o copielo a mano')
-    }
-    Write-Listo 'modelos VLM listos'
 }
 
 function Build-Launcher {
@@ -424,18 +330,6 @@ function Show-Estado {
             MB         = Get-TamanoMB (Join-Path $Portable 'paddlex')
         },
         [pscustomobject]@{
-            Componente = 'Tesseract'
-            Estado     = if (Test-Path $TessExe) { 'ok' } else { 'opcional' }
-            Ruta       = 'portable\tesseract'
-            MB         = Get-TamanoMB $TessDir
-        },
-        [pscustomobject]@{
-            Componente = 'Verificador VLM'
-            Estado     = if (Test-Vlm) { 'ok' } else { 'opcional' }
-            Ruta       = 'portable\llama'
-            MB         = Get-TamanoMB $LlamaDir
-        },
-        [pscustomobject]@{
             Componente = 'Launcher'
             Estado     = if (Test-Path $LauncherExe) { 'ok' } else { 'FALTA' }
             Ruta       = 'LogbookClassification.exe'
@@ -468,14 +362,6 @@ if ($Check) {
 Install-Python
 Install-Dependencias
 Install-Modelos
-if ($SkipTesseract) {
-    Write-Paso 'Tesseract'
-    Write-Aviso 'omitido por -SkipTesseract (el OCR de respaldo quedara apagado)'
-}
-else {
-    Install-Tesseract
-}
-if ($Vlm) { Install-Vlm }
 if ($Launcher) { Build-Launcher }
 
 if ($CleanCache -and (Test-Path $Cache)) {

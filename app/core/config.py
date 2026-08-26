@@ -60,13 +60,6 @@ class AppConfig(BaseModel):
                     "Desactivarlo alimenta el motor con el recorte crudo, para "
                     "comparar motores/resultados (escritura a mano).",
     )
-    date_ocr_fallback: bool = Field(
-        default=False,
-        description="Segunda pasada OCR (Tesseract restringido) para los "
-                    "campos de fecha day/month/year y los campos críticos "
-                    "(matricula, log_number) cuando la lectura principal de "
-                    "PaddleOCR no produce un valor válido.",
-    )
     date_slot_ocr: bool = Field(
         default=False,
         description="Lectura estructurada para day/month/year: segmentación de la "
@@ -82,37 +75,6 @@ class AppConfig(BaseModel):
                     "la ventana de la plantilla y alinea el peine esperado "
                     "con una traslación/escala pequeñas. Si la retícula no "
                     "encaja, se conserva la geometría de plantilla.",
-    )
-    vlm_enabled: bool = Field(
-        default=False,
-        description="Verificador VLM local (llama-server + modelo GGUF): "
-                    "procesa todas las fechas y arbitra firmas inciertas y "
-                    "campos críticos sin resolver. Si el modelo o el "
-                    "binario no están presentes, el pipeline conserva el "
-                    "fallback OCR.",
-    )
-    vlm_model: Optional[Path] = Field(
-        default=None,
-        description="Ruta explícita al GGUF del modelo VLM. Si es None, "
-                    "se usa BITS_LLAMA_MODEL o Qwen3-VL por defecto.",
-    )
-    vlm_mmproj: Optional[Path] = Field(
-        default=None,
-        description="Ruta explícita al proyector multimodal GGUF. Si es "
-                    "None, se usa BITS_LLAMA_MMPROJ o el mmproj compatible.",
-    )
-    vlm_max_crops: int = Field(
-        default=120, ge=0,
-        description="Límite de recortes evaluados por el verificador VLM "
-                    "en una ejecución (cada consulta cuesta ~1-4 s en CPU).",
-    )
-    vlm_timeout: float = Field(
-        default=60.0, ge=5.0,
-        description="Tiempo máximo (s) por consulta al servidor VLM local.",
-    )
-    vlm_threads: Optional[int] = Field(
-        default=None, ge=1,
-        description="Hilos de CPU del servidor VLM (None = automático).",
     )
     min_match_count: int = Field(
         default=10, ge=1,

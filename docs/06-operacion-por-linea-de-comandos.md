@@ -61,7 +61,7 @@ La CLI no mueve los PDF terminados a `input/processed/`.
 | `--verbose` | Muestra detalle de depuración y traceback en la terminal. |
 | `-h`, `--help` | Muestra la ayuda incorporada. |
 
-No hay opciones de GPU, motor OCR, modelo, Tesseract ni VLM. Esos elementos están fijados o desactivados por la configuración de producción.
+No hay opciones de GPU, motor OCR ni modelo: son fijos en la configuración de producción.
 
 ## 6.4 Formato del rango
 

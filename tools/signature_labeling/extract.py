@@ -137,12 +137,10 @@ def extract(
     known = {sample.id for sample in dataset.samples}
     added = 0
 
-    # Sin OCR, sin VLM y sin máscara de fondo impreso: de todo el pipeline
-    # aquí solo interesa la geometría (deskew + alineación), que es lo que
-    # decide qué píxeles caen dentro del campo.
-    base_config = AppConfig(
-        remove_printed=False, date_slot_ocr=False, vlm_enabled=False,
-    )
+    # Sin OCR y sin máscara de fondo impreso: de todo el pipeline aquí solo
+    # interesa la geometría (deskew + alineación), que es lo que decide qué
+    # píxeles caen dentro del campo.
+    base_config = AppConfig(remove_printed=False, date_slot_ocr=False)
     selection = PageRange.parse(pages_text) if pages_text else PageRange()
 
     for pdf_path in pdf_paths:

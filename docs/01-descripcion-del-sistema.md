@@ -50,13 +50,12 @@ Dentro del mismo libro, una fecha posterior en `log_number` no debe ser anterior
 | `app/validation/` | Valida campos, libros, fechas, flota y firmas. |
 | `app/reports/` | Escribe CSV, JSON, estadísticas y PDF. |
 | `app/gui/` | Contiene la interfaz principal, el visor y el editor. |
-| `app/verifier/` | Contiene el verificador VLM local opcional, desactivado en producción. |
 | `app/utils/` | Resuelve entorno portable, archivos, registros y normalización. |
 | `template/` | Contiene las definiciones de campos. |
 | `input/` | Recibe los PDF pendientes. |
 | `input/processed/` | Conserva los PDF terminados que procedían de `input/`. |
 | `output/` | Conserva una carpeta independiente por ejecución. |
-| `portable/` | Contiene Python, dependencias, Tesseract y modelos locales. |
+| `portable/` | Contiene Python, dependencias y modelos locales. |
 | `tools/` | Contiene utilidades de preparación, evaluación y calibración. |
 | `tests/` | Contiene la verificación automatizada. |
 

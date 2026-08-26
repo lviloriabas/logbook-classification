@@ -112,7 +112,6 @@ def _clean_stale_artifacts(run_dir: Path) -> None:
 def write_outputs(
     reports: Sequence[ValidationReport],
     options: OutputOptions,
-    vlm_stats: Sequence[dict] | None = None,
     on_stage: Optional[Callable[[str, int], None]] = None,
 ) -> Path:
     """Escribe los reportes y PDFs de una ejecución completa.
@@ -338,7 +337,6 @@ def write_outputs(
         separar_por=None if skip_pdfs else separar,
         entradas=entradas,
         excluidas=excluidas or None,
-        vlm_stats=vlm_stats,
         pdf_paths=pdf_paths,
     )
     logger.info(f"Stats de la ejecución: {stats_path}")
