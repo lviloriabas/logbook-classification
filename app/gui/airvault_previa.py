@@ -44,6 +44,7 @@ from app.gui.widgets import (
     APP_CHROME_QSS,
     DATA_TABLE_QSS,
     PANE_STATUS_COLORS,
+    ElidedLabel,
     align_vertical_scrollbar_to_header,
     size_columns_once,
     style_data_table,
@@ -193,10 +194,12 @@ class _ListaBuscable(QDialog):
         self.buscar_siguiente.setEnabled(False)
         self.buscar_siguiente.clicked.connect(lambda: self._mover_busqueda(1))
         fila.addWidget(self.buscar_siguiente)
-        self.busqueda_ayuda = QLabel(pista)
-        self.busqueda_ayuda.setStyleSheet(f"color: {COLOR_AYUDA};")
         # Una frase larga pide de ancho mínimo la frase entera: se recorta
-        # antes que empujar el separador y estrechar la página.
+        # antes que empujar el separador y estrechar la página. Recortar es
+        # de ``ElidedLabel``, que la termina en puntos suspensivos y deja la
+        # entera en el tooltip; un QLabel a secas la cortaba a media palabra.
+        self.busqueda_ayuda = ElidedLabel(pista)
+        self.busqueda_ayuda.setStyleSheet(f"color: {COLOR_AYUDA};")
         self.busqueda_ayuda.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )

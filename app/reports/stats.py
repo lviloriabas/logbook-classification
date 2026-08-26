@@ -97,33 +97,6 @@ def _stats_discrepancias(entradas: Sequence[Discrepancia]) -> dict:
     }
 
 
-def _stats_vlm(vlm_stats: Sequence[dict]) -> dict:
-    """Bloque del verificador VLM: cuántos casos resolvió la ejecución."""
-    activos = [v for v in vlm_stats if v.get("enabled")]
-    modelos = sorted({v["model"] for v in activos if v.get("model")})
-    desactivado = next(
-        (v.get("disabled") for v in vlm_stats if v.get("disabled")),
-        None,
-    )
-    return {
-        "activo": bool(activos),
-        "bitacoras_con_vlm": len(activos),
-        "modelos": modelos,
-        "date_targets": sum(v.get("date_targets", 0) for v in activos),
-        "date_fields_resueltos": sum(
-            v.get("date_fields_resolved", 0) for v in activos
-        ),
-        "crops_consultados": sum(v.get("crops", 0) for v in activos),
-        "firmas_resueltas": sum(
-            v.get("signatures_resolved", 0) for v in activos
-        ),
-        "campos_resueltos": sum(
-            v.get("fields_resolved", 0) for v in activos
-        ),
-        "desactivado_por": desactivado,
-    }
-
-
 def _stats_separacion(
     reports: Sequence[ValidationReport],
     separar_por: Sequence[str],
@@ -190,7 +163,6 @@ def construir_stats(
     separar_por: Optional[Sequence[str]] = None,
     entradas: Optional[Sequence[Discrepancia]] = None,
     excluidas: Optional[Set[Tuple[str, int]]] = None,
-    vlm_stats: Optional[Sequence[dict]] = None,
     pdf_paths: Optional[Sequence[Path]] = None,
 ) -> dict:
     """Construye el diccionario de estadísticas de la ejecución.
@@ -203,7 +175,6 @@ def construir_stats(
             verificación de que ninguna página queda por fuera.
         entradas: Discrepancias de firma clasificadas (si se calcularon).
         excluidas: Páginas excluidas de los PDFs por discrepancia.
-        vlm_stats: Stats del verificador VLM por bitácora (si se ejecutó).
         pdf_paths: Rutas de los PDFs realmente escritos, para que el bloque
             ``separacion`` nombre los archivos que existen en disco.
 
@@ -232,7 +203,6 @@ def construir_stats(
         "sin_matricula": sin_matricula,
         "sin_fecha": sin_fecha,
         "discrepancias": _stats_discrepancias(list(entradas or [])),
-        "vlm": _stats_vlm(list(vlm_stats or [])),
     }
     if separar_por:
         stats["separacion"] = _stats_separacion(
@@ -249,7 +219,6 @@ def escribir_stats(
     separar_por: Optional[Sequence[str]] = None,
     entradas: Optional[Sequence[Discrepancia]] = None,
     excluidas: Optional[Set[Tuple[str, int]]] = None,
-    vlm_stats: Optional[Sequence[dict]] = None,
     pdf_paths: Optional[Sequence[Path]] = None,
 ) -> Path:
     """Escribe ``stats.json`` en la carpeta de la ejecución.
@@ -265,7 +234,6 @@ def escribir_stats(
         separar_por=separar_por,
         entradas=entradas,
         excluidas=excluidas,
-        vlm_stats=vlm_stats,
         pdf_paths=pdf_paths,
     )
     output_path = run_dir / "stats.json"

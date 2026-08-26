@@ -100,6 +100,13 @@ class Density:
     pdf_pane_min_height: int
     editor_view_min_width: int
     editor_panel_max_width: int
+    # Ventana de AirVault: las tres piezas elásticas que se apilan en ella
+    # (las dos tablas, la bitácora y el resumen de abajo). Lo que suman es
+    # lo que decide si la ventana entra en un escritorio bajo o si el
+    # reparto tiene que apretar los controles unos contra otros.
+    airvault_table_min_height: int
+    airvault_log_min_height: int
+    airvault_summary_min_height: int
     qss: str = ""
 
     @property
@@ -125,6 +132,9 @@ ROOMY = Density(
     pdf_pane_min_height=260,
     editor_view_min_width=600,
     editor_panel_max_width=340,
+    airvault_table_min_height=132,
+    airvault_log_min_height=160,
+    airvault_summary_min_height=48,
 )
 
 COMPACT = Density(
@@ -136,35 +146,60 @@ COMPACT = Density(
     group_row_spacing=3,
     group_column_spacing=4,
     bottom_pane_height=140,
-    # Veinte píxeles menos que antes, que son los que ocupa la línea de
-    # pasos del proceso automático. En una pantalla de 768 la ventana ya
-    # estaba en su techo y no cabía una fila más; de las dos, la que puede
-    # ceder es esta, que solo enseña menos archivos a la vez y se desplaza,
-    # mientras que la línea de pasos o se ve entera o no dice nada. Con
-    # sitio de sobra el separador le da bastante más que su suelo.
-    bottom_min_height=72,
+    # Lo que de verdad pide el panel de avance apretado: sus tres rótulos
+    # enteros más una fila de la lista, que es la parte que se desplaza.
+    # Con los 72 px de antes (los que se le quitaron para hacerle sitio a la
+    # línea de pasos) el reparto no llegaba a los rótulos y los dejaba en
+    # once píxeles: «Avance por archivo» salía partido por la mitad y
+    # «Sin archivos procesados aún.» cortado por abajo.
+    bottom_min_height=100,
     log_min_width=200,
     name_column_width=150,
     preview_min_width=200,
-    preview_min_height=140,
+    # Los píxeles que gana el panel de avance salen de aquí, que es lo que
+    # se puede ceder sin cortar nada: la página se desplaza dentro de su
+    # marco. Es un suelo que solo se toca con la ventana en su tamaño más
+    # pequeño; en cualquier otro, el separador le da mucho más.
+    preview_min_height=112,
     pdf_pane_min_width=260,
     pdf_pane_min_height=160,
     editor_view_min_width=360,
     editor_panel_max_width=300,
+    # La ventana de AirVault pide 789 px de alto con las medidas holgadas y
+    # un escritorio de 1366x768 solo da 728: al recortarla, el reparto
+    # empujaba el resumen de abajo por encima de la bitácora y la frase se
+    # leía sobre la lista. Apretadas, las tres piezas suman 118 px menos y
+    # la ventana entra entera hasta en un escritorio de 1280x720.
+    airvault_table_min_height=100,
+    airvault_log_min_height=120,
+    airvault_summary_min_height=34,
     qss=_COMPACT_QSS,
 )
 
 
-def density_for(height: int, current: Density | None = None) -> Density:
+def density_for(
+    height: int,
+    current: Density | None = None,
+    threshold: int = COMPACT_HEIGHT,
+) -> Density:
     """Medidas que le tocan a una ventana de ``height`` px de alto.
 
     ``current`` es la densidad que ya está aplicada: sirve para la histéresis,
     de modo que volver a lo holgado exija recuperar algo más de alto del que
     se perdió al apretar.
+
+    ``threshold`` es el alto por debajo del cual hay que apretarse. Por
+    defecto es ``COMPACT_HEIGHT``, la estimación que sirve para elegir con
+    qué medidas se construye una ventana; la que ya está construida pasa el
+    alto que de verdad pide su reparto holgado, que depende de la tipografía
+    del equipo. Con el número estimado, una ventana entre ese valor y lo que
+    el reparto holgado necesita se quedaba con medidas que no caben, y el
+    layout, sin sitio, encogía los cuadros por debajo de su mínimo: es lo que
+    monta unos controles encima de otros.
     """
     if current is COMPACT:
-        return ROOMY if height >= COMPACT_HEIGHT + DENSITY_HYSTERESIS else COMPACT
-    return COMPACT if height < COMPACT_HEIGHT else ROOMY
+        return ROOMY if height >= threshold + DENSITY_HYSTERESIS else COMPACT
+    return COMPACT if height < threshold else ROOMY
 
 
 def fitted_geometry(

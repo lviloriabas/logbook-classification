@@ -76,7 +76,6 @@ def test_pipeline_records_effective_preview_geometry_without_serializing_it():
             align=True,
             date_dynamic_geometry=False,
             date_slot_ocr=False,
-            date_ocr_fallback=False,
             crop_preprocess=False,
         ),
         EmptyEngine(),

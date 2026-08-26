@@ -128,6 +128,7 @@ en el `airvault.json` de la carpeta portable.
 
 | Paso | Se elige | Qué hace |
 | --- | --- | --- |
+| Preprocesar (enderezar y alinear) | No | Siempre se hace: es la primera parte del procesamiento, la que endereza y alinea cada página del batch para que el OCR lea donde debe. |
 | Procesar (OCR) | No | Siempre se hace: es de donde salen los datos. |
 | Exportar CSV, JSON y PDF | No | Siempre se hace: es la entrega. |
 | Depurar páginas repetidas y en blanco | Sí, suelto | Quita las apariciones sobrantes de cada bitácora repetida (nunca la primera) y las páginas en blanco, antes de exportar, así que los PDF salen ya sin ellas. Sin marcar, la ejecución se exporta entera y **Depurar** sigue disponible para revisarla a mano. |
@@ -154,12 +155,19 @@ sale de la ejecución elegida.
 
 ### La línea de pasos
 
-Debajo de la barra de progreso hay una línea con los siete pasos en el orden
+Debajo de la barra de progreso hay una línea con los ocho pasos en el orden
 en que ocurren:
 
 ```
-Procesar › Depurar › Exportar › Subir › Esperar › Indexar › Completar
+Preprocesar › Procesar › Depurar › Exportar › Subir › Esperar › Indexar › Completar
 ```
+
+**Preprocesar** es el tramo con el que empieza el procesamiento: antes de
+leer ninguna página, el programa recorre el batch entero enderezando y
+alineando cada hoja. En un libro de cincuenta páginas son unos diez
+segundos, y hasta ahora se contaban como si ya estuviera leyendo, así que el
+primer paso parecía atascado. Cuando la barra empieza a contar páginas, ese
+paso queda en verde y el turno pasa a **Procesar**.
 
 Cada uno se pinta según lo que le pasó: gris claro los que faltan, azul el
 que está en curso, verde los terminados, rojo el que se cortó y gris apagado
@@ -349,3 +357,7 @@ Para localizar un original, el visor comprueba la ruta del JSON, la carpeta del 
 ## 2.15 Adaptación a la pantalla
 
 Las ventanas se limitan al área útil del escritorio y consideran el escalado de Windows. En pantallas bajas, la ventana principal reduce márgenes y reorganiza los grupos superiores para conservar la vista previa y la tabla. Maximizar, restaurar o mover la ventana a otro monitor vuelve a calcular la distribución.
+
+El cambio de medidas no depende de un alto escrito a mano: la ventana mide lo que pide su distribución holgada con la tipografía del equipo y se aprieta en cuanto no llega a ese alto. Por eso una ventana a media pantalla (por ejemplo 1600x900) se ve compacta aunque el monitor sea grande; con las medidas holgadas no cabría y los controles quedarían montados unos sobre otros.
+
+Lo que cede sitio al apretarse son las partes que se desplazan: la página de la vista previa, la consola y la lista de archivos del panel de avance. Los rótulos y los botones no se recortan. El recuadro de zoom flota sobre la página y se esconde cuando la página se queda más baja que él; el zoom sigue disponible con `Ctrl` y la rueda del ratón y con `Ctrl +` y `Ctrl -`. Las frases de ayuda largas (la pista del buscador) se recortan con puntos suspensivos y se leen enteras al pasar el cursor por encima.

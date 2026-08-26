@@ -32,8 +32,7 @@ def _pdf(path: Path, pages: int) -> Path:
 
 def _config() -> AppConfig:
     return AppConfig(dpi=72, date_dpi=72, deskew=False, align=False,
-                     remove_printed=False, date_ocr_fallback=False,
-                     date_slot_ocr=False, vlm_enabled=False)
+                     remove_printed=False, date_slot_ocr=False)
 
 
 def _pipeline(**kwargs) -> Pipeline:
@@ -163,7 +162,6 @@ def test_the_batch_range_spans_files_and_skips_the_ones_outside(tmp_path):
     calls: list[tuple[str, int, int | None]] = []
 
     class _FakePipeline:
-        vlm_stats = {"enabled": False}
 
         def __init__(self, *_args, **_kwargs):
             self.on_progress = None
@@ -184,14 +182,13 @@ def test_the_batch_range_spans_files_and_skips_the_ones_outside(tmp_path):
             return tmp_path / name
 
     with patch("app.core.pipeline.Pipeline", _FakePipeline):
-        reports, stats = process_pdf_batch(
+        reports = process_pdf_batch(
             paths, _config(), Template(name="empty"), _Pool(), _FakeEngine(),
             page_range=PageRange(8, 22),
         )
 
     assert calls == [("a.pdf", 8, 10), ("b.pdf", 1, 12)]
     assert [Path(r.pdf_path).name for r in reports] == ["a.pdf", "b.pdf"]
-    assert len(stats) == 2
 
 
 def test_a_batch_range_outside_the_input_returns_nothing(tmp_path):
@@ -203,12 +200,12 @@ def test_a_batch_range_outside_the_input_returns_nothing(tmp_path):
         def temporary_path(self, name):
             return tmp_path / name
 
-    reports, stats = process_pdf_batch(
+    reports = process_pdf_batch(
         paths, _config(), Template(name="empty"), _Pool(), _FakeEngine(),
         page_range=PageRange(50, 60),
     )
 
-    assert reports == [] and stats == []
+    assert reports == []
 
 
 def test_the_batch_progress_totals_only_the_selected_pages(tmp_path):
@@ -221,7 +218,6 @@ def test_the_batch_progress_totals_only_the_selected_pages(tmp_path):
     per_file: list[tuple[int, int, int]] = []
 
     class _ProgressPipeline:
-        vlm_stats = {"enabled": False}
 
         def __init__(self, *_args, **_kwargs):
             self.on_progress = None

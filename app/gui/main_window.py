@@ -83,7 +83,14 @@ from app.gui.eta import estimate_remaining_seconds, wall_ms_per_page
 from app.gui.export_options import ExportOptionsGroup
 from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.fleet_editor import FLEET_FILENAME, FleetEditorDialog, FleetStore
-from app.gui.responsive import COMPACT, Density, density_for, fit_to_screen
+from app.gui.responsive import (
+    COMPACT,
+    COMPACT_HEIGHT,
+    ROOMY,
+    Density,
+    density_for,
+    fit_to_screen,
+)
 from app.gui.table_sort import ColumnSortController
 from app.gui.airvault_window import AIRVAULT_TOOLTIP, AirVaultWindow
 from app.gui import automatizacion as pasos_automaticos
@@ -102,6 +109,7 @@ from app.gui.widgets import (
     SpinBoxWithButtons,
     ZoomableScrollArea,
     ZoomOverlay,
+    hide_overlay_when_tight,
     load_icon,
     style_data_table,
 )
@@ -167,6 +175,9 @@ _BAR_MIN_WIDTH = 140
 _PAGES_COLUMN_WIDTH = 86
 _SECS_COLUMN_WIDTH = 70
 _FILE_ROW_SPACING = 8
+# Alto de una fila del panel más el marco de la lista: es hasta donde puede
+# encogerse la parte que se desplaza, y por debajo no se vería ni un archivo.
+_TIMES_SCROLL_MIN_HEIGHT = 26
 # El selector conserva su ancho habitual en pantallas holgadas. En la
 # densidad compacta cede apenas lo necesario para que «Entrada» y «Salidas»
 # entren en dos columnas dentro de un escritorio lógico de 1280 px.
@@ -396,6 +407,9 @@ class MainWindow(QMainWindow):
         self._two_column_width = _PREFERRED_WIDTH
         self._stacked_minimum = QSize(0, 0)
         self._side_by_side_minimum = QSize(0, 0)
+        # Alto que pide el reparto holgado. Hasta medirlo vale el umbral de
+        # siempre, que es el que decide la densidad con la que se construye.
+        self._roomy_minimum = QSize(0, COMPACT_HEIGHT)
         # Mientras se mide el reparto compacto la ventana cambia de medidas
         # varias veces; los eventos de tamaño que eso provoca no deben
         # volver a entrar a decidir nada.
@@ -407,9 +421,6 @@ class MainWindow(QMainWindow):
         self._pdf_paths: list[Path] = []
         self._template_path: Path | None = None
         self._reports: list[ValidationReport] | None = None
-        # Estadísticas de la ejecución, copiadas al terminar: el worker se libera
-        # en cuanto acaba y una re-exportación posterior las sigue necesitando.
-        self._vlm_stats: list[dict] = []
         self._worker: PipelineWorker | None = None
         self._preprocess_worker: PreprocessWorker | None = None
         self._outputs_worker: OutputsWorker | None = None
@@ -660,7 +671,7 @@ class MainWindow(QMainWindow):
             self._set_row_name(row, label.toolTip())
 
     def _refresh_minimum_size(self) -> None:
-        """Mide los dos números que gobiernan el reparto y fija el suelo.
+        """Mide los tres números que gobiernan el reparto y fija el suelo.
 
         Se miden en vez de escribirse porque dependen de la tipografía del
         sistema y del escalado de Windows, que no se conocen hasta que la
@@ -675,10 +686,19 @@ class MainWindow(QMainWindow):
           mínimo explícito manda sobre el del reparto y de apretarla a
           tiempo se encarga ``_update_responsive_layout``.
         * el ancho a partir del cual el reparto en dos columnas cabe.
+        * el alto que pide el reparto holgado, que es el umbral por debajo
+          del cual hay que apretarse. Antes ese umbral era un número escrito
+          a mano (820 px) y se quedaba corto: entre 860 y 980 px de alto la
+          ventana usaba medidas holgadas que no caben, y el layout, sin
+          sitio, encogía los cuadros por debajo de su mínimo. Ahí es donde
+          «Salidas» aparecía con las casillas montadas unas sobre otras y el
+          botón de matrículas fuera de su marco.
         """
         density = self._density
         self._measuring_layout = True
         try:
+            self._apply_density(ROOMY)
+            roomy = self._layout_minimum(1)
             self._apply_density(COMPACT)
             stacked = self._layout_minimum(1)
             side_by_side = self._layout_minimum(2)
@@ -687,6 +707,7 @@ class MainWindow(QMainWindow):
             self._measuring_layout = False
         self._stacked_minimum = stacked
         self._side_by_side_minimum = side_by_side
+        self._roomy_minimum = roomy
         self._two_column_width = side_by_side.width()
         # El reparto se decide con el umbral recién medido, no con el que
         # valía antes de medir: si la ventana ya es bastante ancha para dos
@@ -733,12 +754,18 @@ class MainWindow(QMainWindow):
         contenido: según la tipografía del sistema el reparto puede pedir
         algún píxel más. Se le da, sin salirse del escritorio, que es el
         único límite que no se negocia.
+
+        El alto que se pide es el del reparto holgado, no el del que esté
+        montado: donde la pantalla lo permite, la ventana se abre con las
+        medidas de siempre en vez de apretarse por unos pocos píxeles. Donde
+        no lo permite, ``fit_to_screen`` recorta y ``_update_responsive_layout``
+        aprieta, que es lo que corresponde.
         """
         needed = self.centralWidget().layout().minimumSize()
         fit_to_screen(
             self,
             max(self.width(), needed.width()),
-            max(self.height(), needed.height()),
+            max(self.height(), needed.height(), self._roomy_minimum.height()),
         )
 
     def _update_responsive_layout(self) -> None:
@@ -750,7 +777,9 @@ class MainWindow(QMainWindow):
         """
         if self._measuring_layout:
             return
-        density = density_for(self.height(), self._density)
+        density = density_for(
+            self.height(), self._density, self._roomy_minimum.height()
+        )
         if density is not self._density:
             self._apply_density(density)
         self._apply_controls_columns(self._controls_columns_for(self.width()))
@@ -1346,13 +1375,21 @@ class MainWindow(QMainWindow):
         time_summary = QFrame()
         time_summary.setObjectName("timeSummary")
         time_summary.setMinimumWidth(270)
-        time_summary.setFixedHeight(30)
+        # Alto de suelo, no fijo: dentro van dos líneas (el rótulo y su
+        # reloj) y con 30 px clavados no cabían las dos, así que los números
+        # salían con la base cortada. Con suelo se ven enteros aquí y siguen
+        # cabiendo si el equipo dibuja el texto un poco más alto.
+        time_summary.setMinimumHeight(30)
         time_summary.setToolTip(
             "El tiempo restante se recalcula con las páginas completadas y el "
             "ritmo observado."
         )
         time_layout = QHBoxLayout(time_summary)
-        time_layout.setContentsMargins(9, 2, 9, 2)
+        # Sin margen arriba ni abajo: los 30 px de la píldora son el borde
+        # (1 px por lado) más las dos líneas de texto justas. Con los 2 px
+        # que había, las dos líneas no cabían y los relojes salían con la
+        # base cortada.
+        time_layout.setContentsMargins(9, 0, 9, 0)
         time_layout.setSpacing(12)
         self.time_labels: dict[str, QLabel] = {}
         for key, caption in (
@@ -1361,7 +1398,7 @@ class MainWindow(QMainWindow):
             ("total", "ESTIMADO"),
         ):
             metric = QVBoxLayout()
-            metric.setSpacing(1)
+            metric.setSpacing(0)
             caption_label = QLabel(caption)
             caption_label.setProperty("role", "caption")
             value_label = QLabel("--:--:--")
@@ -1568,6 +1605,16 @@ class MainWindow(QMainWindow):
         zoom_holder_layout = QVBoxLayout(zoom_holder)
         zoom_holder_layout.setContentsMargins(8, 8, 8, 8)
         zoom_holder_layout.addWidget(zoom_overlay)
+        # El recuadro de zoom flota sobre la página, así que no puede decidir
+        # cuánto mide de mínimo el panel: con sus 156 px mandaba sobre la
+        # página misma y era él quien fijaba el suelo de la ventana entera.
+        # Ignorado en vertical no cuenta para ese mínimo; a cambio hay que
+        # esconderlo cuando la página se queda más baja que él, que es lo que
+        # hace ``hide_overlay_when_tight``: recortado a medias dejaría los
+        # botones montados unos sobre otros.
+        zoom_holder.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+        )
         viewer_frame_layout.addWidget(
             zoom_holder,
             0,
@@ -1575,6 +1622,8 @@ class MainWindow(QMainWindow):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
         )
         zoom_holder.raise_()
+        self._zoom_holder = zoom_holder
+        hide_overlay_when_tight(zoom_holder)
 
         page_area = QWidget()
         page_layout = QVBoxLayout(page_area)
@@ -1675,6 +1724,12 @@ class MainWindow(QMainWindow):
         times = QWidget()
         times_layout = QVBoxLayout(times)
         times_layout.setSpacing(4)
+        # Los tres rótulos del panel no dan de sí: en una ventana baja el
+        # reparto los apretaba hasta dejarlos en once píxeles y «Avance por
+        # archivo» aparecía partido por la mitad. Con las medidas compactas
+        # el panel cede sus márgenes y su separación, que es lo que se puede
+        # ceder sin cortar ninguna letra.
+        self._register_density_layout(times_layout, stacked=True)
         title = QLabel("Avance por archivo")
         title.setStyleSheet("font-weight: bold;")
         times_layout.addWidget(title)
@@ -1696,6 +1751,10 @@ class MainWindow(QMainWindow):
         self.times_scroll.setWidgetResizable(True)
         self.times_scroll.setWidget(self.times_container)
         self.times_scroll.setMaximumHeight(self._density.bottom_pane_height)
+        # La lista es la parte elástica del panel: cuando el alto escasea es
+        # ella la que se queda con una fila y se desplaza, en vez de robarles
+        # píxeles a los rótulos, que no se desplazan ni se recortan.
+        self.times_scroll.setMinimumHeight(_TIMES_SCROLL_MIN_HEIGHT)
         times_layout.addWidget(self.times_scroll, 1)
 
         self.empty_times_label = QLabel("Sin archivos procesados aún.")
@@ -2782,10 +2841,8 @@ class MainWindow(QMainWindow):
             ocr_det_model="PP-OCRv6_medium_det",
             remove_printed=True,  # mapa del fondo impreso: siempre activo
             crop_preprocess=self.crop_preprocess_check.isChecked(),
-            date_ocr_fallback=False,
             date_slot_ocr=False,
             date_dynamic_geometry=True,
-            vlm_enabled=False,
             verify_fleet=self.fleet_check.isChecked(),
             fleet_file=SCRIPT_DIR / FLEET_FILENAME,
             book_matriculas_file=SCRIPT_DIR / "book_matriculas.json",
@@ -2913,7 +2970,13 @@ class MainWindow(QMainWindow):
         if self._worker is None or not self._worker.isRunning():
             self._auto_en_marcha = False
             return
-        self.cadena.marcar(pasos_automaticos.PROCESAR, pasos_automaticos.EN_CURSO)
+        # El pipeline empieza por la calibración: endereza y alinea el batch
+        # entero antes de leer la primera página. Ese tramo es «preprocesar»,
+        # y el paso siguiente lo enciende ``_on_progress`` en cuanto llega la
+        # primera página contada.
+        self.cadena.marcar(
+            pasos_automaticos.PREPROCESAR, pasos_automaticos.EN_CURSO
+        )
         pasos = self._pasos_automaticos()
         logger.info(f"Proceso automático: {pasos}")
         self.status_label.setText(f"Procesando… ({pasos})")
@@ -2921,7 +2984,7 @@ class MainWindow(QMainWindow):
     def _pasos_automaticos(self) -> str:
         """Los pasos elegidos, en una línea, para la bitácora y el estado."""
         opciones = self._automatizacion
-        pasos = ["procesar"]
+        pasos = ["preprocesar", "procesar"]
         if opciones.depurar:
             pasos.append("depurar")
         pasos.append("exportar")
@@ -2960,6 +3023,12 @@ class MainWindow(QMainWindow):
             self._cortar_automatico("la ejecución quedó cancelada")
             return
         if contexto == "proceso":
+            # Un batch que se lee entero sin pasar por la calibración (sin
+            # alineación, o tan corto que no llega ningún aviso de página)
+            # deja el primer paso en curso: aquí ya está terminado.
+            self.cadena.marcar(
+                pasos_automaticos.PREPROCESAR, pasos_automaticos.HECHO
+            )
             self.cadena.marcar(
                 pasos_automaticos.PROCESAR, pasos_automaticos.HECHO
             )
@@ -3363,6 +3432,19 @@ class MainWindow(QMainWindow):
             self.progress.setValue(done)
             self._done_global = done
         self.status_label.setText(with_page_counter(done, total, message))
+        # La calibración avisa con done=0 (es una etapa, no páginas leídas);
+        # la primera página contada es la señal de que el OCR ya empezó y de
+        # que el preprocesamiento quedó atrás. ``marcar`` da por terminados
+        # los pasos anteriores que estuvieran en curso.
+        if (
+            self._auto_en_marcha
+            and done > 0
+            and self.cadena.estado(pasos_automaticos.PROCESAR)
+            != pasos_automaticos.EN_CURSO
+        ):
+            self.cadena.marcar(
+                pasos_automaticos.PROCESAR, pasos_automaticos.EN_CURSO
+            )
 
     def _on_succeeded(self, reports: list[ValidationReport]) -> None:
         elapsed = (
@@ -3372,7 +3454,6 @@ class MainWindow(QMainWindow):
         )
         self._timer.stop()
         self._reports = reports
-        self._vlm_stats = list(getattr(self._worker, "vlm_stats", []) or [])
         self._preview_results = {
             (str(Path(report.pdf_path).resolve()), page.page_number): page
             for report in reports
@@ -3491,12 +3572,7 @@ class MainWindow(QMainWindow):
             self._on_outputs_thread_finished()
             return
 
-        worker = OutputsWorker(
-            reports,
-            options,
-            vlm_stats=self._vlm_stats,
-            parent=self,
-        )
+        worker = OutputsWorker(reports, options, parent=self)
         self._outputs_worker = worker
         worker.succeeded.connect(self._on_outputs_written)
         worker.failed.connect(self._on_outputs_failed)
@@ -4185,13 +4261,16 @@ class MainWindow(QMainWindow):
         self.search_next.setEnabled(False)
         self.search_next.clicked.connect(lambda: self._mover_busqueda(1))
         row.addWidget(self.search_next)
-        self.search_context = QLabel(_PISTA_BUSQUEDA)
-        self.search_context.setStyleSheet("color: #57606a;")
         # La pista es una frase larga, y un QLabel pide de ancho mínimo la
         # frase entera: metida en el panel de la tabla, ese mínimo era el que
         # empujaba el separador y dejaba la bitácora en su franja más
         # estrecha. Aquí el texto cede: se recorta antes que robarle sitio a
-        # la página, que es lo que de verdad hay que ver.
+        # la página, que es lo que de verdad hay que ver. Recortar es de
+        # ``ElidedLabel``, que termina la frase en puntos suspensivos y deja
+        # la entera en el tooltip; un QLabel a secas la cortaba a media
+        # palabra contra el borde de la ventana, en cualquier tamaño.
+        self.search_context = ElidedLabel(_PISTA_BUSQUEDA)
+        self.search_context.setStyleSheet("color: #57606a;")
         self.search_context.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )

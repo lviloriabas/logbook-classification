@@ -52,12 +52,7 @@ from app.models.schemas import (
     ValidationReport,
 )
 from app.ocr.engine import OcrEngine
-from app.ocr.date_ocr import (
-    decode_slots,
-    ocr_fallback,
-    ocr_fallback_batch,
-    read_date_slots,
-)
+from app.ocr.date_ocr import decode_slots, read_date_slots
 from app.ocr.regional import ocr_regions
 from app.templates.schema import FieldType, Template
 from app.utils.postprocess import (
@@ -259,7 +254,7 @@ def abortar_pools() -> int:
 
 
 class OcrProcessPool:
-    """Pool de Paddle/Tesseract reutilizable durante un batch completo."""
+    """Pool de motores OCR reutilizable durante un batch completo."""
 
     def __init__(
         self,
@@ -680,53 +675,6 @@ def process_page_image(
     by_id = {field.id: result
              for field, result in zip(ocr_fields, ocr_results)}
 
-    # Los fallbacks críticos comparten solo tres configuraciones de
-    # Tesseract. Se preparan juntos para que cada whitelist lance como máximo
-    # un proceso, conservando los mismos recortes y reglas de aceptación.
-    fallback_requests: List[Tuple[str, Optional[str], np.ndarray]] = []
-    fallback_fields: List[str] = []
-    if config.date_ocr_fallback:
-        for field in ocr_fields:
-            if field.postprocess not in _CRITICAL_POSTPROCESS:
-                continue
-            raw_text, _confidence = by_id.get(field.id, ("", 0.0))
-            processed = raw_text
-            if raw_text and field.postprocess:
-                processed, _note = apply_postprocess(
-                    field.id, field.postprocess, raw_text
-                )
-            if processed:
-                continue
-            is_date = field.postprocess in _DATE_FIELDS
-            source = (
-                date_region.image
-                if is_date and date_region is not None
-                else date_image
-                if is_date and date_image is not None
-                else image
-            )
-            crop_field = date_overrides.get(field.id, field) if is_date else field
-            if is_date and date_region is not None:
-                crop_field = date_region.local_field(crop_field)
-            field_dpi = config.date_dpi if is_date and (
-                date_region is not None or date_image is not None
-            ) else config.dpi
-            region = _critical_region(
-                crop_field,
-                source,
-                config.crop_padding,
-                preprocess=config.crop_preprocess,
-                dpi=field_dpi,
-            )
-            if region is not None:
-                fallback_fields.append(field.id)
-                fallback_requests.append(
-                    (field.id, field.postprocess, region)
-                )
-    fallback_by_id = dict(zip(
-        fallback_fields, ocr_fallback_batch(fallback_requests)
-    ))
-
     for field in template.fields:
         if field.type in (FieldType.SIGNATURE, FieldType.CHECKBOX):
             if field.type is FieldType.SIGNATURE:
@@ -786,31 +734,6 @@ def process_page_image(
                 )
                 if note == WEAK_MATRICULA_NOTE:
                     confidence = round(confidence * 0.4, 3)
-            # Redundancia OCR: si la lectura principal no produce un valor
-            # válido en un campo crítico (fecha, matrícula, log_number), se
-            # reintenta con Tesseract restringido (dígitos/letras/matrícula)
-            # sobre la tinta localizada.
-            if (
-                config.date_ocr_fallback
-                and field.postprocess in _CRITICAL_POSTPROCESS
-                and not text
-            ):
-                fb = fallback_by_id.get(field.id)
-                if fb is not None:
-                    fb_text, fb_conf = fb
-                    text, fb_note = apply_postprocess(
-                        field.id, field.postprocess, fb_text
-                    )
-                    if text:
-                        confidence = fb_conf
-                        note = fb_note
-                        recovered = True
-                        recovered_via = "tesseract"
-                        logger.info(
-                            f"[Página {page_number}] {field.id}: "
-                            f"valor recuperado con OCR de respaldo "
-                            f"({fb_text!r})"
-                        )
             # Redundancia por ranuras: la casilla de fecha está partida por
             # separadores verticales impresos; se lee carácter por carácter
             # con restricciones (dígitos / abreviatura de mes). Se prefiere
@@ -889,11 +812,7 @@ def process_page_image(
                 alternatives=alternatives,
             )
             if recovered and not note:
-                result.comment = (
-                    f"OCR respaldo ({recovered_via}): {fb_text!r}"
-                    if recovered_via else
-                    f"OCR respaldo (tesseract): {fb_text!r}"
-                )
+                result.comment = f"OCR respaldo ({recovered_via}): {fb_text!r}"
         page.add_field(result)
 
     # 7a) Unir las celdas de carácter (day_1..year_2) en day/month/year
@@ -944,7 +863,7 @@ _CRITICAL_POSTPROCESS = frozenset(
 )
 _TIGHT_CROP_POSTPROCESS = _CRITICAL_POSTPROCESS
 
-# Campos de fecha: se leen sin crop_to_ink (ver _critical_ocr_fallback).
+# Campos de fecha: se leen sin crop_to_ink (ver _critical_region).
 _DATE_FIELDS = frozenset({"day", "month", "year"})
 
 # Celdas de carácter de la banda de fecha (una por posición de casilla).
@@ -1080,30 +999,6 @@ def _accept_slot_candidate(
     return candidate_confidence >= current_confidence
 
 
-def _critical_ocr_fallback(
-    field: "FieldTemplate",
-    image: np.ndarray,
-    crop_padding: float,
-    preprocess: bool = True,
-    dpi: Optional[int] = None,
-) -> Optional[Tuple[str, float]]:
-    """Segunda pasada OCR (Tesseract restringido) para un campo crítico.
-
-    Recorta la región igual que el OCR principal, la localiza por tinta y
-    la escala, y delega en ``ocr_fallback``. Devuelve (texto, confianza)
-    o None si no se puede leer. ``preprocess=False`` envía el recorte
-    crudo (sin crop_to_ink ni upscale). Los campos de fecha (day/month/
-    year) se leen sin localizar: se elimina solo la franja superior del
-    rótulo impreso.
-    """
-    region = _critical_region(
-        field, image, crop_padding, preprocess=preprocess, dpi=dpi
-    )
-    if region is None:
-        return None
-    return ocr_fallback(field.id, field.postprocess, region)
-
-
 def _critical_region(
     field: "FieldTemplate",
     image: np.ndarray,
@@ -1111,7 +1006,7 @@ def _critical_region(
     preprocess: bool = True,
     dpi: Optional[int] = None,
 ) -> Optional[np.ndarray]:
-    """Prepara el mismo recorte usado por el fallback restringido."""
+    """Recorte de un campo crítico, localizado por tinta y escalado."""
     try:
         field_padding = (
             0.0 if field.postprocess in _TIGHT_CROP_POSTPROCESS
@@ -1140,16 +1035,14 @@ def _slot_ocr_fallback(
     dpi: Optional[int] = None,
     engine: Optional[OcrEngine] = None,
 ) -> Optional[Tuple[str, float]]:
-    """Tercera pasada: OCR por carácter sobre las ranuras de la casilla.
+    """Segunda pasada: OCR por carácter sobre las ranuras de la casilla.
 
     La casilla lleva separadores verticales impresos entre caracteres;
     con el mapa de ranuras (posiciones fijas derivadas del fondo impreso)
-    se recorta cada celda y se lee con Tesseract PSM 10 + whitelist,
-    decodificando con restricciones (dígitos o abreviatura de mes).
-    ``preprocess=False`` lee las ranuras crudas. ``engine`` es el motor
-    genérico (p. ej. PaddleOCR) que se usa cuando Tesseract no está
-    disponible; las restricciones por regla las aplica
-    ``read_date_slots``.
+    se recorta cada celda y se lee por separado, decodificando con
+    restricciones (dígitos o abreviatura de mes). ``preprocess=False`` lee
+    las ranuras crudas. ``engine`` es el motor OCR de la ejecución; las
+    restricciones por regla las aplica ``read_date_slots``.
     """
     slots = crop_slots(image, field, 0.0, slot_spec)
     if not slots:
@@ -1524,7 +1417,6 @@ class Pipeline:
         # calibración: entonces cada página lo vuelve a detectar por su cuenta.
         self._skew_angles: List[float] = []
         self._should_cancel: Optional[Callable[[], bool]] = None
-        self.vlm_stats: dict = {"enabled": False}
         self.calibration_ms: float = 0.0
 
     def _is_cancelled(self) -> bool:
@@ -1614,22 +1506,16 @@ class Pipeline:
                                              anchors, own_transforms,
                                              renderer=renderer)
 
-        # Antes del VLM: las firmas que quedaron inciertas se contrastan con
-        # el resto de la bitácora, que es evidencia gratis y no requiere
-        # modelo. Lo que ni así se resuelve sigue su camino al verificador.
-        # Tras una cancelación no se entra: la revisión renderiza decenas de
-        # páginas más (medido: 93 ms cada una a 200 DPI, 3 s solo la muestra)
-        # y cancelar tiene que notarse en el acto, no varios segundos después.
+        # Las firmas que quedaron inciertas se contrastan con el resto de
+        # la bitácora, que es evidencia que ya está leída. Tras una
+        # cancelación no se entra: la revisión renderiza decenas de páginas
+        # más (medido: 93 ms cada una a 200 DPI, 3 s solo la muestra) y
+        # cancelar tiene que notarse en el acto, no varios segundos después.
         if not self._is_cancelled():
             pages = self._review_signatures(
                 pdf_path, pages, reference, anchors, own_transforms,
                 renderer=renderer, first_page=first,
             )
-
-        pages = self._verify_pages(
-            pdf_path, pages, reference, anchors, own_transforms,
-            renderer=renderer, first_page=first,
-        )
 
         self._notify(total, total, "Generando reporte")
         report = ValidationReport(
@@ -2140,178 +2026,6 @@ class Pipeline:
                 summary["error_pages"] += 1
         return summary
 
-    # ── Verificador VLM (Fase 1: resuelve solo casos inciertos) ───────
-
-    def _verify_pages(
-        self,
-        pdf_path: Path,
-        pages: List[PageResult],
-        reference: Optional[np.ndarray],
-        anchors: Optional[List[TransformResult]],
-        own: Optional[List[TransformResult]],
-        renderer: Optional[PdfPageRenderer] = None,
-        first_page: int = 1,
-    ) -> List[PageResult]:
-        """Arbitra con el VLM los campos incitos de la ejecución.
-
-        Corre una sola vez por PDF, en el proceso principal (el servidor
-        llama-server es un subproceso único). Recorta los campos de las
-        páginas que necesitan resolución, re-alineados con los mismos
-        parámetros del procesado, y aplica solo respuestas terminantes.
-        Si no hay binario/modelo o el servidor falla, devuelve las páginas
-        tal cual (comportamiento idéntico al pre-Fase 1).
-        """
-        if not self.config.vlm_enabled:
-            return pages
-        targets = self._vlm_targets(pages)
-        if not targets:
-            self.vlm_stats["disabled"] = "sin casos inciertos"
-            return pages
-
-        from app.verifier.verifier import VlmVerifier
-
-        verifier = VlmVerifier(self.config)
-        if not verifier.ensure_server():
-            self.vlm_stats["model"] = getattr(verifier, "model_name", None)
-            self.vlm_stats["disabled"] = "sin binario/modelo/servidor VLM"
-            return pages
-
-        self.vlm_stats.update({
-            "enabled": True,
-            "model": getattr(verifier, "model_name", None),
-            "targets": len(targets),
-            "date_targets": sum(
-                1 for _, _, post in targets if post in _DATE_FIELDS
-            ),
-            "crops": 0,
-            "signatures_resolved": 0,
-            "fields_resolved": 0,
-            "date_fields_resolved": 0,
-        })
-        by_page: dict[int, List[Tuple[str, Optional[str]]]] = {}
-        for idx, field_id, post in targets:
-            by_page.setdefault(idx, []).append((field_id, post))
-
-        for idx, items in by_page.items():
-            if self._is_cancelled():
-                break
-            page = pages[idx]
-            # La página real manda sobre la posición en la lista: con un
-            # tramo (o una cancelación parcial) ya no coinciden.
-            page_number = page.page_number
-            image = (
-                renderer.render_page(page_number, self.config.dpi)
-                if renderer is not None
-                else render_page(pdf_path, page_number, self.config.dpi)
-            )
-            image = self._aligned_image(
-                image, page_number - first_page, reference,
-                anchors=anchors, own=own, skew_angle=page.skew_angle,
-            )
-            date_touched = False
-            for field_id, post in items:
-                field_tmpl = self.template.field(field_id)
-                if field_tmpl is None:
-                    continue
-                try:
-                    if field_tmpl.type is FieldType.SIGNATURE:
-                        # El VLM debe ver exactamente el mismo recorte que
-                        # dejó la firma incierta.
-                        crop = crop_region(
-                            image, field_tmpl,
-                            pad_x=SIGNATURE_PAD_X, pad_y=SIGNATURE_PAD_Y,
-                        )
-                    else:
-                        crop = crop_region(
-                            image, field_tmpl,
-                            0.024
-                            if field_tmpl.postprocess in _DATE_FIELDS
-                            else self.config.crop_padding,
-                        )
-                except ValueError:
-                    continue
-                if field_tmpl.postprocess in _DATE_FIELDS:
-                    # The date labels share the handwriting crop and can be
-                    # mistaken for characters by a multimodal model too.
-                    crop = strip_date_label(crop)
-                if self.config.crop_preprocess and (
-                    field_tmpl.localize == "ink"
-                    and field_tmpl.postprocess not in _DATE_FIELDS
-                ):
-                    localized = crop_to_ink(crop, dpi=self.config.dpi)
-                    if localized is not None:
-                        crop = localized
-                field = next(
-                    (f for f in page.fields if f.field_id == field_id),
-                    None,
-                )
-                if field is None:
-                    continue
-                if post == "signature":
-                    verdict = verifier.check_signature(crop)
-                    if verdict is not None:
-                        self._apply_signature_verdict(field, field_tmpl, verdict)
-                        self.vlm_stats["crops"] += 1
-                        self.vlm_stats["signatures_resolved"] += 1
-                else:
-                    read_kind = (
-                        "matricula" if post == "matricula"
-                        else post if post in {"day", "month", "year"}
-                        else "digits"
-                    )
-                    token = verifier.read_text(crop, read_kind)
-                    if token:
-                        refined, note = apply_postprocess(
-                            field_id, field_tmpl.postprocess, token
-                        )
-                        if refined:
-                            self._apply_text_verdict(
-                                field, field_tmpl, refined, note
-                            )
-                            self.vlm_stats["crops"] += 1
-                            self.vlm_stats["fields_resolved"] += 1
-                            if field_id in ("day", "month", "year"):
-                                self.vlm_stats["date_fields_resolved"] += 1
-                                date_touched = True
-            if date_touched:
-                _combine_date_parts(page)
-            validate_page(page, self.template, self.config)
-        self.vlm_stats["crops"] = min(
-            self.vlm_stats["crops"], self.config.vlm_max_crops)
-        logger.info(f"[VLM] {self.vlm_stats}")
-        return pages
-
-    def _vlm_targets(
-        self, pages: List[PageResult]
-    ) -> List[Tuple[int, str, Optional[str]]]:
-        """Selecciona todas las fechas y luego otros campos inciertos.
-
-        La fecha es responsabilidad del VLM cuando está disponible, incluso
-        si el OCR previo produjo un valor plausible. Se priorizan las fechas
-        para que el presupuesto de recortes no se consuma antes de revisar
-        todas las páginas.
-        """
-        date_targets: List[Tuple[int, str, Optional[str]]] = []
-        other_targets: List[Tuple[int, str, Optional[str]]] = []
-        for idx, page in enumerate(pages):
-            if page.blank:
-                continue
-            for field in page.fields:
-                tmpl = self.template.field(field.field_id)
-                if tmpl is None:
-                    continue
-                if tmpl.postprocess in _DATE_FIELDS:
-                    date_targets.append((idx, field.field_id, tmpl.postprocess))
-                elif tmpl.type is FieldType.SIGNATURE:
-                    if field.value == UNCLEAR:
-                        other_targets.append((idx, field.field_id, "signature"))
-                elif tmpl.postprocess in _CRITICAL_POSTPROCESS:
-                    if field.status is not Status.OK and not field.value:
-                        other_targets.append(
-                            (idx, field.field_id, tmpl.postprocess)
-                        )
-        return (date_targets + other_targets)[:self.config.vlm_max_crops]
-
     def _review_signatures(
         self,
         pdf_path: Path,
@@ -2523,15 +2237,15 @@ class Pipeline:
         """Reproduce el deskew y la alineación del procesado.
 
         Sin la máscara de fondo impreso: ni el OCR ni las firmas la usan, y
-        aplicarla aquí le daría al VLM un recorte con huecos blancos dentro
-        de la escritura que el detector nunca vio.
+        aplicarla aquí dejaría un recorte con huecos blancos dentro de la
+        escritura que el detector nunca vio.
 
         ``skew_angle`` es el ángulo que el procesado ya dejó en
         ``PageResult.skew_angle``. Reutilizarlo no solo ahorra la detección
         (103-139 ms por página, sobre decenas de páginas y en serie): también
-        garantiza que el recorte que ve el fondo del libro (o el VLM) sea el
-        mismo que vio el detector, en vez de uno enderezado por una segunda
-        medición que puede diferir de la primera.
+        garantiza que el recorte que ve el fondo del libro sea el mismo que
+        vio el detector, en vez de uno enderezado por una segunda medición
+        que puede diferir de la primera.
         """
         if self.config.deskew:
             if skew_angle is None:
@@ -2549,41 +2263,6 @@ class Pipeline:
                     image = apply_transform(image, own_t)
         return image
 
-    @staticmethod
-    def _apply_signature_verdict(
-        field: "FieldResult", tmpl, verdict: bool
-    ) -> None:
-        if verdict:
-            field.value = "true"
-            field.confidence = 0.90
-            field.status = Status.OK
-            field.source = "vlm"
-            field.inference_method = "vlm_signature_review"
-            field.comment = "Firma verificada por VLM (PRESENTE)"
-        else:
-            field.value = "false"
-            field.confidence = 0.90
-            field.status = (
-                Status.ERROR if tmpl.required else Status.WARNING
-            )
-            field.source = "vlm"
-            field.inference_method = "vlm_signature_review"
-            field.comment = "Firma verificada por VLM (AUSENTE)"
-
-    @staticmethod
-    def _apply_text_verdict(
-        field: FieldResult, tmpl, value: str, note: str
-    ) -> None:
-        field.value = value
-        field.confidence = max(field.confidence, 0.80)
-        field.source = "vlm"
-        field.inference_method = "vlm_text_review"
-        field.comment = "Verificado por VLM" if not note else note
-        field.status = (
-            Status.OK
-            if not note or note in _SOFT_NOTES
-            else Status.ERROR
-        )
 
 
 def _process_pdf_worker(
@@ -2594,7 +2273,7 @@ def _process_pdf_worker(
     reference_page: int,
     cancel_path: str,
     progress_path: Optional[str] = None,
-) -> Tuple[ValidationReport, dict]:
+) -> ValidationReport:
     """Procesa un PDF completo dentro de un worker OCR persistente."""
     # Un estado de página del perfil B puede haber dejado un documento abierto
     # en este proceso. El Pipeline del archivo mantiene su propio handle único.
@@ -2619,7 +2298,7 @@ def _process_pdf_worker(
         page_range=page_range,
         should_cancel=cancellation_flag.exists,
     )
-    return report, pipeline.vlm_stats
+    return report
 
 
 def _page_counter_writer(path: Path) -> ProgressCallback:
@@ -2667,7 +2346,7 @@ def process_pdf_batch(
     on_file_finished: Optional[Callable[[int, ValidationReport], None]] = None,
     on_progress: Optional[ProgressCallback] = None,
     on_file_progress: Optional[Callable[[int, int, int], None]] = None,
-) -> Tuple[List[ValidationReport], List[dict]]:
+) -> List[ValidationReport]:
     """Procesa un batch con el perfil C siempre activo y cola acotada.
 
     El planificador elige la granularidad sin cambiar el algoritmo OCR: reparte
@@ -2685,7 +2364,7 @@ def process_pdf_batch(
     """
     paths = [Path(path) for path in pdf_paths]
     if not paths:
-        return [], []
+        return []
 
     document_pages: List[int] = []
     for path in paths:
@@ -2697,7 +2376,7 @@ def process_pdf_batch(
             f"[Perfil C] El rango {(page_range or PageRange()).label()} no "
             f"cubre ninguna página de los {len(paths)} archivo(s) del batch"
         )
-        return [], []
+        return []
     paths = [item.path for item in slices]
     counts = [item.count or 0 for item in slices]
     ranges = [item.pages for item in slices]
@@ -2708,10 +2387,7 @@ def process_pdf_batch(
     # Perfil C no es un modo reservado a batches grandes. Para pocos archivos,
     # paralelizar páginas utiliza mejor el mismo pool; para muchos, cada worker
     # recibe archivos completos y elimina las barreras entre PDFs.
-    parallel_by_file = (
-        not base_config.vlm_enabled
-        and total_files >= process_pool.max_workers
-    )
+    parallel_by_file = total_files >= process_pool.max_workers
     strategy = "archivos" if parallel_by_file else "páginas"
     logger.info(
         f"[Perfil C] activo | estrategia={strategy} | "
@@ -2732,7 +2408,6 @@ def process_pdf_batch(
 
     if not parallel_by_file:
         sequential_reports: List[ValidationReport] = []
-        sequential_stats: List[dict] = []
         for index, (path, count) in enumerate(zip(paths, counts)):
             if should_cancel is not None and should_cancel():
                 break
@@ -2781,7 +2456,6 @@ def process_pdf_batch(
                 should_cancel=should_cancel,
             )
             sequential_reports.append(report)
-            sequential_stats.append(pipeline.vlm_stats)
             done_pages += len(report.pages)
             if on_file_progress is not None:
                 on_file_progress(index + 1, len(report.pages), count)
@@ -2797,10 +2471,9 @@ def process_pdf_batch(
             f"[Perfil C] {len(sequential_reports)}/{total_files} archivos | "
             f"estrategia=páginas | páginas={done_pages}"
         )
-        return sequential_reports, sequential_stats
+        return sequential_reports
 
     reports: List[Optional[ValidationReport]] = [None] * total_files
-    statistics: List[Optional[dict]] = [None] * total_files
     retry: List[Tuple[int, Exception]] = []
     pending: dict = {}
     counters: dict = {}
@@ -2901,7 +2574,7 @@ def process_pdf_batch(
             if future.cancelled():
                 continue
             try:
-                report, vlm_stats = future.result()
+                report = future.result()
             except Exception as exc:  # noqa: BLE001 - fallback perfil B
                 retry.append((index, exc))
                 continue
@@ -2920,7 +2593,6 @@ def process_pdf_batch(
                 )
                 report.started_at = started_at
             reports[index] = report
-            statistics[index] = vlm_stats
             done_pages += len(report.pages)
             if on_file_progress is not None:
                 on_file_progress(index + 1, len(report.pages), counts[index])
@@ -2956,7 +2628,6 @@ def process_pdf_batch(
                     f"C={first_error}; B={retry_error}"
                 ) from retry_error
             reports[index] = report
-            statistics[index] = pipeline.vlm_stats
             done_pages += len(report.pages)
             if on_file_progress is not None:
                 on_file_progress(index + 1, len(report.pages), counts[index])
@@ -2969,13 +2640,8 @@ def process_pdf_batch(
                 )
 
     ordered_reports = [report for report in reports if report is not None]
-    ordered_stats = [
-        stats if stats is not None else {"enabled": False}
-        for report, stats in zip(reports, statistics)
-        if report is not None
-    ]
     logger.info(
         f"[Perfil C] {len(ordered_reports)}/{total_files} archivos | "
         f"cola máxima={process_pool.max_workers} | páginas={done_pages}"
     )
-    return ordered_reports, ordered_stats
+    return ordered_reports

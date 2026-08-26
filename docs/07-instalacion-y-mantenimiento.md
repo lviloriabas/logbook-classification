@@ -11,15 +11,12 @@ portable/
 ├── python312/tools/
 │   ├── python.exe
 │   └── pythonw.exe
-├── paddlex/official_models/
-│   ├── PP-OCRv6_medium_det/
-│   └── PP-OCRv5_mobile_rec/
-└── tesseract/                    # opcional para la operación normal
-    ├── tesseract.exe
-    └── tessdata/
+└── paddlex/official_models/
+    ├── PP-OCRv6_medium_det/
+    └── PP-OCRv5_mobile_rec/
 ```
 
-Python y los dos modelos PaddleOCR son indispensables. Tesseract queda disponible para tareas técnicas, pero la configuración normal de GUI y CLI no lo usa y puede omitirse con `-SkipTesseract`. `portable/llama/` es opcional y no forma parte de la operación normal.
+Python y los dos modelos PaddleOCR son todo lo que la aplicación necesita.
 
 > **PRECAUCIÓN:** No entregue solo `LogbookClassification.exe`. El ejecutable es un lanzador; necesita el código y `portable/` en la misma estructura relativa.
 
@@ -31,7 +28,7 @@ Ejecute:
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Check
 ```
 
-El informe debe mostrar disponibles Python, dependencias, modelos PaddleOCR y lanzador. Tesseract y VLM pueden figurar como opcionales según la configuración de la copia.
+El informe debe mostrar disponibles Python, dependencias, modelos PaddleOCR y lanzador.
 
 Compruebe después el arranque:
 
@@ -55,7 +52,7 @@ o:
 powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
-El proceso instala Python 3.12.10, dependencias, modelos PaddleOCR y Tesseract 5.4.0 dentro de `portable/`. Verifica por SHA-256 el paquete de Python y el instalador de Tesseract; pip y los precargadores aplican sus propias comprobaciones. La ejecución es repetible: un componente completo no vuelve a prepararse salvo que se use `-Force`.
+El proceso instala Python 3.12.10, las dependencias y los modelos PaddleOCR dentro de `portable/`. Verifica por SHA-256 el paquete de Python; pip y los precargadores aplican sus propias comprobaciones. La ejecución es repetible: un componente completo no vuelve a prepararse salvo que se use `-Force`.
 
 La red solo se requiere para reconstruir el paquete. La aplicación terminada debe iniciar y procesar sin conexión.
 
@@ -64,10 +61,8 @@ La red solo se requiere para reconstruir el paquete. La aplicación terminada de
 | Opción | Efecto |
 |---|---|
 | `-Check` | Informa el estado sin descargar. |
-| `-SkipTesseract` | Omite Tesseract. |
-| `-Vlm` | Descarga modelos del verificador visual opcional. No lo activa en GUI ni CLI. |
 | `-Launcher` | Instala PyInstaller y regenera el ejecutable. |
-| `-Force` | Reconstruye los componentes principales y los modelos Paddle. Los GGUF existentes no se vuelven a descargar. |
+| `-Force` | Reconstruye los componentes principales y los modelos Paddle. |
 | `-CleanCache` | Elimina `portable/.cache/` al terminar. |
 
 ## 7.5 Entorno local
@@ -80,7 +75,6 @@ La red solo se requiere para reconstruir el paquete. La aplicación terminada de
 | `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` | `1` |
 | `PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT` | `0` |
 | `FLAGS_use_mkldnn` | `0` |
-| `TESSDATA_PREFIX` | `portable/tesseract/tessdata` cuando existe |
 
 Las variables se fijan con `setdefault`. Un valor ya definido en Windows tiene prioridad; compruébelo si una caché o una opción se desvía de la carpeta portable.
 
@@ -93,7 +87,7 @@ No debe existir una descarga de modelos durante una ejecución. Si Paddle intent
 `requirements.txt` registra las dependencias directas:
 
 - OpenCV, NumPy, PyMuPDF y Pillow;
-- PaddlePaddle, PaddleOCR, PaddleX y pytesseract;
+- PaddlePaddle, PaddleOCR y PaddleX;
 - PySide6 y Send2Trash;
 - Pydantic y Loguru.
 
@@ -104,7 +98,6 @@ PyMuPDF renderiza y copia los PDF. Poppler no es necesario.
 | Herramienta | Uso |
 |---|---|
 | `tools/precache_paddle.py` | Descarga, inicializa y prueba en CPU los dos modelos OCR de producción. |
-| `tools/precache_vlm.py` | Prepara modelos GGUF y, si se proporciona su paquete, `llama-server` para pruebas opcionales. |
 | `tools/build_launcher.py` | Genera `LogbookClassification.exe` con PyInstaller, sin consola. |
 | `tools/make_icon.py` | Regenera los iconos PNG e ICO. |
 | `tools/evaluate_date_images.py` | Compara lecturas de fecha contra datos de referencia. |
@@ -114,10 +107,6 @@ PyMuPDF renderiza y copia los PDF. Poppler no es necesario.
 | `tools/signature_labeling/evaluate_background.py` | Evalúa la corrección de firmas por fondo del libro. |
 
 > **PRECAUCIÓN:** Ejecute `tune.py --aplicar` solo sobre una copia controlada. La opción modifica la plantilla indicada por `--template`; con el valor predeterminado modifica `template/aircraft_log.json`.
-
-El verificador VLM admite los presets `qwen3-vl-8b-instruct` y `smolvlm2`. Sus rutas pueden definirse con `BITS_LLAMA_BIN`, `BITS_LLAMA_MODEL` y `BITS_LLAMA_MMPROJ`. Aunque esté instalado, GUI y CLI lo mantienen desactivado.
-
-`setup.ps1 -Vlm` descarga normalmente los GGUF. Para obtener `llama-server.exe`, defina `BITS_LLAMA_BIN_ZIP`, pase `--bin-url` a `tools/precache_vlm.py` o copie el binario a `portable/llama/bin/`.
 
 ## 7.8 Pruebas
 

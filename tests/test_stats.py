@@ -162,26 +162,6 @@ class TestConstruirStats(unittest.TestCase):
         stats = construir_stats(self.reports)
         self.assertNotIn("separacion", stats)
 
-    def test_bloque_vlm_sin_datos(self):
-        stats = construir_stats(self.reports)
-        self.assertFalse(stats["vlm"]["activo"])
-        self.assertEqual(stats["vlm"]["crops_consultados"], 0)
-
-    def test_bloque_vlm_agrega(self):
-        vlm = [
-            {"enabled": True, "crops": 3, "signatures_resolved": 2,
-             "fields_resolved": 1},
-            {"enabled": True, "crops": 1, "signatures_resolved": 0,
-             "fields_resolved": 1},
-            {"enabled": False, "disabled": "sin casos inciertos"},
-        ]
-        stats = construir_stats(self.reports, vlm_stats=vlm)
-        self.assertTrue(stats["vlm"]["activo"])
-        self.assertEqual(stats["vlm"]["bitacoras_con_vlm"], 2)
-        self.assertEqual(stats["vlm"]["crops_consultados"], 4)
-        self.assertEqual(stats["vlm"]["firmas_resueltas"], 2)
-        self.assertEqual(stats["vlm"]["campos_resueltos"], 2)
-
 
 class TestEscribirStats(unittest.TestCase):
     def test_escribe_json_valido(self):

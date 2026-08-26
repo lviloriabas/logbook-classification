@@ -150,7 +150,7 @@ class TestFirmaIncierta(unittest.TestCase):
     """Evidencia que no alcanza para afirmar ni para negar.
 
     Nunca debe acusarse una falta con estas entradas: quedan en WARNING
-    para revisión manual (o para que las arbitre el verificador VLM).
+    para revisión manual.
     """
 
     def test_calca_de_la_pagina_vecina(self):

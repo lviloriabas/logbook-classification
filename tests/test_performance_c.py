@@ -17,10 +17,26 @@ import pytest
 from app.core.config import AppConfig
 from app.core.pipeline import OcrProcessPool, Pipeline, process_pdf_batch
 from app.models.schemas import PageResult, ValidationReport
-from app.ocr.engine import TesseractOcrEngine
 from app.reports.csv_reporter import CsvReporter
 from app.templates.schema import Template
 from app.vision.alignment import TransformResult, warp_with_transform
+
+
+class _MotorDePrueba:
+    """Motor OCR de mentira: el pool real no necesita leer nada.
+
+    Las páginas de las fixtures salen en blanco, así que el motor nunca
+    llega a mirar una imagen: al pipeline le basta con que cumpla el
+    protocolo ``OcrEngine``.
+    """
+
+    name = "prueba"
+
+    def recognize(self, image, config=None):
+        return []
+
+    def recognize_batch(self, images, config=None):
+        return [[] for _ in images]
 
 
 class _TrackingExecutor:
@@ -110,12 +126,12 @@ def test_mass_scheduler_keeps_only_one_pdf_per_worker_in_flight(tmp_path):
 
     def fake_worker(path, *_args):
         time.sleep(0.0005)
-        return _report(path), {"enabled": False}
+        return _report(path)
 
     with patch("app.core.pipeline.PdfPageRenderer", _FakeRenderer), patch(
         "app.core.pipeline._process_pdf_worker", side_effect=fake_worker
     ):
-        reports, stats = process_pdf_batch(
+        reports = process_pdf_batch(
             paths,
             AppConfig(),
             Template(name="empty"),
@@ -127,7 +143,7 @@ def test_mass_scheduler_keeps_only_one_pdf_per_worker_in_flight(tmp_path):
         )
     pool.executor.shutdown()
 
-    assert len(reports) == len(stats) == len(paths) == 1000
+    assert len(reports) == len(paths) == 1000
     assert [Path(report.pdf_path).name for report in reports] == [
         path.name for path in paths
     ]
@@ -147,21 +163,19 @@ def test_file_parallelism_runs_in_the_real_persistent_process_pool(tmp_path):
         deskew=False,
         align=False,
         remove_printed=False,
-        date_ocr_fallback=False,
         date_slot_ocr=False,
-        ocr_engine="tesseract",
-        ocr_lang="eng",
+        ocr_engine="paddle",
+        ocr_lang="en",
     )
-    engine = TesseractOcrEngine(lang="eng", tesseract_cmd="tesseract.exe")
+    engine = _MotorDePrueba()
 
-    with OcrProcessPool(2, config, "tesseract", "eng", 1) as pool:
-        reports, stats = process_pdf_batch(
+    with OcrProcessPool(2, config, "paddle", "en", 1) as pool:
+        reports = process_pdf_batch(
             paths, config, Template(name="empty"), pool, engine
         )
 
     assert [Path(report.pdf_path) for report in reports] == paths
     assert [len(report.pages) for report in reports] == [1, 1]
-    assert len(stats) == 2
 
 
 def test_the_csv_time_column_adds_up_to_the_clock_of_a_real_run(tmp_path):
@@ -182,16 +196,15 @@ def test_the_csv_time_column_adds_up_to_the_clock_of_a_real_run(tmp_path):
         deskew=False,
         align=False,
         remove_printed=False,
-        date_ocr_fallback=False,
         date_slot_ocr=False,
-        ocr_engine="tesseract",
-        ocr_lang="eng",
+        ocr_engine="paddle",
+        ocr_lang="en",
     )
-    engine = TesseractOcrEngine(lang="eng", tesseract_cmd="tesseract.exe")
+    engine = _MotorDePrueba()
 
     started = time.perf_counter()
-    with OcrProcessPool(2, config, "tesseract", "eng", 1) as pool:
-        reports, _stats = process_pdf_batch(
+    with OcrProcessPool(2, config, "paddle", "en", 1) as pool:
+        reports = process_pdf_batch(
             paths, config, Template(name="empty"), pool, engine
         )
     elapsed_ms = (time.perf_counter() - started) * 1000
@@ -220,11 +233,11 @@ def test_mass_scheduler_retries_a_failed_file_with_profile_b(tmp_path):
     def fake_worker(path, *_args):
         if path == failed:
             raise RuntimeError("fallo C simulado")
-        return _report(path), {"enabled": False}
+        return _report(path)
 
     class FakePipeline:
         def __init__(self, *_args, **_kwargs):
-            self.vlm_stats = {"enabled": False, "fallback": True}
+            self.on_progress = None
 
         def process(self, path, **_kwargs):
             return _report(path)
@@ -234,14 +247,13 @@ def test_mass_scheduler_retries_a_failed_file_with_profile_b(tmp_path):
     ), patch("app.core.pipeline.config_for_pdf", side_effect=lambda config, _p: config), patch(
         "app.core.pipeline.Pipeline", FakePipeline
     ):
-        reports, stats = process_pdf_batch(
+        reports = process_pdf_batch(
             paths, AppConfig(), Template(name="empty"), pool, _FakeEngine()
         )
     pool.executor.shutdown()
 
     assert len(reports) == 12
     assert reports[5].pdf_path == str(failed)
-    assert stats[5]["fallback"] is True
 
 
 def test_profile_c_uses_page_parallelism_for_a_small_batch(tmp_path):
@@ -252,7 +264,6 @@ def test_profile_c_uses_page_parallelism_for_a_small_batch(tmp_path):
     class FakePipeline:
         def __init__(self, *_args, workers, **_kwargs):
             self.workers = workers
-            self.vlm_stats = {"enabled": False}
             self.on_progress = None
             created.append(self)
 
@@ -266,7 +277,7 @@ def test_profile_c_uses_page_parallelism_for_a_small_batch(tmp_path):
     ) as file_worker, patch(
         "app.core.pipeline.config_for_pdf", side_effect=lambda config, _p: config
     ), patch("app.core.pipeline.Pipeline", FakePipeline):
-        reports, _stats = process_pdf_batch(
+        reports = process_pdf_batch(
             paths, AppConfig(), Template(name="empty"), pool, _FakeEngine()
         )
     pool.executor.shutdown()
@@ -293,7 +304,7 @@ def test_file_parallelism_reports_progress_of_every_file_in_flight(tmp_path):
         for page in range(1, 51):
             counter.write_text(f"{page}/50", encoding="ascii")
             time.sleep(0.005)
-        return _report(path), {"enabled": False}
+        return _report(path)
 
     with patch("app.core.pipeline.PdfPageRenderer", _FakeRenderer), patch(
         "app.core.pipeline._process_pdf_worker", side_effect=fake_worker
@@ -327,7 +338,6 @@ def test_page_parallelism_reports_the_same_per_file_progress(tmp_path):
 
     class FakePipeline:
         def __init__(self, *_args, **_kwargs):
-            self.vlm_stats = {"enabled": False}
             self.on_progress = None
 
         def process(self, path, **_kwargs):
@@ -368,12 +378,12 @@ def test_mass_scheduler_cancellation_does_not_fill_the_queue(tmp_path):
 
     def fake_worker(path, *_args):
         time.sleep(0.3)
-        return _report(path, cancelled=True), {"enabled": False}
+        return _report(path, cancelled=True)
 
     with patch("app.core.pipeline.PdfPageRenderer", _FakeRenderer), patch(
         "app.core.pipeline._process_pdf_worker", side_effect=fake_worker
     ):
-        reports, _stats = process_pdf_batch(
+        reports = process_pdf_batch(
             paths,
             AppConfig(),
             Template(name="empty"),

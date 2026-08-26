@@ -24,7 +24,6 @@ def test_cli_uses_validated_fixed_ocr_configuration():
     assert 'ocr_engine="paddle"' in CLI_SOURCE
     assert 'ocr_rec_model="PP-OCRv5_mobile_rec"' in CLI_SOURCE
     assert 'ocr_det_model="PP-OCRv6_medium_det"' in CLI_SOURCE
-    assert "date_ocr_fallback=False" in CLI_SOURCE
     assert "date_slot_ocr=False" in CLI_SOURCE
     assert "complete_csv_path(csv_path)" in CLI_SOURCE
 

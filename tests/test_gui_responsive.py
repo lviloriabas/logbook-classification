@@ -27,7 +27,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QRect, QSize
 from PySide6.QtGui import QFont, QFontDatabase
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 import app.gui.responsive as responsive
 from app.gui.csv_viewer import CsvViewerWindow
@@ -250,9 +250,102 @@ def test_la_ventana_se_readapta_al_cambiar_de_tamano():
             ventana.resize(1366, 680)
             assert ventana._density is COMPACT
             assert ventana._controls_columns == 2
-            ventana.resize(1400, 950)
+            # Se vuelve a lo holgado cuando el alto llega a lo que ese
+            # reparto pide de verdad, medido con la tipografía del equipo.
+            holgado = ventana._roomy_minimum.height()
+            ventana.resize(1400, holgado + responsive.DENSITY_HYSTERESIS)
             assert ventana._density is ROOMY
             assert ventana._controls_columns == 1
+        finally:
+            ventana.close()
+
+
+def test_ningun_alto_deja_el_contenido_apretado_por_debajo_de_su_minimo():
+    """El umbral de 820 px escrito a mano dejaba un hueco de cien píxeles.
+
+    Entre ese número y lo que el reparto holgado pide de verdad, la ventana
+    se quedaba con las medidas holgadas sin sitio para ellas: el layout
+    encogía los cuadros por debajo de su mínimo y «Salidas» aparecía con las
+    casillas montadas unas sobre otras y el botón de matrículas fuera de su
+    marco. Con el umbral medido, a cualquier alto cabe lo que hay dentro.
+    """
+    app = _app()
+    with patch.object(
+        responsive, "available_area", return_value=_area_de_trabajo(2560, 1440)
+    ):
+        ventana = MainWindow()
+        try:
+            ventana.show()
+            for alto in range(700, 1101, 20):
+                ventana.resize(1366, alto)
+                app.processEvents()
+                layout = ventana.centralWidget().layout()
+                layout.invalidate()
+                layout.activate()
+                assert layout.minimumSize().height() <= ventana.height(), (
+                    f"a {alto} px de alto el contenido no cabe "
+                    f"({ventana._density.name})"
+                )
+        finally:
+            ventana.close()
+
+
+def test_el_panel_de_avance_no_recorta_sus_rotulos_en_la_ventana_mas_pequena():
+    """Los rótulos no se desplazan ni se recortan: o caben o no caben.
+
+    El panel cedió veinte píxeles de su mínimo para hacerle sitio a la línea
+    de pasos, y el reparto se los quitó a los rótulos: «Avance por archivo»
+    salía partido por la mitad. Lo que cede ahora es la lista, que se
+    desplaza.
+    """
+    app = _app()
+    with patch.object(
+        responsive, "available_area", return_value=_area_de_trabajo(1366, 768)
+    ):
+        ventana = MainWindow()
+        try:
+            ventana.show()
+            ventana.resize(ventana.minimumWidth(), ventana.minimumHeight())
+            app.processEvents()
+            rotulos = [
+                etiqueta
+                for etiqueta in ventana.times_pane.findChildren(QLabel)
+                if etiqueta.text() and etiqueta.isVisibleTo(ventana)
+            ]
+            assert any(
+                etiqueta.text() == "Avance por archivo" for etiqueta in rotulos
+            )
+            for etiqueta in rotulos:
+                assert etiqueta.height() >= etiqueta.fontMetrics().height(), (
+                    f"«{etiqueta.text()}» se recorta"
+                )
+        finally:
+            ventana.close()
+
+
+def test_el_recuadro_de_zoom_se_esconde_antes_que_dibujarse_a_medias():
+    """Flota sobre la página: no manda sobre el mínimo, y o cabe o no está."""
+    app = _app()
+    with patch.object(
+        responsive, "available_area", return_value=_area_de_trabajo(1920, 1080)
+    ):
+        ventana = MainWindow()
+        try:
+            ventana.show()
+            app.processEvents()
+            assert ventana._zoom_holder.isVisible()
+
+            # La ventana en su suelo: la página se queda con lo justo y el
+            # recuadro ya no cabe entero.
+            ventana.resize(ventana.minimumWidth(), ventana.minimumHeight())
+            for _ in range(4):
+                app.processEvents()
+
+            assert not ventana._zoom_holder.isVisible()
+            assert (
+                ventana.preview_scroll.height()
+                < ventana._zoom_holder.sizeHint().height()
+            )
         finally:
             ventana.close()
 

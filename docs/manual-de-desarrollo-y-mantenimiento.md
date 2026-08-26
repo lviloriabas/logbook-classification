@@ -55,7 +55,6 @@ La GUI delega los trabajos largos a `PipelineWorker`, `PreprocessWorker` y `Outp
 | `paddlepaddle>=2.6.0` | Runtime de inferencia Paddle en CPU. |
 | `paddleocr==3.7.0` | Detección y reconocimiento OCR principal. |
 | `paddlex[ocr]==3.7.2` | Predictor por línea y administración de modelos PaddleX. |
-| `pytesseract>=0.3.10` | Adaptador del OCR Tesseract opcional. No se usa en la GUI o CLI normal. |
 | `PySide6>=6.6.0` | Interfaz, vista previa, tablas y trabajos con `QThread`. |
 | `Send2Trash>=1.8.0` | Envío recuperable de archivos a la Papelera. |
 | `pydantic>=2.6.0` | Validación de configuración, plantillas y modelos de datos. |
@@ -73,9 +72,7 @@ Los módulos `csv`, `json`, `concurrent.futures`, `ctypes`, `pathlib`, `subproce
 |---|---|
 | Python 3.12.10 | Obligatorio en `portable/python312/tools/`. |
 | Modelos PaddleOCR | Obligatorios en `portable/paddlex/official_models/`. |
-| Tesseract 5.4 | Opcional; la GUI y la CLI no lo usan como respaldo. |
 | Microsoft Edge | Necesario solo para iniciar sesión en AirVault. |
-| `llama-server` y modelos GGUF | Opcionales; el verificador VLM está desactivado. |
 | `pytest` | Desarrollo; no forma parte de `requirements.txt`. |
 
 ## 4. Portabilidad
@@ -90,9 +87,7 @@ BITS/
 ├── portable/
 │   ├── python312/tools/
 │   ├── paddlex/official_models/
-│   ├── tesseract/             opcional
-│   ├── edge-airvault/         generado al iniciar sesión
-│   └── llama/                  opcional
+│   └── edge-airvault/         generado al iniciar sesión
 ├── input/                      creado si falta
 └── output/                     creado si falta
 ```
@@ -108,16 +103,11 @@ PADDLE_PDX_CACHE_HOME=<raíz>\portable\paddlex
 PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1
 PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=0
 FLAGS_use_mkldnn=0
-TESSDATA_PREFIX=<raíz>\portable\tesseract\tessdata
 ```
 
 Una variable definida por el sistema tiene prioridad sobre `setdefault()` y puede sacar la caché fuera del paquete. Compruébela cuando una máquina se comporte distinto.
 
-La ruta opcional de Tesseract busca primero el `PATH` del sistema y después `portable/tesseract/`. Para una prueba estrictamente aislada, retire cualquier Tesseract externo del `PATH` o cambie esa prioridad antes de habilitar el respaldo.
-
-El VLM opcional también puede resolver binarios desde variables de entorno o `PATH`. Los archivos temporales pueden usar `%TEMP%`; no son activos persistentes. Revise estas rutas si habilita capacidades experimentales.
-
-Todos los motores se crean con `device="cpu"`, `use_gpu=False` o el equivalente. El VLM opcional arranca con cero capas de GPU. oneDNN está desactivado por un fallo conocido de Paddle en Windows.
+El motor se crea con `device="cpu"` (`use_gpu=False` en la compatibilidad con PaddleOCR v2). oneDNN está desactivado por un fallo conocido de Paddle en Windows. Los archivos temporales pueden usar `%TEMP%`; no son activos persistentes.
 
 En la operación normal, el OCR no requiere red y AirVault sí. Microsoft Edge es el método normal para obtener la sesión; también se admite una cookie y, por consola, una cuenta local. El perfil de Edge queda en `portable/edge-airvault/`. Las conexiones de Python validan TLS contra el almacén de certificados de Windows mediante `truststore`, por lo que respetan las CA corporativas instaladas por TI sin desactivar la verificación. `REQUESTS_CA_BUNDLE` permite agregar un archivo PEM entregado por TI. La reconstrucción y las descargas de modelos también requieren red. `airvault.json` contiene URL, repositorio, esquema, tiempos y valores de índice; no contiene credenciales. Las cookies y contraseñas no se escriben en el log.
 
@@ -131,22 +121,18 @@ Desde una máquina Windows con red:
 setup.cmd
 ```
 
-El script descarga Python, instala `requirements.txt`, precarga los dos modelos PaddleOCR y prepara Tesseract. Python y Tesseract se verifican con SHA-256.
+El script descarga Python, instala `requirements.txt` y precarga los dos modelos PaddleOCR. Python se verifica con SHA-256.
 
 Opciones de mantenimiento:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Check
-powershell -ExecutionPolicy Bypass -File setup.ps1 -SkipTesseract
-powershell -ExecutionPolicy Bypass -File setup.ps1 -Vlm
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Launcher
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Force
 powershell -ExecutionPolicy Bypass -File setup.ps1 -CleanCache
 ```
 
-`-Vlm` descarga Qwen3-VL y su `mmproj` desde las URL predeterminadas, pero no activa el VLM. `llama-server.exe` debe copiarse manualmente o suministrarse mediante `BITS_LLAMA_BIN_ZIP`.
-
-> **PRECAUCIÓN:** `-Force` elimina y reconstruye el intérprete de `portable/python312/tools/`, Tesseract y los directorios de modelos. Úselo solo sobre una copia o durante una reconstrucción controlada.
+> **PRECAUCIÓN:** `-Force` elimina y reconstruye el intérprete de `portable/python312/tools/` y los directorios de modelos. Úselo solo sobre una copia o durante una reconstrucción controlada.
 
 ## 5. Proceso interno por página
 
@@ -444,9 +430,9 @@ PP-OCRv5_mobile_rec
 
 Si se cambia alguno, actualice `setup.ps1`, `tools/precache_paddle.py`, `app/ocr/engine.py` y `app/core/config.py`. Precargue en `portable/paddlex/`, ejecute una inferencia con red y repita la prueba sin red.
 
-### 11.3 Python, Tesseract y lanzador
+### 11.3 Python y lanzador
 
-Para cambiar Python o Tesseract, actualice la versión, la URL y el SHA-256 en `setup.ps1`; después, reconstruya el paquete desde una instalación limpia. Para regenerar el EXE:
+Para cambiar Python, actualice la versión, la URL y el SHA-256 en `setup.ps1`; después, reconstruya el paquete desde una instalación limpia. Para regenerar el EXE:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File setup.ps1 -Launcher
@@ -491,9 +477,7 @@ Las pruebas de AirVault usan un cliente falso y no escriben en producción. Una 
 La GUI y la CLI fijan:
 
 ```text
-date_ocr_fallback=False
 date_slot_ocr=False
-vlm_enabled=False
 ```
 
-Tesseract, el OCR por ranuras y el VLM son capacidades opcionales o experimentales. La presencia de sus componentes no las activa. No documente ninguna como operativa hasta habilitarla, probarla en CPU y confirmar que funciona sin descargas durante la ejecución.
+El OCR por ranuras es una capacidad experimental: está apagada en GUI y CLI. No la documente como operativa hasta habilitarla, probarla en CPU y confirmar que funciona sin descargas durante la ejecución.

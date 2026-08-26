@@ -20,11 +20,10 @@ def test_gui_worker_applies_book_sequence_after_all_files():
     ]
     pipeline = MagicMock()
     pipeline.process.side_effect = reports
-    pipeline.vlm_stats = {"enabled": False}
     worker = PipelineWorker(
         [Path("a.pdf"), Path("b.pdf")],
         Path("template/aircraft_log.json"),
-        AppConfig(align=False, vlm_enabled=False),
+        AppConfig(align=False),
     )
 
     with patch("app.core.pipeline.Pipeline", return_value=pipeline), patch(
@@ -40,4 +39,3 @@ def test_gui_worker_applies_book_sequence_after_all_files():
         reports, worker.config.book_fechas_file
     )
     assert worker.reports == reports
-    assert all(item["enabled"] is False for item in worker.vlm_stats)
