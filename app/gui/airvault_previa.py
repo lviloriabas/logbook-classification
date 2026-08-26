@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -39,11 +38,14 @@ from PySide6.QtWidgets import (
 )
 
 from app.airvault.model import EstadoRegistro, Registro
-from app.gui.responsive import fit_to_screen
+from app.gui.responsive import Density, fit_to_screen
 from app.gui.table_sort import ColumnSortController
 from app.gui.widgets import (
+    APP_CHROME_QSS,
+    DATA_TABLE_QSS,
     PANE_STATUS_COLORS,
     align_vertical_scrollbar_to_header,
+    size_columns_once,
     style_data_table,
 )
 
@@ -125,6 +127,41 @@ class _ListaBuscable(QDialog):
 
     #: Columnas donde busca el texto. Vacío significa todas.
     COLUMNAS_BUSCABLES: tuple[int, ...] = ()
+
+    def __init__(self, dueño: QWidget | None = None) -> None:
+        """Ventana nativa aparte, como el visor de CSV y la de AirVault.
+
+        Sin dueño a nivel de Qt: en Windows una ventana con dueño no recibe
+        entrada propia en la barra de tareas y se queda pegada a la de
+        arriba. Quien la abre conserva la referencia, que es lo que la
+        mantiene viva. ``dueño`` solo sirve para heredar el icono.
+        """
+        super().__init__(None, Qt.WindowType.Window)
+        # Mirar una lista larga es compatible con seguir trabajando en la
+        # ventana de al lado, así que se puede minimizar.
+        self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint, True)
+        # Al cerrarla se destruye: son ventanas de consulta y no tiene
+        # sentido acumularlas en memoria una por batch mirado.
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        if dueño is not None:
+            self.setWindowIcon(dueño.windowIcon())
+
+    def _medir_la_pantalla(self, ancho: int, alto: int) -> Density:
+        """Tamaño de apertura y hoja de estilo, como las demás ventanas.
+
+        Sin dueño no se hereda la hoja de la ventana que la abrió, así que
+        se aplica aquí la misma: tipografías, botones y el radio de 6 px de
+        los cuadros salen de ahí y no del estilo nativo.
+        """
+        densidad = fit_to_screen(self, ancho, alto)
+        self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS + densidad.qss)
+        return densidad
+
+    def mostrar(self) -> None:
+        """La trae al frente, esté recién abierta o ya abierta detrás."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _fila_de_busqueda(self, pista: str, ayuda: str) -> QHBoxLayout:
         self._coincidencias: list[int] = []
@@ -278,10 +315,9 @@ class BitacorasDelBatch(_ListaBuscable):
         # llenó. Es lo que le pide el visor a la página que enseña.
         self._bitacoras: list[Registro] = []
         self.setWindowTitle(f"Bitácoras de {nombre or 'el batch'}")
-        # Como el resto de los cuadros: el tamaño lo pone la pantalla, que
+        # Como el resto de las ventanas: el tamaño lo pone la pantalla, que
         # en un portátil bajo dejaría los botones fuera del borde.
-        densidad = fit_to_screen(self, 1180, 700)
-        self._build_ui(nombre, densidad)
+        self._build_ui(nombre, self._medir_la_pantalla(1180, 700))
 
     def _build_ui(self, nombre: str, densidad) -> None:
         from app.gui.csv_viewer import EmbeddedPdfViewer
@@ -310,15 +346,10 @@ class BitacorasDelBatch(_ListaBuscable):
             "la misma que muestra Web Index. Al elegir una fila se abre su "
             "hoja escaneada al lado; el doble clic la lleva al visor.",
         )
-        cabecera = self.tabla.horizontalHeader()
-        for columna in range(len(self.COLUMNAS) - 1):
-            cabecera.setSectionResizeMode(
-                columna, QHeaderView.ResizeMode.ResizeToContents
-            )
-        cabecera.setSectionResizeMode(
-            len(self.COLUMNAS) - 1, QHeaderView.ResizeMode.Stretch
-        )
         self._llenar(bitacoras)
+        # Después de llenarla, no antes: medir por contenido mientras entran
+        # las filas obliga a Qt a repasar la columna entera en cada celda.
+        size_columns_once(self.tabla, stretch_last=True)
 
         divisor = QSplitter(Qt.Orientation.Horizontal)
         divisor.setChildrenCollapsible(False)
@@ -479,8 +510,11 @@ class VistaPreviaBatches(_ListaBuscable):
         super().__init__(parent)
         self._previstos = list(previstos)
         self._csv = Path(csv) if csv else None
+        # Las ventanas de bitácoras que se hayan abierto desde aquí. Sin
+        # esta referencia, Qt las destruiría al volver de este método.
+        self._abiertas: list[BitacorasDelBatch] = []
         self.setWindowTitle("Vista previa de los batches")
-        fit_to_screen(self, 780, 520)
+        self._medir_la_pantalla(780, 520)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -503,18 +537,10 @@ class VistaPreviaBatches(_ListaBuscable):
             "Batches de la entrega. Los que ya están en AirVault salen con "
             "su estado; los demás se crearían al subir.",
         )
-        cabecera = self.tabla.horizontalHeader()
-        cabecera.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        cabecera.setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
-        )
-        cabecera.setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
-        )
-        cabecera.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.tabla.itemDoubleClicked.connect(self._abrir_bitacoras)
         self.tabla.itemSelectionChanged.connect(self._ajustar_boton)
         self._llenar()
+        size_columns_once(self.tabla, stretch_last=True)
         cuerpo.addLayout(
             self._fila_de_busqueda(
                 self._PISTA,
@@ -580,7 +606,6 @@ class VistaPreviaBatches(_ListaBuscable):
                     # batch que solo está previsto.
                     item.setForeground(Qt.GlobalColor.gray)
                 self.tabla.setItem(fila, columna, item)
-        self.tabla.resizeColumnToContents(0)
 
     def _elegido(self):
         fila = self.tabla.currentRow()
@@ -597,10 +622,31 @@ class VistaPreviaBatches(_ListaBuscable):
         previsto = self._elegido()
         if previsto is None:
             return
-        BitacorasDelBatch(
+        ventana = BitacorasDelBatch(
             previsto.nombre,
             previsto.registros,
             csv=self._csv or "",
             completado=bool(previsto.completado),
             parent=self,
-        ).exec()
+        )
+        self._abiertas.append(ventana)
+        ventana.destroyed.connect(
+            lambda *_a, v=ventana: self._olvidar(v)
+        )
+        ventana.mostrar()
+
+    def _olvidar(self, ventana) -> None:
+        """Suelta la ventana que se cerró, para no acumularlas."""
+        if ventana in self._abiertas:
+            self._abiertas.remove(ventana)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        """Se lleva consigo las listas que se abrieron desde ella.
+
+        Son ventanas de consulta sobre esta misma entrega: dejarlas sueltas
+        cuando ya no está la lista de la que salieron mantendría el
+        programa abierto por algo que nadie está mirando.
+        """
+        for ventana in list(self._abiertas):
+            ventana.close()
+        super().closeEvent(event)

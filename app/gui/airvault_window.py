@@ -60,6 +60,7 @@ from app.airvault.config import (
     guardar_completar_batch,
     guardar_paginas_por_batch,
 )
+from app.airvault.session import SesionCancelada
 from app.gui.csv_utils import find_csv_files, find_run_dirs
 from app.gui.responsive import available_area, fit_to_screen
 from app.gui.text_copy import CopyableListWidget
@@ -271,9 +272,19 @@ class TrabajoAirVaultWorker(QThread):
         self._parar = False
 
     def cancelar(self) -> None:
-        """Pide que pare, arrancado o no."""
+        """Pide que pare, arrancado o no.
+
+        La bandera sola no basta: el hilo la mira entre paso y paso, y entre
+        dos pasos puede haber una petición esperando hasta un minuto y hasta
+        tres intentos, o la ventana de acceso esperando cinco minutos. Por
+        eso se cancela también la sesión, que es quien está esperando de
+        verdad.
+        """
         self._parar = True
         self.requestInterruption()
+        sesion = self.estado.get("sesion")
+        if sesion is not None:
+            sesion.cancelar()
 
     def hay_que_parar(self) -> bool:
         return self._parar or self.isInterruptionRequested()
@@ -292,6 +303,11 @@ class TrabajoAirVaultWorker(QThread):
         try:
             etapas[self.modo]()
         except TrabajoCancelado:
+            self.cancelado.emit()
+        except SesionCancelada:
+            # La sesión se cortó porque alguien canceló: es lo mismo que
+            # llegar al siguiente paso con la bandera puesta, solo que sin
+            # esperar a que el servidor conteste.
             self.cancelado.emit()
         except Exception as exc:  # noqa: BLE001 - llega a la interfaz
             self.fallo.emit(str(exc))
@@ -839,6 +855,10 @@ class AirVaultWindow(QDialog):
         # Hilos que están soltando batches en AirVault, para que Qt no los
         # destruya a media petición.
         self._soltando: list[QThread] = []
+        # Ventanas de consulta abiertas desde aquí (la vista previa y las
+        # listas de bitácoras). No tienen dueño en Qt, así que esto es lo
+        # único que las mantiene vivas.
+        self._ventanas_de_consulta: list = []
 
         self.setWindowTitle("Indexar en AirVault")
         # Con botón de minimizar: escribir una ejecución entera tarda, y
@@ -1128,7 +1148,9 @@ class AirVaultWindow(QDialog):
                 "viajaron ya a AirVault.",
             )
             return
-        VistaPreviaBatches(previstos, csv=csv, parent=self).exec()
+        self._abrir_ventana(
+            VistaPreviaBatches(previstos, csv=csv, parent=self)
+        )
 
     def _lotes(self) -> QTableWidget:
         """En qué va cada batch de esta ejecución dentro de AirVault.
@@ -1334,13 +1356,34 @@ class AirVaultWindow(QDialog):
         from app.gui.airvault_previa import BitacorasDelBatch
 
         manifiesto = parte.trabajo.manifiesto
-        BitacorasDelBatch(
-            manifiesto.nombre_batch,
-            manifiesto.registros,
-            csv=manifiesto.csv_origen or self.corrida_edit.text().strip(),
-            completado=parte.estado in (COMPLETADO, AUTOCOMPLETADO),
-            parent=self,
-        ).exec()
+        self._abrir_ventana(
+            BitacorasDelBatch(
+                manifiesto.nombre_batch,
+                manifiesto.registros,
+                csv=manifiesto.csv_origen or self.corrida_edit.text().strip(),
+                completado=parte.estado in (COMPLETADO, AUTOCOMPLETADO),
+                parent=self,
+            )
+        )
+
+    def _abrir_ventana(self, ventana) -> None:
+        """Muestra una ventana de consulta y la conserva viva.
+
+        La vista previa y la lista de bitácoras son ventanas aparte, como el
+        visor de CSV: sin dueño a nivel de Qt (para que Windows les dé su
+        entrada en la barra de tareas) y sin bloquear esta, que puede estar
+        subiendo mientras se las mira. Como nadie más las sostiene, la
+        referencia vive aquí hasta que se cierran.
+        """
+        self._ventanas_de_consulta.append(ventana)
+        ventana.destroyed.connect(
+            lambda *_a, v=ventana: (
+                self._ventanas_de_consulta.remove(v)
+                if v in self._ventanas_de_consulta
+                else None
+            )
+        )
+        ventana.mostrar()
 
     def _copiar_al_portapapeles(self, texto: str) -> None:
         if not texto:
@@ -2762,6 +2805,12 @@ class AirVaultWindow(QDialog):
             # esto, una orden expresa dejaría a la reanudación automática
             # subiendo sin comprobar nada.
             estado["forzados"] = []
+        sesion = estado.get("sesion")
+        if sesion is not None and sesion.cancelada:
+            # La sesión quedó cortada por la cancelación anterior. Lo que se
+            # lanza ahora es una orden nueva, así que vuelve a valer; sin
+            # esto, la primera petición se negaría sola.
+            sesion.reanudar()
         self._habilitar(False)
         worker = TrabajoAirVaultWorker(modo, estado, self)
         worker.paso.connect(self._mostrar_paso)
@@ -3234,6 +3283,11 @@ class AirVaultWindow(QDialog):
             )
             event.ignore()
             return
+        # Las ventanas de consulta hablan de esta ejecución: dejarlas
+        # sueltas mantendría el programa abierto por algo que ya no tiene de
+        # dónde colgarse.
+        for ventana in list(self._ventanas_de_consulta):
+            ventana.close()
         super().closeEvent(event)
 
     def _cancelar(self) -> None:
@@ -3279,6 +3333,12 @@ class AirVaultWindow(QDialog):
         cliente = self._estado.get("cliente")
         if not trabajos or cliente is None:
             return
+        sesion = self._estado.get("sesion")
+        if sesion is not None and sesion.cancelada:
+            # Soltar es trabajo que existe *porque* se canceló: con la
+            # sesión cortada, cada petición se negaría y los batches
+            # quedarían tomados, que es justo lo que esto viene a evitar.
+            sesion.reanudar()
         if esperar:
             _soltar(trabajos, cliente)
             return

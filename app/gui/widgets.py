@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QScrollArea,
     QSizePolicy,
@@ -569,6 +570,37 @@ class _HeaderScrollbarAligner(QObject):
         self._table.verticalScrollBar().setStyleSheet(
             f"QScrollBar:vertical {{ margin-top: {max(0, alto)}px; }}"
         )
+
+
+# Filas que se miran al medir el ancho de una columna. Sin tope Qt las
+# recorre todas, y con cuatrocientas filas eso ya es una décima de segundo
+# de espera para averiguar un ancho que deciden las primeras pantallas.
+RESIZE_PRECISION = 64
+
+
+def size_columns_once(table, stretch_last: bool = False) -> None:
+    """Ajusta las columnas al contenido una vez y las deja fijas.
+
+    ``ResizeToContents`` no mide una vez: vuelve a medir la columna entera
+    cada vez que cambia una celda. Llenar una tabla de cuatrocientas filas
+    por siete columnas, u ordenarla (que reubica esas dos mil ochocientas
+    celdas), pasa entonces a costar el cuadrado de las filas: ordenar la
+    lista de bitácoras de un batch tardaba tres minutos y medio.
+
+    Medir una vez y pasar a ``Interactive`` da el mismo ancho de partida y
+    además deja arrastrar el borde de la columna, que con el modo por
+    contenido no se podía. La última columna puede quedarse en ``Stretch``
+    para que no sobre espacio a la derecha: ese modo no mide contenido, así
+    que no cuesta nada.
+    """
+    header = table.horizontalHeader()
+    ultima = table.columnCount() - 1
+    for column in range(table.columnCount()):
+        header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+    header.setResizeContentsPrecision(RESIZE_PRECISION)
+    table.resizeColumnsToContents()
+    if stretch_last and ultima >= 0:
+        header.setSectionResizeMode(ultima, QHeaderView.ResizeMode.Stretch)
 
 
 def align_vertical_scrollbar_to_header(table: QAbstractItemView) -> None:

@@ -29,7 +29,7 @@ delante.
 | `Indexar`               | Escribe en los batches que ya estan listos.                                                                                                                   |
 | `Vista previa…`         | Enseña en cuantos batches quedaria repartida la ejecucion, con sus paginas y sus bitacoras. No prepara ni sube nada.                                          |
 | `Ver reporte…`          | Abre el detalle pagina por pagina de lo que se escribiria.                                                                                                    |
-| `Cancelar`              | Detiene lo que este en marcha y suelta los batches tomados.                                                                                                   |
+| `Cancelar`              | Detiene en el acto lo que esté en marcha (sin esperar al servidor) y suelta los batches tomados.                                                                                                   |
 
 ### Ver lo que va en cada batch
 
@@ -591,6 +591,7 @@ respuesta decidida de antemano.
 | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Se corta la red, vence el tiempo o el servidor responde que está ocupado (408, 429, 5xx) | Reintenta, esperando más en cada intento. Por defecto tres intentos con 5 s, 10 s.                                                                                   |
 | Se agotan los reintentos                                                                 | Corta y dice qué pasó. Lo escrito queda anotado.                                                                                                                     |
+| Alguien cancela mientras hay una petición esperando                                       | Deja de reintentar, corta la espera y cierra el pool de conexiones, que es lo único que aborta la petición en vuelo.  |
 | El servidor responde 404 o 403                                                           | No reintenta: insistir devuelve lo mismo.                                                                                                                            |
 | Una página del batch no carga                                                            | Bloquea **esa** página y sigue con el resto. Sin poder leerla no se puede comprobar que el batch y el manifiesto hablan de la misma bitácora, así que no se escribe. |
 | Caduca la cookie a media escritura                                                       | Corta el batch entero. Lo que no se llegó a intentar queda **pendiente**, no fallido: al volver a revisar se retoma sin repetir lo escrito.                          |
