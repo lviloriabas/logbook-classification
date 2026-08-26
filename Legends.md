@@ -2,6 +2,12 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-26 - Depurar una bitácora repetida se lleva una sola página
+
+Al descartar duplicados se conservaba la primera aparición y se iban las demás, que con dos apariciones es exactamente lo que hace falta. Pero eso solo lo garantizaba el criterio automático: el cuadro deja elegir página por página (para eso está, porque a veces la buena es la segunda) y nada impedía marcar las dos casillas de una misma bitácora y borrarla entera de la ejecución. El otro camino al mismo agujero eran los dos criterios juntos, cuando una aparición cae por repetida y la otra por estar en blanco.
+
+Ahora la regla no depende de quién pida el borrado. `depurar_claves`, por donde pasan igual el cuadro y el proceso automático, respeta siempre una aparición de cada bitácora repetida aunque le lleguen marcadas todas: se va la más nueva y se queda la primera con algo escrito, porque conservar una página en blanco y borrar la que sí se lee sería cumplir la regla y perder la bitácora igual. El cuadro además lo dice antes: marcar la última aparición libre de un grupo devuelve la marca a su sitio y el pie explica que de cada bitácora tiene que quedar una página. Elegir cuál se conserva sigue estando permitido; lo que ya no se puede es quedarse sin ninguna.
+
 ## 2026-08-26 - Una bitácora ya subida no vuelve a AirVault
 
 Se estaban duplicando batches. Las defensas que había miraban todas **la cola del Web Index**: el reparto de la entrega, el registro de la ejecución y la búsqueda del batch por nombre, páginas y Log Page Number. Y ahí estaba el agujero, porque completar un batch lo saca de la cola y lo manda a Web Search: desde ese momento el programa dejaba de verlo. Si además se perdía la memoria local (se borra el registro para empezar de nuevo, se reprocesan los mismos escaneos en otra carpeta), la cola estaba limpia, el manifiesto ya no existía y nada impedía volver a subir lo mismo.

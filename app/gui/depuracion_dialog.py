@@ -47,6 +47,14 @@ DEPURAR_TOOLTIP = (
     "exportar."
 )
 
+# Lo que se contesta a quien intenta marcar la última aparición libre de una
+# bitácora repetida. No es un error de uso: es la regla del descarte dicha
+# donde se intenta romper.
+_AVISO_GRUPO = (
+    "De cada bitácora repetida tiene que quedar una página. Desmarque otra "
+    "aparición y después marque esta."
+)
+
 # La clave de cada página viaja en el propio elemento del árbol: es lo que
 # después se le pasa a ``depurar_claves`` y no depende de en qué fila quedó.
 _CLAVE = Qt.ItemDataRole.UserRole
@@ -117,7 +125,8 @@ class DepurarPaginasDialog(QDialog):
         )
         self.check_duplicados.setToolTip(
             "Bitácoras que aparecen más de una vez. La tabla las señala "
-            "todas, pero aquí solo se marca la segunda y las siguientes: "
+            "todas, pero aquí solo se marca la segunda y las siguientes: de "
+            "cada una se va la aparición más nueva y se queda una, porque "
             "borrar el grupo entero dejaría la ejecución sin esa bitácora. "
             "Abajo puede conservar otra en su lugar. Las páginas sin "
             "log_number legible no se consideran repetidas."
@@ -128,7 +137,8 @@ class DepurarPaginasDialog(QDialog):
 
         self.arbol_duplicados = self._nuevo_arbol(
             "Cada bitácora repetida con todas sus apariciones. Desmarque la "
-            "que quiera conservar y marque la que sobra."
+            "que quiera conservar y marque la que sobra. Una de cada grupo "
+            "se queda siempre: no se pueden marcar todas."
         )
         self._llenar_duplicados()
         layout.addWidget(self.arbol_duplicados, 1)
@@ -253,21 +263,52 @@ class DepurarPaginasDialog(QDialog):
             {pagina.clave for pagina in self._blancas} if activado else set(),
         )
 
-    def _al_cambiar_marca(self, _item, _columna: int) -> None:
+    def _al_cambiar_marca(self, item, _columna: int) -> None:
+        if self._deshacer_si_vacia_el_grupo(item):
+            return
         self._refrescar_total()
 
-    def _refrescar_total(self) -> None:
+    def _deshacer_si_vacia_el_grupo(self, item) -> bool:
+        """Devuelve la marca que dejaría una bitácora repetida sin páginas.
+
+        De cada grupo se va una sola aparición, la más nueva, y marcarlas
+        todas borraría la bitácora entera de la ejecución. En vez de aceptar
+        esa elección y corregirla por detrás al borrar, la marca vuelve
+        atrás en el sitio y el pie dice por qué: quien elige ve lo que va a
+        pasar. Las páginas en blanco cuelgan del árbol sin cabecera, así que
+        no entran por aquí.
+        """
+        if item.checkState(0) != Qt.CheckState.Checked:
+            return False
+        grupo = item.parent()
+        if grupo is None:
+            return False
+        hermanos = (grupo.child(indice) for indice in range(grupo.childCount()))
+        if any(
+            hermano.checkState(0) != Qt.CheckState.Checked
+            for hermano in hermanos
+        ):
+            return False
+        arbol = item.treeWidget()
+        arbol.blockSignals(True)
+        try:
+            item.setCheckState(0, Qt.CheckState.Unchecked)
+        finally:
+            arbol.blockSignals(False)
+        self._refrescar_total(_AVISO_GRUPO)
+        return True
+
+    def _refrescar_total(self, aviso: str = "") -> None:
         resumen = self.resumen()
         if resumen.total:
-            self.total_label.setText(
+            texto = (
                 f"Se eliminarán {_texto_conteo(resumen.total)} de la ejecución."
             )
         elif not self._disponibles.total:
-            self.total_label.setText(
-                "La ejecución no tiene páginas repetidas ni en blanco."
-            )
+            texto = "La ejecución no tiene páginas repetidas ni en blanco."
         else:
-            self.total_label.setText("Marque al menos un criterio.")
+            texto = "Marque al menos un criterio."
+        self.total_label.setText(f"{aviso} {texto}" if aviso else texto)
         self.boton_eliminar.setEnabled(bool(resumen.total))
 
     def _claves_de(self, arbol: QTreeWidget) -> set:
