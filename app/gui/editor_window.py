@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QSizePolicy,
     QSplitter,
     QToolBar,
     QToolButton,
@@ -55,7 +56,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.responsive import fit_to_screen
-from app.gui.widgets import load_zoom_icon
+from app.gui.widgets import hide_overlay_when_tight, load_zoom_icon
 from app.templates.manager import TEMPLATES_DIR, TemplateManager
 from app.templates.schema import FieldTemplate, FieldType, Template
 
@@ -506,6 +507,11 @@ class EditorWindow(QMainWindow):
         zoom_holder_layout = QVBoxLayout(zoom_holder)
         zoom_holder_layout.setContentsMargins(8, 8, 8, 8)
         zoom_holder_layout.addWidget(zoom_overlay)
+        # El recuadro de zoom flota sobre la página: ni decide el mínimo
+        # del panel ni se dibuja a medias. Ver ``hide_overlay_when_tight``.
+        zoom_holder.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+        )
         view_layout.addWidget(
             zoom_holder,
             0,
@@ -513,6 +519,7 @@ class EditorWindow(QMainWindow):
             Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
         )
         zoom_holder.raise_()
+        hide_overlay_when_tight(zoom_holder)
         self._update_zoom_editor_controls()
 
         splitter.addWidget(view_container)

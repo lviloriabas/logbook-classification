@@ -611,6 +611,33 @@ def align_vertical_scrollbar_to_header(table: QAbstractItemView) -> None:
     filtro._aplicar(cabecera.height())
 
 
+def fit_combo_to_items(combo, extra: int = 0) -> None:
+    """Da al desplegable el ancho de su opción más larga.
+
+    El ``sizeHint`` de un ``QComboBox`` mide el texto con la tipografía del
+    widget, pero no cuenta el relleno que le añade la hoja de estilo (los
+    ``padding`` de ``APP_CHROME_QSS``), así que el desplegable se quedaba
+    unos píxeles corto y la última opción aparecía cortada: «Día específico
+    (si falta, fin de mes» sin el paréntesis de cierre. Aquí se mide el
+    texto a mano y se le suman la flecha, los bordes y ese relleno.
+    """
+    metricas = combo.fontMetrics()
+    texto = max(
+        (metricas.horizontalAdvance(combo.itemText(i))
+         for i in range(combo.count())),
+        default=0,
+    )
+    flecha = combo.style().pixelMetric(
+        QStyle.PixelMetric.PM_ScrollBarExtent, None, combo
+    )
+    combo.setMinimumWidth(texto + flecha + _COMBO_PADDING + extra)
+
+
+# Bordes y relleno alrededor del texto de un desplegable: lo que la hoja de
+# estilo pone a cada lado más el aire que deja el estilo nativo.
+_COMBO_PADDING = 18
+
+
 def style_dark_pane(pane: QWidget) -> None:
     """Deja un panel completo en el gris oscuro, con sus controles.
 
@@ -746,6 +773,41 @@ class ZoomOverlay(QFrame):
         button.clicked.connect(slot)
         panel.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
         return button
+
+
+class _OverlayFitWatcher(QObject):
+    """Esconde un control flotante en cuanto su hueco deja de darle."""
+
+    def __init__(self, holder: QWidget) -> None:
+        super().__init__(holder)
+        self._holder = holder
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self.aplicar(watched.height())
+        return False
+
+    def aplicar(self, alto: int) -> None:
+        cabe = alto >= self._holder.sizeHint().height()
+        if self._holder.isVisible() != cabe:
+            self._holder.setVisible(cabe)
+
+
+def hide_overlay_when_tight(holder: QWidget) -> None:
+    """El recuadro flotante se esconde si su marco no da para dibujarlo.
+
+    Un flotante no manda sobre el mínimo del panel que lo lleva debajo (si
+    lo hiciera, un control de zoom decidiría cuánto mide de mínimo la
+    ventana entera), así que puede tocarle un hueco más bajo que él. Metido
+    a la fuerza, sus botones de tamaño fijo se montan unos sobre otros. O
+    cabe entero o no se enseña.
+    """
+    marco = holder.parentWidget()
+    if marco is None:
+        return
+    vigilante = _OverlayFitWatcher(holder)
+    marco.installEventFilter(vigilante)
+    vigilante.aplicar(marco.height())
 
 
 class ZoomableScrollArea(QScrollArea):

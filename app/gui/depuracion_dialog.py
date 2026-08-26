@@ -206,6 +206,17 @@ class DepurarPaginasDialog(QDialog):
         return item
 
     def _llenar_duplicados(self) -> None:
+        # Cada hoja nace con su casilla, y ponerla avisa de un cambio de
+        # marca: durante la construcción eso llamaba al refresco del pie
+        # antes de que el pie existiera. Se llena en silencio y el total se
+        # escribe una vez, al final de ``_build_ui``.
+        self.arbol_duplicados.blockSignals(True)
+        try:
+            self._llenar_grupos()
+        finally:
+            self.arbol_duplicados.blockSignals(False)
+
+    def _llenar_grupos(self) -> None:
         for numero, paginas in self._grupos:
             cabeza = QTreeWidgetItem(
                 self.arbol_duplicados,
@@ -220,8 +231,12 @@ class DepurarPaginasDialog(QDialog):
                 self._nueva_hoja(pagina, _etiqueta(pagina) + sufijo, cabeza)
 
     def _llenar_blancas(self) -> None:
-        for pagina in self._blancas:
-            self._nueva_hoja(pagina, _etiqueta(pagina), self.arbol_blancas)
+        self.arbol_blancas.blockSignals(True)
+        try:
+            for pagina in self._blancas:
+                self._nueva_hoja(pagina, _etiqueta(pagina), self.arbol_blancas)
+        finally:
+            self.arbol_blancas.blockSignals(False)
 
     def _hojas(self, arbol: QTreeWidget):
         """Recorre las páginas de un árbol, estén donde estén."""
