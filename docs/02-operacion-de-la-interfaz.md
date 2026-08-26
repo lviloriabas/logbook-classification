@@ -111,6 +111,68 @@ que esté marcada en ese momento.
 
 La barra cuenta páginas terminadas del batch. Las páginas pueden finalizar fuera de orden por el procesamiento paralelo; el contador nunca representa el número de la última página entregada por un proceso.
 
+## 2.8.1 Proceso automático
+
+**Automático**, en la misma fila que **Procesar**, hace de una sola vez toda
+la cadena: procesa, exporta y, si se pidió, depura la ejecución, sube la
+entrega a AirVault y la escribe allí. Cada paso arranca solo al terminar el
+anterior; los botones sueltos siguen disponibles para hacer un solo tramo.
+
+Hasta dónde llega se elige en **Automatización…**, junto a **Opciones
+avanzadas** y **Indexar en AirVault…**. Se abre como el menú del botón
+derecho, encima de la ventana y sin quitarle sitio a nada, y se queda
+abierto entre clic y clic: marque los pasos que quiera y salga con un clic
+fuera o con `Esc`. La ventana de AirVault tiene el mismo botón y el mismo
+menú, con la misma elección. Lo elegido se conserva al cerrar el programa,
+en el `airvault.json` de la carpeta portable.
+
+| Paso | Se elige | Qué hace |
+| --- | --- | --- |
+| Procesar (OCR) | No | Siempre se hace: es de donde salen los datos. |
+| Exportar CSV, JSON y PDF | No | Siempre se hace: es la entrega. |
+| Depurar páginas repetidas y en blanco | Sí, suelto | Quita las apariciones sobrantes de cada bitácora repetida (nunca la primera) y las páginas en blanco, antes de exportar, así que los PDF salen ya sin ellas. Sin marcar, la ejecución se exporta entera y **Depurar** sigue disponible para revisarla a mano. |
+| Subir a AirVault | Sí | Manda a Quick Upload todos los batches de la entrega en cuanto termina la exportación. |
+| Esperar a que AirVault los deje listos | Sí | Es la misma casilla que **Comprobar cada** en la ventana de AirVault, donde se elige el intervalo. |
+| Indexar páginas | Sí | Escribe cada batch apenas AirVault lo deja entero. |
+| Completar batch | Sí | Es la misma casilla que **Completar batch** en la ventana de AirVault: marcarla en un sitio la marca en el otro. |
+
+Los cuatro pasos de AirVault ocurren uno detrás de otro y se marcan juntos:
+marcar **Indexar páginas** enciende subir y esperar, porque no se puede
+indexar lo que no está arriba; apagar **Subir a AirVault** apaga los tres de
+abajo, que sin la carga no tienen sobre qué trabajar. **Depurar** va suelto y
+no arrastra a ninguno.
+
+**Cancelar** corta la cadena entera, no solo el paso en curso: lo ya leído se
+guarda, pero no se exporta ni se sube nada más. Un error al procesar o al
+generar las salidas la corta igual, y lo dice en el estado.
+
+La cadena solo trabaja sobre **la ejecución que está en marcha**. La ventana
+de AirVault puede retomar batches que quedaron a medias en ejecuciones de
+días anteriores, pero eso lo hace únicamente cuando alguien pulsa **Subir a
+AirVault**: lo que arranca solo (la cadena y el reloj de comprobación) no
+sale de la ejecución elegida.
+
+### La línea de pasos
+
+Debajo de la barra de progreso hay una línea con los siete pasos en el orden
+en que ocurren:
+
+```
+Procesar › Depurar › Exportar › Subir › Esperar › Indexar › Completar
+```
+
+Cada uno se pinta según lo que le pasó: gris claro los que faltan, azul el
+que está en curso, verde los terminados, rojo el que se cortó y gris apagado
+los que no están marcados en **Automatización…**, que no se van a hacer. Al
+pasar por encima, cada paso dice su estado con palabras.
+
+Los cuatro últimos ocurren en la ventana de AirVault y llegan aquí desde
+ella, así que la línea sigue contando aunque esa ventana esté minimizada:
+sirve para saber, sin ir a buscarla, si la entrega terminó de subirse, en
+qué paso se quedó o dónde se cortó. Solo refleja la ejecución que esta
+ventana mandó subir; si hay varias ventanas de AirVault abiertas, el avance
+de las demás no la toca.
+
 ## 2.9 Vista previa y tabla
 
 Antes de procesar, la vista previa recorre todos los PDF como una sola secuencia. Después del OCR, conserva solo los documentos que aportaron páginas al rango. Escriba un número de página global para saltar directamente a ella. La ventana indica además el archivo y la página local.
@@ -118,6 +180,8 @@ Antes de procesar, la vista previa recorre todos los PDF como una sola secuencia
 La tabla contiene una fila por página y usa las columnas del CSV completo. El selector de vista alterna entre todas las columnas y las importantes sin cambiar el archivo guardado. El orden de una columna sigue un ciclo de tres pasos: descendente, ascendente y orden original. La fila bajo el cursor y la fila seleccionada se sombrean enteras.
 
 La página y la tabla se reparten el ancho a medias. Arrastre el separador para darle más a una de las dos; desde entonces se respeta esa medida, también al cambiar el tamaño de la ventana.
+
+`Ctrl+C` copia **la celda que está bajo el cursor**, no la fila entera: se pulsa una celda para llevarse ese dato (un número de bitácora, una matrícula) y pegarlo en otro sitio. El menú del botón derecho hace lo mismo con la celda sobre la que se hizo clic. Vale igual en la tabla de la ventana principal, en la del visor de CSV y en la cola de la ventana de AirVault, que son las que seleccionan por filas.
 
 El indicador **Duplicados** cuenta las páginas marcadas desde la segunda aparición de un `log_number`; la primera queda sin marca. El detalle muestra el grupo completo. Haga doble clic en una fila para llevar la vista previa a la página correspondiente.
 
