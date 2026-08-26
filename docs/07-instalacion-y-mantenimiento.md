@@ -65,6 +65,41 @@ La red solo se requiere para reconstruir el paquete. La aplicación terminada de
 | `-Force` | Reconstruye los componentes principales y los modelos Paddle. |
 | `-CleanCache` | Elimina `portable/.cache/` al terminar. |
 
+## 7.4.1 Limpieza de copias anteriores al 2026-08-26
+
+Las instalaciones preparadas antes de esa fecha traen dos componentes que el
+programa ya no usa (ver `Legends.md`). Se pueden borrar sin tocar nada más;
+`setup.ps1` ya no los descarga.
+
+| Ruta | Tamaño típico | Qué era |
+|---|---:|---|
+| `portable/tesseract/` | 239 MB | Motor OCR alternativo y su `tessdata`. |
+| `portable/llama/` | varios GB | Modelos GGUF y `llama-server` del verificador VLM. |
+| `portable/.cache/` | variable | Instaladores descargados, incluido el de Tesseract. |
+
+En cada equipo, con el programa cerrado:
+
+```powershell
+Remove-Item -LiteralPath .\portable\tesseract -Recurse -Force
+Remove-Item -LiteralPath .\portable\llama -Recurse -Force
+Remove-Item -LiteralPath .\portable\.cache -Recurse -Force
+```
+
+`portable/llama/` y `portable/.cache/` no existen en todas las copias: solo
+las tenía quien ejecutó `setup.ps1 -Vlm` o no limpió la caché de
+instaladores. Un `Remove-Item` sobre una ruta ausente informa un error que se
+puede ignorar.
+
+Queda además la dependencia `pytesseract` dentro del intérprete portable:
+
+```powershell
+.\portable\python312\tools\python.exe -m pip uninstall -y pytesseract
+```
+
+Ninguna de las tres carpetas se versiona, así que borrarlas no produce
+cambios en git. Después, `setup.ps1 -Check` debe seguir informando Python,
+dependencias, modelos PaddleOCR y lanzador como disponibles.
+
 ## 7.5 Entorno local
 
 `app/utils/portable.py` prepara las rutas antes de importar los motores:
