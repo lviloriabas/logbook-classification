@@ -68,12 +68,12 @@ def test_el_historial_abre_la_corrida_elegida(tmp_path: Path):
         assert viewer.history_combo.placeholderText() == (
             "Seleccione una ejecución…"
         )
-        assert viewer.table.rowCount() == 0
+        assert viewer.table_model.rowCount() == 0
 
         viewer._on_history_activated(0)
 
         assert viewer._folder == nueva
-        assert viewer.table.rowCount() == 1
+        assert viewer.table_model.rowCount() == 1
         # La ejecución abierta queda marcada en la lista, se haya llegado a ella
         # por el historial o buscándola a mano.
         viewer.load_folder(tmp_path / "BITS 16 AUG 2026 20 54")

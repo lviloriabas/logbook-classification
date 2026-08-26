@@ -109,6 +109,23 @@ class AirVaultConfig:
     # la persona marca o desmarca «Completar batch», se conserva exactamente
     # ese último estado en la carpeta portable.
     completar_batch: bool | None = None
+    # Hasta donde llega el boton «Automatico» de la ventana principal. Son
+    # preferencias de la interfaz, no del indexado, pero viven aqui por lo
+    # mismo que «Completar batch»: es el unico archivo portable que la
+    # instalacion se lleva consigo, y tres de los cuatro pasos son de
+    # AirVault. Procesar y exportar no aparecen porque siempre se hacen.
+    auto_depurar: bool = False
+    auto_subir: bool = True
+    auto_esperar: bool = True
+    auto_indexar: bool = True
+    # Ruta de consulta de Web Search y nombre de la forma en que se le
+    # mandan los parametros. AirVault no documenta su API, asi que las
+    # descubre el programa la primera vez (ver
+    # :mod:`app.airvault.websearch`) y las conserva aqui para no repetir el
+    # recorrido en cada consulta. Vacias significa «todavia sin descubrir»,
+    # nunca «no hay»: se vuelven a buscar en la siguiente comprobacion.
+    ruta_websearch: str = ""
+    parametros_websearch: str = ""
     # Segundos de espera entre sondeos al buscar el batch por nombre.
     espera_descubrimiento_s: float = 20.0
     espera_maxima_s: float = 900.0
@@ -161,6 +178,58 @@ class AirVaultConfig:
         return f"{self.base_url.rstrip('/')}/{ruta.lstrip('/')}"
 
 
+def _actualizar(path: Path | str, valores: Mapping[str, Any]) -> bool:
+    """Cambia unas claves del JSON portable sin perder las demas.
+
+    Es la escritura que comparten todas las preferencias: se relee el
+    archivo, se sustituye lo que cambia y se reemplaza entero de forma
+    atomica. Con el candado puesto, porque la ventana de AirVault y la
+    principal escriben aqui desde hilos distintos y una lectura a medias
+    dejaria el archivo con la mitad de las opciones.
+    """
+    if not valores:
+        return False
+    ruta = Path(path)
+    try:
+        with _CONFIG_WRITE_LOCK:
+            if ruta.is_file():
+                datos = json.loads(ruta.read_text(encoding="utf-8"))
+                if not isinstance(datos, Mapping):
+                    return False
+                datos = dict(datos)
+            else:
+                datos = {}
+            datos.update(valores)
+            ruta.parent.mkdir(parents=True, exist_ok=True)
+            temporal = ruta.with_name(f"{ruta.name}.tmp")
+            temporal.write_text(
+                json.dumps(datos, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporal, ruta)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return True
+
+
+def guardar_ruta_websearch(
+    path: Path | str, ruta: str, parametros: str
+) -> bool:
+    """Conserva la consulta de Web Search que el programa encontro.
+
+    Descubrirla cuesta leer la portada del modulo y probar varias rutas.
+    Guardarla evita repetir ese recorrido en cada comprobacion, y borrarla
+    del archivo basta para que se vuelva a descubrir.
+    """
+    limpia = str(ruta or "").strip()
+    forma = str(parametros or "").strip()
+    if not limpia or not forma:
+        return False
+    return _actualizar(
+        path, {"ruta_websearch": limpia, "parametros_websearch": forma}
+    )
+
+
 def guardar_paginas_por_batch(path: Path | str, cantidad: int) -> bool:
     """Conserva la ultima cantidad elegida sin perder otras opciones.
 
@@ -168,50 +237,27 @@ def guardar_paginas_por_batch(path: Path | str, cantidad: int) -> bool:
     porque la aplicacion completa debe poder moverse a otro Windows sin
     depender del registro ni de una ruta del perfil del usuario.
     """
-    ruta = Path(path)
     try:
-        with _CONFIG_WRITE_LOCK:
-            if ruta.is_file():
-                datos = json.loads(ruta.read_text(encoding="utf-8"))
-                if not isinstance(datos, Mapping):
-                    return False
-            else:
-                datos = {}
-            valor = int(cantidad)
-            if valor <= 0:
-                return False
-            datos["paginas_por_batch"] = valor
-            ruta.parent.mkdir(parents=True, exist_ok=True)
-            temporal = ruta.with_name(f"{ruta.name}.tmp")
-            temporal.write_text(
-                json.dumps(datos, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(temporal, ruta)
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        valor = int(cantidad)
+    except (TypeError, ValueError):
         return False
-    return True
+    if valor <= 0:
+        return False
+    return _actualizar(path, {"paginas_por_batch": valor})
+
+
+def guardar_preferencias(path: Path | str, **valores: bool) -> bool:
+    """Conserva casillas de la interfaz sin perder el resto del archivo.
+
+    Vale para «Completar batch» y para los pasos del proceso automatico:
+    todas son casillas, todas viven en el mismo JSON portable y escribir
+    varias a la vez evita releer el archivo una vez por cada una.
+    """
+    return _actualizar(
+        path, {clave: bool(valor) for clave, valor in valores.items()}
+    )
 
 
 def guardar_completar_batch(path: Path | str, marcado: bool) -> bool:
     """Conserva el último estado de «Completar batch» en el JSON portable."""
-    ruta = Path(path)
-    try:
-        with _CONFIG_WRITE_LOCK:
-            if ruta.is_file():
-                datos = json.loads(ruta.read_text(encoding="utf-8"))
-                if not isinstance(datos, Mapping):
-                    return False
-            else:
-                datos = {}
-            datos["completar_batch"] = bool(marcado)
-            ruta.parent.mkdir(parents=True, exist_ok=True)
-            temporal = ruta.with_name(f"{ruta.name}.tmp")
-            temporal.write_text(
-                json.dumps(datos, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(temporal, ruta)
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        return False
-    return True
+    return guardar_preferencias(path, completar_batch=marcado)

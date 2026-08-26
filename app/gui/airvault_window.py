@@ -18,7 +18,8 @@ El trabajo va en tres tiempos, separados porque duran cosas muy distintas:
 2. **Comprobar** asigna el ID apenas aparece y confirma si ya está entero.
 3. **Indexar** puede trabajar un batch listo mientras se siguen buscando los
    demás, pero siempre después de terminar todas las subidas. Se puede
-   desactivar en Automatización.
+   desactivar en «Automatización…», el menú que dice hasta dónde llega la
+   cadena y que es el mismo que el de la ventana principal.
 """
 
 from __future__ import annotations
@@ -57,8 +58,14 @@ from PySide6.QtWidgets import (
 from app.airvault.config import (
     AIRVAULT_FILENAME,
     AirVaultConfig,
-    guardar_completar_batch,
     guardar_paginas_por_batch,
+)
+from app.airvault.session import SesionCancelada
+from app.gui.automatizacion import (
+    COMPLETAR,
+    ESPERAR,
+    MenuAutomatizacion,
+    OpcionesAutomatizacion,
 )
 from app.gui.csv_utils import find_csv_files, find_run_dirs
 from app.gui.responsive import available_area, fit_to_screen
@@ -96,6 +103,12 @@ INTENTOS_INDEXADO = 3
 # Líneas que conserva la bitácora. Con la comprobación automática corriendo
 # toda una tarde, sin tope crecería sin fin.
 LIMITE_BITACORA = 300
+
+# Alto mínimo de la bitácora. Con 110 px fijos cabían tres líneas, y un
+# mensaje largo (el motivo por el que una carga no salió, las páginas que
+# faltan para completar un batch) había que leerlo a trozos moviendo la
+# barra. Ahora crece con la ventana y nunca baja de esto.
+ALTO_MINIMO_BITACORA = 160
 
 # El nombre distingue las divisiones y REVISAR, así que no puede quedar
 # reducido a unas pocas letras. A partir de este ancho se conserva espacio
@@ -215,6 +228,13 @@ def estado_de_entrega(
     return f"{archivos}, {reparto}", True
 
 
+TOOLTIP_ELIMINAR_REGISTRO = (
+    "Envía a la Papelera el estado local de AirVault de esta ejecución para "
+    "empezar nuevamente. No borra el CSV, los PDF exportados ni los batches "
+    "que ya existan en AirVault."
+)
+
+
 class TrabajoCancelado(BaseException):
     """Alguien pulsó Cancelar; el trabajo se deshace y se sale.
 
@@ -258,9 +278,19 @@ class TrabajoAirVaultWorker(QThread):
         self._parar = False
 
     def cancelar(self) -> None:
-        """Pide que pare, arrancado o no."""
+        """Pide que pare, arrancado o no.
+
+        La bandera sola no basta: el hilo la mira entre paso y paso, y entre
+        dos pasos puede haber una petición esperando hasta un minuto y hasta
+        tres intentos, o la ventana de acceso esperando cinco minutos. Por
+        eso se cancela también la sesión, que es quien está esperando de
+        verdad.
+        """
         self._parar = True
         self.requestInterruption()
+        sesion = self.estado.get("sesion")
+        if sesion is not None:
+            sesion.cancelar()
 
     def hay_que_parar(self) -> bool:
         return self._parar or self.isInterruptionRequested()
@@ -279,6 +309,11 @@ class TrabajoAirVaultWorker(QThread):
         try:
             etapas[self.modo]()
         except TrabajoCancelado:
+            self.cancelado.emit()
+        except SesionCancelada:
+            # La sesión se cortó porque alguien canceló: es lo mismo que
+            # llegar al siguiente paso con la bandera puesta, solo que sin
+            # esperar a que el servidor conteste.
             self.cancelado.emit()
         except Exception as exc:  # noqa: BLE001 - llega a la interfaz
             self.fallo.emit(str(exc))
@@ -325,6 +360,7 @@ class TrabajoAirVaultWorker(QThread):
         cliente = self.estado.get("cliente")
         if cliente is not None:
             self._detectar_pendientes()
+            self._preparar_buscador()
             return cliente
 
         def avisar_texto(texto: str) -> None:
@@ -345,10 +381,42 @@ class TrabajoAirVaultWorker(QThread):
         self.estado["cliente"] = cliente
         self.estado["sesion"] = sesion
         self._detectar_pendientes()
+        self._preparar_buscador()
         return cliente
 
+    def _preparar_buscador(self) -> None:
+        """Deja lista la consulta a Web Search de esta ejecución.
+
+        Es lo que ve un batch que ya se completó: completarlo lo saca de la
+        cola de Web Index, así que a partir de ese momento ninguna consulta
+        a la cola lo encuentra y nada impedía volver a subirlo. Se construye
+        una vez y lo comparten todas las cargas: descubrir la ruta cuesta
+        varias peticiones y no cambia entre batches.
+        """
+        from app.airvault.config import AIRVAULT_FILENAME
+        from app.airvault.flujo import buscador_de
+
+        if self.estado.get("buscador") is not None:
+            return
+        sesion = self.estado.get("sesion")
+        if sesion is None:
+            return
+        self.estado["buscador"] = buscador_de(
+            sesion,
+            self.estado["config"],
+            Path(self.estado["raiz"]) / AIRVAULT_FILENAME,
+        )
+
     def _detectar_pendientes(self) -> None:
-        """Agrega trabajos de otras ejecuciones, con los no subidos primero."""
+        """Agrega trabajos de otras ejecuciones, con los no subidos primero.
+
+        Solo cuando alguien lo pidió con «Subir a AirVault». Lo que arranca
+        solo (la cadena automática y el reloj de comprobación) se queda en
+        la ejecución elegida: nadie está delante, y mandar a AirVault los
+        batches de otro día sin pedirlo es como acaban subidos dos veces.
+        """
+        if not self.estado.get("recuperar_pendientes"):
+            return
         from app.airvault.flujo import (
             CARPETA_TRABAJOS,
             SIN_SUBIR,
@@ -478,6 +546,7 @@ class TrabajoAirVaultWorker(QThread):
                 reintentar_estancados=True,
                 en_la_ejecucion=trabajos,
                 forzados=estado.get("forzados") or (),
+                buscador=estado.get("buscador"),
             ) or []
             # La escritura puede correr mientras este hilo busca las partes
             # siguientes, pero subir_partes retiene los hallazgos hasta que
@@ -780,14 +849,28 @@ class AirVaultWindow(QDialog):
     """Ventana aparte que sube al Web Index una ejecución del historial."""
 
     abrir_corrida_paralela = Signal(str)
+    # Paso de la cadena y en qué quedó, para la línea de pasos de la
+    # ventana principal. Los cuatro últimos pasos del proceso automático
+    # ocurren aquí, así que sin esto aquella línea se quedaba en «Exportar»
+    # y no había forma de saber desde allí si la entrega llegó a subirse.
+    avance_automatico = Signal(str, str)
 
-    def __init__(self, raiz: Path) -> None:
+    def __init__(
+        self, raiz: Path, opciones: OpcionesAutomatizacion | None = None
+    ) -> None:
         # Aunque conserva QDialog por su comportamiento de cierre, se crea
         # como ventana nativa normal y sin dueño. En Windows, los diálogos
         # parentados no tienen entrada propia en la barra de tareas y su marco
         # puede quedar desincronizado del contenido al minimizar o restaurar.
         super().__init__(None, Qt.WindowType.Window)
         self._raiz = Path(raiz)
+        # Los pasos del proceso automático se eligen en la ventana principal
+        # y esta ventana los obedece. Compartir el objeto es lo que hace que
+        # «Completar batch» y la espera valgan lo mismo en los dos sitios;
+        # abierta por su cuenta (una prueba, un arranque suelto) se lee la
+        # misma memoria portable, así que tampoco cambia nada.
+        self._opciones = opciones or OpcionesAutomatizacion(self._raiz, self)
+        self._opciones.cambiado.connect(self._al_cambiar_automatizacion)
         self._worker: Optional[TrabajoAirVaultWorker] = None
         # Todo lo que el hilo necesita y devuelve: la conexión abierta, los
         # trabajos de cada parte, los planes ya calculados y el reporte.
@@ -820,12 +903,19 @@ class AirVaultWindow(QDialog):
         # Se van lanzando en orden segun el hilo queda libre.
         self._cola_de_acciones: list[tuple[str, list]] = []
         self._indexado_incompleto = False
+        # Solo «Subir a AirVault» recupera batches de ejecuciones
+        # anteriores, y solo para la acción que lanza. Ver `_subir_a_mano`.
+        self._recuperar_pendientes = False
         # Cerrar con trabajo en vuelo no bloquea: se pide la cancelación y
         # la ventana se va en cuanto el hilo suelta lo que tenía tomado.
         self._cerrar_al_terminar = False
         # Hilos que están soltando batches en AirVault, para que Qt no los
         # destruya a media petición.
         self._soltando: list[QThread] = []
+        # Ventanas de consulta abiertas desde aquí (la vista previa y las
+        # listas de bitácoras). No tienen dueño en Qt, así que esto es lo
+        # único que las mantiene vivas.
+        self._ventanas_de_consulta: list = []
 
         self.setWindowTitle("Indexar en AirVault")
         # Con botón de minimizar: escribir una ejecución entera tarda, y
@@ -833,7 +923,9 @@ class AirVaultWindow(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint, True)
         # Como el resto de las ventanas: el tamaño lo pone la pantalla, que
         # en un portátil bajo dejaría los botones fuera del borde.
-        densidad = fit_to_screen(self, 780, 720)
+        # El alto pedido deja sitio a la bitácora, que es lo que se lee
+        # mientras trabaja; lo que no quepa lo recorta la pantalla.
+        densidad = fit_to_screen(self, 780, 800)
         self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS + densidad.qss)
         self._build_ui()
 
@@ -851,12 +943,14 @@ class AirVaultWindow(QDialog):
 
         cuerpo.addWidget(self._historial(), 1)
         cuerpo.addLayout(self._campos())
-        cuerpo.addWidget(self._titulo("Batches en AirVault"))
+        cuerpo.addLayout(self._cabecera_de_lotes())
         cuerpo.addWidget(self._lotes(), 1)
         cuerpo.addLayout(self._fila_vigilancia())
-        cuerpo.addWidget(self._menu_automatizacion())
         cuerpo.addLayout(self._fila_avance())
-        cuerpo.addWidget(self._bitacora())
+        # La bitácora se queda con el alto que sobre: las dos tablas
+        # tienen tope y ella es la que necesita sitio para los mensajes
+        # largos.
+        cuerpo.addWidget(self._bitacora(), 2)
 
         self.resumen = QLabel(TEXTO_SIN_SUBIR)
         self.resumen.setWordWrap(True)
@@ -903,9 +997,51 @@ class AirVaultWindow(QDialog):
             2, QHeaderView.ResizeMode.ResizeToContents
         )
         tabla.itemSelectionChanged.connect(self._al_elegir_del_historial)
+        # Cada ejecución se puede reiniciar o quitar de en medio sin tocar a
+        # las demás, así que las dos acciones viven en su fila.
+        tabla.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        tabla.customContextMenuRequested.connect(self._menu_del_historial)
         self._ajustar_tabla(tabla)
         self.historial = tabla
         return tabla
+
+    def _menu_del_historial(self, punto) -> None:
+        """Lo que se puede hacer con la ejecución sobre la que se hizo clic.
+
+        Son dos cosas distintas y por eso salen separadas: olvidar lo que la
+        aplicación recuerda de esa ejecución en AirVault (para volver a
+        empezar con ella) y deshacerse de la ejecución entera, que es lo que
+        vacía la lista de lo que ya no hace falta. Ninguna de las dos toca
+        los batches que ya estén en AirVault.
+        """
+        fila = self.historial.rowAt(punto.y())
+        item = self.historial.item(fila, 0) if fila >= 0 else None
+        if item is None:
+            return
+        menu = self._acciones_del_historial(
+            Path(str(item.data(Qt.ItemDataRole.UserRole))), item.text()
+        )
+        menu.exec(self.historial.viewport().mapToGlobal(punto))
+
+    def _acciones_del_historial(self, csv: Path, nombre: str) -> QMenu:
+        """Lo que el menú ofrece para una ejecución de la lista."""
+        menu = QMenu(self)
+        registro = menu.addAction("Eliminar el registro de AirVault")
+        registro.setToolTip(TOOLTIP_ELIMINAR_REGISTRO)
+        registro.triggered.connect(lambda: self._eliminar_registro(csv))
+        menu.addSeparator()
+        ejecucion = menu.addAction("Eliminar la ejecución…")
+        ejecucion.setToolTip(
+            "Manda a la Papelera la carpeta de esta ejecución en output/, "
+            "con su CSV, su JSON y sus PDF de entrega. Los batches que ya "
+            "estén en AirVault se quedan como están."
+        )
+        ejecucion.triggered.connect(
+            lambda: self._eliminar_ejecucion(csv, nombre)
+        )
+        return menu
 
     def _campos(self) -> QGridLayout:
         """Los datos de la carga, en rejilla para que se alineen.
@@ -941,13 +1077,9 @@ class AirVaultWindow(QDialog):
 
         self.boton_eliminar_registro = QPushButton("Eliminar registro")
         self.boton_eliminar_registro.setEnabled(False)
-        self.boton_eliminar_registro.setToolTip(
-            "Envía a la Papelera el estado local de AirVault de esta "
-            "ejecución para empezar nuevamente. No borra el CSV, los PDF "
-            "exportados ni los batches que ya existan en AirVault."
-        )
+        self.boton_eliminar_registro.setToolTip(TOOLTIP_ELIMINAR_REGISTRO)
         self.boton_eliminar_registro.clicked.connect(
-            self._eliminar_registro
+            lambda: self._eliminar_registro()
         )
         grid.addWidget(self.boton_eliminar_registro, 0, 3)
 
@@ -1009,6 +1141,72 @@ class AirVaultWindow(QDialog):
         )
         grid.addWidget(self.cookie_edit, 3, 1, 1, 2)
         return grid
+
+    def _cabecera_de_lotes(self) -> QHBoxLayout:
+        """El título de la tabla de batches, con la vista previa al lado."""
+        fila = QHBoxLayout()
+        fila.addWidget(self._titulo("Batches en AirVault"))
+        fila.addStretch()
+        self.boton_previa = QPushButton("Vista previa…")
+        self.boton_previa.setEnabled(False)
+        self.boton_previa.setToolTip(
+            "Enseña en cuántos batches quedaría repartida la ejecución con "
+            "el máximo de páginas elegido, cuáles faltan por subir y qué "
+            "bitácoras lleva cada uno. Mirarlo no prepara ni sube nada."
+        )
+        self.boton_previa.clicked.connect(self._vista_previa)
+        fila.addWidget(self.boton_previa)
+        return fila
+
+    def _vista_previa(self) -> None:
+        """Calcula el reparto sin tocar nada y lo enseña.
+
+        Hasta que se sube no hay ningún batch que mirar, y el reparto solo
+        se sabía después de haberlo hecho. Esto responde antes la misma
+        pregunta: con qué nombre y con cuántas páginas saldría cada batch,
+        y qué bitácoras van dentro.
+        """
+        from app.airvault.flujo import (
+            ErrorDeCorrida,
+            carpeta_de_corrida,
+            carpeta_de_trabajo,
+            previsualizar_reparto,
+        )
+        from app.airvault.mapping import FLOTA_CACHE_FILENAME, ResolutorFlota
+        from app.gui.airvault_previa import VistaPreviaBatches
+
+        csv = self.corrida_edit.text().strip()
+        if not csv:
+            return
+        carpeta = self._raiz / carpeta_de_trabajo(
+            carpeta_de_corrida(csv).name
+        )
+        try:
+            previstos = previsualizar_reparto(
+                self._config_actual(),
+                carpeta,
+                Path(csv),
+                self.lote_edit.text().strip(),
+                resolutor=ResolutorFlota.load(
+                    self._raiz / FLOTA_CACHE_FILENAME
+                ),
+                paginas_por_batch=self.limite_batch_spin.value(),
+                compresion=self.compresion_check.isChecked(),
+            )
+        except (ErrorDeCorrida, OSError, ValueError) as error:
+            QMessageBox.warning(self, "Vista previa", str(error))
+            return
+        if not previstos:
+            QMessageBox.information(
+                self,
+                "Vista previa",
+                "Esta ejecución no deja ningún batch: todas sus bitácoras "
+                "viajaron ya a AirVault.",
+            )
+            return
+        self._abrir_ventana(
+            VistaPreviaBatches(previstos, csv=csv, parent=self)
+        )
 
     def _lotes(self) -> QTableWidget:
         """En qué va cada batch de esta ejecución dentro de AirVault.
@@ -1157,6 +1355,16 @@ class AirVaultWindow(QDialog):
         )
 
         menu.addSeparator()
+        sospechosos = [
+            parte for parte in partes
+            if parte.trabajo.manifiesto.posible_duplicado
+        ]
+        self._accion(
+            menu, "No es duplicado: volver a permitirlo", sospechosos,
+            lambda: self._quitar_sospecha(sospechosos),
+        )
+
+        menu.addSeparator()
         if reanudables and not cancelables:
             self._accion(
                 menu, "Reanudar en la cola", reanudables,
@@ -1167,6 +1375,19 @@ class AirVaultWindow(QDialog):
                 menu, "Cancelar en la cola", cancelables,
                 lambda: self._cancelar_estas(cancelables, True),
             )
+
+        menu.addSeparator()
+        # Mirar lo que lleva dentro es de un batch a la vez: son listas
+        # distintas y no hay una sola que enseñar por varios.
+        con_bitacoras = (
+            list(partes)
+            if len(partes) == 1 and partes[0].trabajo.manifiesto.registros
+            else []
+        )
+        self._accion(
+            menu, "Ver las bitácoras del batch", con_bitacoras,
+            lambda: self._ver_bitacoras(con_bitacoras[0]),
+        )
 
         menu.addSeparator()
         con_nombre = [parte for parte in partes if parte.nombre]
@@ -1194,6 +1415,72 @@ class AirVaultWindow(QDialog):
         accion.setEnabled(bool(sobre))
         accion.triggered.connect(hacer)
         return accion
+
+    def _quitar_sospecha(self, partes) -> None:
+        """Deja subir un batch que el programa dio por posible duplicado.
+
+        La sospecha se levanta con pruebas de que esas bitácoras están en
+        AirVault, no de que las subiera este batch: pueden haber llegado
+        por otro batch, por otra persona o por una carga anterior de la
+        misma ejecución. Quién lo decide es quien mira AirVault, así que
+        aquí solo se quita la marca; lo que el programa no hace es seguir
+        solo mientras la duda esté puesta.
+        """
+        from app.airvault.flujo import estado_local, limpiar_posible_duplicado
+
+        limpiadas = set()
+        for parte in partes:
+            limpiar_posible_duplicado(parte.trabajo)
+            limpiadas.add(str(parte.trabajo.carpeta))
+            self._anotar(
+                f"«{parte.nombre}» deja de estar marcado como posible "
+                "duplicado; vuelve a poder subirse"
+            )
+        # La fila la pinta el estado que se calculó antes de quitar la
+        # marca, así que sin recalcularlo seguiría diciendo «Posible
+        # duplicado» hasta la siguiente comprobación.
+        self._estados = [
+            estado_local(otra.trabajo)
+            if str(otra.trabajo.carpeta) in limpiadas
+            else otra
+            for otra in self._estados
+        ]
+        self._pintar_lotes()
+
+    def _ver_bitacoras(self, parte) -> None:
+        """Abre la lista de las bitácoras que lleva dentro un batch."""
+        from app.airvault.flujo import AUTOCOMPLETADO, COMPLETADO
+        from app.gui.airvault_previa import BitacorasDelBatch
+
+        manifiesto = parte.trabajo.manifiesto
+        self._abrir_ventana(
+            BitacorasDelBatch(
+                manifiesto.nombre_batch,
+                manifiesto.registros,
+                csv=manifiesto.csv_origen or self.corrida_edit.text().strip(),
+                completado=parte.estado in (COMPLETADO, AUTOCOMPLETADO),
+                parent=self,
+            )
+        )
+
+    def _abrir_ventana(self, ventana) -> None:
+        """Muestra una ventana de consulta y la conserva viva.
+
+        La vista previa y la lista de bitácoras son ventanas aparte, como el
+        visor de CSV: sin dueño a nivel de Qt (para que Windows les dé su
+        entrada en la barra de tareas) y sin bloquear esta, que puede estar
+        subiendo mientras se las mira. Como nadie más las sostiene, la
+        referencia vive aquí hasta que se cierran.
+        """
+        self._ventanas_de_consulta.append(ventana)
+        ventana.destroyed.connect(
+            lambda *_a, v=ventana: (
+                self._ventanas_de_consulta.remove(v)
+                if v in self._ventanas_de_consulta
+                else None
+            )
+        )
+        ventana.mostrar()
 
     def _copiar_al_portapapeles(self, texto: str) -> None:
         if not texto:
@@ -1233,9 +1520,7 @@ class AirVaultWindow(QDialog):
             return False
         if modo in ("subir_pendientes", "resubir"):
             estado["pendientes_subida"] = list(trabajos)
-            estado["indexar_al_encontrar"] = (
-                self.auto_indexar_check.isChecked()
-            )
+            estado["indexar_al_encontrar"] = self._opciones.indexar
             if modo == "resubir":
                 # La orden dada a mano sobre filas concretas. El otro modo
                 # es la reanudación automática, que sí comprueba antes.
@@ -1448,14 +1733,19 @@ class AirVaultWindow(QDialog):
         """Cada cuánto se pregunta automáticamente a AirVault."""
         fila = QHBoxLayout()
         self.auto_check = QCheckBox("Comprobar cada")
-        self.auto_check.setChecked(True)
+        # Es la cara visible de «Esperar a que AirVault los deje listos»:
+        # el mismo valor que se elige en la ventana principal, no una
+        # segunda casilla que decide lo mismo.
+        self.auto_check.setChecked(self._opciones.esperar)
         self.auto_check.setToolTip(
             "Le pregunta a AirVault cada tantos minutos si ya terminó de "
             "procesar lo subido, y deja de preguntar cuando no queda nada "
             "por esperar. Se puede apagar y usar «Revisar en AirVault»."
         )
         self.auto_check.toggled.connect(self._ajustar_vigilancia)
-        self.auto_check.toggled.connect(self._sincronizar_espera_visible)
+        self.auto_check.toggled.connect(
+            lambda marcado: self._opciones.fijar(ESPERAR, marcado)
+        )
         fila.addWidget(self.auto_check)
 
         self.minutos_spin = QSpinBox()
@@ -1470,54 +1760,36 @@ class AirVaultWindow(QDialog):
         self.minutos_control = SpinBoxWithButtons(self.minutos_spin)
         fila.addWidget(self.minutos_control)
 
+        # Los mismos pasos que en la ventana principal y el mismo menú: no
+        # es una copia sino el mismo ajuste visto desde aquí, que es donde
+        # se está mirando mientras AirVault trabaja. Empotrado ocupaba media
+        # ventana; en un menú no le quita sitio a la bitácora.
         self.boton_automatizacion = QPushButton("Automatización…")
-        self.boton_automatizacion.setCheckable(True)
         self.boton_automatizacion.setToolTip(
-            "Muestra los pasos que se pueden encadenar automáticamente y "
-            "las acciones para continuar o reiniciar un proceso incompleto."
+            "Hasta dónde continúa el trabajo solo: subir, esperar a que "
+            "AirVault los deje listos, indexar y completar el batch. Es la "
+            "misma elección que en la ventana principal."
+        )
+        self.menu_automatizacion = MenuAutomatizacion(self._opciones, self)
+        self.boton_automatizacion.clicked.connect(
+            lambda: self.menu_automatizacion.abrir_sobre(
+                self.boton_automatizacion
+            )
         )
         fila.addWidget(self.boton_automatizacion)
-        fila.addStretch()
-        return fila
 
-    def _menu_automatizacion(self) -> QGroupBox:
-        """Opciones avanzadas, escondidas hasta que se pidan."""
-        panel = QGroupBox("Hasta dónde continuar automáticamente")
-        contenido = QVBoxLayout(panel)
-
-        self.auto_subir_check = QCheckBox("Subir todos los batches")
-        self.auto_subir_check.setChecked(True)
-        self.auto_subir_check.setEnabled(False)
-        self.auto_esperar_check = QCheckBox(
-            "Esperar hasta que AirVault los deje listos"
-        )
-        self.auto_esperar_check.setChecked(True)
-        self.auto_indexar_check = QCheckBox("Indexar páginas")
-        self.auto_indexar_check.setChecked(True)
-        # Cerrar el batch se elige en «Completar batch», en el menú
-        # principal, y esa casilla se recuerda entre ejecuciones. Aquí había
-        # una segunda que decidía lo mismo y ademas forzaba a la otra: dos
-        # controles para un solo ajuste, y el que mandaba dependia de cual
-        # se hubiera tocado ultimo.
-        for control in (
-            self.auto_esperar_check,
-            self.auto_indexar_check,
-        ):
-            control.toggled.connect(self._ajustar_pasos_automaticos)
-        for control in (
-            self.auto_subir_check, self.auto_esperar_check,
-            self.auto_indexar_check,
-        ):
-            contenido.addWidget(control)
-
-        acciones = QHBoxLayout()
+        # Continuar y reiniciar vivían escondidos detrás de «Automatización…»,
+        # junto a unas casillas que ahora son un menú. Son acciones de esta
+        # ventana, no ajustes, así que se quedan a la vista: son lo que se
+        # pulsa cuando un batch quedó a medias.
         self.boton_continuar = QPushButton("Continuar pendiente")
         self.boton_continuar.setToolTip(
             "Consulta AirVault y continúa desde el primer paso que no haya "
             "terminado, sin repetir páginas que ya estén en verde."
         )
         self.boton_continuar.clicked.connect(self._continuar_pendiente)
-        acciones.addWidget(self.boton_continuar)
+        fila.addWidget(self.boton_continuar)
+
         self.boton_reiniciar = QPushButton("Reiniciar paso incompleto")
         self.boton_reiniciar.setToolTip(
             "Reinicia el estado local del batch seleccionado; si no hay una "
@@ -1525,28 +1797,24 @@ class AirVaultWindow(QDialog):
             "nada en AirVault."
         )
         self.boton_reiniciar.clicked.connect(self._reiniciar_incompleto)
-        acciones.addWidget(self.boton_reiniciar)
-        acciones.addStretch()
-        contenido.addLayout(acciones)
+        fila.addWidget(self.boton_reiniciar)
+        fila.addStretch()
+        return fila
 
-        panel.setVisible(False)
-        self.boton_automatizacion.toggled.connect(panel.setVisible)
-        self.menu_automatizacion = panel
-        self._ajustar_pasos_automaticos()
-        return panel
+    def _al_cambiar_automatizacion(self, paso: str, marcado: bool) -> None:
+        """Refleja lo que se eligió en la ventana principal.
 
-    def _ajustar_pasos_automaticos(self) -> None:
-        """Mantiene la cadena secuencial y apaga dependencias imposibles."""
-        espera = self.auto_esperar_check.isChecked()
-        self.auto_indexar_check.setEnabled(espera)
-        if not espera:
-            self.auto_indexar_check.setChecked(False)
-        self.auto_check.setChecked(espera)
-
-    def _sincronizar_espera_visible(self, marcada: bool) -> None:
-        """La opción visible y el paso oculto representan la misma espera."""
-        if hasattr(self, "auto_esperar_check"):
-            self.auto_esperar_check.setChecked(marcada)
+        Las dos casillas que esta ventana sigue enseñando (la espera y
+        «Completar batch») son el mismo ajuste que el de allá, así que se
+        mueven solas cuando se toca el otro lado.
+        """
+        casilla = {
+            ESPERAR: getattr(self, "auto_check", None),
+            COMPLETAR: getattr(self, "completar_check", None),
+        }.get(paso)
+        if casilla is None or casilla.isChecked() == marcado:
+            return
+        casilla.setChecked(marcado)
 
     def _fila_avance(self) -> QHBoxLayout:
         """Estado, reloj y barra propios: la ventana no cuelga de la principal."""
@@ -1578,7 +1846,9 @@ class AirVaultWindow(QDialog):
         """
         lista = CopyableListWidget()
         lista.setToolTip("Lo que el indexado va haciendo, con la hora de cada paso")
-        lista.setMaximumHeight(110)
+        # Sin tope y con suelo: un mensaje largo se envuelve en varias
+        # líneas y con 110 px fijos solo se veía el principio.
+        lista.setMinimumHeight(ALTO_MINIMO_BITACORA)
         lista.setWordWrap(True)
         lista.setTextElideMode(Qt.TextElideMode.ElideNone)
         lista.setResizeMode(QListView.ResizeMode.Adjust)
@@ -1595,8 +1865,7 @@ class AirVaultWindow(QDialog):
         fila = QHBoxLayout()
 
         self.completar_check = QCheckBox("Completar batch")
-        if self._config.completar_batch is not None:
-            self.completar_check.setChecked(self._config.completar_batch)
+        self.completar_check.setChecked(self._opciones.completar)
         self.completar_check.setToolTip(
             "Al terminar de escribir, da el batch por terminado en AirVault: "
             "lo indexa y lo manda a Web Search. AirVault solo lo acepta con "
@@ -1604,7 +1873,9 @@ class AirVaultWindow(QDialog):
             "obligatorio, el batch se queda en la cola y se dice cuáles son. "
             "Sin marcar, el batch queda ahí para revisarlo."
         )
-        self.completar_check.toggled.connect(self._guardar_completar_batch)
+        self.completar_check.toggled.connect(
+            lambda marcado: self._opciones.fijar(COMPLETAR, marcado)
+        )
         fila.addWidget(self.completar_check)
         fila.addStretch()
 
@@ -1621,7 +1892,7 @@ class AirVaultWindow(QDialog):
             "Web Index, al pulsarlo de nuevo comprueba la cola y vuelve a "
             "enviar solamente ese batch."
         )
-        self.boton_subir.clicked.connect(self._subir)
+        self.boton_subir.clicked.connect(self._subir_a_mano)
 
         self.boton_revisar = QPushButton("Revisar en AirVault")
         self.boton_revisar.setEnabled(False)
@@ -1866,6 +2137,40 @@ class AirVaultWindow(QDialog):
         carpeta = self._raiz / carpeta_de_trabajo(carpeta_de_corrida(csv).name)
         self._cargar_trabajos(carpeta, ruta)
 
+    def corrida(self) -> Optional[Path]:
+        """La ejecución a la que apunta la ventana, si ya hay una."""
+        texto = self.corrida_edit.text().strip()
+        return Path(texto) if texto else None
+
+    def subir_automaticamente(self) -> None:
+        """Arranca la subida sin que nadie pulse «Subir a AirVault».
+
+        Es el único punto por el que el proceso automático de la ventana
+        principal entra aquí. De este paso en adelante manda la cadena de
+        esta ventana, que ya sabe hasta dónde continuar y lo cuenta en su
+        bitácora.
+        """
+        from app.gui.automatizacion import CORTADO, EN_CURSO, SUBIR
+
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if self.hilo() is not None:
+            self._anotar(
+                "Hay trabajo en curso: la subida automática no se lanza"
+            )
+            self.avance_automatico.emit(SUBIR, CORTADO)
+            return
+        if not self._listo_para_subir:
+            # ``_sincronizar_entrega`` ya dejó escrito el motivo en el
+            # resumen; repetirlo en la bitácora lo deja con hora.
+            self._anotar(f"No se puede subir todavía: {self.resumen.text()}")
+            self.avance_automatico.emit(SUBIR, CORTADO)
+            return
+        self.avance_automatico.emit(SUBIR, EN_CURSO)
+        self._anotar("Subida pedida por el proceso automático")
+        self._subir()
+
     def _cargar_trabajos(self, carpeta: Path, csv: Path) -> None:
         """Retoma los trabajos que ya existan para esta ejecución."""
         from app.airvault.flujo import (
@@ -1927,6 +2232,7 @@ class AirVaultWindow(QDialog):
         self._estados = [estado_local(t) for t in self._trabajos]
         self._pintar_lotes()
         self.boton_indexar.setEnabled(bool(self.corrida_edit.text().strip()))
+        self.boton_previa.setEnabled(bool(self.corrida_edit.text().strip()))
         self.boton_revisar.setEnabled(bool(self._trabajos))
         self.boton_eliminar_registro.setEnabled(
             bool(self._rutas_del_registro())
@@ -1934,15 +2240,22 @@ class AirVaultWindow(QDialog):
         self.boton_reiniciar.setEnabled(bool(self._trabajos))
         self._ajustar_vigilancia()
 
-    def _carpeta_del_registro(self) -> Optional[Path]:
-        """Carpeta local exacta de la ejecución elegida, si es segura."""
+    def _carpeta_del_registro(
+        self, corrida: Path | str = ""
+    ) -> Optional[Path]:
+        """Carpeta local exacta de una ejecución, si es segura.
+
+        Sin ``corrida`` vale la que la ventana tiene abierta, que es lo que
+        pide el botón; el menú del historial nombra la fila sobre la que se
+        hizo clic, que puede no ser esa.
+        """
         from app.airvault.flujo import (
             CARPETA_TRABAJOS,
             carpeta_de_corrida,
             carpeta_de_trabajo,
         )
 
-        csv = self.corrida_edit.text().strip()
+        csv = str(corrida or self.corrida_edit.text()).strip()
         if not csv:
             return None
         raiz_trabajos = (self._raiz / CARPETA_TRABAJOS).resolve()
@@ -1957,8 +2270,8 @@ class AirVaultWindow(QDialog):
             return None
         return carpeta
 
-    def _rutas_del_registro(self) -> list[Path]:
-        """Memoria local de la ejecución elegida, nunca de otra.
+    def _rutas_del_registro(self, corrida: Path | str = "") -> list[Path]:
+        """Memoria local de la ejecución indicada, nunca de otra.
 
         Son los manifiestos vivos, el registro de batches de la entrega y
         los manifiestos que se apartaron al rehacer un reparto. Es una sola
@@ -1968,7 +2281,7 @@ class AirVaultWindow(QDialog):
         from app.airvault.manifest import MANIFIESTO_FILENAME
         from app.airvault.registro import rutas_del_registro
 
-        carpeta = self._carpeta_del_registro()
+        carpeta = self._carpeta_del_registro(corrida)
         if carpeta is None:
             return []
         rutas = {
@@ -1981,9 +2294,18 @@ class AirVaultWindow(QDialog):
         )
         return sorted(rutas)
 
-    def _eliminar_registro(self) -> None:
-        """Reinicia la ejecución borrando solo su memoria local de AirVault."""
-        rutas = self._rutas_del_registro()
+    def _eliminar_registro(self, corrida: Path | str = "") -> None:
+        """Reinicia una ejecución borrando solo su memoria local de AirVault.
+
+        Sin ``corrida`` es la ejecución abierta, que es lo que pulsa el
+        botón; el menú del historial nombra la fila elegida, que puede ser
+        cualquier otra de la lista.
+        """
+        csv = Path(str(corrida or self.corrida_edit.text()).strip())
+        if not str(csv).strip():
+            return
+        abierta = self._es_la_ejecucion_abierta(csv)
+        rutas = self._rutas_del_registro(csv)
         if not rutas:
             QMessageBox.information(
                 self,
@@ -1997,7 +2319,7 @@ class AirVaultWindow(QDialog):
         respuesta = QMessageBox.warning(
             self,
             "Eliminar registro de AirVault",
-            "Se enviará a la Papelera el registro local de esta ejecución "
+            f"Se enviará a la Papelera el registro local de «{csv.stem}» "
             f"({cuenta}).\n\n"
             "No se borrarán el CSV, los PDF ni los batches existentes en "
             "AirVault. Al volver a subir, se reconstruirá el proceso y se "
@@ -2008,15 +2330,14 @@ class AirVaultWindow(QDialog):
         if respuesta != QMessageBox.StandardButton.Yes:
             return
 
-        carpeta = self._carpeta_del_registro()
+        carpeta = self._carpeta_del_registro(csv)
         if carpeta is None:
             return
         movidos, fallidos = send_to_trash(rutas)
-        if movidos:
+        if movidos and abierta:
             self._parar_vigilancia()
             self._indexado_incompleto = False
             self.boton_reporte.setEnabled(False)
-            csv = Path(self.corrida_edit.text())
             self._cargar_trabajos(carpeta, csv)
             self.estado_label.setText("Registro local eliminado")
             self.resumen.setText(
@@ -2024,7 +2345,10 @@ class AirVaultWindow(QDialog):
                 "puede iniciarse nuevamente; los batches remotos no se "
                 "modificaron."
             )
-            self._anotar("Registro local de AirVault eliminado")
+        if movidos:
+            self._anotar(
+                f"Registro local de AirVault eliminado: {csv.stem}"
+            )
 
         if fallidos:
             detalle = "\n".join(
@@ -2036,6 +2360,108 @@ class AirVaultWindow(QDialog):
                 f"Se eliminaron {len(movidos)} de {len(rutas)} registros.\n\n"
                 "No se pudieron eliminar:\n" + detalle,
             )
+
+    def _es_la_ejecucion_abierta(self, csv: Path | str) -> bool:
+        """Si esa ejecución es la que la ventana tiene cargada ahora."""
+        abierta = self.corrida_edit.text().strip()
+        if not abierta:
+            return False
+        return str(Path(csv)).casefold() == str(Path(abierta)).casefold()
+
+    def _carpeta_de_la_ejecucion(self, csv: Path | str) -> Optional[Path]:
+        """Carpeta de output de esa ejecución, si está donde debe estar.
+
+        Se exige que cuelgue de ``output/`` y que no sea la propia carpeta:
+        lo que se va a la Papelera es una ejecución concreta, y un CSV
+        elegido a mano con «Otra ejecución…» puede vivir en cualquier sitio.
+        """
+        from app.airvault.flujo import carpeta_de_corrida
+
+        raiz = (self._raiz / "output").resolve()
+        try:
+            carpeta = carpeta_de_corrida(Path(csv)).resolve()
+        except OSError:
+            return None
+        if carpeta == raiz or not carpeta.is_relative_to(raiz):
+            return None
+        return carpeta
+
+    def _eliminar_ejecucion(self, csv: Path | str, nombre: str) -> None:
+        """Manda a la Papelera la ejecución entera, con su registro.
+
+        Es lo que vacía el historial de lo que ya no hace falta. Va a la
+        Papelera y no al vacío porque una ejecución son horas de proceso, y
+        equivocarse de fila tiene que poder deshacerse. Lo que ya esté en
+        AirVault no se toca: eso no vive aquí.
+        """
+        csv = Path(csv)
+        carpeta = self._carpeta_de_la_ejecucion(csv)
+        if carpeta is None:
+            QMessageBox.information(
+                self,
+                "Eliminar la ejecución",
+                "Esta ejecución no está en la carpeta output/ del programa, "
+                "así que no se elimina desde aquí.",
+            )
+            return
+        if self._es_la_ejecucion_abierta(csv) and self.hilo() is not None:
+            QMessageBox.information(
+                self,
+                "Eliminar la ejecución",
+                "Esta ejecución se está subiendo o indexando ahora mismo. "
+                "Cancele el trabajo antes de eliminarla.",
+            )
+            return
+        respuesta = QMessageBox.warning(
+            self,
+            "Eliminar la ejecución",
+            f"Se enviará a la Papelera la ejecución «{nombre}» entera: su "
+            "CSV, su JSON, sus estadísticas y los PDF de entrega, junto con "
+            "el registro local de AirVault.\n\n"
+            "Los batches que ya estén en AirVault no se modifican.\n\n"
+            "¿Desea continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if respuesta != QMessageBox.StandardButton.Yes:
+            return
+
+        # Primero la memoria de AirVault y después la ejecución: al revés,
+        # un fallo al mover la carpeta dejaría un registro que habla de una
+        # ejecución que ya no está.
+        registro = self._carpeta_del_registro(csv)
+        objetivos = [carpeta]
+        if registro is not None and registro.is_dir():
+            objetivos.insert(0, registro)
+        movidos, fallidos = send_to_trash(objetivos)
+        if fallidos:
+            detalle = "\n".join(
+                f"- {ruta.name}: {error}" for ruta, error in fallidos
+            )
+            QMessageBox.warning(
+                self,
+                "No se pudo eliminar la ejecución",
+                "No se pudieron enviar a la Papelera:\n" + detalle,
+            )
+        if carpeta not in movidos:
+            return
+
+        self._anotar(f"Ejecución eliminada: {nombre}")
+        if self._es_la_ejecucion_abierta(csv):
+            # La ventana se queda apuntando a una carpeta que ya no existe:
+            # se suelta lo que hubiera tomado y se parte de cero.
+            self._soltar_lotes()
+            self._parar_vigilancia()
+            self.corrida_edit.clear()
+            self.lote_edit.clear()
+            self._trabajos = []
+            self._estados = []
+            self._pintar_lotes()
+            self.boton_subir.setEnabled(False)
+            self.boton_indexar.setEnabled(False)
+            self.boton_reporte.setEnabled(False)
+            self.boton_previa.setEnabled(False)
+        self._refrescar_historial()
 
     def _sincronizar_entrega(self, csv: Path) -> None:
         """Dice si la ejecución elegida se puede subir, antes de intentarlo."""
@@ -2071,7 +2497,8 @@ class AirVaultWindow(QDialog):
     def _pintar_lotes(self) -> None:
         """Vuelca en la tabla en qué va cada batch."""
         from app.airvault.flujo import (
-            AUTOCOMPLETADO, CANCELADO, COMPLETADO, INDEXADO, SIN_SUBIR,
+            AUTOCOMPLETADO, CANCELADO, COMPLETADO, INDEXADO,
+            POSIBLE_DUPLICADO, SIN_SUBIR,
         )
 
         tabla = self.lotes
@@ -2101,10 +2528,13 @@ class AirVaultWindow(QDialog):
                     )
                 if ya_indexado:
                     item.setForeground(QColor(COLOR_INDEXADO))
-                elif parte.estado in (SIN_SUBIR, CANCELADO):
+                elif parte.estado in (
+                    SIN_SUBIR, CANCELADO, POSIBLE_DUPLICADO
+                ):
                     # Gris es lo que la cola no va a mover por su cuenta:
-                    # el archivo que Quick Upload aun no acepto y el batch
-                    # que alguien saco de la cola. Desde que se sube queda
+                    # el archivo que Quick Upload aun no acepto, el batch
+                    # que alguien sacó de la cola y el que se paró por
+                    # parecerse a algo ya subido. Desde que se sube queda
                     # en blanco, incluso mientras AirVault lo procesa.
                     item.setForeground(Qt.GlobalColor.gray)
                 tabla.setItem(fila, columna, item)
@@ -2153,7 +2583,7 @@ class AirVaultWindow(QDialog):
         """
         from app.airvault.flujo import reenvio_pendiente
 
-        if self._indexado_incompleto and self.auto_indexar_check.isChecked():
+        if self._indexado_incompleto and self._opciones.indexar:
             return True
         ejecucion = self._ejecucion()
         perdidas = self._subidas_perdidas()
@@ -2223,6 +2653,7 @@ class AirVaultWindow(QDialog):
 
     def _aviso_para_volver_a_subir(self) -> str:
         from app.airvault.flujo import (
+            MAXIMO_REENVIOS,
             busqueda_amplia_sin_hallar,
             espera_de_reenvio,
             subida_rebasada,
@@ -2271,6 +2702,22 @@ class AirVaultWindow(QDialog):
                 "probable que la carga no vaya a aparecer."
             )
         cabeza = f" AirVault no publicó en Web Index: {nombres}. {razon}"
+        agotadas = [
+            parte for parte in perdidas
+            if int(parte.trabajo.manifiesto.reenvios or 0) >= MAXIMO_REENVIOS
+        ]
+        if len(agotadas) == len(perdidas):
+            # Con el tope agotado la decisión pasa a quien mira AirVault. El
+            # programa no puede distinguir «la carga se perdió» de «AirVault
+            # va lento», y por ese margen es por donde aparecen dos copias
+            # del mismo batch cuando la cola acaba publicándolas todas.
+            return (
+                f"{cabeza} Ya se reenviaron {MAXIMO_REENVIOS} veces sin que "
+                "AirVault los publique, así que no se vuelven a mandar solos: "
+                "insistir es como acaban varias copias del mismo batch en la "
+                "cola. Mírelos en Web Index y, si de verdad no están, clic "
+                "derecho sobre su fila y «Subir a AirVault ahora»."
+            )
         if self.auto_check.isChecked():
             return (
                 f"{cabeza} Se comprueba la cola una vez más y se vuelve "
@@ -2333,15 +2780,6 @@ class AirVaultWindow(QDialog):
         # subir. Se rehace la lista con el número nuevo.
         self._refrescar_historial()
 
-    def _guardar_completar_batch(self, marcado: bool) -> None:
-        """Recuerda el check tal como quedó, sin reponer un valor fijo."""
-        if guardar_completar_batch(
-            self._raiz / AIRVAULT_FILENAME, marcado
-        ):
-            self._config = self._config.with_overrides(
-                completar_batch=bool(marcado)
-            )
-
     def _base_del_estado(self) -> Optional[dict]:
         """Los datos comunes del trabajo, o ``None`` si falta algo."""
         from app.airvault.flujo import carpeta_de_corrida, carpeta_de_trabajo
@@ -2365,11 +2803,30 @@ class AirVaultWindow(QDialog):
             "cookie": self.cookie_edit.text(),
             "paginas_por_batch": self.limite_batch_spin.value(),
             "compresion": self.compresion_check.isChecked(),
-            "indexar_al_encontrar": self.auto_indexar_check.isChecked(),
+            "indexar_al_encontrar": self._opciones.indexar,
             "completar": self.completar_check.isChecked(),
+            # Solo lo pone «Subir a AirVault», y para una sola acción. Todo
+            # lo que corre solo (la cadena automática, el reloj de
+            # comprobación, la reanudación) se queda en la ejecución que
+            # está elegida y no toca las de otros días.
+            "recuperar_pendientes": self._recuperar_pendientes,
         })
+        self._recuperar_pendientes = False
         self._estado.setdefault("trabajos", self._trabajos)
         return self._estado
+
+    def _subir_a_mano(self) -> None:
+        """Lo que hace el botón, que es más que lo que hace la cadena.
+
+        Pulsarlo significa «ponte al día con lo que haya pendiente», así
+        que además de esta ejecución retoma los batches que quedaron a
+        medias en ejecuciones anteriores. La cadena automática no hace eso:
+        lo que arranca solo se ciñe a la ejecución elegida, porque nadie
+        está mirando y mandar a AirVault batches de otro día sin pedirlo es
+        justo como se acaban subiendo dos veces.
+        """
+        self._recuperar_pendientes = True
+        self._subir()
 
     def _subir(self) -> None:
         estado = self._base_del_estado()
@@ -2421,7 +2878,7 @@ class AirVaultWindow(QDialog):
         if estado is None:
             return
         if not self._trabajos:
-            self._indexar_al_terminar = self.auto_indexar_check.isChecked()
+            self._indexar_al_terminar = self._opciones.indexar
             self._comprobar()
             return
         pendientes_subida = [
@@ -2492,6 +2949,12 @@ class AirVaultWindow(QDialog):
             # esto, una orden expresa dejaría a la reanudación automática
             # subiendo sin comprobar nada.
             estado["forzados"] = []
+        sesion = estado.get("sesion")
+        if sesion is not None and sesion.cancelada:
+            # La sesión quedó cortada por la cancelación anterior. Lo que se
+            # lanza ahora es una orden nueva, así que vuelve a valer; sin
+            # esto, la primera petición se negaría sola.
+            sesion.reanudar()
         self._habilitar(False)
         worker = TrabajoAirVaultWorker(modo, estado, self)
         worker.paso.connect(self._mostrar_paso)
@@ -2507,6 +2970,9 @@ class AirVaultWindow(QDialog):
         self._worker = worker
         self._arrancar_reloj()
         worker.start()
+        # Con el hilo ya en marcha, para que la línea de pasos de la ventana
+        # principal pase a «en curso» al empezar y no al terminar.
+        self._publicar_avance()
 
     def _habilitar(self, activo: bool) -> None:
         # La ejecución de esta ventana no cambia mientras trabaja. El
@@ -2523,6 +2989,11 @@ class AirVaultWindow(QDialog):
         self.limite_batch_spin.setEnabled(activo)
         self.compresion_check.setEnabled(activo)
         self.boton_comprobar.setEnabled(activo and bool(self._trabajos))
+        # La vista previa solo lee el disco, pero mientras el hilo reparte
+        # los manifiestos están a medio escribir y enseñarlos engaña.
+        self.boton_previa.setEnabled(
+            activo and bool(self.corrida_edit.text().strip())
+        )
         self.boton_automatizacion.setEnabled(activo)
         self.boton_continuar.setEnabled(activo)
         self.boton_reiniciar.setEnabled(activo and bool(self._trabajos))
@@ -2690,9 +3161,7 @@ class AirVaultWindow(QDialog):
         por_reenviar = self._por_reenviar()
         if por_reenviar:
             self._estado["pendientes_subida"] = por_reenviar
-            self._estado["indexar_al_encontrar"] = (
-                self.auto_indexar_check.isChecked()
-            )
+            self._estado["indexar_al_encontrar"] = self._opciones.indexar
             self._estado["completar"] = self.completar_check.isChecked()
             self._reenvios_del_ciclo.update(
                 str(trabajo.carpeta) for trabajo in por_reenviar
@@ -2729,7 +3198,7 @@ class AirVaultWindow(QDialog):
             + "; ".join(f"{p.nombre} {p}" for p in self._estados)
         )
         self._limpiar_progreso()
-        if self.auto_indexar_check.isChecked() and (
+        if self._opciones.indexar and (
             self._listos()
             or (
                 self.completar_check.isChecked()
@@ -2899,9 +3368,74 @@ class AirVaultWindow(QDialog):
             ):
                 self._indexar()
                 return
+        self._publicar_avance()
         # Lo que se pidió desde la tabla mientras esto trabajaba entra ahora,
         # que es lo que hace de la tabla una cola y no una lista de avisos.
         self._siguiente_de_la_cola()
+
+    # ── lo que ve la ventana principal ─────────────────────────────
+
+    def _publicar_avance(self) -> None:
+        """Cuenta a la ventana principal por qué paso va esta ejecución.
+
+        Se deduce de los batches, no de qué botón se pulsó: es lo único que
+        vale igual venga la orden de la cadena automática, del reloj o de
+        la tabla. Cada paso está hecho cuando ya no queda ningún batch al
+        que le falte, en curso mientras el hilo trabaja o el reloj espera, y
+        cortado cuando no queda quién lo haga avanzar.
+        """
+        from app.airvault.flujo import (
+            AUTOCOMPLETADO, COMPLETADO, INDEXADO, SIN_SUBIR,
+        )
+        from app.gui.automatizacion import (
+            COMPLETAR, CORTADO, EN_CURSO, ESPERAR, HECHO, INDEXAR, PENDIENTE,
+            SUBIR,
+        )
+
+        if not self._estados:
+            return
+        trabajando = self.hilo() is not None
+        propios = [
+            parte for parte in self._estados
+            if not parte.trabajo.manifiesto.solo_subir
+        ]
+        terminados = (INDEXADO, COMPLETADO, AUTOCOMPLETADO)
+        cerrados = (COMPLETADO, AUTOCOMPLETADO)
+
+        def como(hecho: bool, avanza: bool) -> str:
+            if hecho:
+                return HECHO
+            if trabajando or avanza:
+                return EN_CURSO
+            return CORTADO
+
+        # Nadie va a mover esto solo si no hay hilo, ni reloj, ni nada
+        # encolado: eso es que la cadena se paró aquí.
+        avanza = bool(
+            self._vigilante is not None and self._vigilante.isActive()
+        ) or bool(self._cola_de_acciones)
+        subido = not any(
+            parte.estado == SIN_SUBIR for parte in self._estados
+        )
+        self.avance_automatico.emit(SUBIR, como(subido, avanza))
+        self.avance_automatico.emit(
+            ESPERAR,
+            HECHO if subido and not self._falta_esperar()
+            else como(False, avanza) if subido
+            else PENDIENTE,
+        )
+        indexado = bool(propios) and all(
+            parte.estado in terminados for parte in propios
+        )
+        self.avance_automatico.emit(
+            INDEXAR, como(indexado, avanza) if subido else PENDIENTE
+        )
+        completado = bool(propios) and all(
+            parte.estado in cerrados for parte in propios
+        )
+        self.avance_automatico.emit(
+            COMPLETAR, como(completado, avanza) if indexado else PENDIENTE
+        )
 
     def _limpiar_progreso(self) -> None:
         """Deja la barra quieta en cero: lo que pasó lo cuenta el resumen."""
@@ -2959,6 +3493,11 @@ class AirVaultWindow(QDialog):
             )
             event.ignore()
             return
+        # Las ventanas de consulta hablan de esta ejecución: dejarlas
+        # sueltas mantendría el programa abierto por algo que ya no tiene de
+        # dónde colgarse.
+        for ventana in list(self._ventanas_de_consulta):
+            ventana.close()
         super().closeEvent(event)
 
     def _cancelar(self) -> None:
@@ -3004,6 +3543,12 @@ class AirVaultWindow(QDialog):
         cliente = self._estado.get("cliente")
         if not trabajos or cliente is None:
             return
+        sesion = self._estado.get("sesion")
+        if sesion is not None and sesion.cancelada:
+            # Soltar es trabajo que existe *porque* se canceló: con la
+            # sesión cortada, cada petición se negaría y los batches
+            # quedarían tomados, que es justo lo que esto viene a evitar.
+            sesion.reanudar()
         if esperar:
             _soltar(trabajos, cliente)
             return

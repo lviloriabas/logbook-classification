@@ -22,13 +22,38 @@ delante.
 | `Otra ejecucion…`       | Elige el CSV de una ejecucion que no este en la lista.                                                                                                        |
 | `Batch:`                | Nombre con el que el batch queda en AirVault. Viene propuesto con la fecha y la hora de la ejecucion.                                                         |
 | `Sesion:`               | Respaldo, normalmente vacio: la sesion la resuelve el navegador. Lo que se pegue aqui no se guarda en el disco.                                               |
-| `Comprobar cada N min`  | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 5 minutos, y deja de preguntar cuando no queda nada por esperar.                        |
+| `Comprobar cada N min`  | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 2 minutos, y deja de preguntar cuando no queda nada por esperar. Es la misma casilla que `Esperar a que AirVault los deje listos` en **Automatización…** de la ventana principal. |
 | `Comprobar ahora`       | La misma pregunta, en el momento.                                                                                                                             |
-| `Subir a AirVault`      | Manda los PDF de la entrega. Termina cuando termina la subida.                                                                                                |
-| `Completar batch`       | Al terminar de escribir, da el batch por terminado en AirVault: lo indexa y lo manda a Web Search (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo.                      |
+| `Subir a AirVault`      | Manda los PDF de la entrega. Termina cuando termina la subida. Es lo unico que ademas retoma los batches que quedaron a medias en ejecuciones anteriores: lo que arranca solo se ciñe a la ejecucion elegida. |
+| `Completar batch`       | Al terminar de escribir, da el batch por terminado en AirVault: lo indexa y lo manda a Web Search (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo. Es la misma casilla que la de **Automatización…** en la ventana principal. |
+| `Automatizacion…`       | Menu con los pasos que se encadenan solos: subir, esperar, indexar y completar el batch, mas depurar la ejecucion. Es la misma eleccion que en la ventana principal y se conserva al cerrar el programa. |
+| `Continuar pendiente`   | Consulta AirVault y sigue desde el primer paso que no haya terminado, sin repetir paginas que ya esten en verde.                                              |
+| `Reiniciar paso incompleto` | Reinicia el estado local del batch elegido, o de todos los incompletos si no hay ninguno elegido. No borra nada en AirVault.                              |
 | `Indexar`               | Escribe en los batches que ya estan listos.                                                                                                                   |
+| `Vista previa…`         | Enseña en cuantos batches quedaria repartida la ejecucion, con sus paginas y sus bitacoras. No prepara ni sube nada.                                          |
 | `Ver reporte…`          | Abre el detalle pagina por pagina de lo que se escribiria.                                                                                                    |
-| `Cancelar`              | Detiene lo que este en marcha y suelta los batches tomados.                                                                                                   |
+| `Cancelar`              | Detiene en el acto lo que esté en marcha (sin esperar al servidor) y suelta los batches tomados.                                                                                                   |
+
+### Ver lo que va en cada batch
+
+Hasta que se sube no hay ningun batch en la lista, porque el reparto se
+decide al preparar los archivos. **Vista previa…**, junto al titulo de la
+tabla, lo adelanta: calcula el mismo reparto que hara **Subir a AirVault**
+con el maximo de paginas elegido y enseña cada batch con el nombre que
+llevaria, sus paginas (separadores incluidos) y sus bitacoras. Los que ya
+estan en AirVault salen con su estado; los demas son los que se crearian.
+Solo lee el indice de paginas y el CSV: no escribe manifiestos, no divide
+PDF y no sube nada, asi que se puede cambiar el maximo y volver a mirarla
+las veces que haga falta.
+
+De cada batch se abre la lista de las bitacoras que lleva dentro, con la
+pagina que ocupa cada una (la misma que muestra Web Index), su matricula,
+su Log Page Number, su fecha, su vuelo, de que pagina de la ejecucion
+salio y que la bloquea si algo la bloquea. Se llega desde la vista previa
+y con el boton derecho sobre una fila de la tabla de batches, que es la
+via para un batch que ya esta subido. Los separadores no aparecen: ocupan
+pagina en el batch pero no son documentos que indexar, y se cuentan
+aparte en la linea de arriba.
 
 ### Los tres tiempos
 
@@ -259,6 +284,110 @@ reporte y no se escribe; el resto del batch sigue. La primera guarda es la
 unica que corta el trabajo entero, porque si sobran o faltan paginas la
 correspondencia por posicion esta rota y cualquier escritura caeria en la
 bitacora de al lado.
+
+## Que nada se suba dos veces
+
+Publicar la misma bitacora dos veces es el unico error de este modulo que no
+se deshace desde el programa: hay que ir a borrar la copia a mano en Web
+Index. Hay cinco defensas, y estan puestas en cascada porque cada una ve
+algo que las otras no.
+
+1. **El reparto de la entrega.** Cambiar el maximo de paginas por batch de
+   una ejecucion que ya tiene batches subidos conserva esos batches y
+   reparte solo las bitacoras que ninguno se llevo (ver «Repartir en varios
+   batches»).
+2. **El registro de la entrega** (`registro-de-batches.json`, en la carpeta
+   de la ejecucion). Recuerda que bitacoras se llevo cada batch aunque su
+   manifiesto se aparte al rehacer el reparto.
+3. **La cola de Web Index.** Antes de cada carga se busca el batch por su
+   nombre, por su cantidad de paginas y por los Log Page Number de dentro,
+   incluidos los `Empty-Batch` sin nombre (ver «Deteccion del batch»).
+4. **El libro de envios** (`bitacoras-enviadas.json`, en `output/airvault/`).
+   Es la memoria de la instalacion, no de una ejecucion: no la borra
+   **Eliminar el registro local** ni desaparece al reprocesar los escaneos en
+   otra carpeta. Anota cada bitacora que salio hacia AirVault, por su numero.
+5. **Web Search.** Antes de cada carga se consultan tres bitacoras del batch,
+   repartidas de principio a fin, para ver si ya estan publicadas.
+
+Las tres primeras miran la **cola** de Web Index, y ahi estaba el hueco:
+completar un batch lo saca de la cola y lo manda a Web Search, asi que desde
+ese momento ninguna consulta a la cola lo encuentra. Si ademas se pierde la
+memoria local, nada impedia volver a subirlo. Las dos ultimas cubren ese
+caso: el libro sabe lo que mando este programa y Web Search sabe lo que hay
+publicado, lo subiera quien lo subiera.
+
+### La identidad de una bitacora
+
+Cambia segun con que se compare, y no es un detalle:
+
+* Dentro de **la misma entrega**, una bitacora es su pagina de origen (el
+  archivo escaneado y el numero de pagina). Dos paginas distintas pueden
+  traer el mismo numero mal leido, y darlas por la misma dejaria sin subir
+  una pagina que nadie subio.
+* Entre **entregas distintas**, esa pagina de origen no significa nada: los
+  mismos escaneos procesados otra vez producen otros archivos y otra
+  numeracion. Ahi lo unico que identifica al documento es su **numero de
+  bitacora**, que es tambien por lo que pregunta Web Search.
+
+### La consulta a Web Search
+
+AirVault no documenta su API de busqueda, asi que la ruta se descubre en
+ejecucion: se lee la portada de `/zfp/`, se sacan las rutas que aparecen en
+ella y en sus scripts, se prueban las que parecen de busqueda y la que
+funciona se conserva en `airvault.json` (`ruta_websearch` y
+`parametros_websearch`). Borrar esas dos claves obliga a descubrirla otra
+vez, que es lo que hay que hacer si AirVault cambia.
+
+**Una ruta sin probar no sirve para decir que una bitacora no esta**: una
+ruta equivocada tambien contesta que no hay nada. Por eso solo se acepta la
+que encuentra un **control positivo**, un numero de bitacora que el propio
+programa completo antes y que por lo tanto tiene que estar publicado. Los
+controles salen del libro de envios. Mientras no haya ninguno (una
+instalacion nueva, que todavia no ha completado nada), la consulta contesta
+que no puede responder y no autoriza nada; las otras cuatro defensas siguen
+en pie.
+
+Una consulta que no sale (sin red, sin ruta) tampoco inventa un motivo: no
+es un «no esta». No frena la carga, pero tampoco la respalda.
+
+### «Posible duplicado»
+
+Cuando el libro o Web Search encuentran que las bitacoras del batch ya estan
+en AirVault, el batch **no se sube**, se anota el motivo en su manifiesto y
+la fila queda en la cola con el estado `Posible duplicado` y el motivo al
+lado. Mientras la marca este puesta, ese batch:
+
+* no se sube ni se reenvia, ni solo ni por orden dada desde la tabla;
+* **no se completa**, que es lo que lo archivaria por segunda vez.
+
+Es una sospecha y no una certeza a proposito: lo que se demuestra es que el
+documento esta arriba, no que este batch sea el que lo subio (pudo llegar por
+otro batch, por otra persona o por una carga anterior). Decidirlo es de quien
+mira AirVault, asi que la marca se quita a mano: clic derecho sobre la fila y
+**No es duplicado: volver a permitirlo**. Lo que el programa no hace es
+seguir solo mientras la duda este puesta.
+
+### El tope de reenvios
+
+Una carga que Quick Upload acepto y AirVault nunca publico se vuelve a
+mandar sola, con una espera que crece en cada intento. Se reenvia **como
+mucho dos veces** (`MAXIMO_REENVIOS`). Las tres senales que dan una carga por
+perdida (la cola entera sin encontrarla, las partes siguientes ya indexadas,
+o el tiempo de espera vencido) pueden dispararse mientras AirVault todavia
+la esta procesando; al tercer intento lo que falla ya no es el envio, y
+seguir mandando el mismo PDF es como aparecen tres copias del mismo batch el
+dia que AirVault los publica todos. Agotado el tope, el resumen lo dice y
+queda la orden a mano desde la cola, que si sube.
+
+### El PDF que se manda
+
+Los tramos que van a Quick Upload se guardan en `cargas/` y se reaprovechan,
+que es lo que evita volver a cortar (y a comprimir) la entrega en cada
+intento. Se reconocen por la ruta del PDF de origen, por que paginas se
+pidieron y por **el tamaño y la fecha de ese PDF**. Los dos primeros no
+bastaban: al depurar y volver a exportar, el archivo conserva el nombre y las
+paginas se numeran otra vez desde uno, asi que el tramo viejo encajaba y se
+subia tal cual, con paginas que no eran las suyas.
 
 ## Campos
 
@@ -569,6 +698,7 @@ respuesta decidida de antemano.
 | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Se corta la red, vence el tiempo o el servidor responde que está ocupado (408, 429, 5xx) | Reintenta, esperando más en cada intento. Por defecto tres intentos con 5 s, 10 s.                                                                                   |
 | Se agotan los reintentos                                                                 | Corta y dice qué pasó. Lo escrito queda anotado.                                                                                                                     |
+| Alguien cancela mientras hay una petición esperando                                       | Deja de reintentar, corta la espera y cierra el pool de conexiones, que es lo único que aborta la petición en vuelo.  |
 | El servidor responde 404 o 403                                                           | No reintenta: insistir devuelve lo mismo.                                                                                                                            |
 | Una página del batch no carga                                                            | Bloquea **esa** página y sigue con el resto. Sin poder leerla no se puede comprobar que el batch y el manifiesto hablan de la misma bitácora, así que no se escribe. |
 | Caduca la cookie a media escritura                                                       | Corta el batch entero. Lo que no se llegó a intentar queda **pendiente**, no fallido: al volver a revisar se retoma sin repetir lo escrito.                          |

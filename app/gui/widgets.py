@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QScrollArea,
     QSizePolicy,
@@ -43,6 +44,12 @@ TABLE_HEADER_BG = "#262626"  # rgb(38, 38, 38)
 TABLE_GRID = "#4a4a4a"
 TABLE_TEXT = "#ffffff"
 TABLE_SELECTION_BG = "#2f81f7"
+# La fila bajo el cursor y la fila marcada con su casilla. Las dos son azules
+# porque las dos hablan de lo mismo que la selección, y las dos quedan por
+# debajo de ella: el cursor solo pasa por encima y una marca no es lo que se
+# está mirando, así que ninguna puede competir con la banda de la selección.
+TABLE_HOVER_BG = "#3a4a5f"
+TABLE_CHECKED_BG = "#1f4a7a"
 
 # El visor de PDF acompaña a la tabla dentro de la misma ventana, así que va
 # en su mismo gris. La superficie que rodea la página baja al tono más oscuro:
@@ -295,6 +302,74 @@ class SpinBoxWithButtons(QWidget):
         )
 
 
+def _mezclado(fondo: QBrush, color: str, peso: float = 0.55) -> QColor:
+    """Tiñe el color que ya tenía la celda en lugar de taparlo.
+
+    El realce del cursor es pasajero y recorre la tabla entera: si borrara
+    los colores de estado, media tabla cambiaría de significado mientras se
+    mueve el ratón. Mezclándolo, la fila se lee como una sola banda y cada
+    celda conserva de qué color era.
+    """
+    encima = QColor(color)
+    if fondo.style() == Qt.BrushStyle.NoBrush:
+        return encima
+    debajo = fondo.color()
+    resto = 1.0 - peso
+    return QColor(
+        round(debajo.red() * resto + encima.red() * peso),
+        round(debajo.green() * resto + encima.green() * peso),
+        round(debajo.blue() * resto + encima.blue() * peso),
+    )
+
+
+class _HoverRowTracker(QObject):
+    """Recuerda sobre qué fila está el cursor y repinta las dos afectadas.
+
+    Qt solo avisa del hover celda a celda, y ninguna celda sabe que su
+    vecina de la misma fila también tiene que resaltarse. Aquí se guarda la
+    fila en la propia vista (``hoverRow``), donde el delegado la consulta al
+    pintar cada celda, y se repinta la fila que se deja y la que se toma.
+    """
+
+    def __init__(self, view: QAbstractItemView) -> None:
+        super().__init__(view)
+        self._view = view
+        view.setProperty("hoverRow", -1)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        tipo = event.type()
+        if tipo == QEvent.Type.MouseMove:
+            self._marcar(self._view.indexAt(event.position().toPoint()).row())
+        elif tipo in (QEvent.Type.Leave, QEvent.Type.Wheel):
+            # Al salir no llega ningún movimiento más, y al rodar la rueda la
+            # fila bajo el cursor cambia sin que el ratón se mueva.
+            self._marcar(-1)
+        return False
+
+    def _marcar(self, fila: int) -> None:
+        anterior = self._view.property("hoverRow")
+        anterior = -1 if anterior is None else int(anterior)
+        if fila == anterior:
+            return
+        self._view.setProperty("hoverRow", fila)
+        for numero in (anterior, fila):
+            if numero >= 0:
+                self._repintar(numero)
+
+    def _repintar(self, fila: int) -> None:
+        modelo = self._view.model()
+        if modelo is None or fila >= modelo.rowCount():
+            return
+        viewport = self._view.viewport()
+        primera = self._view.visualRect(modelo.index(fila, 0))
+        ultima = self._view.visualRect(
+            modelo.index(fila, max(0, modelo.columnCount() - 1))
+        )
+        viewport.update(
+            primera.united(ultima).adjusted(0, 0, viewport.width(), 0)
+        )
+
+
 class FlatSelectionDelegate(QStyledItemDelegate):
     """Pinta la fila seleccionada como una sola banda azul.
 
@@ -328,18 +403,68 @@ class FlatSelectionDelegate(QStyledItemDelegate):
             return modelo.isSelected(index)
         return modelo.isRowSelected(index.row(), index.parent())
 
+    def _fila_marcada(self, index) -> bool:
+        """Si la fila lleva marcada su casilla, mire donde mire el cursor.
+
+        La casilla vive en una sola columna, así que la vista dice en cuál
+        con la propiedad ``checkColumn``; sin ella (una tabla sin casillas)
+        no hay nada que pintar.
+        """
+        vista = self.parent()
+        columna = vista.property("checkColumn") if vista is not None else None
+        if columna is None or int(columna) < 0:
+            return False
+        modelo = index.model()
+        if modelo is None or int(columna) >= modelo.columnCount():
+            return False
+        estado = modelo.index(index.row(), int(columna), index.parent()).data(
+            Qt.ItemDataRole.CheckStateRole
+        )
+        return Qt.CheckState(estado) is Qt.CheckState.Checked if estado is not None else False
+
+    def _fila_bajo_el_cursor(self, index) -> bool:
+        """Si el cursor está sobre esta fila, aunque no sobre esta celda."""
+        vista = self.parent()
+        if vista is None:
+            return False
+        fila = vista.property("hoverRow")
+        return fila is not None and int(fila) == index.row()
+
     def initStyleOption(self, option, index) -> None:  # noqa: N802 - API Qt
         super().initStyleOption(option, index)
-        if not (
+        seleccionada = (
             option.state & QStyle.StateFlag.State_Selected
             or self._fila_seleccionada(index)
-        ):
+        )
+        if not seleccionada:
+            # El estilo nativo pinta el hover celda a celda, que es lo que
+            # dejaba un solo cuadro azul bajo el cursor en vez de la fila
+            # entera. Se le quita el estado y lo pinta esta clase, que sí
+            # sabe de filas.
+            option.state &= ~QStyle.StateFlag.State_MouseOver
+            if self._fila_marcada(index):
+                # Marcada es una decisión, como la selección: el color de
+                # estado de la celda cede y la fila queda de un solo tono.
+                option.backgroundBrush = QBrush(QColor(TABLE_CHECKED_BG))
+                self._texto_claro(option)
+                return
+            if self._fila_bajo_el_cursor(index):
+                option.backgroundBrush = QBrush(
+                    _mezclado(option.backgroundBrush, TABLE_HOVER_BG)
+                )
             return
         option.state &= ~QStyle.StateFlag.State_Selected
         option.backgroundBrush = QBrush(QColor(TABLE_SELECTION_BG))
-        # Sin el estado de selección, el estilo escribiría el texto con el
-        # color normal de la tabla; los roles se fijan a mano para conservar
-        # el contraste sobre el azul.
+        self._texto_claro(option)
+
+    @staticmethod
+    def _texto_claro(option) -> None:
+        """Escribe el texto en blanco sobre las bandas de color.
+
+        Sin el estado de selección, el estilo usaría el color normal de la
+        tabla, y una fila que ya trae su propio color de letra (el verde de
+        lo hecho, el gris de lo que no existe) se perdería sobre el azul.
+        """
         palette = option.palette
         for role in (
             QPalette.ColorRole.Text,
@@ -414,7 +539,19 @@ def style_data_table(table: QAbstractItemView) -> None:
     viewport.setPalette(palette)
     viewport.setAutoFillBackground(True)
     table.setItemDelegate(FlatSelectionDelegate(table))
+    enable_row_hover(table)
     round_corners(table)
+
+
+def enable_row_hover(table: QAbstractItemView) -> None:
+    """Resalta la fila entera bajo el cursor, no solo la celda."""
+    table.setMouseTracking(True)
+    viewport = table.viewport()
+    viewport.setMouseTracking(True)
+    # Solo el viewport: es quien recibe el movimiento del ratón sobre las
+    # filas, y sus coordenadas son las que entiende ``indexAt``. Las del
+    # widget entero llevan encima la cabecera y señalarían otra fila.
+    viewport.installEventFilter(_HoverRowTracker(table))
 
 
 class _HeaderScrollbarAligner(QObject):
@@ -433,6 +570,37 @@ class _HeaderScrollbarAligner(QObject):
         self._table.verticalScrollBar().setStyleSheet(
             f"QScrollBar:vertical {{ margin-top: {max(0, alto)}px; }}"
         )
+
+
+# Filas que se miran al medir el ancho de una columna. Sin tope Qt las
+# recorre todas, y con cuatrocientas filas eso ya es una décima de segundo
+# de espera para averiguar un ancho que deciden las primeras pantallas.
+RESIZE_PRECISION = 64
+
+
+def size_columns_once(table, stretch_last: bool = False) -> None:
+    """Ajusta las columnas al contenido una vez y las deja fijas.
+
+    ``ResizeToContents`` no mide una vez: vuelve a medir la columna entera
+    cada vez que cambia una celda. Llenar una tabla de cuatrocientas filas
+    por siete columnas, u ordenarla (que reubica esas dos mil ochocientas
+    celdas), pasa entonces a costar el cuadrado de las filas: ordenar la
+    lista de bitácoras de un batch tardaba tres minutos y medio.
+
+    Medir una vez y pasar a ``Interactive`` da el mismo ancho de partida y
+    además deja arrastrar el borde de la columna, que con el modo por
+    contenido no se podía. La última columna puede quedarse en ``Stretch``
+    para que no sobre espacio a la derecha: ese modo no mide contenido, así
+    que no cuesta nada.
+    """
+    header = table.horizontalHeader()
+    ultima = table.columnCount() - 1
+    for column in range(table.columnCount()):
+        header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+    header.setResizeContentsPrecision(RESIZE_PRECISION)
+    table.resizeColumnsToContents()
+    if stretch_last and ultima >= 0:
+        header.setSectionResizeMode(ultima, QHeaderView.ResizeMode.Stretch)
 
 
 def align_vertical_scrollbar_to_header(table: QAbstractItemView) -> None:

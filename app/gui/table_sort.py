@@ -174,3 +174,82 @@ class ColumnSortController(QObject):
             if self._descending
             else Qt.SortOrder.AscendingOrder,
         )
+
+
+class ModelSortController(QObject):
+    """El mismo ciclo de tres estados sobre una tabla con modelo.
+
+    ``ColumnSortController`` mueve los ítems de una ``QTableWidget``, y en
+    una ejecución de miles de páginas por decenas de columnas eso son cientos
+    de miles de movimientos por clic. Cuando la tabla tiene modelo propio no
+    hace falta mover nada: basta decirle en qué orden van sus filas, así que
+    aquí solo se lleva la cuenta del estado del ciclo.
+    """
+
+    sortChanged = Signal()
+
+    def __init__(self, view, model) -> None:
+        super().__init__(view)
+        self._view = view
+        self._model = model
+        self._column = -1
+        self._descending = False
+        view.setSortingEnabled(False)
+        header = view.horizontalHeader()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(False)
+        header.setToolTip(HEADER_TOOLTIP)
+        header.sectionClicked.connect(self.cycle_column)
+
+    @property
+    def sorted_column(self) -> int:
+        """Columna ordenada, o ``-1`` cuando la tabla está en su orden original."""
+        return self._column
+
+    @property
+    def descending(self) -> bool:
+        """``True`` mientras la columna activa se muestre de mayor a menor."""
+        return self._descending
+
+    def reset(self) -> None:
+        """Olvida el criterio, sin tocar el orden que tenga el modelo."""
+        self._column = -1
+        self._descending = False
+        self._sync_indicator()
+
+    def cycle_column(self, column: int) -> None:
+        """Avanza al siguiente estado de orden para ``column``."""
+        if not 0 <= column < self._model.columnCount():
+            return
+        if column != self._column:
+            self._column, self._descending = column, True
+        elif self._descending:
+            self._descending = False
+        else:
+            self._column, self._descending = -1, False
+        self._apply()
+        self.sortChanged.emit()
+
+    def restore(self, column: int, descending: bool) -> None:
+        """Vuelve a ordenar por ``column`` sin pasar por el ciclo de clics."""
+        if not 0 <= column < self._model.columnCount():
+            return
+        self._column, self._descending = column, descending
+        self._apply()
+
+    def _apply(self) -> None:
+        if self._column < 0:
+            self._model.reset_order()
+        else:
+            self._model.sort_rows(self._column, self._descending)
+        self._sync_indicator()
+
+    def _sync_indicator(self) -> None:
+        header = self._view.horizontalHeader()
+        header.setSortIndicatorShown(self._column >= 0)
+        header.setSortIndicator(
+            self._column,
+            Qt.SortOrder.DescendingOrder
+            if self._descending
+            else Qt.SortOrder.AscendingOrder,
+        )
