@@ -1523,8 +1523,8 @@ def test_subir_de_nuevo_reenvia_el_que_no_aparecio_durante_mucho_tiempo(
 
 
 def test_cada_reenvio_automatico_se_cuenta_y_espera_mas(tmp_path, monkeypatch):
-    """No se deja de insistir; lo que crece es el margen entre intentos."""
-    from app.airvault.flujo import espera_de_reenvio
+    """El margen entre intentos crece, y al segundo reenvio se para solo."""
+    from app.airvault.flujo import MAXIMO_REENVIOS, espera_de_reenvio
 
     trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
     subida = trabajo.manifiesto.etapa("subir")
@@ -1565,12 +1565,24 @@ def test_cada_reenvio_automatico_se_cuenta_y_espera_mas(tmp_path, monkeypatch):
     perdida.manifiesto.reenvios = 3
     assert espera_de_reenvio(perdida) == base * 4
 
-    # Y por muchos que lleve, una carga de 2020 sigue mereciendo otro envio:
-    # rendirse la dejaria fuera de AirVault para siempre.
+    # Con un reenvio hecho todavia se insiste: puede ser una cola lenta.
+    perdida.manifiesto.reenvios = MAXIMO_REENVIOS - 1
+    perdida.guardar()
     estado = EstadoParte(perdida, BUSCANDO, "no aparecio")
     assert subida_estancada(perdida, espera_de_reenvio(perdida))
     assert reenvio_pendiente(estado)
     assert [t.carpeta for t in partes_por_subir([estado])] == [perdida.carpeta]
+
+    # Agotado el tope, el programa deja de mandarlo solo. Lo que falla ya
+    # no es el envio, y seguir insistiendo es como aparecen tres copias del
+    # mismo batch el dia que AirVault los publica todos. Queda la orden a
+    # mano desde la cola, que si sube.
+    perdida.manifiesto.reenvios = MAXIMO_REENVIOS
+    perdida.guardar()
+    estado = EstadoParte(perdida, BUSCANDO, "no aparecio")
+    assert subida_estancada(perdida, espera_de_reenvio(perdida))
+    assert not reenvio_pendiente(estado)
+    assert partes_por_subir([estado]) == []
 
 
 def test_lo_que_falta_por_subir_sale_de_una_sola_regla(tmp_path):

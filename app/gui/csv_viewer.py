@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -18,7 +19,6 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtGui import (
-    QColor,
     QIcon,
     QImage,
     QIntValidator,
@@ -27,6 +27,7 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -38,8 +39,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QToolButton,
     QVBoxLayout,
     QSplitter,
@@ -56,11 +56,17 @@ from app.gui.csv_utils import (
     template_for_csv,
     template_name_for_csv,
 )
+from app.gui.csv_model import (
+    CHECK_COLUMN,
+    CHECK_COLUMN_WIDTH,
+    STATUS_COLORS,
+    CsvTableModel,
+)
 from app.gui.depuracion_dialog import DEPURAR_TOOLTIP, DepurarPaginasDialog
 from app.gui.export_options import ExportOptionsGroup
 from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.responsive import ROOMY, Density, density_for, fit_to_screen
-from app.gui.table_sort import ColumnSortController
+from app.gui.table_sort import ModelSortController
 from app.reports.csv_reporter import CsvReporter
 from app.gui.widgets import (
     APP_CHROME_QSS,
@@ -93,21 +99,11 @@ from app.validation.book_corrector import _recompute_summary
 from app.validation.depuracion import depurar_claves
 
 
-_STATUS_COLORS = {
-    "OK": "#1a7f37",
-    "WARNING": "#9a6700",
-    "ERROR": "#cf222e",
-}
 _PROGRAM_DIR = Path(__file__).resolve().parents[2]
 _ASSETS = _PROGRAM_DIR / "assets"
 _RENDER_DPI = 150
 _MIN_ZOOM = 0.4
 _MAX_ZOOM = 4.0
-# Celdas por tramo al llenar la tabla. Medido: ~16 µs por celda, así que un
-# CSV completo (85 columnas) cuesta ~800 ms de una sentada y la ventana se
-# queda sin responder mientras tanto. El primer tramo se llena en el acto y
-# el resto se reparte, de modo que un CSV corto sigue estando listo al volver.
-_TABLE_CELL_CHUNK = 2000
 # Filas que examina Qt al ajustar el ancho de una columna. Sin tope recorre
 # todas: con miles de filas el ajuste solo costaba más que llenar la tabla.
 _RESIZE_PRECISION = 64
@@ -216,19 +212,43 @@ def _archived_base_name(name: str) -> str:
     return path.name
 
 
-def _companion_payload(csv_path: Path) -> dict:
-    """Lee el JSON consolidado que acompaña al CSV; ``{}`` si no está."""
+def _companion_path(csv_path: Path) -> Path:
+    """JSON consolidado que le corresponde a un CSV de ejecución."""
     csv_path = Path(csv_path)
     companion = csv_path.with_suffix(".json")
     if not companion.is_file() and csv_path.stem.casefold().endswith("_completo"):
         companion = csv_path.with_name(
             f"{csv_path.stem[:-len('_completo')]}.json"
         )
+    return companion
+
+
+@lru_cache(maxsize=4)
+def _parsed_companion(path: str, _marca: tuple[int, int]) -> dict:
+    """El JSON ya interpretado, recordado mientras el archivo no cambie.
+
+    Abrir una ejecución lo pedía cinco veces (para los PDF de cada fila, los
+    documentos, sus páginas, los estados de campo y el botón de exportar), y
+    el de una ejecución grande son varios megabytes: se interpretaba entero
+    cinco veces seguidas y eso solo era ya un segundo de espera. ``_marca``
+    es el tamaño y la fecha del archivo, así que reescribirlo (al eliminar
+    páginas) invalida lo recordado sin que nadie tenga que acordarse.
+    """
     try:
-        payload = json.loads(companion.read_text(encoding="utf-8"))
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _companion_payload(csv_path: Path) -> dict:
+    """Lee el JSON consolidado que acompaña al CSV; ``{}`` si no está."""
+    companion = _companion_path(csv_path)
+    try:
+        info = companion.stat()
+    except OSError:
+        return {}
+    return _parsed_companion(str(companion), (info.st_size, info.st_mtime_ns))
 
 
 def source_pdf_paths_for_rows(
@@ -646,13 +666,19 @@ def reports_for_csv(
 
 
 def apply_csv_column_visibility(
-    table: QTableWidget,
+    table: QAbstractItemView,
     columns: Iterable[str],
     important_field_ids: Iterable[str],
     important_only: bool,
     selected_columns: Iterable[str] | None = None,
+    offset: int = 0,
 ) -> None:
-    """Aplica el modo resumido/completo ocultando columnas de la tabla."""
+    """Aplica el modo resumido/completo ocultando columnas de la tabla.
+
+    ``offset`` son las columnas propias de la tabla que van delante de las
+    del CSV: en el visor, la de las casillas, que no se oculta nunca porque
+    no es un campo de la bitácora sino la forma de elegir páginas.
+    """
     column_list = list(columns)
     visible = set(
         selected_columns
@@ -660,7 +686,9 @@ def apply_csv_column_visibility(
         else important_csv_columns(column_list, important_field_ids)
     )
     for index, column in enumerate(column_list):
-        table.setColumnHidden(index, important_only and column not in visible)
+        table.setColumnHidden(
+            index + offset, important_only and column not in visible
+        )
 
 
 class CsvColumnModeButton(QToolButton):
@@ -1355,7 +1383,7 @@ class CsvViewerWindow(QMainWindow):
         # find_csv_files) no trae columnas ``_status``: se recorta al
         # exportar. El color de las celdas sale entonces de aquí, el JSON
         # compañero, indexado igual que las filas del CSV.
-        self._field_statuses: dict[tuple[str, str], dict[str, str]] = {}
+        self._field_statuses: dict[tuple[str, str], dict[str, str]] | None = None
         # Cada coincidencia es la fila del CSV y la columna donde apareció el
         # texto: la columna es lo que se muestra y sobre lo que se posa el
         # cursor, para que se vea por qué esa fila coincide.
@@ -1375,6 +1403,7 @@ class CsvViewerWindow(QMainWindow):
         # calcula una sola vez por archivo y se consulta por columna.
         self._field_id_by_column: dict[str, str | None] = {}
         self._column_set: set[str] = set()
+        self._has_status_columns = False
 
         self._splitter_adjusted = False
         self._outputs_worker = None
@@ -1386,12 +1415,6 @@ class CsvViewerWindow(QMainWindow):
         # que sobrevive a esos cambios hasta que se abre otro CSV.
         self._summary = "Seleccione una carpeta o un CSV para visualizarlo."
         self._export_note = ""
-        self._pending_rows: list[int] = []
-        self._table_timer = QTimer(self)
-        # Intervalo cero: el siguiente tramo entra cuando la cola de eventos
-        # queda vacía, de modo que la ventana responde entre uno y otro.
-        self._table_timer.setInterval(0)
-        self._table_timer.timeout.connect(self._on_table_chunk)
 
         self.setWindowTitle("Visor de CSV e historial de procesados")
         # Como la ventana principal: el tamaño lo pone la pantalla. Pedía
@@ -1528,19 +1551,27 @@ class CsvViewerWindow(QMainWindow):
         self.pdf_viewer = EmbeddedPdfViewer(density=self._density)
         self.pdf_viewer.relocateRequested.connect(self._relocate_source_pdfs)
         splitter.addWidget(self.pdf_viewer)
-        self.table = QTableWidget(0, 0)
+        # Con modelo propio: una ejecución grande son más de doscientas mil
+        # celdas, y un ítem por celda dejaba la ventana sin responder tanto
+        # al abrir el CSV como al ordenarlo.
+        self.table = QTableView()
+        self.table_model = CsvTableModel(self.table)
+        self.table_model.set_lookups(self._status_for, self._comment_for)
+        self.table.setModel(self.table_model)
         self.table.setAccessibleName("CSV procesado")
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(
-            QTableWidget.SelectionMode.ExtendedSelection
+            QTableView.SelectionMode.ExtendedSelection
         )
+        self.table.setWordWrap(False)
         self.table.setToolTip(
             "Cada fila es una página de la ejecución. Al seleccionarla se abre "
             "su página en el visor, y Supr quita de la ejecución las páginas "
             "elegidas. Para juntar páginas sueltas, marque su casilla en la "
-            "primera columna: mientras haya alguna marcada, son esas las que "
-            "se eliminan."
+            "primera columna (o pulse la barra espaciadora sobre las filas "
+            "elegidas): la fila marcada queda sombreada y, mientras haya "
+            "alguna, son esas las que se eliminan."
         )
         # Supr solo mientras la tabla tiene el foco: es la que sabe qué
         # páginas hay elegidas, y desde el buscador o el cuadro de salidas la
@@ -1548,19 +1579,30 @@ class CsvViewerWindow(QMainWindow):
         delete_pages = QShortcut(QKeySequence.StandardKey.Delete, self.table)
         delete_pages.setContext(Qt.ShortcutContext.WidgetShortcut)
         delete_pages.activated.connect(self._delete_selected_pages)
+        # La barra espaciadora marca las filas elegidas, como en cualquier
+        # lista con casillas: con muchas seguidas es lo que evita apuntar a
+        # una casilla de dos milímetros una por una.
+        marcar = QShortcut(QKeySequence(Qt.Key.Key_Space), self.table)
+        marcar.setContext(Qt.ShortcutContext.WidgetShortcut)
+        marcar.activated.connect(self._toggle_checked_rows)
         style_data_table(self.table)
+        # El delegado pinta la fila marcada entera; aquí se le dice en qué
+        # columna vive la casilla que lo decide.
+        self.table.setProperty("checkColumn", CHECK_COLUMN)
+        self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionsMovable(False)
         self.table.horizontalHeader().setFixedHeight(30)
         self.table.horizontalHeader().setResizeContentsPrecision(_RESIZE_PRECISION)
-        self.table_sort = ColumnSortController(self.table)
+        self.table_sort = ModelSortController(self.table, self.table_model)
         self.table_sort.sortChanged.connect(self._remember_sort)
-        self.table.currentCellChanged.connect(self._on_current_cell_changed)
-        # ``currentCellChanged`` cubre teclado y búsquedas, pero no se emite
+        seleccion = self.table.selectionModel()
+        seleccion.currentRowChanged.connect(self._on_current_row_changed)
+        # ``currentRowChanged`` cubre teclado y búsquedas, pero no se emite
         # al volver a pulsar la fila que ya estaba activa. El clic debe volver
         # a ubicar su bitácora aunque entre ambos el usuario haya navegado el
         # PDF con las flechas o el campo de página.
-        self.table.cellClicked.connect(self._on_table_cell_clicked)
+        self.table.clicked.connect(self._on_table_clicked)
         splitter.addWidget(self.table)
         # El mismo reparto de la ventana principal: la tabla lleva muchas
         # columnas y la página cabe entera en la parte que le toca. Los
@@ -1632,14 +1674,13 @@ class CsvViewerWindow(QMainWindow):
         self.content_splitter.setSizes([pane, available - pane])
 
     def closeEvent(self, event) -> None:  # noqa: N802 - API Qt
-        """Detiene el llenado y los hilos antes de cerrar.
+        """Detiene los hilos antes de cerrar.
 
         El panel es un hijo de la ventana: cerrarla no le entrega un evento
         de cierre, y dejar su hilo de render vivo abortaría el proceso al
         destruir la ventana. La exportación no se puede interrumpir a mitad
         de escritura, así que se la espera.
         """
-        self._table_timer.stop()
         self.pdf_viewer.shutdown()
         worker = self._outputs_worker
         if worker is not None and worker.isRunning():
@@ -1797,8 +1838,15 @@ class CsvViewerWindow(QMainWindow):
         # La comprobación de pertenencia también corría por celda sobre una
         # lista; con el conjunto es constante.
         self._column_set = set(columns)
+        self._has_status_columns = any(
+            column.endswith("_status") for column in columns
+        )
         self._rows = rows
-        self._field_statuses = self._load_field_statuses(path)
+        # No se lee aquí: el CSV completo trae sus columnas ``_status`` y
+        # nunca lo consulta, así que armar el mapa de la ejecución entera
+        # (una entrada por página y campo) era medio segundo tirado en cada
+        # apertura. Se arma la primera vez que una celda lo necesita.
+        self._field_statuses = None
         # Se limpia antes de poblar: la tabla emite selección mientras se
         # llena y las rutas de la ejecución anterior ya no corresponden.
         self._row_pdf_paths = []
@@ -1827,6 +1875,15 @@ class CsvViewerWindow(QMainWindow):
         self._sync_export_button()
         self.setWindowTitle(f"Visor de CSV e historial - {path.name}")
 
+    def _statuses_from_companion(self) -> dict[tuple[str, str], dict[str, str]]:
+        """Mapa de estados del JSON compañero, leído una sola vez por CSV."""
+        if self._field_statuses is None:
+            path = self._loaded_csv_path
+            self._field_statuses = (
+                self._load_field_statuses(path) if path is not None else {}
+            )
+        return self._field_statuses
+
     @staticmethod
     def _load_field_statuses(path: Path) -> dict[tuple[str, str], dict[str, str]]:
         """Estado de cada campo por página, leído del JSON compañero.
@@ -1851,100 +1908,46 @@ class CsvViewerWindow(QMainWindow):
         return statuses
 
     def _populate_table(self) -> None:
-        """Llena la tabla por tramos para no bloquear la ventana.
+        """Publica el CSV en la tabla y ajusta sus columnas.
 
-        El primer tramo se escribe en el acto, así que un CSV corto queda
-        completo al volver de aquí; solo las ejecuciones grandes reparten el
-        resto entre eventos de la interfaz.
+        La tabla no guarda copia de nada: el modelo lee del CSV que ya está
+        en memoria y pinta solo lo que se ve, así que esto es inmediato por
+        grande que sea la ejecución.
         """
-        self.table_sort.suspend()
-        self.table.clear()
-        self.table.setColumnCount(len(self._columns))
-        self.table.setHorizontalHeaderLabels(self._columns)
-        self.table.setRowCount(len(self._rows))
-        self._pending_rows = list(range(len(self._rows)))
-        self._fill_table_chunk()
-        if self._pending_rows:
-            self._table_timer.start()
-        else:
-            self._finish_table()
+        self.table_model.set_content(self._columns, self._rows)
+        self.table_sort.reset()
+        self._apply_column_mode()
+        self.table.resizeColumnsToContents()
+        self.table.setColumnWidth(CHECK_COLUMN, CHECK_COLUMN_WIDTH)
+        self._restore_sort()
 
-    def _rows_per_chunk(self) -> int:
-        """Filas que caben en el presupuesto de celdas de un tramo."""
-        return max(1, _TABLE_CELL_CHUNK // max(1, len(self._columns)))
-
-    def _fill_table_chunk(self) -> None:
-        """Escribe el siguiente tramo de filas pendientes."""
-        batch = self._pending_rows[: self._rows_per_chunk()]
-        del self._pending_rows[: len(batch)]
-        self.table.setUpdatesEnabled(False)
-        try:
-            for row_index in batch:
-                row = self._rows[row_index]
-                for column_index, column in enumerate(self._columns):
-                    item = QTableWidgetItem(row.get(column, ""))
-                    item.setData(Qt.ItemDataRole.UserRole, row_index)
-                    if column_index == 0:
-                        # La marca vive en la primera columna, que la vista
-                        # resumida nunca oculta. Sirve para juntar páginas
-                        # que no están seguidas sin sostener Ctrl mientras
-                        # se recorre media ejecución.
-                        item.setFlags(
-                            item.flags()
-                            | Qt.ItemFlag.ItemIsUserCheckable
-                        )
-                        item.setCheckState(Qt.CheckState.Unchecked)
-                    status = self._status_for(row, column)
-                    if status:
-                        field_id = self._field_id_by_column.get(column)
-                        comment = row.get(f"{field_id}_comment")
-                        item.setToolTip(
-                            f"Estado: {status}"
-                            + (f"\n{comment}" if comment else "")
-                        )
-                        item.setForeground(Qt.GlobalColor.white)
-                        item.setBackground(QColor(_STATUS_COLORS[status]))
-                    self.table.setItem(row_index, column_index, item)
-        finally:
-            self.table.setUpdatesEnabled(True)
-
-    def _on_table_chunk(self) -> None:
-        if self._pending_rows:
-            self._fill_table_chunk()
-        if not self._pending_rows:
-            self._table_timer.stop()
-            self._finish_table()
+    def _toggle_checked_rows(self) -> None:
+        """Marca o desmarca de una vez las filas resaltadas."""
+        modelo = self.table.selectionModel()
+        if modelo is None:
+            return
+        self.table_model.toggle_rows(
+            sorted(indice.row() for indice in modelo.selectedRows())
+        )
 
     def _remember_sort(self) -> None:
         """Anota por qué columna quedó ordenada la tabla tras un clic."""
         column = self.table_sort.sorted_column
-        if 0 <= column < len(self._columns):
-            self._sort_state = (
-                self._columns[column], self.table_sort.descending
-            )
-        else:
-            self._sort_state = None
+        name = self.table_model.name_of(column)
+        self._sort_state = (name, self.table_sort.descending) if name else None
 
     def _restore_sort(self) -> None:
         """Devuelve la tabla recién llenada al orden que ya tenía puesto."""
         if self._sort_state is None:
             return
         name, descending = self._sort_state
-        try:
-            column = self._columns.index(name)
-        except ValueError:
+        column = self.table_model.column_of(name)
+        if column < 0:
             # El CSV nuevo no trae esa columna: no hay criterio que aplicar
             # y tampoco uno que recordar.
             self._sort_state = None
             return
         self.table_sort.restore(column, descending)
-
-    def _finish_table(self) -> None:
-        """Cierra el llenado: columnas visibles, anchos y orden disponibles."""
-        self._apply_column_mode()
-        self.table.resizeColumnsToContents()
-        self.table_sort.reset()
-        self._restore_sort()
 
     def _load_pdf_paths(self, csv_path: Path) -> None:
         """Publica en el visor los PDF de los que proviene el CSV."""
@@ -2026,15 +2029,11 @@ class CsvViewerWindow(QMainWindow):
 
     def _checked_source_rows(self) -> list[int]:
         """Filas marcadas con la casilla de la primera columna."""
-        rows: set[int] = set()
-        for display_row in range(self.table.rowCount()):
-            item = self.table.item(display_row, 0)
-            if item is None or item.checkState() != Qt.CheckState.Checked:
-                continue
-            source_row = item.data(Qt.ItemDataRole.UserRole)
-            if isinstance(source_row, int) and 0 <= source_row < len(self._rows):
-                rows.add(source_row)
-        return sorted(rows)
+        return [
+            source_row
+            for source_row in self.table_model.checked_source_rows()
+            if 0 <= source_row < len(self._rows)
+        ]
 
     def _selected_source_rows(self) -> list[int]:
         """Filas del CSV elegidas, en el orden en que están en el CSV.
@@ -2056,9 +2055,8 @@ class CsvViewerWindow(QMainWindow):
             return []
         rows: set[int] = set()
         for index in model.selectedRows():
-            item = self.table.item(index.row(), 0)
-            source_row = item.data(Qt.ItemDataRole.UserRole) if item else None
-            if isinstance(source_row, int) and 0 <= source_row < len(self._rows):
+            source_row = self.table_model.source_row(index.row())
+            if 0 <= source_row < len(self._rows):
                 rows.add(source_row)
         return sorted(rows)
 
@@ -2446,23 +2444,18 @@ class CsvViewerWindow(QMainWindow):
         self._outputs_worker = None
         self._sync_export_button()
 
-    def _on_current_cell_changed(
-        self, row: int, _column: int, _previous_row: int, _previous_column: int
-    ) -> None:
+    def _on_current_row_changed(self, current, _previous) -> None:
         """Sigue con el visor la fila activa de la tabla."""
-        self._show_visible_row_in_pdf(row)
+        self._show_visible_row_in_pdf(current.row() if current.isValid() else -1)
 
-    def _on_table_cell_clicked(self, row: int, _column: int) -> None:
+    def _on_table_clicked(self, index) -> None:
         """Reubica también una fila que ya era la selección actual."""
-        self._show_visible_row_in_pdf(row)
+        self._show_visible_row_in_pdf(index.row())
 
     def _show_visible_row_in_pdf(self, row: int) -> None:
         """Traduce una fila visible a su fila original y muestra su página."""
-        item = self.table.item(row, 0) if row >= 0 else None
-        if item is None:
-            return
-        source_row = item.data(Qt.ItemDataRole.UserRole)
-        if isinstance(source_row, int) and 0 <= source_row < len(self._rows):
+        source_row = self.table_model.source_row(row) if row >= 0 else -1
+        if 0 <= source_row < len(self._rows):
             self._show_row_in_pdf(source_row)
 
     def _show_row_in_pdf(self, source_row: int) -> str:
@@ -2495,9 +2488,8 @@ class CsvViewerWindow(QMainWindow):
         """
         visible = [
             column
-            for index, column in enumerate(self._columns)
-            if index < self.table.columnCount()
-            and not self.table.isColumnHidden(index)
+            for column in self._columns
+            if not self.table.isColumnHidden(self.table_model.column_of(column))
         ]
         return visible or list(self._columns)
 
@@ -2564,21 +2556,13 @@ class CsvViewerWindow(QMainWindow):
 
     def _show_search_match(self) -> None:
         source_row, column = self._search_matches[self._search_position]
-        display_row = next(
-            (
-                row
-                for row in range(self.table.rowCount())
-                if self.table.item(row, 0)
-                and self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-                == source_row
-            ),
-            -1,
-        )
+        display_row = self.table_model.display_row(source_row)
         if display_row >= 0:
             target = self._column_to_focus(column)
+            index = self.table_model.index(display_row, target)
             self.table.selectRow(display_row)
-            self.table.setCurrentCell(display_row, target)
-            self.table.scrollToItem(self.table.item(display_row, target))
+            self.table.setCurrentIndex(index)
+            self.table.scrollTo(index)
 
         location = self._show_row_in_pdf(source_row)
         self.search_context.setText(
@@ -2594,19 +2578,16 @@ class CsvViewerWindow(QMainWindow):
         primera visible, porque el cursor sobre una columna que no se ve deja
         la fila seleccionada sin decir dónde está lo que se buscó.
         """
-        try:
-            index = self._columns.index(column)
-        except ValueError:
-            index = -1
+        index = self.table_model.column_of(column)
         if index >= 0 and not self.table.isColumnHidden(index):
             return index
         return next(
             (
                 position
-                for position in range(self.table.columnCount())
+                for position in range(1, self.table_model.columnCount())
                 if not self.table.isColumnHidden(position)
             ),
-            0,
+            CHECK_COLUMN,
         )
 
     def _sync_search_controls(self) -> None:
@@ -2633,12 +2614,20 @@ class CsvViewerWindow(QMainWindow):
         if not field_id:
             return None
         status = row.get(f"{field_id}_status", "").upper()
-        if status in _STATUS_COLORS:
+        if status in STATUS_COLORS:
             return status
-        if f"{field_id}_status" not in self._column_set:
+        if not self._has_status_columns:
+            # Solo el CSV mínimo necesita el respaldo: el completo trae sus
+            # columnas ``_status`` y consultarlas por celda obligaba a armar
+            # el mapa de la ejecución entera para nada.
             key = (row.get("file", "").casefold(), row.get("page", ""))
-            status = self._field_statuses.get(key, {}).get(field_id, "").upper()
-            if status in _STATUS_COLORS:
+            status = (
+                self._statuses_from_companion()
+                .get(key, {})
+                .get(field_id, "")
+                .upper()
+            )
+            if status in STATUS_COLORS:
                 return status
         if field_id.endswith("_signature"):
             value = row.get(field_id, "").strip().lower()
@@ -2646,6 +2635,11 @@ class CsvViewerWindow(QMainWindow):
                 value
             )
         return None
+
+    def _comment_for(self, row: dict[str, str], column: str) -> str:
+        """Lo que anotó la validación sobre ese campo de esa página."""
+        field_id = self._field_id_by_column.get(column)
+        return row.get(f"{field_id}_comment", "") if field_id else ""
 
     def _apply_column_mode(self, _checked: bool | None = None) -> None:
         important_only = self.column_toggle.isChecked()
@@ -2655,6 +2649,7 @@ class CsvViewerWindow(QMainWindow):
             self._important_field_ids,
             important_only,
             self._selected_important_columns,
+            offset=CHECK_COLUMN + 1,
         )
         visible = (
             sum(

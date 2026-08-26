@@ -28,6 +28,15 @@ def _column_texts(table, column: int) -> list[str]:
     ]
 
 
+def _model_texts(viewer, name: str) -> list[str]:
+    """Lo que muestra hoy esa columna del CSV, de arriba abajo."""
+    modelo = viewer.table_model
+    column = modelo.column_of(name)
+    return [
+        modelo.index(row, column).data() for row in range(modelo.rowCount())
+    ]
+
+
 def _viewer_with_csv(tmp_path: Path) -> CsvViewerWindow:
     run = tmp_path / "run"
     data = run / "datos"
@@ -55,19 +64,19 @@ def test_header_clicks_cycle_descending_ascending_and_original(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     viewer = _viewer_with_csv(tmp_path)
     table = viewer.table
-    log_column = 2
+    log_column = viewer.table_model.column_of("log_number")
 
     _click(table, log_column)
-    assert _column_texts(table, log_column) == ["1234502", "1234501", "1234500"]
+    assert _model_texts(viewer, "log_number") == ["1234502", "1234501", "1234500"]
     assert table.horizontalHeader().sortIndicatorOrder() == (
         Qt.SortOrder.DescendingOrder
     )
 
     _click(table, log_column)
-    assert _column_texts(table, log_column) == ["1234500", "1234501", "1234502"]
+    assert _model_texts(viewer, "log_number") == ["1234500", "1234501", "1234502"]
 
     _click(table, log_column)
-    assert _column_texts(table, log_column) == ["1234501", "1234502", "1234500"]
+    assert _model_texts(viewer, "log_number") == ["1234501", "1234502", "1234500"]
     assert not table.horizontalHeader().isSortIndicatorShown()
 
     viewer.close()
@@ -77,21 +86,20 @@ def test_header_clicks_cycle_descending_ascending_and_original(tmp_path: Path):
 def test_sorting_moves_the_whole_row_and_its_metadata(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     viewer = _viewer_with_csv(tmp_path)
-    table = viewer.table
+    modelo = viewer.table_model
 
-    _click(table, 1)  # página, de mayor a menor
+    _click(viewer.table, modelo.column_of("page"))  # de mayor a menor
 
-    assert _column_texts(table, 0) == ["a.pdf", "b.pdf", "c.pdf"]
-    assert _column_texts(table, 1) == ["10", "9", "2"]
-    # El rol de fila original acompaña a la celda: la búsqueda sigue ubicándola.
-    assert [
-        table.item(row, 0).data(Qt.ItemDataRole.UserRole)
-        for row in range(table.rowCount())
-    ] == [1, 0, 2]
+    assert _model_texts(viewer, "file") == ["a.pdf", "b.pdf", "c.pdf"]
+    assert _model_texts(viewer, "page") == ["10", "9", "2"]
+    # La fila del CSV acompaña a la fila mostrada: la búsqueda la ubica.
+    assert [modelo.source_row(row) for row in range(modelo.rowCount())] == [
+        1, 0, 2
+    ]
 
     viewer.search_edit.setText("1234500")
     viewer._find_in_csv()
-    assert table.currentRow() == 2
+    assert viewer.table.currentIndex().row() == 2
 
     viewer.close()
     app.processEvents()
@@ -101,8 +109,9 @@ def test_changing_csv_starts_again_without_order(tmp_path: Path):
     app = QApplication.instance() or QApplication([])
     viewer = _viewer_with_csv(tmp_path)
 
-    _click(viewer.table, 2)
-    assert viewer.table_sort.sorted_column == 2
+    log_column = viewer.table_model.column_of("log_number")
+    _click(viewer.table, log_column)
+    assert viewer.table_sort.sorted_column == log_column
 
     other = tmp_path / "other"
     data = other / "datos"
@@ -114,7 +123,7 @@ def test_changing_csv_starts_again_without_order(tmp_path: Path):
     assert viewer.load_folder(other)
 
     assert viewer.table_sort.sorted_column == -1
-    assert _column_texts(viewer.table, 2) == ["1234509", "1234503"]
+    assert _model_texts(viewer, "log_number") == ["1234509", "1234503"]
 
     viewer.close()
     app.processEvents()

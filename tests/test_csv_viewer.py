@@ -217,17 +217,15 @@ def test_row_and_column_indicators_are_visible(tmp_path: Path):
     viewer = CsvViewerWindow(tmp_path)
 
     assert viewer.load_folder(run)
+    modelo = viewer.table_model
     horizontal = [
-        viewer.table.horizontalHeaderItem(index).text()
-        for index in range(viewer.table.columnCount())
-    ]
-    vertical = [
-        viewer.table.model().headerData(index, Qt.Orientation.Vertical)
-        for index in range(viewer.table.rowCount())
+        modelo.headerData(index, Qt.Orientation.Horizontal)
+        for index in range(modelo.columnCount())
     ]
 
-    assert horizontal == ["file", "page", "log_number"]
-    assert vertical == [1]
+    # La primera columna es la de las casillas y va sin rótulo.
+    assert horizontal == ["", "file", "page", "log_number"]
+    assert modelo.rowCount() == 1
     # La cabecera se pinta explícitamente: sin fondo y color propios, sobre la
     # tabla oscura el estilo nativo dejaría los rótulos ilegibles.
     stylesheet = viewer.styleSheet()
@@ -393,7 +391,7 @@ def test_a_single_csv_can_be_opened_without_choosing_its_folder(tmp_path: Path):
     # El CSV elegido queda activo y sus vecinos siguen a un clic de distancia.
     assert viewer.csv_combo.currentText() == "run_completo.csv"
     assert viewer.csv_combo.count() == 2
-    assert viewer.table.rowCount() == 1
+    assert viewer.table_model.rowCount() == 1
     viewer.close()
     app.processEvents()
 
@@ -477,7 +475,7 @@ def test_search_finds_the_logbook_by_its_number(tmp_path: Path):
     viewer._find_in_csv()
 
     assert viewer._search_matches == [(1, "log_number")]
-    assert viewer.table.currentRow() == 1
+    assert viewer.table.currentIndex().row() == 1
     assert "b.pdf, página 7" in viewer.search_context.text()
     viewer.close()
     app.processEvents()
@@ -533,7 +531,7 @@ def test_repeating_the_search_walks_the_matches(tmp_path: Path):
 
     viewer._find_in_csv()
     assert viewer._search_position == 1
-    assert viewer.table.currentRow() == 2
+    assert viewer.table.currentIndex().row() == 2
 
     # Al vaciar el campo la búsqueda se olvida en vez de quedar a medias.
     viewer.search_edit.setText("")
@@ -722,12 +720,12 @@ def test_csv_viewer_counts_execution_pages_and_clicks_their_source_page(
     # Los originales suman diez hojas, pero la ejecución contiene tres.
     assert viewer.pdf_viewer.total_pages.text() == "de 3"
 
-    viewer.table.cellClicked.emit(1, 0)
+    viewer.table.clicked.emit(viewer.table_model.index(1, 0))
     assert viewer.pdf_viewer._path == first
     assert viewer.pdf_viewer._page == 4
     assert viewer.pdf_viewer.page_edit.text() == "2"
 
-    viewer.table.cellClicked.emit(2, 0)
+    viewer.table.clicked.emit(viewer.table_model.index(2, 0))
     assert viewer.pdf_viewer._path == second
     assert viewer.pdf_viewer._page == 3
     assert viewer.pdf_viewer.page_edit.text() == "3"
@@ -744,21 +742,15 @@ def test_clicking_the_current_row_locates_its_pdf_again(tmp_path: Path):
     source.touch()
     viewer._rows = [{"file": source.name, "page": "7"}]
     viewer._row_pdf_paths = [source]
-    viewer.table.setColumnCount(1)
-    viewer.table.setRowCount(1)
-    from PySide6.QtWidgets import QTableWidgetItem
-
-    item = QTableWidgetItem(source.name)
-    item.setData(Qt.ItemDataRole.UserRole, 0)
-    viewer.table.setItem(0, 0, item)
+    viewer.table_model.set_content(["file", "page"], viewer._rows)
     shown: list[tuple[int, Path | None]] = []
     viewer.pdf_viewer.show_page = lambda page, path=None: shown.append(
         (page, Path(path) if path is not None else None)
     )
 
-    viewer.table.setCurrentCell(0, 0)
+    viewer.table.setCurrentIndex(viewer.table_model.index(0, 1))
     shown.clear()
-    viewer.table.cellClicked.emit(0, 0)
+    viewer.table.clicked.emit(viewer.table_model.index(0, 1))
 
     assert shown == [(1, None)]
     viewer.close()
@@ -886,8 +878,8 @@ def test_the_page_count_is_read_once_per_document(tmp_path: Path, monkeypatch):
     app.processEvents()
 
 
-def test_a_long_csv_is_filled_in_chunks(tmp_path: Path):
-    """Llenar la tabla de una sola vez dejaba la ventana sin responder."""
+def test_a_long_csv_is_ready_without_filling_cell_by_cell(tmp_path: Path):
+    """La tabla lee del CSV en memoria: abrirla no cuesta una celda por dato."""
     app = QApplication.instance() or QApplication([])
     run = tmp_path / "run"
     data = run / "datos"
@@ -899,23 +891,20 @@ def test_a_long_csv_is_filled_in_chunks(tmp_path: Path):
         + ",".join(f"v{row}_{index}" for index in range(len(columns)))
         for row in range(1, 401)
     )
-    (data / "run.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (data / "run.csv").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
     viewer = CsvViewerWindow(tmp_path)
 
     assert viewer.load_folder(run)
 
-    # La tabla ya tiene su tamaño y su primer tramo, pero no está entera.
-    assert viewer.table.rowCount() == 400
-    assert viewer._pending_rows
-    assert viewer.table.item(0, 0) is not None
-
-    while viewer._pending_rows:
-        viewer._on_table_chunk()
-
-    assert viewer.table.item(399, 1).text() == "400"
-    assert viewer.table.item(399, 2).text() == "v400_0"
-    # Al terminar el llenado la tabla vuelve a poder ordenarse.
-    assert viewer.table_sort.row_order() == list(range(400))
+    modelo = viewer.table_model
+    # Entera desde el primer momento, sin tramos pendientes.
+    assert modelo.rowCount() == 400
+    assert modelo.index(0, 1).data() == "a.pdf"
+    assert modelo.index(399, 2).data() == "400"
+    assert modelo.index(399, 3).data() == "v400_0"
+    assert [modelo.source_row(row) for row in range(400)] == list(range(400))
     viewer.close()
     app.processEvents()
 

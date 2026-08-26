@@ -295,3 +295,53 @@ def test_una_explicacion_propia_gana_al_tooltip_automatico():
     etiqueta.setToolTip("Rango de páginas contando el batch entero")
     etiqueta.setText("de 35 pág.")
     assert etiqueta.toolTip() == "Rango de páginas contando el batch entero"
+
+
+# ── La bitácora tiene que caber en la vista previa ───────────────────────
+
+def test_la_vista_previa_se_queda_con_la_mitad_del_ancho():
+    """Una hoja de bitácora es vertical: en una franja no se lee.
+
+    Los factores de estiramiento solo reparten el espacio *sobrante*, y el
+    panel de la tabla pedía de ancho lo que suman sus controles: se llevaba
+    tres cuartas partes de la ventana y la página quedaba en su mínimo. El
+    reparto se aplica a mano hasta que alguien mueva el separador.
+    """
+    app = _app()
+    area = _area_de_trabajo(1920, 1080)
+    with patch.object(responsive, "available_area", return_value=area):
+        ventana = MainWindow()
+        try:
+            ventana.show()
+            for _ in range(4):
+                app.processEvents()
+
+            pagina, tabla = ventana.content_splitter.sizes()
+            assert abs(pagina - tabla) <= ventana.content_splitter.handleWidth()
+        finally:
+            ventana.close()
+            app.processEvents()
+
+
+def test_mover_el_separador_manda_sobre_el_reparto_automatico():
+    """Quien lo ajusta a mano no quiere que se lo devuelvan al redibujar."""
+    app = _app()
+    area = _area_de_trabajo(1920, 1080)
+    with patch.object(responsive, "available_area", return_value=area):
+        ventana = MainWindow()
+        try:
+            ventana.show()
+            app.processEvents()
+            ventana.content_splitter.splitterMoved.emit(400, 1)
+            ventana.content_splitter.setSizes([1200, 400])
+
+            a_mano = ventana.content_splitter.sizes()
+
+            ventana._balance_content_splitter()
+
+            # Ni se reparte a medias ni se toca lo que el usuario dejó.
+            assert ventana.content_splitter.sizes() == a_mano
+            assert a_mano[0] > a_mano[1]
+        finally:
+            ventana.close()
+            app.processEvents()

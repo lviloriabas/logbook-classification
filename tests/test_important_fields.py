@@ -174,9 +174,11 @@ def test_csv_viewer_reuses_the_stored_list_on_the_next_run(
     try:
         assert reopened.load_folder(run)
         assert reopened._selected_important_columns == {"file", "log_number"}
-        assert reopened.table.isColumnHidden(reopened._columns.index("matricula"))
+        assert reopened.table.isColumnHidden(
+            reopened.table_model.column_of("matricula")
+        )
         assert not reopened.table.isColumnHidden(
-            reopened._columns.index("log_number")
+            reopened.table_model.column_of("log_number")
         )
     finally:
         reopened.close()

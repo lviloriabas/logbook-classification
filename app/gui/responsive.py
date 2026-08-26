@@ -89,7 +89,10 @@ class Density:
     bottom_min_height: int
     log_min_width: int
     name_column_width: int
-    # Vista previa: mínimo por debajo del cual la página ya no se lee.
+    # Vista previa: mínimo por debajo del cual la página ya no se lee. Es un
+    # escaneo vertical de una hoja completa, así que el suelo va por encima
+    # del de un recuadro cualquiera; el reparto habitual lo decide el
+    # separador de la ventana, no este número.
     preview_min_width: int
     preview_min_height: int
     # Visor de CSV y editor de plantillas.
@@ -116,8 +119,8 @@ ROOMY = Density(
     bottom_min_height=150,
     log_min_width=340,
     name_column_width=220,
-    preview_min_width=300,
-    preview_min_height=220,
+    preview_min_width=340,
+    preview_min_height=260,
     pdf_pane_min_width=360,
     pdf_pane_min_height=260,
     editor_view_min_width=600,
@@ -133,7 +136,13 @@ COMPACT = Density(
     group_row_spacing=3,
     group_column_spacing=4,
     bottom_pane_height=140,
-    bottom_min_height=92,
+    # Veinte píxeles menos que antes, que son los que ocupa la línea de
+    # pasos del proceso automático. En una pantalla de 768 la ventana ya
+    # estaba en su techo y no cabía una fila más; de las dos, la que puede
+    # ceder es esta, que solo enseña menos archivos a la vez y se desplaza,
+    # mientras que la línea de pasos o se ve entera o no dice nada. Con
+    # sitio de sobra el separador le da bastante más que su suelo.
+    bottom_min_height=72,
     log_min_width=200,
     name_column_width=150,
     preview_min_width=200,

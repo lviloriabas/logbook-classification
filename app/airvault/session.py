@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 from copy import copy
 from dataclasses import dataclass
@@ -73,6 +74,15 @@ _AYUDA_COOKIE = (
 
 class ErrorDeSesion(RuntimeError):
     """No se pudo autenticar o la sesion caduco."""
+
+
+class SesionCancelada(RuntimeError):
+    """Se pidio parar mientras la sesion estaba esperando al servidor.
+
+    No es un fallo: es la respuesta a que alguien pulsara Cancelar. Se
+    distingue de un corte de red porque no hay nada que reintentar ni nada
+    que contarle a quien mira, mas alla de que se paro.
+    """
 
 
 class ErrorDeConexion(RuntimeError):
@@ -259,12 +269,65 @@ class SesionAirVault:
         # entrar otra vez a mitad del trabajo. Sin conservarlo, Edge aparecia
         # de repente y la bitacora seguia mostrando la peticion anterior.
         self._avisar_sesion: Optional[Callable[[str], None]] = None
+        # Cancelacion del trabajo entero. Es un ``Event`` y no una
+        # bandera porque ademas de consultarse hay que esperarlo: es lo que
+        # corta una espera de reintento en el acto en vez de al terminar.
+        # Las sesiones clonadas comparten este mismo objeto: cancelar es una
+        # decision del trabajo, no de un carril.
+        self._cancelacion = threading.Event()
         # Inyectable para que las pruebas no esperen de verdad.
-        self.dormir = time.sleep
+        self.dormir = self.esperar
 
     @property
     def autenticada(self) -> bool:
         return self._autenticada
+
+    # ── cancelacion ────────────────────────────────────────────────
+
+    @property
+    def cancelada(self) -> bool:
+        """Si alguien pidio parar y todavia no se ha reanudado."""
+        return self._cancelacion.is_set()
+
+    def cancelar(self) -> None:
+        """Corta lo que este en vuelo y deja de reintentar.
+
+        Cerrar el pool de conexiones es lo unico que puede interrumpir una
+        peticion que ya esta esperando respuesta: ``requests`` no tiene como
+        abortarla desde otro hilo, y con el tiempo de espera en sesenta
+        segundos por intento y tres intentos, cancelar podia tardar tres
+        minutos en notarse. Cerrarlo no inutiliza la sesion: la siguiente
+        peticion abre una conexion nueva, que es lo que hace falta para
+        soltar despues los batches que quedaron tomados.
+        """
+        self._cancelacion.set()
+        try:
+            self.http.close()
+        except Exception:  # noqa: BLE001 - cerrar nunca puede fallar aqui
+            logger.debug("El pool de conexiones ya estaba cerrado")
+
+    def reanudar(self) -> None:
+        """Vuelve a permitir peticiones despues de una cancelacion.
+
+        La usa quien tiene que trabajar *por haber* cancelado: soltar en
+        AirVault los batches que quedaron tomados son peticiones nuevas, y
+        sin esto se negarian todas.
+        """
+        self._cancelacion.clear()
+
+    def esperar(self, segundos: float) -> None:
+        """Espera que se corta en cuanto alguien cancela.
+
+        Es lo que hay entre un reintento y el siguiente, y tambien lo que
+        usa el navegador entre dos lecturas de las cookies. Si se cancela,
+        no vuelve: levanta, que es lo que saca al trabajo del bucle.
+        """
+        if self._cancelacion.wait(max(0.0, float(segundos))):
+            raise SesionCancelada("Se cancelo mientras se esperaba")
+
+    def _parar_si_cancelada(self, ruta: str) -> None:
+        if self._cancelacion.is_set():
+            raise SesionCancelada(f"Se cancelo antes de completar {ruta}")
 
     @property
     def origen(self) -> str:
@@ -290,6 +353,9 @@ class SesionAirVault:
         paralela._tokens = dict(self._tokens)
         paralela._avisar_sesion = self._avisar_sesion
         paralela.dormir = self.dormir
+        # El mismo objeto, no una copia: cancelar en un carril tiene que
+        # parar tambien al otro.
+        paralela._cancelacion = self._cancelacion
         return paralela
 
     # ── autenticacion ──────────────────────────────────────────────
@@ -357,6 +423,11 @@ class SesionAirVault:
                 self.config.base_url, perfil, self.config.url_sso,
                 espera_login_s=self.config.espera_login_s, avisar=avisar,
                 forzar_login=forzar_login, confirmar=self.sirven_cookies,
+                # Entre dos lecturas de las cookies pasan uno o dos
+                # segundos, y la ventana de acceso espera hasta cinco
+                # minutos: sin esto, cancelar no se notaba hasta que se
+                # agotara esa espera.
+                dormir=self.dormir,
             ),
             ORIGEN_EDGE,
         )
@@ -572,6 +643,7 @@ class SesionAirVault:
         ultimo = ""
         intento = 1
         while intento <= intentos:
+            self._parar_si_cancelada(ruta)
             cabeceras = dict(propias)
             if escribe:
                 # Solo lo que escribe necesita el token; pedirlo para cada
@@ -593,6 +665,9 @@ class SesionAirVault:
                     f"no contesto en {self.config.timeout_s:.0f}s ({exc})"
                 )
             except requests.RequestException as exc:
+                # Cancelar cierra el pool, y eso llega aqui como un corte de
+                # red. No lo es: no hay nada que reintentar ni que contar.
+                self._parar_si_cancelada(ruta)
                 ultimo = f"no se pudo conectar ({exc})"
             else:
                 if self._caduco(respuesta):
@@ -627,6 +702,7 @@ class SesionAirVault:
             )
             if intento < intentos:
                 self.dormir(self.config.espera_reintento_s * intento)
+            self._parar_si_cancelada(ruta)
             intento += 1
         raise ErrorDeConexion(
             f"No se pudo completar {ruta} tras {intentos} intentos: "
