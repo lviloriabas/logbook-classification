@@ -94,11 +94,25 @@ _MONTH_NUMBER = {
 
 @dataclass(frozen=True)
 class PaginaRef:
-    """Referencia a una página de un reporte, con su posición original."""
+    """Referencia a una página de un reporte, con su posición original.
+
+    ``pdf_path`` es de dónde se lee la página ahora mismo; ``source_name``
+    es con qué nombre se la conoce en el CSV. Casi siempre son el mismo
+    archivo, pero al apartar la entrada a ``input/processed`` un nombre ya
+    usado se numera (``bitacora-2.pdf``) y el reporte se queda apuntando
+    ahí, mientras el CSV conserva el nombre original. Quien empareje el
+    CSV con la entrega tiene que usar el segundo.
+    """
 
     pdf_path: str
     page: PageResult
     orden: int
+    source_name: str = ""
+
+    @property
+    def nombre_en_el_csv(self) -> str:
+        """El ``file`` con el que esta página sale en el CSV."""
+        return self.source_name or Path(self.pdf_path).name
 
 
 def iterar_paginas(reports: Sequence[ValidationReport]) -> Iterable[PaginaRef]:
@@ -106,7 +120,9 @@ def iterar_paginas(reports: Sequence[ValidationReport]) -> Iterable[PaginaRef]:
     orden = 0
     for report in reports:
         for page in report.pages:
-            yield PaginaRef(str(report.pdf_path), page, orden)
+            yield PaginaRef(
+                str(report.pdf_path), page, orden, report.source_filename
+            )
             orden += 1
 
 
@@ -724,7 +740,9 @@ def _paginas_json(secuencia: Sequence[EntradaPdf]) -> List[dict]:
     return [
         {"separador": entrada.separador} if entrada.ref is None
         else {
-            "archivo": Path(entrada.ref.pdf_path).name,
+            # El nombre del CSV, no el del archivo apartado: es la clave
+            # con la que el indexado empareja cada pagina con su fila.
+            "archivo": entrada.ref.nombre_en_el_csv,
             "pagina": entrada.ref.page.page_number,
         }
         for entrada in secuencia

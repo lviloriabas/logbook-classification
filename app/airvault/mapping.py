@@ -32,6 +32,9 @@ from app.airvault.model import Registro
 FLOTA_CACHE_FILENAME = "airvault_flota.json"
 
 _FECHA_CSV_RE = re.compile(r"^(\d{4})/(\d{2})/(\d{2})$")
+# Sufijo con el que se numera un nombre repetido al apartar la entrada a
+# «input/processed» (``bitacora-2.pdf``).
+_SUFIJO_DE_COPIA_RE = re.compile(r"^(?P<base>.+)-\d+$")
 _MATRICULA_RE = re.compile(r"^(HP|HK)-\d{4}(CMP|WWP)?$")
 _LOG_NUMBER_RE = re.compile(r"^\d{7}$")
 
@@ -326,6 +329,22 @@ def leer_indice_paginas(path: Path | str) -> List[dict]:
     return partes
 
 
+def _sin_sufijo_de_copia(nombre: str) -> str:
+    """El nombre original de un PDF que se aparto con el nombre numerado.
+
+    Al terminar una ejecucion sus PDF se guardan en ``input/processed``, y
+    si alli ya habia uno igual el nuevo se numera. El reporte pasa a
+    apuntar al archivo numerado y el CSV conserva el nombre con el que se
+    leyo, asi que un indice escrito con el numerado no encuentra ni una
+    sola fila y el batch entero sale sin matricula, sin log y sin fecha.
+    Los indices nuevos ya guardan el nombre del CSV; esto rescata los que
+    quedaron escritos antes, sin volver a exportar la entrega.
+    """
+    ruta = Path(nombre)
+    match = _SUFIJO_DE_COPIA_RE.match(ruta.stem)
+    return f"{match.group('base')}{ruta.suffix}" if match else ruta.name
+
+
 def registros_desde_entrega(
     filas: Iterable[Mapping[str, str]],
     indice: Sequence[Mapping[str, object]],
@@ -367,6 +386,8 @@ def registros_desde_entrega(
         except (TypeError, ValueError):
             pagina = 0
         fila = por_clave.get((archivo, pagina))
+        if fila is None:
+            fila = por_clave.get((_sin_sufijo_de_copia(archivo), pagina))
         if fila is None:
             registros.append(Registro(
                 seq=seq, archivo_origen=archivo, pagina_origen=pagina,
