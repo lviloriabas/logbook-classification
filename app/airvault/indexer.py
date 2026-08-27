@@ -35,19 +35,26 @@ from app.airvault.guards import (
 )
 from app.airvault.mapping import ResolutorFlota, valores_de_indice
 from app.airvault.model import EstadoRegistro, Manifiesto, Registro
-from app.airvault.session import ErrorDeConexion, ErrorDeSesion
+from app.airvault.session import (
+    ErrorDeAirVault,
+    ErrorDeConexion,
+    ErrorDeSesion,
+)
 
 # Fallos que no son de una pagina sino del camino entero: insistir con la
 # siguiente solo sirve para marcar cuatrocientas paginas con el mismo error.
 FALLOS_DE_CAMINO = (ErrorDeSesion, ErrorDeConexion)
 
-# Estos avisos describen calidad incompleta, no una correspondencia rota. En
-# el batch REVISAR se envia lo disponible para que AirVault la deje pendiente;
-# en un batch automatico los obligatorios vacios bloquean la escritura.
+# Estos avisos describen calidad incompleta, no una correspondencia rota: se
+# envia lo disponible y AirVault deja la pagina pendiente de revision.
+#
+# «obligatorio_vacio» no esta en la lista y no puede estarlo, ni siquiera en
+# REVISAR: AirVault no acepta la pagina y contesta 500 «Field <campo> value
+# is required». Mandarla no la deja amarilla, la rechaza, y el rechazo se
+# llevaba por delante el resto del batch.
 AVISOS_DE_REVISION = {
     "matricula_vacia",
     "matricula_desconocida",
-    "obligatorio_vacio",
     "log_duplicado",
 }
 
@@ -62,7 +69,6 @@ class PlanPagina:
     valores: Dict[int, str]
     avisos: List[Aviso] = field(default_factory=list)
     ya_indexada: bool = False
-    solo_revision: bool = False
 
     @property
     def escribible(self) -> bool:
@@ -71,14 +77,7 @@ class PlanPagina:
 
     @property
     def bloqueos(self) -> List[Aviso]:
-        return [
-            aviso for aviso in self.avisos
-            if aviso.codigo not in AVISOS_DE_REVISION
-            or (
-                aviso.codigo == "obligatorio_vacio"
-                and not self.solo_revision
-            )
-        ]
+        return [a for a in self.avisos if a.codigo not in AVISOS_DE_REVISION]
 
     @property
     def requiere_revision(self) -> bool:
@@ -233,7 +232,6 @@ class Indexador:
                 plan.paginas.append(PlanPagina(
                     seq=registro.seq, pagina_batch=pagina, registro=registro,
                     valores={}, avisos=[], ya_indexada=False,
-                    solo_revision=self.manifiesto.solo_subir,
                 ))
                 continue
             valores = valores_de_indice(
@@ -282,7 +280,6 @@ class Indexador:
                         remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
                     ).strip()
                 ),
-                solo_revision=self.manifiesto.solo_subir,
             ))
 
         plan.avisos_globales = [
@@ -392,6 +389,24 @@ class Indexador:
                 )
                 self._persistir()
                 break
+            except ErrorDeAirVault as exc:
+                # AirVault contesto y dijo que no acepta *esta* pagina. No
+                # es el camino: la siguiente puede escribirse sin problema,
+                # asi que se anota y se sigue aunque se haya pedido parar en
+                # el primer error. Una bitacora que el servidor rechaza no
+                # puede dejar sin indexar a las cuatrocientas de atras.
+                registro.estado = EstadoRegistro.ERROR
+                registro.avisos = [f"[rechazada] {exc}"]
+                resultado.fallidas += 1
+                resultado.detalles.append(
+                    f"pagina {entrada.pagina_batch}: {exc}"
+                )
+                logger.error(
+                    "AirVault rechazo la pagina {}: {}",
+                    entrada.pagina_batch, exc,
+                )
+                self._persistir()
+                continue
             except Exception as exc:  # noqa: BLE001 - se anota y se sigue
                 registro.estado = EstadoRegistro.ERROR
                 registro.avisos = [f"[error_escritura] {exc}"]

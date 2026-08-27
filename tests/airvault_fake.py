@@ -10,6 +10,7 @@ from dataclasses import replace
 from typing import Dict, List, Mapping, Optional
 
 from app.airvault.client import PaginaDelLote, PaginaIndexada, ResumenLote
+from app.airvault.session import ErrorDeAirVault
 
 
 class ClienteFalso:
@@ -20,6 +21,7 @@ class ClienteFalso:
         picklist: Optional[List[str]] = None,
         page_count: int = 0,
         fallar_en: Optional[set[int]] = None,
+        rechazar_en: Optional[set[int]] = None,
         mapa: Optional[List[PaginaDelLote]] = None,
         no_se_pueden_borrar: Optional[set[int]] = None,
         estados_tras_validar: Optional[Dict[int, int]] = None,
@@ -30,6 +32,9 @@ class ClienteFalso:
         self.picklist = picklist or []
         self.page_count = page_count or len(self.paginas)
         self.fallar_en = fallar_en or set()
+        # Paginas que AirVault contesta explicando que no las acepta, como
+        # hace con «Field Aircraft value is required».
+        self.rechazar_en = rechazar_en or set()
         # Como ve AirVault el batch entero. Sin decir nada, cada pagina es
         # su propio documento y esta en verde: lo que hace falta para que
         # el batch se pueda dar por terminado.
@@ -98,6 +103,11 @@ class ClienteFalso:
                        pagina_siguiente=None):
         if pagina in self.fallar_en:
             raise RuntimeError(f"fallo simulado en la pagina {pagina}")
+        if pagina in self.rechazar_en:
+            raise ErrorDeAirVault(
+                f"AirVault rechazo la pagina {pagina}: "
+                f"Field Aircraft value is required."
+            )
         self.escrituras.append((pagina, dict(valores), estado))
         self.paginas[pagina] = PaginaIndexada(
             pagina=pagina, estado=estado, valores=dict(valores), columnas={}

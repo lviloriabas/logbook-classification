@@ -354,6 +354,15 @@ a mano.
 Al guardar, si algun campo obligatorio queda vacio o invalido, la pagina
 queda en 3. Si todos son validos, en 0.
 
+**Un obligatorio vacio no deja la pagina en 3: el guardado se rechaza.**
+Medido contra `SaveAndGetIndexFields`: mandar la pagina sin Aircraft
+contesta 500 con la pagina de error generica y `Message: Field Aircraft
+value is required` dentro, y no guarda nada. El `status` que se envie da
+igual. La pagina queda en 3 cuando AirVault lo decide al validar lo que
+recibio, no cuando se le pide. Mandar «lo disponible» para que quede
+pendiente de revision no funciona: hay que tener el campo o no mandar la
+pagina.
+
 ---
 
 ## 6. Reglas del dominio
@@ -702,6 +711,14 @@ Recien despues de que eso funcione, correr un batch completo.
   distintas, con nombres repetidos entre ellos.
 - **El lookup de flota es del cliente.** Escribir por API solo la matricula
   deja Fleet y Lessor vacios y la pagina en amarillo.
+- **El Aircraft que trae una pagina recien subida es el nuestro.** Quick
+  Upload clasifica el archivo entero con los valores de un solo
+  `FinishUpload`, asi que todas las paginas del batch llegan con el Aircraft
+  de la primera bitacora. No sirve para comprobar que el PDF no se subio
+  corrido: comparado contra el manifiesto acusa a toda pagina de otro avion.
+  El unico ancla real es el Log Page Number, que Quick Upload no puede
+  escribir; hasta que lo escriba el indexado, la pagina no tiene con que
+  contrastarse y se sigue por posicion.
 - **`LOG PAGE` no esta en el picklist.** La interfaz lo agrega al combo
   para no perderlo, pero es un valor fuera del vocabulario controlado.
 - **Edge congela las pestanas en segundo plano** y la aplicacion deja de

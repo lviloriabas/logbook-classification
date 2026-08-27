@@ -632,13 +632,14 @@ def test_el_lote_de_revisar_no_se_numera_como_una_parte_mas(tmp_path):
     assert principal[0].manifiesto.nombre_batch == "DP | BITS PRUEBA"
 
 
-def test_en_el_lote_de_revisar_se_escribe_lo_disponible_en_amarillo(tmp_path):
-    from app.airvault.config import (
-        CAMPO_END_DATE,
-        CAMPO_LOG_NUMBER,
-        CAMPO_MATRICULA,
-        ESTADO_NECESITA_CORRECCION,
-    )
+def test_en_el_lote_de_revisar_no_se_manda_lo_que_airvault_no_acepta(tmp_path):
+    """Sin avion no hay pagina que guardar, ni siquiera amarilla.
+
+    Se intento mandar lo disponible confiando en que AirVault la dejara en
+    «Need Correction». No lo hace: contesta 500 «Field Aircraft value is
+    required» y ese rechazo paraba el batch entero. Las bitacoras de
+    REVISAR sin avion se quedan para que una persona las resuelva.
+    """
     from app.airvault.indexer import Indexador
     from tests.airvault_fake import ClienteFalso, pagina
 
@@ -654,29 +655,18 @@ def test_en_el_lote_de_revisar_se_escribe_lo_disponible_en_amarillo(tmp_path):
     )
     indexador = Indexador(cliente, revisar.manifiesto, ["HP-1848CMP"])
     plan = indexador.planificar(total)
-    indexador.aplicar(plan)
+    resultado = indexador.aplicar(plan)
 
-    assert len(cliente.escrituras) == 2
-    assert all(
-        estado == ESTADO_NECESITA_CORRECCION
-        for _pagina, _valores, estado in cliente.escrituras
-    )
-    assert {
-        (valores[CAMPO_LOG_NUMBER], valores[CAMPO_END_DATE])
-        for _pagina, valores, _estado in cliente.escrituras
-    } == {
-        ("2271621", "08/12/2026"),
-        ("2293107", "08/13/2026"),
-    }
-    assert all(
-        valores[CAMPO_MATRICULA] == ""
-        for _pagina, valores, _estado in cliente.escrituras
-    )
+    assert cliente.escrituras == []
+    assert resultado.omitidas == 2
+    assert not resultado.interrumpido
     assert cliente.lecturas == [2, 3]
-    assert len(plan.escribibles) == 2
+    motivos = {a.codigo for p in plan.bloqueadas for a in p.avisos}
+    assert "obligatorio_vacio" in motivos
+    assert plan.escribibles == []
 
 
-def test_el_reporte_muestra_los_avisos_sin_bloquear_la_escritura(tmp_path):
+def test_el_reporte_dice_por_que_esa_pagina_no_se_puede_escribir(tmp_path):
     from app.airvault.indexer import Indexador
     from tests.airvault_fake import ClienteFalso
 
@@ -688,9 +678,11 @@ def test_el_reporte_muestra_los_avisos_sin_bloquear_la_escritura(tmp_path):
     total = len(revisar.manifiesto.registros)
     plan = Indexador(ClienteFalso(page_count=total), revisar.manifiesto,
                      []).planificar(total)
-    motivos = {a.codigo for p in plan.escribibles for a in p.avisos}
+    motivos = {a.codigo for p in plan.bloqueadas for a in p.avisos}
+    # El reporte tiene que nombrar las dos cosas: que no se leyo el avion y
+    # que por eso la pagina no se puede guardar.
     assert "matricula_vacia" in motivos
-    assert plan.bloqueadas == []
+    assert "obligatorio_vacio" in motivos
 
 
 def test_sin_bitacoras_sueltas_no_hay_lote_de_revisar(tmp_path):

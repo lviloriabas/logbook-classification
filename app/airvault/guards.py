@@ -16,7 +16,6 @@ from app.airvault.config import (
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
     CAMPOS_OBLIGATORIOS,
-    ESTADO_NECESITA_CORRECCION,
     ESTADO_VALIDO,
     nombre_campo,
 )
@@ -116,6 +115,10 @@ def verificar_obligatorios(
 ) -> List[Aviso]:
     """Ningun campo obligatorio puede ir vacio.
 
+    No es que la pagina quede amarilla: AirVault ni siquiera la guarda.
+    Contesta 500 con «Field <campo> value is required», asi que mandarla no
+    consigue una pagina pendiente de revision, consigue un rechazo.
+
     El aviso nombra el campo como se llama en la pantalla de AirVault: quien
     lo lee tiene que poder ir a la bitacora y ver que falta, sin traducir un
     numero de campo.
@@ -127,8 +130,9 @@ def verificar_obligatorios(
                 Aviso(
                     registro.seq,
                     "obligatorio_vacio",
-                    f"{nombre_campo(campo)} quedaria vacio y AirVault dejaria "
-                    f"la pagina en Need Correction",
+                    f"{nombre_campo(campo)} quedaria vacio y AirVault no "
+                    f"acepta la pagina: contesta «Field "
+                    f"{nombre_campo(campo)} value is required»",
                 )
             )
     return avisos
@@ -148,7 +152,10 @@ def verificar_alineacion(
     parar.
 
     Si AirVault no trae nada, no se puede contrastar y se sigue por
-    posicion, que es lo unico disponible.
+    posicion, que es lo unico disponible. La matricula remota no sirve de
+    ancla: Quick Upload clasifica el archivo entero con el Aircraft de su
+    primera bitacora, asi que la trae puesta cada pagina del batch y es
+    nuestra, no de AirVault.
     """
     avisos: List[Aviso] = []
     log_remoto = str(valores_en_airvault.get(CAMPO_LOG_NUMBER, "")).strip()
@@ -172,12 +179,14 @@ def verificar_alineacion(
         and registro.matricula
         and mat_remota.upper() != registro.matricula.upper()
         and not log_remoto
-        # Quick Upload clasifica inicialmente todas las páginas con el
-        # Aircraft de la primera bitácora del archivo. En una página todavía
-        # amarilla y sin log ese valor es una preclasificación del batch, no
-        # evidencia de que el orden esté corrido. En una página ya verde sí
-        # se conserva como guarda: podría ser trabajo previo de una persona.
-        and estado_pagina != ESTADO_NECESITA_CORRECCION
+        # Solo la matricula de una pagina ya verde es evidencia: ahi la
+        # escribio el indexado o una persona. En cualquier otro estado
+        # (amarilla, sin plantilla, recien subida) lo que hay es la
+        # clasificacion inicial de Quick Upload, que es la misma para todo
+        # el archivo. Contrastarla no descubre un PDF corrido; acusa a toda
+        # pagina cuyo avion no sea el de la primera bitacora y las deja sin
+        # indexar, que era justo lo que dejaba el batch entero en amarillo.
+        and estado_pagina == ESTADO_VALIDO
     ):
         avisos.append(
             Aviso(

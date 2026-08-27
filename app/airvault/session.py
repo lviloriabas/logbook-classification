@@ -133,6 +133,32 @@ _PISTAS_POR_RUTA = {
 }
 
 
+# AirVault explica sus negativas dentro de la misma pagina de error
+# generica, en el «Message:» del formulario ``ErrorDetails``. Cuando ese
+# mensaje esta, el 500 no es un servidor ocupado sino un rechazo: guardar una
+# pagina a la que le falta un campo obligatorio contesta «Field Aircraft
+# value is required». Reintentarlo tres veces no lo arregla, y hacerlo pasar
+# por un corte de red cortaba el batch entero en la primera bitacora
+# incompleta, sin escribir ninguna de las que venian detras.
+_MENSAJE_DE_RECHAZO = re.compile(r"Message:\s*([^<]{1,200})")
+
+
+def _motivo_del_rechazo(respuesta: requests.Response) -> str:
+    """El «Message:» con el que AirVault dice por que no acepta la peticion.
+
+    Cadena vacia si la respuesta no trae esa pagina: entonces el codigo si
+    habla de un servidor ocupado y reintentar tiene sentido.
+    """
+    try:
+        cuerpo = respuesta.text or ""
+    except Exception:  # noqa: BLE001 - leer el motivo no puede fallar
+        return ""
+    if "ErrorDetails" not in cuerpo:
+        return ""
+    encontrado = _MENSAJE_DE_RECHAZO.search(cuerpo)
+    return " ".join(encontrado.group(1).split()) if encontrado else ""
+
+
 def _pista_de(ruta: str) -> str:
     """Lo que conviene mirar cuando falla justo esta ruta."""
     for prefijo, pista in _PISTAS_POR_RUTA.items():
@@ -687,6 +713,14 @@ class SesionAirVault:
                         continue
                 if respuesta.status_code not in ESTADOS_TRANSITORIOS:
                     return respuesta
+                motivo = _motivo_del_rechazo(respuesta)
+                if motivo:
+                    # AirVault contesto por que no lo acepta. Frena esta
+                    # peticion, no el camino: la pagina siguiente puede
+                    # estar perfectamente.
+                    raise ErrorDeAirVault(
+                        f"AirVault rechazo {ruta}: {motivo}."
+                    )
                 ultimo = (
                     f"el servidor respondio {respuesta.status_code} "
                     f"({_describir_cuerpo(respuesta)})"
