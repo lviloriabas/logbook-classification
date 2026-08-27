@@ -148,6 +148,39 @@ def test_lo_que_no_mejora_insistiendo_no_se_reintenta():
     assert "404" in str(fallo.value)
 
 
+_ERROR_CON_MOTIVO = (
+    "<!DOCTYPE html> <html> <head> <title>Client Error</title> </head> "
+    "<body> <div> <h2>Info</h2> <form id=\"ErrorDetails\"> <p> Message: "
+    "Field Aircraft value is required </p> </form> </div> </body> </html>"
+)
+
+
+def test_un_500_que_dice_por_que_no_se_reintenta():
+    """Guardar una pagina incompleta contesta 500 con el motivo dentro.
+
+    Se leia como «la red o AirVault ocupado»: tres intentos identicos y
+    despues un ErrorDeConexion que cortaba el batch entero.
+    """
+    s = sesion([RespuestaFalsa(status_code=500, text=_ERROR_CON_MOTIVO)])
+
+    with pytest.raises(ErrorDeAirVault) as fallo:
+        s.post("/index/FormsProcessing/SaveAndGetIndexFields")
+
+    assert len(s.http.pedidas) == 1
+    assert "Field Aircraft value is required" in str(fallo.value)
+
+
+def test_un_500_sin_motivo_sigue_siendo_un_servidor_ocupado():
+    """La pagina de error generica no explica nada; ahi si vale insistir."""
+    s = sesion([
+        RespuestaFalsa(status_code=500, text="<html>Client Error</html>"),
+        RespuestaFalsa(json_data={"ok": True}),
+    ])
+
+    assert s.post("/x").json() == {"ok": True}
+    assert len(s.http.pedidas) == 2
+
+
 def test_un_rechazo_de_una_pagina_no_es_un_fallo_del_camino():
     """Un 404 frena esa pagina; el batch entero sigue.
 
@@ -345,6 +378,28 @@ def test_un_fallo_de_una_pagina_si_se_marca_en_esa_pagina():
     resultado = indexador.aplicar(
         indexador.planificar(3), detener_en_error=False
     )
+
+    assert resultado.escritas == 2
+    assert resultado.fallidas == 1
+    assert not resultado.interrumpido
+    assert manifiesto_.registros[1].estado is EstadoRegistro.ERROR
+
+
+def test_una_pagina_rechazada_no_deja_sin_indexar_a_las_demas():
+    """El motivo es de esa bitacora, no del batch.
+
+    Cuando el rechazo viajaba disfrazado de corte de red, la primera pagina
+    que AirVault no aceptaba se llevaba por delante todo lo que venia
+    detras: el batch se quedaba en amarillo y sin una sola pagina escrita.
+    """
+    cliente = ClienteFalso(
+        paginas={n: pagina(n) for n in (1, 2, 3)}, picklist=PICKLIST,
+        page_count=3, rechazar_en={2},
+    )
+    manifiesto_ = manifiesto()
+    indexador = Indexador(cliente, manifiesto_, PICKLIST)
+
+    resultado = indexador.aplicar(indexador.planificar(3))
 
     assert resultado.escritas == 2
     assert resultado.fallidas == 1
