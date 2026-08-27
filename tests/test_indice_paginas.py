@@ -216,6 +216,28 @@ def test_el_indice_marca_cual_es_el_lote_de_revisar(tmp_path):
     assert [p["revisar"] for p in datos["partes"]] == [False, True]
 
 
+def test_el_indice_usa_el_nombre_con_el_que_sale_en_el_csv(tmp_path):
+    """El PDF apartado se numera; el CSV conserva el nombre original.
+
+    Al terminar la ejecucion su PDF se guarda en «input/processed», y si
+    ahi ya habia uno igual el nuevo se numera. El reporte pasa a apuntar al
+    numerado, pero el CSV sigue diciendo «bitacora.pdf». Si el indice
+    escribiera el numerado, el indexado no encontraria ni una fila y el
+    batch entero saldria sin matricula, sin log y sin fecha.
+    """
+    reporte = _reporte(_page(1, "2147337", "HP-1534CMP"))
+    reporte.pdf_path = "input/processed/bitacora-2.pdf"
+    reporte.source_name = "bitacora.pdf"
+
+    destino = escribir_indice_paginas(
+        [ArchivoDeEntrega(Path("ejecución.pdf"), secuencia_pdf_unico([reporte]))],
+        tmp_path / "corrida_paginas.json",
+    )
+    datos = json.loads(Path(destino).read_text(encoding="utf-8"))
+
+    assert datos["partes"][0]["paginas"][0]["archivo"] == "bitacora.pdf"
+
+
 def test_el_indice_se_escribe_aunque_no_exista_la_carpeta(tmp_path):
     destino = escribir_indice_paginas([], tmp_path / "datos" / "x.json")
     assert Path(destino).is_file()

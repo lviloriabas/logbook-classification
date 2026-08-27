@@ -18,6 +18,7 @@ from app.airvault.mapping import (
     normalizar_matricula,
     obligatorios_vacios_por_pagina,
     registros_desde_csv,
+    registros_desde_entrega,
     valores_de_indice,
 )
 
@@ -194,3 +195,34 @@ def test_sin_vuelo_leido_no_se_toca_description():
     registro = registros_desde_csv([_fila(flight_number="")])[0]
     valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
     assert CAMPO_DESCRIPCION not in valores
+
+
+# ── el PDF apartado con el nombre numerado ─────────────────────────
+#
+# Al terminar una ejecucion sus PDF se guardan en «input/processed», y si
+# alli ya habia uno con ese nombre el nuevo se numera. El reporte pasa a
+# apuntar al numerado; el CSV conserva el nombre con el que se leyo. Un
+# indice escrito con el numerado no encontraba ni una sola fila, y el batch
+# entero salia sin matricula, sin log y sin fecha: en AirVault eso son
+# cuatrocientas paginas amarillas que el indexado se niega a escribir.
+
+def test_el_indice_numerado_encuentra_igual_su_fila():
+    filas = [_fila(file="bitacora.pdf", page="1")]
+    indice = [{"archivo": "bitacora-2.pdf", "pagina": 1}]
+
+    registro = registros_desde_entrega(filas, indice)[0]
+
+    assert registro.matricula == "HP-1848CMP"
+    assert registro.log_number == "2287325"
+    assert registro.fecha == "2026/08/31"
+
+
+def test_una_pagina_que_de_verdad_no_esta_en_el_csv_se_anota():
+    """El rescate no puede tapar una entrega descuadrada de verdad."""
+    filas = [_fila(file="bitacora.pdf", page="1")]
+    indice = [{"archivo": "otra.pdf", "pagina": 1}]
+
+    registro = registros_desde_entrega(filas, indice)[0]
+
+    assert registro.matricula == ""
+    assert any("sin_fila" in aviso for aviso in registro.avisos)
