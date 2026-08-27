@@ -685,6 +685,40 @@ def test_el_reporte_dice_por_que_esa_pagina_no_se_puede_escribir(tmp_path):
     assert "obligatorio_vacio" in motivos
 
 
+def test_una_entrega_que_no_cuadra_con_su_csv_no_se_prepara():
+    """Mejor pararlo aqui que subir cuatrocientas paginas vacias.
+
+    Si el indice y el CSV no usan el mismo nombre de archivo, el manifiesto
+    sale con un registro vacio por pagina. Eso no se notaba hasta tener el
+    batch en AirVault, entero en amarillo y sin nada que indexar.
+    """
+    from app.airvault.flujo import _comprobar_que_el_csv_cuadra
+    from app.airvault.model import Registro
+
+    huerfanas = [
+        Registro(seq=1, avisos=["[sin_fila] la pagina 1 de x.pdf ..."]),
+        Registro(seq=2, avisos=["[sin_fila] la pagina 2 de x.pdf ..."]),
+    ]
+
+    with pytest.raises(ErrorDeCorrida) as fallo:
+        _comprobar_que_el_csv_cuadra(huerfanas, "datos/EJEC.CSV")
+
+    assert "no estan hablando de los mismos archivos" in str(fallo.value)
+
+
+def test_una_pagina_suelta_sin_fila_no_para_la_entrega():
+    """Una sola descuadrada se anota y el resto del batch sigue."""
+    from app.airvault.flujo import _comprobar_que_el_csv_cuadra
+    from app.airvault.model import Registro
+
+    registros = [
+        Registro(seq=1, matricula="HP-1848CMP"),
+        Registro(seq=2, avisos=["[sin_fila] la pagina 2 de x.pdf ..."]),
+    ]
+
+    _comprobar_que_el_csv_cuadra(registros, "datos/EJEC.CSV")
+
+
 def test_sin_bitacoras_sueltas_no_hay_lote_de_revisar(tmp_path):
     _csv_path, partes = corrida(tmp_path)
     assert not [a for a in partes if a.revisar]
