@@ -24,6 +24,7 @@ from app.airvault.flujo import (
     POSIBLE_DUPLICADO,
     ErrorDeCorrida,
     Trabajo,
+    buscador_de,
     carpeta_del_libro,
     completar_partes,
     es_posible_duplicado,
@@ -163,6 +164,27 @@ def test_sin_poder_consultar_no_se_inventa_un_motivo(tmp_path):
             raise RuntimeError("sin red")
 
     assert revisar_duplicado(trabajo, BuscadorMudo()) == ""
+
+
+# ── preguntarle a Web Search es opcional ───────────────────────────
+
+def test_de_fabrica_no_se_le_pregunta_a_web_search(tmp_path):
+    """La ruta de busqueda se adivina en ejecucion; no se paga sin pedirlo.
+
+    Sin buscador no se deja de vigilar: el libro de envios es local, no
+    falla y frena igual un batch que ya se mando.
+    """
+    assert buscador_de(SesionFalsa(), AirVaultConfig(), tmp_path / "a.json") is None
+
+
+def test_encendida_la_opcion_si_se_construye_el_buscador(tmp_path):
+    buscador = buscador_de(
+        SesionFalsa(),
+        AirVaultConfig(buscar_publicadas=True),
+        tmp_path / "a.json",
+    )
+
+    assert isinstance(buscador, Buscador)
 
 
 # ── lo que la marca impide ─────────────────────────────────────────

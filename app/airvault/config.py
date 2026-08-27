@@ -118,6 +118,14 @@ class AirVaultConfig:
     auto_subir: bool = True
     auto_esperar: bool = True
     auto_indexar: bool = True
+    # Si antes de subir se le pregunta a Web Search si esas bitacoras ya
+    # estan publicadas. Apagado de fabrica: la ruta de busqueda no esta
+    # documentada y el programa la adivina en ejecucion, asi que la consulta
+    # cuesta varias peticiones y solo contesta cuando ese descubrimiento
+    # acierta. Apagado queda el libro de envios, que es local, no falla y
+    # tambien frena un batch repetido; lo que se pierde es ver un batch que
+    # ya se completo y por eso salio de la cola de Web Index.
+    buscar_publicadas: bool = False
     # Ruta de consulta de Web Search y nombre de la forma en que se le
     # mandan los parametros. AirVault no documenta su API, asi que las
     # descubre el programa la primera vez (ver
