@@ -217,10 +217,36 @@ def test_el_indice_numerado_encuentra_igual_su_fila():
     assert registro.fecha == "2026/08/31"
 
 
-def test_una_pagina_que_de_verdad_no_esta_en_el_csv_se_anota():
+def test_con_un_solo_pdf_la_pagina_manda_aunque_el_nombre_no_cuadre():
+    """Un solo archivo no deja lugar a dudas: la pagina 1 es la pagina 1.
+
+    Vale para cualquier renombrado, no solo para el sufijo numerado, que es
+    lo que hace falta cuando no se sabe con que regla cambio el nombre.
+    """
+    filas = [_fila(file="bitacora.pdf", page="1")]
+    indice = [{"archivo": "otro-nombre-cualquiera.pdf", "pagina": 1}]
+
+    registro = registros_desde_entrega(filas, indice)[0]
+
+    assert registro.matricula == "HP-1848CMP"
+
+
+def test_con_varios_pdf_no_se_adivina_y_la_pagina_queda_anotada():
+    """Con dos archivos la pagina 1 es ambigua: adivinar seria escribir mal."""
+    filas = [_fila(file="uno.pdf", page="1"),
+             _fila(file="dos.pdf", page="1", log_number="2287326")]
+    indice = [{"archivo": "otra.pdf", "pagina": 1}]
+
+    registro = registros_desde_entrega(filas, indice)[0]
+
+    assert registro.matricula == ""
+    assert any("sin_fila" in aviso for aviso in registro.avisos)
+
+
+def test_una_pagina_que_no_esta_en_el_csv_se_anota():
     """El rescate no puede tapar una entrega descuadrada de verdad."""
     filas = [_fila(file="bitacora.pdf", page="1")]
-    indice = [{"archivo": "otra.pdf", "pagina": 1}]
+    indice = [{"archivo": "bitacora.pdf", "pagina": 7}]
 
     registro = registros_desde_entrega(filas, indice)[0]
 
