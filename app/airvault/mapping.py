@@ -374,6 +374,16 @@ def registros_desde_entrega(
             continue
         por_clave[(archivo, pagina)] = fila
 
+    # Cuando la ejecucion salio de un solo PDF no hay ambiguedad posible: la
+    # pagina 7 del indice es la pagina 7 del CSV, se llame como se llame el
+    # archivo. Es el rescate que vale para cualquier renombrado, sin tener
+    # que acertar con la regla con la que se renombro.
+    nombres = {archivo for archivo, _pagina in por_clave}
+    por_pagina: Dict[int, Mapping[str, str]] = (
+        {pagina: fila for (_archivo, pagina), fila in por_clave.items()}
+        if len(nombres) == 1 else {}
+    )
+
     registros: List[Registro] = []
     for seq, entrada in enumerate(indice, start=1):
         etiqueta = str(entrada.get("separador", "") or "").strip()
@@ -388,6 +398,8 @@ def registros_desde_entrega(
         fila = por_clave.get((archivo, pagina))
         if fila is None:
             fila = por_clave.get((_sin_sufijo_de_copia(archivo), pagina))
+        if fila is None:
+            fila = por_pagina.get(pagina)
         if fila is None:
             registros.append(Registro(
                 seq=seq, archivo_origen=archivo, pagina_origen=pagina,
