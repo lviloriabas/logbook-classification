@@ -86,20 +86,22 @@ def test_sin_dato_remoto_se_sigue_por_posicion():
     assert verificar_alineacion(registro(), {}) == []
 
 
-def test_matricula_distinta_sin_log_remoto_avisa():
-    avisos = verificar_alineacion(registro(matricula="HP-1848CMP"),
-                                  {CAMPO_MATRICULA: "HP-1852CMP"})
-    assert [a.codigo for a in avisos] == ["matricula_distinta"]
+def test_la_matricula_de_quick_upload_nunca_bloquea():
+    """Es la del archivo entero, puesta por nosotros: no dice nada.
 
+    Quick Upload clasifica el PDF completo con el Aircraft de su primera
+    bitacora, asi que toda pagina cuyo avion sea otro llega con la matricula
+    «distinta». Tomarla por evidencia dejaba el batch entero sin indexar y
+    en amarillo: ni una sola pagina llegaba a escribirse.
+    """
+    for estado in (None, 1, 2, 3):
+        avisos = verificar_alineacion(
+            registro(matricula="HP-1848CMP"),
+            {CAMPO_MATRICULA: "HP-1852CMP"},
+            estado_pagina=estado,
+        )
 
-def test_matricula_inicial_de_quick_upload_no_bloquea_una_amarilla():
-    avisos = verificar_alineacion(
-        registro(matricula="HP-1848CMP"),
-        {CAMPO_MATRICULA: "HP-1852CMP"},
-        estado_pagina=3,
-    )
-
-    assert avisos == []
+        assert avisos == [], f"estado {estado}"
 
 
 def test_matricula_distinta_si_bloquea_una_pagina_verde():
