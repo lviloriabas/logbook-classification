@@ -12,5 +12,6 @@
   "reintentos": 3,
   "usuario": "",
   "completar_batch": false,
-  "auto_depurar": true
+  "auto_depurar": true,
+  "buscar_publicadas": false
 }

@@ -8,6 +8,7 @@ deja dudas sobre que se alcanzo a escribir.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
@@ -285,7 +286,44 @@ class Indexador:
         plan.avisos_globales = [
             a for a in globales if a.seq not in {p.seq for p in plan.paginas}
         ]
+        self._anotar_plan(plan)
         return plan
+
+    def _anotar_plan(self, plan: Plan) -> None:
+        """Deja en la bitacora por que no se va a escribir cada pagina.
+
+        Sin esto, un batch que no escribe nada solo se nota en AirVault: el
+        indexado dice «omitidas 400» y hay que abrir el manifiesto para
+        saber si fue una guarda, cual, o si AirVault ya las daba por buenas.
+        Una linea por batch con el recuento y las primeras paginas basta
+        para no volver a adivinarlo.
+        """
+        bitacoras = len(plan.paginas) - len(plan.separadores)
+        bloqueadas = plan.bloqueadas
+        logger.info(
+            "Batch {}: {} bitacoras, {} por escribir, {} bloqueadas, "
+            "{} divisorias",
+            plan.batch_id, bitacoras, len(plan.escribibles),
+            len(bloqueadas), len(plan.separadores),
+        )
+        if not bloqueadas:
+            return
+        motivos = Counter(
+            aviso.codigo for entrada in bloqueadas
+            for aviso in entrada.bloqueos
+        )
+        paginas = [str(entrada.pagina_batch) for entrada in bloqueadas[:8]]
+        if len(bloqueadas) > len(paginas):
+            paginas.append("...")
+        logger.warning(
+            "Batch {}: {} de {} bitacoras no se pueden escribir ({}). "
+            "Paginas {}. La primera: {}",
+            plan.batch_id, len(bloqueadas), bitacoras,
+            ", ".join(f"{codigo} x{cuantas}"
+                      for codigo, cuantas in motivos.most_common()),
+            ", ".join(paginas),
+            bloqueadas[0].bloqueos[0],
+        )
 
     def _aprender_flota(self, remotas) -> None:
         """Guarda los pares matricula/flota que AirVault ya tiene puestos."""

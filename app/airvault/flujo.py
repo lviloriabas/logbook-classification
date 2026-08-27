@@ -2304,8 +2304,15 @@ def buscador_de(
     completo y que por lo tanto tienen que estar publicadas. Sin ninguna no
     se puede distinguir «no esta» de «pregunte donde no era», asi que el
     buscador se construye igual pero dira que no puede responder.
+
+    Sin ``buscar_publicadas`` no hay consulta: se devuelve ``None`` y quien
+    pregunta se queda con el libro de envios, que es local y tambien frena
+    un batch repetido. Viene apagado porque la ruta de busqueda no esta
+    documentada y se adivina en ejecucion; encenderlo es decidir que se
+    quiere pagar ese descubrimiento a cambio de ver tambien los batches ya
+    completados, que son los que ninguna consulta a la cola encuentra.
     """
-    if sesion is None:
+    if sesion is None or not config.buscar_publicadas:
         return None
     raiz = Path(ruta_config).parent if ruta_config else None
     return websearch.Buscador(
