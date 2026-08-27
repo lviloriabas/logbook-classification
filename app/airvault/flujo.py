@@ -775,6 +775,35 @@ class EstadoParte:
         return f"{titulo}: {self.detalle}" if self.detalle else titulo
 
 
+def _comprobar_que_el_csv_cuadra(registros, csv) -> None:
+    """Para en seco si ninguna pagina de la entrega encontro su fila.
+
+    Cuando el indice y el CSV no usan el mismo nombre de archivo, el
+    manifiesto se arma con un registro vacio por pagina y el batch sale sin
+    matricula, sin log y sin fecha. Eso no se nota hasta que AirVault tiene
+    cuatrocientas paginas amarillas que nadie puede indexar, asi que mas
+    vale no llegar a preparar el trabajo: el dato esta en el CSV y lo que
+    hay que arreglar es el emparejamiento, no volver a procesar.
+    """
+    bitacoras = [r for r in registros if not r.es_separador]
+    if not bitacoras:
+        return
+    huerfanas = [
+        registro for registro in bitacoras
+        if any("sin_fila" in str(aviso) for aviso in registro.avisos)
+    ]
+    if len(huerfanas) < len(bitacoras):
+        return
+    raise ErrorDeCorrida(
+        f"Ninguna de las {len(bitacoras)} bitacoras de la entrega "
+        f"encontro su fila en {Path(csv).name}, asi que el batch "
+        f"saldria entero sin matricula, sin log y sin fecha. El PDF y "
+        f"el CSV no estan hablando de los mismos archivos. Para ver "
+        f"que nombres usa cada uno, corra tools/revisar_entrega.py "
+        f"sobre {Path(csv).parent.parent}."
+    )
+
+
 class Trabajo:
     """Un trabajo de indexado: su manifiesto y las etapas que lo mueven."""
 
@@ -847,6 +876,7 @@ class Trabajo:
             raise ErrorDeCorrida(
                 "El CSV de la ejecución no tiene ninguna bitacora utilizable"
             )
+        _comprobar_que_el_csv_cuadra(registros, csv)
         carpeta = Path(carpeta)
         manifiesto = Manifiesto(
             job_id=carpeta.name,

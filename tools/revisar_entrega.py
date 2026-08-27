@@ -72,8 +72,12 @@ def main() -> int:
     print(f"\nCSV: {len(filas)} filas")
     for nombre, cuantas in nombres_csv.most_common():
         print(f"  file = {nombre!r}  ({cuantas} paginas)")
-    if not {"matricula", "log_number", "date"} <= set(filas[0] if filas else {}):
-        print("  OJO: al CSV le faltan columnas (matricula, log_number, date)")
+    columnas = list(filas[0]) if filas else []
+    print(f"  columnas = {columnas}")
+    if not {"file", "page", "matricula", "log_number", "date"} <= set(columnas):
+        print("  OJO: al CSV le faltan columnas que el indexado necesita")
+    for fila in filas[:2]:
+        print(f"  fila: {dict(fila)}")
 
     indice = json.loads(indice_path.read_text(encoding="utf-8"))
     paginas = paginas_del_indice(indice)
@@ -84,6 +88,8 @@ def main() -> int:
     print(f"\nIndice: {len(paginas)} paginas, {len(bitacoras)} bitacoras")
     for nombre, cuantas in nombres_indice.most_common():
         print(f"  archivo = {nombre!r}  ({cuantas} paginas)")
+    for entrada in bitacoras[:2]:
+        print(f"  entrada: {entrada}")
 
     exactas = {(str(f.get("file", "")).strip(), str(f.get("page", "")).strip())
                for f in filas}
