@@ -883,6 +883,7 @@ class Trabajo:
             solo_subir=bool(parte and parte.revisar),
             doc_type=config.doc_type,
             audit_status=config.audit_status,
+            audit_status_discrepancia=config.audit_status_discrepancia,
             registros=registros,
         )
         manifiesto.etapa("procesar").marcar(EstadoEtapa.HECHA, str(csv))

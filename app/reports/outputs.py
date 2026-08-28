@@ -187,7 +187,6 @@ def write_outputs(
         leer_csv_corrida,
         obligatorios_vacios_por_pagina,
     )
-    from app.reports.organize import paginas_para_revisar
 
     faltantes_por_pagina = obligatorios_vacios_por_pagina(
         leer_csv_corrida(csv_path)
@@ -213,22 +212,14 @@ def write_outputs(
             len(discrepancias_confirmadas),
         )
 
-    revisar = {
-        (Path(ref.pdf_path).name, ref.page.page_number)
-        for ref in paginas_para_revisar(reports)
-    }
-    # REVISAR tiene prioridad. Una página con datos críticos sin resolver y
-    # además una falta de firma no debe aparecer dos veces para la persona.
-    confirmadas_para_pdf = [
-        entrada
-        for entrada in confirmadas
-        if (Path(entrada.pdf_path).name, entrada.page_number) not in revisar
-    ]
+    # Las que van a «Posibles discrepancias»: las confirmadas y las
+    # inciertas por igual. Una firma que no se pudo leer es justo lo que
+    # alguien tiene que mirar, asi que se aparta como la que falta.
     excluidas: set[tuple[str, int]] = set()
     if options.discrepancias:
         excluidas = {
             (Path(entrada.pdf_path).name, entrada.page_number)
-            for entrada in confirmadas_para_pdf
+            for entrada in entradas
         }
     stage("Escribiendo JSON…", 20)
     json_path = datos_dir / f"{corrida}.json"
@@ -264,18 +255,18 @@ def write_outputs(
 
     separar = list(options.separar_por) or None
     pdf_unico = options.un_solo_pdf or not separar
-    if (options.discrepancias and confirmadas_para_pdf and not skip_pdfs
+    if (options.discrepancias and entradas and not skip_pdfs
             and not pdf_unico):
         stage("Generando discrepancias.pdf…", 45)
         from app.reports.organize import escribir_pdf_discrepancias
 
         escribir_pdf_discrepancias(
-            confirmadas_para_pdf, template, run_dir, dpi=options.dpi
+            entradas, template, run_dir, dpi=options.dpi
         )
-    elif (options.discrepancias and not confirmadas_para_pdf and not skip_pdfs
+    elif (options.discrepancias and not entradas and not skip_pdfs
           and not pdf_unico):
         logger.info(
-            "No hay ausencias de firma confirmadas; no se genera "
+            "Ninguna pagina quedo marcada como discrepancia; no se genera "
             "discrepancias.pdf"
         )
 

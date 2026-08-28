@@ -240,6 +240,7 @@ class Indexador:
                 self.manifiesto.doc_type,
                 self.manifiesto.audit_status,
                 self.manifiesto.nombre_batch,
+                self.manifiesto.audit_status_discrepancia,
             )
             avisos = list(por_seq.get(registro.seq, ()))
             avisos.extend(verificar_obligatorios(registro, valores))

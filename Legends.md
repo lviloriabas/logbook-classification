@@ -2,6 +2,39 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-28 - Las discrepancias abren su seccion y se indexan con AUDIT REQUIRED
+
+La seccion **POSIBLES DISCREPANCIAS** existia en el codigo pero no llegaba
+a escribirse nunca. Las discrepancias confirmadas se marcaban
+`airvault_review` y con eso pasaban a **REVISAR**; la seccion se armaba
+despues con las confirmadas que no estuvieran ya en REVISAR, o sea con
+ninguna. Y las inciertas (la firma esta, pero no se pudo leer con
+seguridad) se quedaban repartidas en las secciones de cada avion, sin nada
+que las distinguiera. En la ejecucion del 27 de agosto son 25 paginas
+marcadas: 6 confirmadas y 19 inciertas.
+
+Ahora toda pagina con `disc=true` va al batch manual, y ese batch va en dos
+secciones: abre con **POSIBLES DISCREPANCIAS** y sigue con **REVISAR**. Son
+el mismo archivo y el mismo batch: el separador solo dice que hay que mirar
+en cada tramo, una firma en el primero y un dato de indice en el segundo.
+Una firma incierta se aparta igual que una que falta, porque en las dos hay
+que mirar la pagina para saberlo.
+
+Al indexar, esas paginas se escriben con su propio `Audit Status`,
+`AUDIT REQUIRED`, en lugar del valor del trabajo (`PUBLISHED`). Es lo unico
+que las distingue en AirVault del resto del batch: la firma que falta no
+viaja a ningun campo del indice. El valor sale de `airvault.json`
+(`audit_status_discrepancia`) porque el picklist del campo no se lee de la
+API; dejarlo vacio devuelve a todas las paginas el `Audit Status` normal.
+
+En la salida de varios PDF, marcar **Posibles discrepancias** vuelve a
+escribir `discrepancias.pdf`, ahora con las 25 y no con las cero de antes, y
+esas paginas dejan de repetirse en `revisar.pdf`.
+
+Cuesta las 19 paginas inciertas, que antes se indexaban solas y ahora se
+completan a mano. Es el precio de que nadie tenga que buscarlas: una firma
+que el programa no supo leer no la puede dar por buena.
+
 ## 2026-08-28 - Las bitacoras de REVISAR van sin la marca AUTO INDEX
 
 Al indexar, el programa escribia `Description` con la marca `AUTO INDEX`
