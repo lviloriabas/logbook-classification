@@ -2,7 +2,8 @@
 
 Comprueba lo que promete: que los pasos se elijan una sola vez y sobrevivan
 al cierre, que los de AirVault se marquen y desmarquen juntos porque van uno
-detrás de otro, que «Completar batch» valga lo mismo en las dos ventanas, y
+detrás de otro, que esperar a AirVault no sea uno de los que se eligen sino
+parte de subir, que «Completar batch» valga lo mismo en las dos ventanas, y
 que la cadena avance sola de un paso al siguiente y se corte cuando algo
 sale mal.
 
@@ -96,7 +97,6 @@ def test_sin_nada_guardado_la_cadena_llega_hasta_indexar(tmp_path):
 
     assert not opciones.depurar
     assert opciones.subir
-    assert opciones.esperar
     assert opciones.indexar
     # Cerrar el batch en AirVault nunca se ha impuesto solo.
     assert not opciones.completar
@@ -109,28 +109,50 @@ def test_marcar_un_paso_enciende_los_que_van_antes(tmp_path):
     opciones = OpcionesAutomatizacion(tmp_path)
     opciones.fijar(SUBIR, False)
     assert not any(
-        (opciones.subir, opciones.esperar, opciones.indexar, opciones.completar)
+        (opciones.subir, opciones.indexar, opciones.completar)
     )
 
     opciones.fijar(COMPLETAR, True)
 
     assert opciones.subir
-    assert opciones.esperar
     assert opciones.indexar
     assert opciones.completar
 
 
 def test_apagar_un_paso_apaga_los_que_van_despues(tmp_path):
-    """Sin espera no hay batch entero que indexar ni que cerrar."""
+    """Sin escribir los datos no hay batch que cerrar."""
     opciones = OpcionesAutomatizacion(tmp_path)
     opciones.fijar(COMPLETAR, True)
 
-    opciones.fijar(ESPERAR, False)
+    opciones.fijar(INDEXAR, False)
 
     assert opciones.subir
-    assert not opciones.esperar
     assert not opciones.indexar
     assert not opciones.completar
+
+
+def test_esperar_a_airvault_no_es_un_paso_que_se_elija(app, tmp_path):
+    """Va dentro de subir: subir sin esperar no deja nada terminado."""
+    opciones = OpcionesAutomatizacion(tmp_path)
+    menu = MenuAutomatizacion(opciones)
+    try:
+        with pytest.raises(KeyError):
+            menu.accion(ESPERAR)
+        with pytest.raises(KeyError):
+            opciones.fijar(ESPERAR, False)
+        assert not any(
+            "Esperar" in accion.text() for accion in menu.actions()
+        )
+        # Pero sigue siendo un paso del recorrido, y se hace si se sube.
+        cadena = CadenaAutomatica(opciones)
+        assert cadena.elegido(ESPERAR)
+
+        opciones.fijar(SUBIR, False)
+
+        assert not cadena.elegido(ESPERAR)
+        assert cadena.estado(ESPERAR) == OMITIDO
+    finally:
+        menu.deleteLater()
 
 
 def test_depurar_va_suelto_y_no_arrastra_a_nadie(tmp_path):
@@ -140,12 +162,12 @@ def test_depurar_va_suelto_y_no_arrastra_a_nadie(tmp_path):
     opciones.fijar(DEPURAR, True)
 
     assert opciones.depurar
-    assert opciones.subir and opciones.esperar and opciones.indexar
+    assert opciones.subir and opciones.indexar
 
     opciones.fijar(DEPURAR, False)
 
     assert not opciones.depurar
-    assert opciones.subir and opciones.esperar and opciones.indexar
+    assert opciones.subir and opciones.indexar
 
 
 def test_los_pasos_elegidos_sobreviven_al_cierre(tmp_path):
@@ -158,7 +180,6 @@ def test_los_pasos_elegidos_sobreviven_al_cierre(tmp_path):
 
     assert segunda.depurar
     assert segunda.subir
-    assert segunda.esperar
     assert not segunda.indexar
     guardado = json.loads((tmp_path / "airvault.json").read_text(encoding="utf-8"))
     assert guardado["auto_depurar"] is True

@@ -961,8 +961,8 @@ class MainWindow(QMainWindow):
         btn_clear_input.setIcon(trash_icon)
         btn_clear_input.setIconSize(ICON_SIZE)
         btn_clear_input.setToolTip(
-            "Mover todos los archivos de input/ a la Papelera de reciclaje. "
-            "Los ya procesados, que están en input/processed, se conservan"
+            "Mover los archivos de input/ a la Papelera. Los de "
+            "input/processed se conservan"
         )
         btn_clear_input.clicked.connect(self._clear_input_folder)
         grid.addWidget(btn_clear_input, 0, 4)
@@ -1025,19 +1025,16 @@ class MainWindow(QMainWindow):
 
         engine_label = QLabel("OCR: Paddle v5 (CPU)")
         engine_label.setToolTip(
-            "Motor y dispositivo CPU fijados internamente; no requiere "
-            "configuración del usuario."
+            "Motor y dispositivo fijos; no hay nada que configurar."
         )
         row.addWidget(engine_label)
 
         # El batch se numera de corrido, igual que lo navega el visor: un solo
         # rango decide qué páginas entran, caigan en los archivos que caigan.
         range_tip = (
-            "Rango de páginas contando el batch entero de corrido, como en el "
-            "visor: la página 1 es la primera del primer archivo y la "
-            "numeración sigue en el siguiente sin reiniciarse. Arranca en la "
-            "primera y la última página de todos los archivos seleccionados. "
-            "Los archivos que quedan fuera del rango no se abren."
+            "Rango de páginas contando el batch de corrido: la página 1 es la "
+            "primera del primer archivo y la cuenta sigue en el siguiente. "
+            "Los archivos fuera del rango no se abren."
         )
         row.addWidget(QLabel("Páginas:"))
         self.page_from_spin = QSpinBox()
@@ -1081,8 +1078,8 @@ class MainWindow(QMainWindow):
         self.crop_preprocess_check = QCheckBox("Preprocesar recortes")
         self.crop_preprocess_check.setChecked(True)
         self.crop_preprocess_check.setToolTip(
-            "Aplica localización de tinta y reescalado a cada recorte antes "
-            "del OCR. Desactívelo para enviar los recortes crudos al motor."
+            "Limpia y reescala cada recorte antes del OCR. Sin marcar, el "
+            "motor recibe el recorte crudo."
         )
         row.addWidget(self.crop_preprocess_check)
         row.addStretch()
@@ -1117,17 +1114,16 @@ class MainWindow(QMainWindow):
         info_row.addSpacing(8)
         self.fields_check = QCheckBox("Visualizar campos")
         self.fields_check.setToolTip(
-            "Mostrar los bounding boxes de los campos únicamente en la vista "
-            "previa. Los PDFs exportados conservan las bitácoras sin marcas."
+            "Dibuja los recuadros de los campos solo en la vista previa; los "
+            "PDF exportados salen sin marcas."
         )
         self.fields_check.toggled.connect(self._on_fields_toggled)
         info_row.addWidget(self.fields_check)
         self.important_fields_check = QCheckBox("Mostrar solo columnas importantes")
         self.important_fields_check.setEnabled(False)
         self.important_fields_check.setToolTip(
-            "Mostrar únicamente los campos marcados en la lista de campos "
-            "importantes (botón contiguo). Sin la casilla se dibuja la "
-            "plantilla completa."
+            "Muestra solo los campos importantes (botón de al lado). Sin "
+            "marcar, se dibuja la plantilla completa."
         )
         self.important_fields_check.toggled.connect(self._on_fields_toggled)
         self.fields_check.toggled.connect(
@@ -1151,18 +1147,14 @@ class MainWindow(QMainWindow):
         self.fleet_check = QCheckBox("Verificar matrículas")
         self.fleet_check.setChecked(True)
         self.fleet_check.setToolTip(
-            "Compara las matrículas leídas contra la lista de aviones. La "
-            "lectura que no esté en la lista se reclasifica como la "
-            "matrícula más parecida y queda marcada para revisión; si dos "
-            "quedan igual de parecidas no se elige ninguna. La lista debe "
-            "tener todos los aviones para que la clasificación sea correcta."
+            "Corrige la matrícula leída contra la lista de aviones: la que no "
+            "esté se cambia por la más parecida y queda marcada para revisar."
         )
         fleet_row.addWidget(self.fleet_check)
         fleet_button = QPushButton("Editar lista de matrículas…")
         fleet_button.setToolTip(
-            "Abre la lista de matrículas de la flota. Debe incluir todos "
-            "los aviones y mantenerse al día con las altas y las bajas; se "
-            f"guarda en {FLEET_FILENAME}, en la carpeta del programa."
+            "Abre la lista de matrículas de la flota. Debe estar al día con "
+            f"las altas y las bajas; se guarda en {FLEET_FILENAME}."
         )
         fleet_button.clicked.connect(self._open_fleet_editor)
         fleet_row.addWidget(fleet_button)
@@ -1217,8 +1209,8 @@ class MainWindow(QMainWindow):
         self.threads_spin.setRange(1, available)
         self.threads_spin.setValue(available)
         self.threads_spin.setToolTip(
-            "Cantidad total de hilos que puede utilizar el procesamiento. "
-            f"Disponibles detectados: {available}."
+            "Hilos que puede usar el procesamiento. "
+            f"Detectados: {available}."
         )
         self.threads_control = SpinBoxWithButtons(self.threads_spin)
         top_row.addWidget(self.threads_control)
@@ -1238,8 +1230,8 @@ class MainWindow(QMainWindow):
         )
         self.reserve_core_check.setChecked(True)
         self.reserve_core_check.setToolTip(
-            "Deja un hilo del procesador libre para que la interfaz siga "
-            "fluida mientras se procesa; el OCR usa los hilos restantes."
+            "Deja un hilo libre para que la interfaz no se trabe; el OCR usa "
+            "el resto."
         )
         top_row.addWidget(self.reserve_core_check)
         top_row.addStretch()
@@ -1431,10 +1423,8 @@ class MainWindow(QMainWindow):
         self.btn_export = QPushButton("Exportar")
         self.btn_export.setEnabled(False)
         self.btn_export.setToolTip(
-            "Volver a generar CSV, JSON y PDFs con las opciones actuales, "
-            "sin reprocesar los archivos. Los PDFs ya exportados se "
-            "conservan: los nuevos se numeran (-2, -3…) si el nombre se "
-            "repite"
+            "Volver a generar CSV, JSON y PDF con las opciones actuales, sin "
+            "reprocesar. Los PDF repetidos se numeran (-2, -3…)"
         )
         self.btn_export.clicked.connect(self._exportar)
         row.addWidget(self.btn_export)
@@ -1451,10 +1441,8 @@ class MainWindow(QMainWindow):
         self.btn_automatico = QPushButton("Automático")
         self.btn_automatico.setObjectName("primaryButton")
         self.btn_automatico.setToolTip(
-            "Hace de una sola vez todo lo que esté marcado en "
-            "«Automatización…»: procesa, exporta y, si se pidió, depura, "
-            "sube la entrega a AirVault y la escribe allí. Cada paso arranca "
-            "solo al terminar el anterior; «Cancelar» corta la cadena."
+            "Encadena todos los pasos marcados en «Automatización…», uno tras "
+            "otro. «Cancelar» corta la cadena."
         )
         self.btn_automatico.clicked.connect(self._start_automatico)
         row.addWidget(self.btn_automatico)
@@ -2982,21 +2970,17 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Procesando… ({pasos})")
 
     def _pasos_automaticos(self) -> str:
-        """Los pasos elegidos, en una línea, para la bitácora y el estado."""
-        opciones = self._automatizacion
-        pasos = ["preprocesar", "procesar"]
-        if opciones.depurar:
-            pasos.append("depurar")
-        pasos.append("exportar")
-        if opciones.subir:
-            pasos.append("subir")
-        if opciones.esperar:
-            pasos.append("esperar")
-        if opciones.indexar:
-            pasos.append("indexar")
-        if opciones.completar:
-            pasos.append("completar")
-        return " > ".join(pasos)
+        """Los pasos elegidos, en una línea, para la bitácora y el estado.
+
+        Se leen de la misma línea de pasos que se enseña debajo de la barra,
+        para que la bitácora no pueda contar una cadena distinta de la que
+        se está mirando.
+        """
+        return " > ".join(
+            pasos_automaticos.NOMBRES_CORTOS[paso].lower()
+            for paso in pasos_automaticos.RECORRIDO
+            if self.cadena.elegido(paso)
+        )
 
     def _cortar_automatico(self, motivo: str = "") -> None:
         """Suelta la cadena para que el paso siguiente no arranque solo."""
@@ -4238,10 +4222,9 @@ class MainWindow(QMainWindow):
         )
         self.search_edit.setAccessibleName("Texto que se busca en la tabla")
         self.search_edit.setToolTip(
-            "Busca el texto en las columnas que muestra la tabla; con el CSV "
-            "completo busca también en las que la vista resumida oculta. "
-            "Cada coincidencia selecciona su fila y abre su página en la "
-            "vista previa; se recorren con ‹ y ›, o repitiendo la búsqueda."
+            "Busca en las columnas visibles; con el CSV completo, también en "
+            "las ocultas. Cada coincidencia abre su página en la vista "
+            "previa."
         )
         self.search_edit.returnPressed.connect(self._buscar_en_la_tabla)
         row.addWidget(self.search_edit, 1)

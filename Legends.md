@@ -36,6 +36,12 @@ aprovecha o se cierra el que aparezca. El mensaje de fallo, si aun asi no se
 puede, ya nombra la causa de verdad en vez de dejarla en «nadie contesto por
 el puerto de depuracion».
 
+## 2026-08-26 - Esperar a AirVault deja de ser un paso que se elige
+
+**Automatización…** ofrecía cuatro pasos de AirVault: subir, esperar a que los deje listos, indexar y completar el batch. Los dos primeros no son elecciones distintas: subir sin esperar la respuesta no deja nada terminado, porque el batch se queda en la cola y nadie vuelve a mirarlo, así que la casilla de esperar solo servía para dejar la cadena a medias, y encima había que marcarla o desmarcarla junto con la de subir para que la cosa tuviera sentido. Ahora son un solo paso, **Subir a AirVault**, y el menú tiene tres pasos de AirVault en vez de cuatro. La entrada no nombra la espera: no es algo que se marque, sino parte de lo que hace subir. La preferencia `auto_esperar` del `airvault.json` ya no se lee; la que quede escrita de una versión anterior se ignora sin romper nada.
+
+La espera no desaparece de la vista: sigue siendo uno de los ocho pasos de la línea de progreso, que es donde importa saber que el tiempo se va ahí, y se cuenta como paso hecho o cortado igual que antes. **Comprobar cada**, en la ventana de AirVault, ya no es la cara visible de aquella casilla: elige cada cuánto se pregunta y vale mientras la ventana esté abierta. Apagarla sigue parando la comprobación periódica —y la línea de pasos lo enseña en rojo—, pero ya no desmarca indexar ni completar en el menú.
+
 ## 2026-08-26 - Fuera el verificador VLM y fuera Tesseract
 
 El programa arrastraba dos motores que no usaba. El **verificador VLM** (un `llama-server` local con un modelo GGUF que arbitraba firmas dudosas y releía fechas) llegaba a la aplicación con `vlm_enabled=False` escrito a mano en la ventana, en el CLI y en las herramientas: nunca corrió fuera de las pruebas, y a cambio pedía varios GB de modelos, un bloque en `stats.json` que siempre decía «desactivado», una segunda salida en cada función del pipeline y una carpeta entera (`app/verifier/`). **Tesseract** estaba igual: el motor solo se podía elegir con un nombre que ningún punto de entrada pasa, y su segunda pasada por campo (`date_ocr_fallback`) también venía apagada de fábrica. En la evaluación del 2026-08-14 con las diez fechas etiquetadas, Tesseract directo acertó 0 de 10 (ver `docs/ocr-engine-decision.md`); no era una alternativa que valiera la pena mantener viva.
