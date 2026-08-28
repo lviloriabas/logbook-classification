@@ -378,7 +378,7 @@ ejecuta su descubrimiento hasta obtener el ID. Cada ventana mantiene un
 `TrabajoAirVaultWorker` independiente, por lo que varias ejecuciones pueden
 avanzar a la vez; el cierre principal reúne y detiene todos esos hilos.
 
-BITS escribe siempre `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status` y `End Date`. Añade `Batch Name` cuando se proporciona y `Lessor` cuando está resuelto. `Description` recibe `<flight_number> AUTO INDEX` cuando existe vuelo y `AUTO INDEX` cuando no existe. Esta marca se agrega al payload remoto y no altera los CSV.
+BITS escribe siempre `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status` y `End Date`. Añade `Batch Name` cuando se proporciona y `Lessor` cuando está resuelto. `Description` recibe `<flight_number> AUTO INDEX` cuando existe vuelo y `AUTO INDEX` cuando no existe. Esta marca se agrega al payload remoto y no altera los CSV. Los trabajos con `solo_subir` (el batch `REVISAR`) van sin marca: mandan el vuelo leído, o nada cuando no lo hay.
 
 La flota de AirVault se resuelve primero desde `airvault_flota.json`, en la raíz. BITS guarda allí los pares `Aircraft`, `Fleet` y `Lessor` confirmados por AirVault. Si no hay entrada, usa este respaldo: `HK-` produce `EMB`, `HP-98` y `HP-99` producen `MAX`, y las demás `HP-` producen `NG`. El reporte marca `fleet_inferido`; una confirmación posterior de AirVault sustituye el dato inferido en la caché.
 
