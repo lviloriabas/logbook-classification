@@ -63,14 +63,22 @@ def test_el_historial_abre_la_corrida_elegida(tmp_path: Path):
         assert [
             viewer.history_combo.itemText(index)
             for index in range(viewer.history_combo.count())
-        ] == ["BITS 18 AUG 2026 05 42", "BITS 16 AUG 2026 20 54"]
-        assert viewer.history_combo.currentIndex() == -1
-        assert viewer.history_combo.placeholderText() == (
-            "Seleccione una ejecución…"
-        )
+        ] == [
+            "Seleccionar ejecución",
+            "BITS 18 AUG 2026 05 42",
+            "BITS 16 AUG 2026 20 54",
+        ]
+        # Abre en su propia opción: ninguna ejecución está cargada todavía,
+        # y ver un nombre ahí hacía creer que ya se había elegido.
+        assert viewer.history_combo.currentIndex() == 0
+        assert viewer.history_combo.currentData() is None
         assert viewer.table_model.rowCount() == 0
 
+        # Elegir la opción de abrir no carga nada; la ejecución sí.
         viewer._on_history_activated(0)
+        assert viewer.table_model.rowCount() == 0
+
+        viewer._on_history_activated(1)
 
         assert viewer._folder == nueva
         assert viewer.table_model.rowCount() == 1

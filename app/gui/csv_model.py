@@ -219,9 +219,9 @@ class CsvTableModel(QAbstractTableModel):
             return "" if section == CHECK_COLUMN else self.name_of(section)
         if role == Qt.ItemDataRole.ToolTipRole and section == CHECK_COLUMN:
             return (
-                "Marque aquí las páginas que quiere juntar aunque no estén "
-                "seguidas. Mientras haya alguna marcada, son esas las que "
-                "se eliminan."
+                "Marque las páginas que quiera juntar aunque no estén "
+                "seguidas. Mientras haya alguna marcada, son esas las que se "
+                "eliminan."
             )
         return None
 

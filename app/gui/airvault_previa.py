@@ -395,10 +395,9 @@ class BitacorasDelBatch(_ListaBuscable):
 
         self.tabla = _tabla(
             self.COLUMNAS,
-            "Cada página del batch con el número que ocupa dentro de él, que "
-            "es el mismo que muestra Web Index, y con los campos importantes "
-            "de la bitácora. Al elegir una fila se abre su hoja escaneada al "
-            "lado; el doble clic la lleva al visor.",
+            "Cada página del batch con el número que ocupa dentro de él, el "
+            "mismo que muestra Web Index. Al elegir una fila se abre su hoja "
+            "al lado; el doble clic la lleva al visor.",
         )
         self._llenar(self._registros)
         # Después de llenarla, no antes: medir por contenido mientras entran
@@ -417,9 +416,8 @@ class BitacorasDelBatch(_ListaBuscable):
         columna.addLayout(
             self._fila_de_busqueda(
                 self._PISTA,
-                "Busca el texto en la lista de bitácoras. Cada coincidencia "
-                "selecciona su fila y abre su hoja en el visor; se recorren "
-                "con ‹ y ›, o repitiendo la búsqueda.",
+                "Busca en la lista de bitácoras. Cada coincidencia abre su "
+                "hoja en el visor; se recorren con ‹ y ›.",
             )
         )
         columna.addWidget(self.tabla, 1)
@@ -618,9 +616,7 @@ class VistaPreviaBatches(_ListaBuscable):
         intro = QLabel(
             f"{_plural(len(self._previstos), 'batch', 'batches')} con "
             f"{_plural(bitacoras, 'bitácora', 'bitácoras')} en total, "
-            f"{len(por_subir)} sin subir todavía. Es el reparto que haría "
-            "«Subir a AirVault» con el máximo de páginas elegido; mirarlo "
-            "no prepara ni sube nada."
+            f"{len(por_subir)} sin subir todavía."
         )
         intro.setWordWrap(True)
         cuerpo.addWidget(intro)
@@ -637,9 +633,8 @@ class VistaPreviaBatches(_ListaBuscable):
         cuerpo.addLayout(
             self._fila_de_busqueda(
                 self._PISTA,
-                "Busca el texto en la lista de batches. Cada coincidencia "
-                "selecciona su fila; se recorren con ‹ y ›, o repitiendo la "
-                "búsqueda.",
+                "Busca en la lista de batches. Cada coincidencia selecciona "
+                "su fila; se recorren con ‹ y ›.",
             )
         )
         cuerpo.addWidget(self.tabla, 1)
@@ -657,8 +652,8 @@ class VistaPreviaBatches(_ListaBuscable):
         self.boton_bitacoras = QPushButton("Ver las bitácoras…")
         self.boton_bitacoras.setEnabled(False)
         self.boton_bitacoras.setToolTip(
-            "Abre la lista de las bitácoras del batch elegido, con la página "
-            "que ocupa cada una dentro del batch y su hoja escaneada al lado."
+            "Abre las bitácoras del batch elegido, con la página que ocupa "
+            "cada una y su hoja escaneada al lado."
         )
         self.boton_bitacoras.clicked.connect(self._abrir_bitacoras)
         fila.addWidget(self.boton_bitacoras)

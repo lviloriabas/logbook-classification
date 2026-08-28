@@ -195,3 +195,51 @@ def test_un_registro_ilegible_no_corta_el_trabajo(tmp_path):
 
     assert registro.leer(carpeta).batches == []
     assert registro.comprometidas(carpeta) == set()
+
+
+def test_olvidar_un_batch_libera_sus_bitacoras_y_deja_las_demas(tmp_path):
+    """Eliminar un batch: se olvida el suyo y el resto del reparto sigue.
+
+    Sin esto, el batch desaparecería de la cola pero sus páginas seguirían
+    contando como enviadas, así que ningún reparto posterior las volvería a
+    mandar y se quedarían sin subir sin que nadie lo dijera.
+    """
+    csv_path, _partes = corrida(tmp_path)
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    assert len(trabajos) > 1
+    for trabajo in trabajos:
+        _subido(trabajo, f"ID-{trabajo.manifiesto.parte}")
+    registro.anotar(tmp_path / "job", trabajos, str(csv_path))
+    fuera = trabajos[0]
+    suyas = {
+        (r.archivo_origen, int(r.pagina_origen))
+        for r in fuera.manifiesto.registros
+        if not r.es_separador and r.archivo_origen
+    }
+
+    quedan = registro.olvidar(tmp_path / "job", [fuera.carpeta])
+
+    assert [b.carpeta for b in quedan.batches] == [
+        str(t.carpeta) for t in trabajos[1:]
+    ]
+    assert not (suyas & quedan.comprometidas())
+    # Y queda escrito, no solo devuelto.
+    assert registro.leer(tmp_path / "job").batches == quedan.batches
+
+
+def test_olvidar_lo_que_no_esta_anotado_no_toca_el_registro(tmp_path):
+    """Un batch que ya se olvidó no vuelve a reescribir el archivo."""
+    csv_path, _partes = corrida(tmp_path)
+    trabajos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
+    )
+    antes = registro.ruta_registro(tmp_path / "job").read_text(encoding="utf-8")
+
+    registro.olvidar(tmp_path / "job", [tmp_path / "job" / "parte-99"])
+
+    assert registro.ruta_registro(tmp_path / "job").read_text(
+        encoding="utf-8"
+    ) == antes
+    assert len(registro.leer(tmp_path / "job").batches) == len(trabajos)

@@ -10,6 +10,11 @@ from typing import Iterable
 from app.templates.manager import TemplateManager
 
 
+# Con lo que abren las listas de ejecuciones, aquí y en «Indexar en
+# AirVault». Es la misma lista en las dos ventanas y se elige igual, así que
+# dice lo mismo con las mismas palabras.
+TEXTO_ELEGIR_EJECUCION = "Seleccionar ejecución"
+
 _CSV_METADATA_SUFFIXES = ("_conf", "_status", "_comment", "_source")
 _ALWAYS_IMPORTANT_COLUMNS = frozenset(
     {"file", "page", "dup", "disc", "date", "time_ms"}
