@@ -2,6 +2,40 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-27 - Un Edge olvidado dejaba de tumbar el acceso a AirVault
+
+El programa toma la sesion de AirVault del Edge que abre el mismo, con un
+perfil propio dentro de `portable/`. Chromium admite **un solo navegador por
+perfil**: el segundo que se lanza no abre nada, le entrega la orden al
+primero y se va. Cuando una ejecucion dejaba el navegador vivo (se cierra el
+programa a media faena, o el puerto no llega a contestar y nadie cierra el
+navegador), la ejecucion siguiente se encontraba el perfil tomado y su
+puerto de depuracion —que es otro cada vez— mudo para siempre. El acceso
+moria en «Edge no llego a arrancar: el proceso termino (codigo 21)» una y
+otra vez, y con el se quedaba parado todo lo que va detras: subir, esperar,
+indexar y completar. La unica salida era cerrar a mano un proceso sin
+ventana que nadie sabia que estaba ahi.
+
+Ahora el puerto queda **anotado dentro del perfil** en cuanto se lanza el
+navegador, antes de saber si va a contestar, y la ejecucion siguiente
+empieza por ahi. Si el navegador que quedo sigue vivo y solo hacen falta las
+cookies, se trabaja con el —son las del mismo perfil— y se cierra al
+terminar. Si lo que hace falta es la ventana para entrar, se le pide paso y
+se abre la propia. Y si esta colgado (contesta que existe pero no atiende su
+protocolo, que es como termina un navegador olvidado durante horas) se
+cierra a la fuerza el proceso que tiene ese puerto, buscado por el puerto y
+no por el nombre, para no llevarse por delante el Edge de la persona.
+
+Al cerrar tampoco se da por muerto al que sigue en pie: si no se va cuando
+se le pide se cierra a la fuerza, y la anotacion solo se borra cuando de
+verdad ya no esta. Y si el perfil esta tomado sin anotacion que leer —un
+navegador de una version anterior, o uno que arranco sin llegar a
+anotarse—, se le pregunta a Windows que Edge hay abiertos sobre ese perfil,
+que es lo unico que los distingue del navegador de la persona, y se
+aprovecha o se cierra el que aparezca. El mensaje de fallo, si aun asi no se
+puede, ya nombra la causa de verdad en vez de dejarla en «nadie contesto por
+el puerto de depuracion».
+
 ## 2026-08-26 - Fuera el verificador VLM y fuera Tesseract
 
 El programa arrastraba dos motores que no usaba. El **verificador VLM** (un `llama-server` local con un modelo GGUF que arbitraba firmas dudosas y releía fechas) llegaba a la aplicación con `vlm_enabled=False` escrito a mano en la ventana, en el CLI y en las herramientas: nunca corrió fuera de las pruebas, y a cambio pedía varios GB de modelos, un bloque en `stats.json` que siempre decía «desactivado», una segunda salida en cada función del pipeline y una carpeta entera (`app/verifier/`). **Tesseract** estaba igual: el motor solo se podía elegir con un nombre que ningún punto de entrada pasa, y su segunda pasada por campo (`date_ocr_fallback`) también venía apagada de fábrica. En la evaluación del 2026-08-14 con las diez fechas etiquetadas, Tesseract directo acertó 0 de 10 (ver `docs/ocr-engine-decision.md`); no era una alternativa que valiera la pena mantener viva.

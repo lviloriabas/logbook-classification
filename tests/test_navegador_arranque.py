@@ -144,3 +144,307 @@ def test_si_nadie_contesta_tras_irse_el_lanzador_si_es_un_fallo(monkeypatch,
     finally:
         sesion.cerrar()
     assert "no llego a arrancar" in str(fallo.value)
+
+
+# ── el perfil que ya tiene un navegador ────────────────────────────
+#
+# Chromium admite un solo navegador por perfil: el segundo que se lanza le
+# entrega la orden al primero y se va sin abrir su puerto. Un Edge que quedo
+# vivo de una ejecucion anterior dejaba asi el acceso muerto para siempre,
+# porque el puerto es otro cada vez y nadie sabia por donde escuchaba aquel.
+
+
+def _perfil_con(monkeypatch, vivos, tmp_path, colgados=()):
+    """Sustituye el sistema dejando vivos los puertos de ``vivos``.
+
+    ``vivos`` es ``{puerto: version}`` y se modifica al pedir el cierre o al
+    matar el proceso: es lo que hace que ``_esperar_a_que_se_vaya`` vea irse
+    al navegador, como pasa de verdad. Los puertos de ``colgados`` contestan
+    el ``/json/version`` pero no su protocolo, que es como termina un
+    navegador olvidado durante horas.
+    """
+    lanzados = []
+    matados = []
+
+    class _Lanzador:
+        def __init__(self, orden, **_k):
+            lanzados.append(orden)
+            # Con el perfil tomado, Chromium no abre nada: le entrega la
+            # orden al que ya esta y se va con codigo 21.
+            self.tomado = bool(vivos)
+            self.returncode = 21 if self.tomado else 0
+            if self.tomado:
+                return
+            # El navegador recien lanzado empieza a contestar por su puerto.
+            for parte in orden:
+                if parte.startswith("--remote-debugging-port="):
+                    puerto = int(parte.split("=", 1)[1])
+                    vivos[puerto] = {
+                        "Browser": "Edg/151",
+                        "webSocketDebuggerUrl": f"ws://127.0.0.1:{puerto}/x",
+                    }
+
+        def poll(self):
+            return self.returncode if self.tomado else None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            pass
+
+    def _correr(orden, **_k):
+        """``powershell``, ``netstat`` y ``taskkill``: lo unico que se pide."""
+        if orden[0] == "powershell":
+            filas = [
+                f"{7000 + puerto} \"msedge.exe\" "
+                f"--remote-debugging-port={puerto} "
+                f"--user-data-dir=\"{tmp_path}\" --no-first-run"
+                for puerto in vivos
+            ]
+            return types.SimpleNamespace(stdout="\n".join(filas))
+        if orden[0] == "netstat":
+            filas = [
+                f"  TCP    127.0.0.1:{puerto}   0.0.0.0:0   LISTENING   "
+                f"{7000 + puerto}"
+                for puerto in vivos
+            ]
+            return types.SimpleNamespace(stdout="\n".join(filas))
+        pid = int(orden[orden.index("/PID") + 1])
+        matados.append(pid)
+        vivos.pop(pid - 7000, None)
+        return types.SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(navegador, "subprocess", types.SimpleNamespace(
+        Popen=_Lanzador, DEVNULL=-3, TimeoutExpired=TimeoutError, run=_correr,
+    ))
+
+    def urlopen(url, timeout=0):
+        puerto = int(str(url).rsplit(":", 1)[1].split("/", 1)[0])
+        if puerto not in vivos:
+            raise OSError("puerto mudo")
+        return _Respuesta(json.dumps(vivos[puerto]))
+
+    monkeypatch.setattr(navegador, "urllib", types.SimpleNamespace(
+        request=types.SimpleNamespace(urlopen=urlopen),
+        error=types.SimpleNamespace(URLError=OSError),
+    ))
+    # El reloj avanza: hay esperas que solo terminan porque pasa el tiempo
+    # (la del navegador que no se va), y con un reloj parado no volverian.
+    tictac = iter(i * 0.5 for i in range(100000))
+    monkeypatch.setattr(navegador, "time", types.SimpleNamespace(
+        monotonic=lambda: next(tictac), sleep=lambda _s: None,
+    ))
+
+    class _WSPostizo:
+        pedidos: list = []
+
+        def __init__(self, url, timeout=15.0):
+            self.puerto = int(str(url).rsplit(":", 1)[1].split("/", 1)[0])
+            if self.puerto in colgados:
+                raise OSError("timed out")
+
+        def pedir(self, metodo, **_p):
+            _WSPostizo.pedidos.append(metodo)
+            if metodo == "Browser.close":
+                vivos.pop(self.puerto, None)
+            return {}
+
+        def cerrar(self):
+            pass
+
+    _WSPostizo.pedidos = []
+    monkeypatch.setattr(navegador, "_WebSocket", _WSPostizo)
+    return lanzados, _WSPostizo, matados
+
+
+def _anotacion(perfil):
+    return Path(perfil) / navegador._ANOTACION_DEL_PUERTO
+
+
+def test_se_habla_con_el_edge_que_ya_tenia_tomado_el_perfil(monkeypatch,
+                                                            tmp_path):
+    """Lanzar otro no serviria: le pasaria la orden y se iria sin abrir nada.
+
+    Al navegador que quedo vivo se le piden sus cookies igual de bien —son
+    las del perfil— y se le manda a la pagina de entrada, que es lo que
+    rehace el acceso federado.
+    """
+    vivos = {4321: {"Browser": "Edg/151",
+                    "webSocketDebuggerUrl": "ws://127.0.0.1:4321/x"}}
+    lanzados, ws, _matados = _perfil_con(monkeypatch, vivos, tmp_path)
+    _anotacion(tmp_path).write_text("4321", encoding="ascii")
+
+    sesion = navegador.SesionDeNavegador(
+        tmp_path, edge=Path("msedge.exe"), visible=False
+    )
+    try:
+        assert sesion.abrir("https://airvault/sso")["Browser"] == "Edg/151"
+        assert lanzados == []
+        assert sesion.puerto == 4321
+        assert "Target.createTarget" in ws.pedidos
+    finally:
+        sesion.cerrar()
+    # Y al cerrarlo se le pide por las buenas, aunque no sea proceso propio.
+    assert "Browser.close" in ws.pedidos
+    assert not _anotacion(tmp_path).exists()
+
+
+def test_para_entrar_hace_falta_ventana_asi_que_al_otro_se_le_pide_paso(
+        monkeypatch, tmp_path):
+    """El que quedo vivo puede ser uno sin ventana, y ahi nadie teclea nada.
+
+    Cuando lo que hace falta es que la persona entre, no se reusa: se le
+    pide el cierre y se abre la ventana propia sobre el perfil libre.
+    """
+    vivos = {4321: {"Browser": "Edg/151",
+                    "webSocketDebuggerUrl": "ws://127.0.0.1:4321/x"}}
+    lanzados, ws, _matados = _perfil_con(monkeypatch, vivos, tmp_path)
+    _anotacion(tmp_path).write_text("4321", encoding="ascii")
+
+    sesion = navegador.SesionDeNavegador(
+        tmp_path, edge=Path("msedge.exe"), visible=True
+    )
+    try:
+        assert sesion.abrir("https://airvault/sso")["Browser"] == "Edg/151"
+        assert "Browser.close" in ws.pedidos
+        assert len(lanzados) == 1
+        assert sesion.puerto != 4321
+    finally:
+        sesion.cerrar()
+
+
+def test_una_anotacion_vieja_no_manda_a_un_puerto_apagado(monkeypatch,
+                                                          tmp_path):
+    """El navegador se pudo ir sin borrarla (un cierre a la fuerza).
+
+    Que el puerto anotado no conteste no es un fallo: se tira la anotacion y
+    se abre un navegador nuevo, que deja la suya.
+    """
+    lanzados, _ws, _matados = _perfil_con(monkeypatch, {}, tmp_path)
+    _anotacion(tmp_path).write_text("4321", encoding="ascii")
+
+    sesion = navegador.SesionDeNavegador(
+        tmp_path, edge=Path("msedge.exe"), visible=False
+    )
+    try:
+        assert sesion.abrir("https://airvault/sso")["Browser"] == "Edg/151"
+        assert len(lanzados) == 1
+        assert _anotacion(tmp_path).read_text(encoding="ascii") == str(
+            sesion.puerto
+        )
+    finally:
+        sesion.cerrar()
+    assert not _anotacion(tmp_path).exists()
+
+
+def test_el_puerto_se_anota_aunque_el_navegador_no_llegue_a_contestar(
+        monkeypatch, tmp_path):
+    """Es el caso que dejaba el perfil tomado para siempre.
+
+    Si el puerto no llega a abrirse pero el navegador queda vivo, la
+    anotacion es lo unico que le deja a la ejecucion siguiente para dar con
+    el en vez de tropezar otra vez con el perfil tomado.
+    """
+    reloj = iter([i * 1.0 for i in range(200)])
+    _postizos(
+        monkeypatch, _LanzadorQueSeVa(21),
+        iter(OSError("puerto mudo") for _ in range(200)),
+        reloj=lambda: next(reloj),
+    )
+    sesion = navegador.SesionDeNavegador(tmp_path, edge=Path("msedge.exe"))
+    try:
+        with pytest.raises(ErrorDeNavegador) as fallo:
+            sesion.abrir("about:blank", espera_s=120.0)
+    finally:
+        anotado = _anotacion(tmp_path)
+        assert anotado.exists() and anotado.read_text() == str(sesion.puerto)
+        sesion.cerrar()
+    # Y el mensaje nombra la causa de verdad, no solo que nadie contesto.
+    assert "tiene abierto el perfil" in str(fallo.value)
+
+
+def test_al_que_se_colgo_se_le_cierra_a_la_fuerza(monkeypatch, tmp_path):
+    """Un navegador olvidado durante horas contesta a medias.
+
+    Su ``/json/version`` sigue respondiendo, asi que parece vivo, pero el
+    protocolo por el que se le piden las cookies —y por el que se le pide el
+    cierre— se queda esperando. Mientras ese proceso viva, ningun Edge nuevo
+    abre el perfil: es lo que dejaba el acceso a AirVault muerto ejecucion
+    tras ejecucion. No queda mas remedio que cerrarlo a la fuerza.
+    """
+    vivos = {4321: {"Browser": "Edg/151",
+                    "webSocketDebuggerUrl": "ws://127.0.0.1:4321/x"}}
+    lanzados, _ws, matados = _perfil_con(
+        monkeypatch, vivos, tmp_path, colgados={4321}
+    )
+    _anotacion(tmp_path).write_text("4321", encoding="ascii")
+
+    sesion = navegador.SesionDeNavegador(
+        tmp_path, edge=Path("msedge.exe"), visible=False
+    )
+    try:
+        assert sesion.abrir("https://airvault/sso")["Browser"] == "Edg/151"
+        # Se le cerro por el puerto, que es lo unico que lo distingue del
+        # navegador de la persona, y despues se abrio uno propio.
+        assert matados == [7000 + 4321]
+        assert len(lanzados) == 1
+        assert sesion.puerto != 4321
+    finally:
+        sesion.cerrar()
+
+
+def test_se_encuentra_al_edge_que_no_dejo_anotado_su_puerto(monkeypatch,
+                                                            tmp_path):
+    """Uno de una version anterior, o uno que arranco sin llegar a anotarse.
+
+    Sin anotacion que leer no hay por donde empezar, y el lanzamiento choca
+    con el perfil tomado. Ahi se le pregunta a Windows que Edge hay abiertos
+    sobre este perfil —lo unico que lo distingue del navegador de la
+    persona— y se trabaja con el que aparezca. Antes no habia salida: el
+    acceso moria igual ejecucion tras ejecucion.
+    """
+    vivos = {4321: {"Browser": "Edg/151",
+                    "webSocketDebuggerUrl": "ws://127.0.0.1:4321/x"}}
+    lanzados, ws, matados = _perfil_con(monkeypatch, vivos, tmp_path)
+    assert not _anotacion(tmp_path).exists()
+
+    sesion = navegador.SesionDeNavegador(
+        tmp_path, edge=Path("msedge.exe"), visible=False
+    )
+    try:
+        assert sesion.abrir("https://airvault/sso")["Browser"] == "Edg/151"
+        # Se intento lanzar, se choco con el perfil tomado y se acabo
+        # hablando con el que ya estaba, sin cerrar nada.
+        assert len(lanzados) == 1
+        assert sesion.puerto == 4321
+        assert matados == []
+    finally:
+        sesion.cerrar()
+
+
+def test_al_cerrar_no_se_da_por_muerto_al_que_sigue_en_pie(monkeypatch,
+                                                           tmp_path):
+    """Pedirle el cierre no siempre basta, y ahi la anotacion mentia.
+
+    Borrarla con el navegador todavia vivo dejaba a la ejecucion siguiente
+    sin saber por donde buscarlo: se encontraba el perfil tomado y el acceso
+    muerto otra vez. Ahora, si no se va cuando se le pide, se cierra a la
+    fuerza; y solo cuando ya no esta se borra la anotacion.
+    """
+    vivos = {}
+    lanzados, ws, matados = _perfil_con(monkeypatch, vivos, tmp_path)
+
+    sesion = navegador.SesionDeNavegador(
+        tmp_path, edge=Path("msedge.exe"), visible=False
+    )
+    sesion.abrir("https://airvault/sso")
+    puerto = sesion.puerto
+    assert _anotacion(tmp_path).read_text(encoding="ascii") == str(puerto)
+
+    # Este no se va por las buenas: se queda contestando.
+    monkeypatch.setattr(ws, "pedir", lambda *_a, **_k: {})
+    sesion.cerrar()
+
+    assert matados == [7000 + puerto]
+    assert not _anotacion(tmp_path).exists()
