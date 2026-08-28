@@ -266,15 +266,16 @@ los sube y los indexa todos, y cuenta el avance sobre el total.
 7. Pulse **Subir a AirVault**. Manda los PDF y termina ahí. Nada se indexa
    todavía.
 8. Espere. AirVault mete el batch en su cola y tarda en dejarlo indexable:
-   minutos, a veces mucho más. La ventana pregunta sola cada cinco minutos
+   minutos, a veces mucho más. La ventana pregunta sola cada dos minutos
    (se cambia en **Comprobar cada**, o se apaga) y con **Comprobar ahora**
    pregunta en el momento. El estado y el resumen indican cuándo los batches
-   ya están listos para indexar. Cuando no queda nada que esperar, deja de
-   preguntar.
-9. Pulse **Ver reporte…** y revise las páginas bloqueadas.
-10. Si quiere que el batch quede cerrado y fuera de la cola, marque
+   ya están listos para indexar. Solo deja de preguntar cuando no queda nada
+   que esperar: mientras haya un batch sin terminar sigue mirando, también
+   después de agotar el tope de reenvíos, porque AirVault publica cargas
+   horas después de aceptarlas.
+9. Si quiere que el batch quede cerrado y fuera de la cola, marque
    **Completar batch**.
-11. Pulse **Indexar**. Escribe en los batches que estén listos. El avance sale
+10. Pulse **Indexar**. Escribe en los batches que estén listos. El avance sale
    por la barra de esta ventana; la principal queda libre para seguir
    trabajando.
 

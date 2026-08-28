@@ -123,7 +123,6 @@ def test_la_cookie_no_se_ve_al_teclearla(ventana):
 
 def test_indexar_esta_apagado_hasta_que_haya_un_lote_listo(ventana):
     assert not ventana.boton_indexar.isEnabled()
-    assert not ventana.boton_reporte.isEnabled()
 
 
 def test_la_bitacora_de_airvault_se_puede_copiar(ventana):
@@ -761,7 +760,6 @@ def test_un_lote_listo_se_puede_indexar_y_dice_cuanto_escribiria(ventana):
         "estados": [listo],
         "planes": {"job": (PlanFalso(), None)},
         "partes": [("DP | BIT 003SRO", PlanFalso())],
-        "reporte": "r.html",
     })
     texto = ventana.resumen.text()
     assert "5 páginas" in texto and "2 se escribirían" in texto
@@ -775,7 +773,6 @@ def test_un_lote_listo_sin_plan_todavía_no_se_indexa(ventana):
 
     ventana._al_comprobar({
         "estados": [parte(LISTO)], "planes": {}, "partes": [],
-        "reporte": None,
     })
     assert not ventana.boton_indexar.isEnabled()
 
@@ -790,7 +787,6 @@ def test_revisar_con_completar_marcado_encadena_lotes_ya_indexados(
     ventana.completar_check.setChecked(True)
     ventana._al_comprobar({
         "estados": [parte(INDEXADO)], "planes": {}, "partes": [],
-        "reporte": None,
     })
 
     assert ventana.boton_indexar.isEnabled()
@@ -865,7 +861,7 @@ def test_mientras_falte_un_lote_se_sigue_preguntando_solo(ventana):
 
     ventana._al_comprobar({
         "estados": [parte(PROCESANDO, detalle="2 de 5 paginas")],
-        "planes": {}, "partes": [], "reporte": None,
+        "planes": {}, "partes": [],
     })
     assert ventana._vigilante is not None
     assert ventana._vigilante.isActive()
@@ -911,7 +907,6 @@ def test_una_subida_que_no_aparece_se_vuelve_a_enviar_sola(ventana):
     """Esperar sin fin a que alguien pulse un boton no es esperar."""
     ventana._al_comprobar({
         "estados": [estancada()], "planes": {}, "partes": [],
-        "reporte": None,
     })
 
     assert "probable que la carga no vaya a aparecer" in ventana.resumen.text()
@@ -926,7 +921,6 @@ def test_sin_comprobacion_automatica_la_resubida_se_pide_a_mano(ventana):
     ventana.auto_check.setChecked(False)
     ventana._al_comprobar({
         "estados": [estancada()], "planes": {}, "partes": [],
-        "reporte": None,
     })
 
     assert "Subir a AirVault" in ventana.resumen.text()
@@ -939,7 +933,7 @@ def test_cada_reenvio_espera_mas_que_el_anterior(ventana):
 
     ventana._al_comprobar({
         "estados": [estancada(reenvios=MAXIMO_REENVIOS - 1)],
-        "planes": {}, "partes": [], "reporte": None,
+        "planes": {}, "partes": [],
     })
 
     assert "sin pulsar nada" in ventana.resumen.text()
@@ -962,12 +956,31 @@ def test_agotado_el_tope_de_reenvios_deja_de_mandarlo_solo(ventana):
 
     ventana._al_comprobar({
         "estados": [estancada(reenvios=MAXIMO_REENVIOS)],
-        "planes": {}, "partes": [], "reporte": None,
+        "planes": {}, "partes": [],
     })
 
     assert "no se vuelven a mandar solos" in ventana.resumen.text()
     assert "Subir a AirVault ahora" in ventana.resumen.text()
     assert not ventana._subir_al_terminar
+
+
+def test_agotado_el_tope_de_reenvios_se_sigue_mirando_la_cola(ventana):
+    """El tope apaga el envío, no la búsqueda.
+
+    AirVault publica cargas horas después de aceptarlas. Parar el reloj al
+    agotar los reenvíos dejaba el batch en la tabla esperando a que alguien
+    volviera a pulsar, cuando lo único que hacía falta era seguir mirando:
+    preguntar no escribe nada y no duplica nada.
+    """
+    from app.airvault.flujo import MAXIMO_REENVIOS
+
+    ventana._al_comprobar({
+        "estados": [estancada(reenvios=MAXIMO_REENVIOS)],
+        "planes": {}, "partes": [],
+    })
+
+    assert ventana._vigilante is not None and ventana._vigilante.isActive()
+    assert "Se sigue mirando la cola" in ventana.resumen.text()
 
 
 def test_un_archivo_sin_subir_no_se_queda_esperando(ventana):
@@ -976,7 +989,7 @@ def test_un_archivo_sin_subir_no_se_queda_esperando(ventana):
 
     ventana._al_comprobar({
         "estados": [parte(SIN_SUBIR, detalle="todavía sin subir")],
-        "planes": {}, "partes": [], "reporte": None,
+        "planes": {}, "partes": [],
     })
 
     assert ventana._subir_al_terminar
@@ -992,7 +1005,6 @@ def test_una_subida_fallida_no_se_reintenta_hasta_la_vuelta_siguiente(
 
     datos = {
         "estados": [parte(SIN_SUBIR)], "planes": {}, "partes": [],
-        "reporte": None,
     }
     ventana._al_comprobar(datos)
     assert ventana._subir_al_terminar
@@ -1014,7 +1026,6 @@ def test_cuando_no_queda_nada_que_esperar_deja_de_preguntar(ventana):
 
     ventana._al_comprobar({
         "estados": [parte(LISTO)], "planes": {}, "partes": [],
-        "reporte": None,
     })
     assert ventana._vigilante is None or not ventana._vigilante.isActive()
 
@@ -1050,15 +1061,52 @@ def test_el_reloj_no_pregunta_con_algo_en_vuelo(ventana):
         ventana._worker = None
 
 
-def test_un_fallo_para_la_comprobacion_automatica(ventana):
-    """Repetirlo cada cinco minutos solo repetiría el mismo error."""
+def test_un_fallo_suelto_no_para_la_comprobacion_automatica(ventana):
+    """AirVault falla un rato y sigue; parar ahí mataba la ejecución.
+
+    La sesión se renueva sola y un error del servidor no se repite
+    necesariamente en el intervalo siguiente. Nadie está delante para
+    volver a pulsar, así que el reloj sigue.
+    """
     from app.airvault.flujo import PROCESANDO
 
     ventana._estados = [parte(PROCESANDO)]
     ventana._ajustar_vigilancia()
     assert ventana._vigilante.isActive()
+
     ventana._al_fallar("La sesion de AirVault caduco.")
+
+    assert ventana._vigilante.isActive()
+    assert ventana._fallos_seguidos == 1
+
+
+def test_fallar_siempre_acaba_parando_la_comprobacion_automatica(ventana):
+    """Repetir el mismo error toda la tarde no lo arregla."""
+    from app.airvault.flujo import PROCESANDO
+    from app.gui.airvault_window import FALLOS_SEGUIDOS_ANTES_DE_PARAR
+
+    ventana._estados = [parte(PROCESANDO)]
+    ventana._ajustar_vigilancia()
+    for _ in range(FALLOS_SEGUIDOS_ANTES_DE_PARAR):
+        ventana._al_fallar("La sesion de AirVault caduco.")
+
     assert not ventana._vigilante.isActive()
+
+
+def test_una_comprobacion_buena_borra_la_racha_de_fallos(ventana):
+    """Lo que llevaba fallando dejó de fallar: se empieza a contar de cero."""
+    from app.airvault.flujo import PROCESANDO
+
+    ventana._estados = [parte(PROCESANDO)]
+    ventana._ajustar_vigilancia()
+    ventana._al_fallar("AirVault no contestó.")
+
+    ventana._al_comprobar({
+        "estados": [parte(PROCESANDO)], "planes": {}, "partes": [],
+    })
+
+    assert ventana._fallos_seguidos == 0
+    assert ventana._vigilante.isActive()
 
 
 # ── completar el batch ─────────────────────────────────────────────
@@ -1486,7 +1534,6 @@ def test_una_carga_que_rebasaron_las_siguientes_se_reenvia_sola(ventana):
 
     ventana._al_comprobar({
         "estados": [perdida, siguiente], "planes": {}, "partes": [],
-        "reporte": None,
     })
 
     assert "ya están indexadas" in ventana.resumen.text()
@@ -1598,9 +1645,7 @@ def test_una_revision_acotada_no_reemplaza_las_otras_filas(ventana):
     ventana._al_comprobar({
         "estados": [revisada],
         "planes": {"job-1": (PlanFalso(), None)},
-        "partes": [("DP | BITS -1", PlanFalso())],
-        "reporte": "r.html",
-        "acotado": True,
+        "partes": [("DP | BITS -1", PlanFalso())],        "acotado": True,
     })
 
     assert [fila.nombre for fila in ventana._estados] == [
@@ -1769,7 +1814,7 @@ def test_la_espera_dice_que_se_puede_subir_sin_esperarla(ventana):
 
     ventana._al_comprobar({
         "estados": [parte(PROCESANDO, "DP | BITS -1", carpeta="job-1")],
-        "planes": {}, "partes": [], "reporte": None,
+        "planes": {}, "partes": [],
     })
 
     texto = ventana.resumen.text()
@@ -1855,7 +1900,7 @@ def test_la_bitacora_lista_cada_batch_en_su_propia_linea(ventana):
             parte(LISTO, "DP | BITS -1", carpeta="job-1"),
             parte(SIN_SUBIR, "DP | BITS -2", carpeta="job-2"),
         ],
-        "planes": {}, "partes": [], "reporte": None,
+        "planes": {}, "partes": [],
     })
 
     comprobado = [

@@ -22,7 +22,7 @@ delante.
 | `Otra ejecucion…`       | Elige el CSV de una ejecucion que no este en la lista.                                                                                                        |
 | `Batch:`                | Nombre con el que el batch queda en AirVault. Viene propuesto con la fecha y la hora de la ejecucion.                                                         |
 | `Sesion:`               | Respaldo, normalmente vacio: la sesion la resuelve el navegador. Lo que se pegue aqui no se guarda en el disco.                                               |
-| `Comprobar cada N min`  | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 2 minutos, y deja de preguntar cuando no queda nada por esperar. No decide si se espera (eso va dentro de `Subir a AirVault`, en **Automatización…**) sino cada cuanto se pregunta, y vale mientras la ventana este abierta: apagarlo deja la cadena parada ahi, y la linea de pasos de la ventana principal lo enseña en rojo. |
+| `Comprobar cada N min`  | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 2 minutos, y solo deja de preguntar cuando no queda nada por esperar; un fallo suelto del servidor no lo para (hacen falta tres seguidos). No decide si se espera (eso va dentro de `Subir a AirVault`, en **Automatización…**) sino cada cuanto se pregunta, y vale mientras la ventana este abierta: apagarlo deja la cadena parada ahi, y la linea de pasos de la ventana principal lo enseña en rojo. |
 | `Comprobar ahora`       | La misma pregunta, en el momento.                                                                                                                             |
 | `Subir a AirVault`      | Manda los PDF de la entrega. Termina cuando termina la subida. Es lo unico que ademas retoma los batches que quedaron a medias en ejecuciones anteriores: lo que arranca solo se ciñe a la ejecucion elegida. |
 | `Completar batch`       | Al terminar de escribir, da el batch por terminado en AirVault: lo indexa y lo manda a Web Search (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo. Es la misma casilla que la de **Automatización…** en la ventana principal. |
@@ -32,7 +32,6 @@ delante.
 | `Indexar`               | Escribe en los batches que ya estan listos.                                                                                                                   |
 | `Buscar:`               | Pregunta por una bitacora (Log Page Number, matricula, vuelo, fecha o archivo de origen) y resalta los batches de la cola que la llevan. Puede estar en varios a la vez. |
 | `Vista previa…`         | Enseña en cuantos batches quedaria repartida la ejecucion, con sus paginas y sus bitacoras. No prepara ni sube nada.                                          |
-| `Ver reporte…`          | Abre el detalle pagina por pagina de lo que se escribiria.                                                                                                    |
 | `Cancelar`              | Detiene en el acto lo que esté en marcha (sin esperar al servidor) y suelta los batches tomados.                                                                                                   |
 
 ### Ver lo que va en cada batch
@@ -121,9 +120,12 @@ la de hace dos minutos.
    quedar indexable: aparece antes de tener todas sus paginas. Mientras le
    falte alguna no esta listo, porque escribir con las paginas corridas
    dejaria cada dato en la bitacora de al lado. La ventana pregunta cada
-   cinco minutos (o cuando se pulse **Comprobar ahora**) y va pasando los
-   batches a **Listo para indexar** segun quedan. Cuando ya no queda nada que
-   esperar deja de preguntar sola.
+   dos minutos (o cuando se pulse **Comprobar ahora**) y va pasando los
+   batches a **Listo para indexar** segun quedan. Solo deja de preguntar
+   cuando ya no queda nada que esperar: mientras haya un batch sin terminar
+   sigue mirando, tambien despues de agotar el tope de reenvios, porque
+   AirVault publica cargas horas despues de aceptarlas y preguntar no
+   escribe nada.
 3. **Indexar.** Con la automatizacion inicial, en cuanto un batch aparece
    entero empieza a escribirse en un carril paralelo mientras se buscan las
    partes restantes. Para entonces ya terminaron todas las subidas. Si se
@@ -435,6 +437,10 @@ la esta procesando; al tercer intento lo que falla ya no es el envio, y
 seguir mandando el mismo PDF es como aparecen tres copias del mismo batch el
 dia que AirVault los publica todos. Agotado el tope, el resumen lo dice y
 queda la orden a mano desde la cola, que si sube.
+
+El tope apaga el envio, no la busqueda: la comprobacion periodica sigue
+mirando la cola por si AirVault acaba publicando la carga, y si aparece se
+indexa sola. Lo que necesita una mano es volver a mandarla.
 
 ### El PDF que se manda
 
@@ -910,7 +916,7 @@ Después:
 1. Procesar `MUESTRA.pdf` y exportar con la salida en **un solo PDF**.
 2. Abrir **Indexar en AirVault…** y pulsar **Subir a AirVault**.
 3. Esperar a que el batch pase a **Listo para indexar** (se comprueba solo
-   cada cinco minutos) y mirar `revision.html`.
+   cada dos minutos).
 4. **Indexar**, y comprobar en el Web Index que las páginas separadoras
    quedaron sin tocar y las bitácoras con sus datos.
 

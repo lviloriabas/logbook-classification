@@ -2,6 +2,50 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-28 - El modo automatico deja de pararse solo
+
+Puesta a trabajar sola, la ventana de AirVault se paraba al cabo de un rato
+y el batch se quedaba en la tabla esperando a que alguien volviera a pulsar.
+Eran dos frenos distintos, y los dos cortaban justo cuando nadie esta
+delante.
+
+El primero era el tope de reenvios. Una carga que Quick Upload acepto y
+AirVault nunca publico se reenvia como mucho dos veces, para no acabar con
+tres copias del mismo batch en la cola; pero al agotarlas se dejaba tambien
+de **preguntar**, y con ello se paraba el reloj de la ejecucion entera. Son
+dos cosas distintas: mandar el archivo otra vez puede duplicarlo, y mirar la
+cola no escribe nada. AirVault publica cargas horas despues de aceptarlas,
+asi que ahora se sigue mirando mientras quede un batch sin terminar y sin
+poderse escribir, y si la carga acaba apareciendo se indexa sola. Lo unico
+que sigue necesitando una mano es volver a mandarla. La unica parte que no
+mantiene el reloj vivo es la marcada como posible duplicado, que por
+definicion espera a que alguien mire AirVault.
+
+El segundo era el primer error. Cualquier fallo -un 500 del servidor, una
+peticion que no llego- paraba la comprobacion automatica en el acto, con el
+argumento de que repetirla daria el mismo error. Pero la sesion se renueva
+sola y esos fallos casi nunca duran dos minutos, de modo que un tropiezo de
+madrugada dejaba la ejecucion muerta hasta la mañana siguiente. Ahora hacen
+falta **tres fallos seguidos** para parar el reloj, y una comprobacion buena
+borra la racha; mientras siga en marcha, el resumen lo dice («Se vuelve a
+intentar solo dentro de 2 min») en vez de dejar el mensaje de error a secas.
+
+## 2026-08-28 - Sin reporte de revision en la ventana de AirVault
+
+Cada comprobacion que encontraba un batch nuevo escribia `revision.csv` y
+`revision.html` en la carpeta del trabajo, y el boton «Ver reporte…» los
+abria. Se quitan los dos: la ventana ya no genera esos archivos ni tiene ese
+boton.
+
+Lo que se miraba en ellos esta en la propia ventana, que hoy tiene la cola
+por vista principal: el resumen dice cuantas paginas se escribirian y
+cuantas quedan bloqueadas, «Vista previa…» enseña en cuantos batches queda
+repartida la ejecucion, y la lista de bitacoras de cada batch (boton derecho
+sobre su fila) dice que va dentro, con su pagina, matricula, Log Page, fecha
+y vuelo. El detalle pagina por pagina en CSV y HTML no desaparece del
+sistema: sigue siendo lo que deja `run_airvault.py` sin banderas, que es el
+recorrido pensado para aprobar antes de escribir.
+
 ## 2026-08-27 - Un manifiesto ya confirmado tambien se rehidrata al retomarlo
 
 Los arreglos del cruce entre el CSV y el PDF (emparejar por posicion, por el
