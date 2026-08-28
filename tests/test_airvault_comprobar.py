@@ -1652,10 +1652,10 @@ def test_una_carga_vieja_que_no_esta_en_la_cola_se_reenvia_enseguida(
     assert trabajo.manifiesto.busquedas_amplias_sin_hallar == 0
 
 
-def test_los_ids_se_publican_solo_despues_de_intentar_todas_las_subidas(
+def test_cada_carga_se_confirma_antes_de_mandar_la_siguiente(
     tmp_path, monkeypatch
 ):
-    """Buscar puede intercalarse; indexar espera la barrera de cargas."""
+    """AirVault junta cargas seguidas: solo una puede estar sin nombre."""
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     cliente = ClienteFalso()
     eventos: list[tuple[str, str]] = []
@@ -1685,14 +1685,60 @@ def test_los_ids_se_publican_solo_despues_de_intentar_todas_las_subidas(
     assert eventos == [
         ("subir", "DP | BIT"),
         ("actualizar", "3"),
+        ("confirmar", "DP | BIT"),
         ("subir", "DP | BIT -2"),
         ("actualizar", "3"),
+        ("confirmar", "DP | BIT -2"),
         ("subir", "DP | BIT REVISAR"),
         ("actualizar", "3"),
-        ("confirmar", "DP | BIT"),
-        ("confirmar", "DP | BIT -2"),
         ("confirmar", "DP | BIT REVISAR"),
     ]
+
+
+def test_la_carga_siguiente_ya_ve_nombrado_el_batch_anterior(
+    tmp_path, monkeypatch
+):
+    """Solo un ``Empty-Batch`` propio puede estar en vuelo a la vez."""
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)[:2]
+    cliente = ClienteFalso(lotes=[lote("003VIEJO", "DP | LO DE ANTES", 9)])
+    fotos: list[list[str]] = []
+
+    def subir(self, sesion, pdf="", avisar=None, cliente=None):
+        self.manifiesto.lotes_previos = [
+            actual.batch_id for actual in cliente.listar_lotes()
+        ]
+        fotos.append(list(self.manifiesto.lotes_previos))
+        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "ok")
+        self.guardar()
+        # AirVault publica la carga sin titulo, como hace de verdad.
+        cliente.lotes.append(
+            lote(f"003NUEVO{len(cliente.lotes)}", "Empty-Batch", 2)
+        )
+
+    def descubrir(self, cliente, esperar=True, dormir=None, avisar=None,
+                  cache=None):
+        conocidos = set(self.manifiesto.lotes_previos or [])
+        nuevos = [
+            actual for actual in cliente.listar_lotes()
+            if actual.batch_id not in conocidos
+        ]
+        assert len(nuevos) == 1, "hay mas de una carga sin identificar"
+        return self.anotar_lote(cliente, nuevos[0])
+
+    monkeypatch.setattr(Trabajo, "subir", subir)
+    monkeypatch.setattr(Trabajo, "descubrir", descubrir)
+
+    subir_partes(trabajos, SesionFalsa(), cliente=cliente)
+
+    assert [trabajo.manifiesto.batch_id for trabajo in trabajos] == [
+        "003NUEVO1", "003NUEVO2",
+    ]
+    assert cliente.renombrados == [
+        ("003NUEVO1", "DP | BIT"),
+        ("003NUEVO2", "DP | BIT -2"),
+    ]
+    # La segunda carga salio con el primer batch ya en su foto de la cola.
+    assert "003NUEVO1" in fotos[1]
 
 
 def test_varios_empty_batch_del_mismo_tamano_conservan_su_id(
