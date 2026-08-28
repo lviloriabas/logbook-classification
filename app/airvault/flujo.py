@@ -2523,10 +2523,17 @@ def subir_partes(
     Justo antes de cada carga se busca otra vez su nombre. Si apareció desde
     la primera pasada, se recupera el ID y no se crea un duplicado; si sigue
     ausente, se sube y se continúa con la fila siguiente. Los callbacks capaces
-    de iniciar el indexado se conservan detrás de todas las cargas. La
-    instantanea de la cola tomada antes de cada subida permite reconocer el
-    nombre temporal ``Empty-Batch``. Un fallo queda aislado en su trabajo: no
-    impide intentar las demas partes de la ejecucion.
+    de iniciar el indexado se conservan detrás de todas las cargas. Un fallo
+    queda aislado en su trabajo: no impide intentar las demas partes de la
+    ejecucion.
+
+    Las cargas van de una en una y cada una se cierra antes de empezar la
+    siguiente: se sube, se espera a que AirVault la publique y se le pone su
+    titulo. AirVault junta las cargas que llegan seguidas, asi que con dos
+    archivos en vuelo la cola muestra dos ``Empty-Batch`` a la vez y la
+    instantanea tomada antes de subir ya no distingue cual es cual. Al
+    identificar y renombrar cada batch primero, la instantanea de la carga
+    siguiente incluye al anterior y solo queda un candidato nuevo.
 
     ``en_la_ejecucion`` son todas las partes de la entrega cuando ``trabajos``
     es solo el subconjunto que falta por subir. Sirve para comprobar que
@@ -2632,7 +2639,8 @@ def subir_partes(
         encontrados_antes = []
 
     fallos: List[Tuple["Trabajo", str]] = []
-    subidos: List["Trabajo"] = []
+    hallados: List["Trabajo"] = []
+    nombres_embebidos: dict[str, str] = {}
     for trabajo in por_subir:
         cabeza = _prefijo(trabajo)
         clave = str(trabajo.carpeta)
@@ -2787,71 +2795,52 @@ def subir_partes(
             # La UI debe reflejar que Quick Upload ya acepto este archivo
             # incluso si AirVault tarda o falla antes de publicar su ID.
             al_finalizar_subidas(trabajos)
-        subidos.append(trabajo)
+        if cliente is None:
+            continue
+
+        # Este batch se deja identificado y con su titulo antes de mandar
+        # el siguiente. Dos cargas seguidas llegan juntas a la cola y se
+        # publican como dos ``Empty-Batch`` que ninguna instantanea separa;
+        # esperar aqui deja una sola carga sin nombre a la vez.
+        if trabajo.manifiesto.batch_id:
+            hallados.append(trabajo)
+            continue
+        if avisar is not None:
+            avisar(f"{cabeza}Subido; buscando el batch en AirVault", 0, 0)
+        try:
+            trabajo.descubrir(
+                cliente,
+                esperar=True,
+                dormir=dormir,
+                avisar=propio if avisar else None,
+                cache=nombres_embebidos,
+            )
+        except Exception as exc:  # noqa: BLE001 - se sigue con las demas
+            detalle = str(exc)
+            fallos.append((trabajo, detalle))
+            logger.error(
+                "No se pudo encontrar el batch {}: {}. Se sube el siguiente.",
+                trabajo.manifiesto.nombre_batch,
+                detalle,
+            )
+            if avisar is not None:
+                avisar(
+                    f"{cabeza}AirVault aun no lo publica; se sube "
+                    "el siguiente batch",
+                    0,
+                    0,
+                )
+            continue
+        hallados.append(trabajo)
 
     # Esta es la barrera entre Quick Upload y cualquier indexado: los
     # callbacks se difieren hasta haber intentado todos los archivos.
     if al_encontrar is not None:
         for trabajo in encontrados_antes:
             al_encontrar(trabajo, trabajos)
+        for trabajo in hallados:
+            al_encontrar(trabajo, trabajos)
 
-    if cliente is not None:
-        # La tabla local conserva el orden de trabajo también después de
-        # Quick Upload. Cada parte empieza por buscar su título; solo el
-        # propio descubrimiento cae a Empty-Batch o a otro nombre si ese
-        # título no aparece. Antes se pedía primero la cola completa y se
-        # recorrían las partes al revés, de modo que la bitácora empezaba
-        # inspeccionando IDs remotos en vez del primer pendiente visible.
-        nombres_embebidos: dict[str, str] = {}
-        for trabajo in subidos:
-            manifiesto = trabajo.manifiesto
-            if manifiesto.batch_id:
-                if al_encontrar is not None:
-                    al_encontrar(trabajo, trabajos)
-                continue
-            cabeza = _prefijo(trabajo)
-
-            def propio(
-                texto: str,
-                hechas: int,
-                total: int,
-                cabeza: str = cabeza,
-            ) -> None:
-                if avisar is not None:
-                    avisar(f"{cabeza}{texto}", hechas, total)
-
-            if avisar is not None:
-                avisar(
-                    f"{cabeza}Subido; buscando el batch en AirVault",
-                    0,
-                    0,
-                )
-            try:
-                trabajo.descubrir(
-                    cliente,
-                    esperar=True,
-                    dormir=dormir,
-                    avisar=propio if avisar else None,
-                    cache=nombres_embebidos,
-                )
-            except Exception as exc:  # noqa: BLE001 - se sigue con las demas
-                detalle = str(exc)
-                fallos.append((trabajo, detalle))
-                logger.error(
-                    "No se pudo encontrar el batch {}: {}. Se intenta el siguiente.",
-                    trabajo.manifiesto.nombre_batch,
-                    detalle,
-                )
-                if avisar is not None:
-                    avisar(
-                        f"{cabeza}AirVault aun no lo publica; se busca "
-                        "el siguiente batch",
-                        0,
-                        0,
-                    )
-                continue
-            if al_encontrar is not None:
-                al_encontrar(trabajo, trabajos)
     return fallos
 
 
@@ -3187,7 +3176,12 @@ def subir_y_descubrir_partes(
     avisar: Optional[Aviso] = None,
     al_encontrar: Optional[Callable[["Trabajo", Sequence["Trabajo"]], None]] = None,
 ) -> None:
-    """Sube todas las partes y solo despues empieza a ubicarlas.
+    """Sube cada parte y la ubica antes de mandar la siguiente.
+
+    AirVault junta las cargas que llegan seguidas: dos archivos en vuelo se
+    publican como dos ``Empty-Batch`` que ninguna instantanea de la cola
+    separa. Por eso cada carga se identifica y se renombra antes de empezar
+    la siguiente, y lo que quede sin ID lo recoge :func:`descubrir_partes`.
 
     ``al_encontrar`` puede iniciar trabajo sobre un batch resuelto, pero se
     invoca unicamente cuando ya terminaron todas las subidas.
@@ -3200,6 +3194,19 @@ def subir_y_descubrir_partes(
                 avisar(f"{cabeza}{texto}", hechas, total)
 
         trabajo.subir(sesion, avisar=propio if avisar else None, cliente=cliente)
+        if trabajo.manifiesto.batch_id:
+            continue
+        try:
+            trabajo.descubrir(
+                cliente, esperar, dormir, propio if avisar else None
+            )
+        except Exception as exc:  # noqa: BLE001 - lo reintenta el recorrido
+            logger.info(
+                "AirVault todavia no publica {}: {}. Se sube la parte "
+                "siguiente y se vuelve a buscar al final.",
+                trabajo.manifiesto.nombre_batch,
+                exc,
+            )
 
     descubrir_partes(
         trabajos,
