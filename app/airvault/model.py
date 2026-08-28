@@ -169,6 +169,10 @@ class Manifiesto(BaseModel):
     completado_automatico: bool = False
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
+    # Audit Status de las bitacoras marcadas como discrepancia. Viaja en el
+    # manifiesto para que un trabajo guardado se reanude con el mismo valor
+    # con el que se planifico.
+    audit_status_discrepancia: str = "AUDIT REQUIRED"
 
     etapas: Dict[str, Etapa] = Field(default_factory=dict)
     registros: List[Registro] = Field(default_factory=list)

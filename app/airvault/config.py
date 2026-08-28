@@ -105,6 +105,13 @@ class AirVaultConfig:
     # decidir por el administrador, con el valor valido como defecto.
     doc_type: str = "Log Page"
     audit_status: str = "PUBLISHED"
+    # Audit Status de las bitacoras marcadas como discrepancia, las que van
+    # bajo el separador «POSIBLES DISCREPANCIAS». Se escribe distinto para
+    # que en AirVault se vea de una vez cual es la que hay que auditar. Es
+    # configurable porque el picklist del campo no se lee de la API: si el
+    # valor no existiera en el repositorio, se corrige aqui sin tocar el
+    # codigo. Vacio deja a todas con el Audit Status normal.
+    audit_status_discrepancia: str = "AUDIT REQUIRED"
     # Preferencia portable de la interfaz. No hay un valor fijo en el
     # codigo: la instalacion conserva aqui la ultima cantidad elegida tanto
     # al repartir la entrega como al preparar los batches de Quick Upload.

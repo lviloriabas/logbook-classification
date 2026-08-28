@@ -38,6 +38,23 @@ def test_matricula_se_normaliza():
     assert normalizar_matricula("HK-4453") == "HK-4453"
 
 
+def test_matricula_1522_sube_siempre_como_cmp():
+    # AirVault tiene ese avion como HP-1522CMP; la bitacora lo trae escrito
+    # de las dos maneras y la flota local lo guarda con WWP.
+    assert normalizar_matricula("HP-1522WWP") == "HP-1522CMP"
+    assert normalizar_matricula("HP-1522CMP") == "HP-1522CMP"
+    assert normalizar_matricula(" hp-1522wwp ") == "HP-1522CMP"
+
+
+def test_alias_de_1522_llega_a_los_valores_de_indice():
+    registros = registros_desde_csv([
+        {"file": "b.pdf", "page": "1", "matricula": "HP-1522WWP",
+         "log_number": "2287325", "date": "2026/08/31"},
+    ])
+    valores = valores_de_indice(registros[0], "Log Page", "PUBLISHED")
+    assert valores[CAMPO_MATRICULA] == "HP-1522CMP"
+
+
 def test_matricula_invalida_queda_vacia():
     for valor in ("", "1848", "HP-184CMP", "XX-1848CMP"):
         assert normalizar_matricula(valor) == ""
@@ -165,6 +182,30 @@ def test_valores_de_indice_llevan_los_seis_obligatorios():
     assert valores[CAMPO_LOG_NUMBER] == "2287325"
     assert valores[CAMPO_AUDIT_STATUS] == "PUBLISHED"
     assert valores[CAMPO_END_DATE] == "08/31/2026"
+
+
+def test_una_discrepancia_lleva_su_propio_audit_status():
+    """Es lo unico que la distingue en AirVault del resto del batch."""
+    registro = registros_desde_csv([_fila(disc="true")])[0]
+    valores = valores_de_indice(
+        registro, "Log Page", "PUBLISHED", "DP | PRUEBA", "AUDIT REQUIRED"
+    )
+    assert valores[CAMPO_AUDIT_STATUS] == "AUDIT REQUIRED"
+
+
+def test_sin_discrepancia_el_audit_status_es_el_del_trabajo():
+    registro = registros_desde_csv([_fila()])[0]
+    valores = valores_de_indice(
+        registro, "Log Page", "PUBLISHED", "DP | PRUEBA", "AUDIT REQUIRED"
+    )
+    assert valores[CAMPO_AUDIT_STATUS] == "PUBLISHED"
+
+
+def test_sin_audit_status_de_discrepancia_no_se_cambia_nada():
+    """Vacio en la configuracion deja a todas con el Audit Status normal."""
+    registro = registros_desde_csv([_fila(disc="true")])[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+    assert valores[CAMPO_AUDIT_STATUS] == "PUBLISHED"
 
 
 def test_no_se_mandan_campos_que_el_sistema_no_controla():

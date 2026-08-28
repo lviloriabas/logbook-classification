@@ -36,6 +36,13 @@ _FECHA_CSV_RE = re.compile(r"^(\d{4})/(\d{2})/(\d{2})$")
 # «input/processed» (``bitacora-2.pdf``).
 _SUFIJO_DE_COPIA_RE = re.compile(r"^(?P<base>.+)-\d+$")
 _MATRICULA_RE = re.compile(r"^(HP|HK)-\d{4}(CMP|WWP)?$")
+# Aviones que AirVault tiene indexados con un sufijo distinto al que usa la
+# flota local. El 1522 esta en su picklist como HP-1522CMP y no como
+# HP-1522WWP; en las bitacoras el sufijo aparece escrito de las dos maneras,
+# asi que da igual cual se lea: aqui sale siempre como lo escribe AirVault.
+# Solo cambia lo que se sube. El CSV, «fleet.json» y los nombres de archivo
+# conservan la matricula tal como la normaliza el OCR.
+_ALIAS_PICKLIST = {"HP-1522WWP": "HP-1522CMP"}
 _LOG_NUMBER_RE = re.compile(r"^\d{7}$")
 
 # Regla de respaldo cuando la matricula no esta en el cache. AirVault
@@ -66,9 +73,17 @@ def fecha_airvault(fecha_csv: str) -> str:
 
 
 def normalizar_matricula(valor: str) -> str:
-    """Deja la matricula como la escribe el picklist de AirVault."""
+    """Deja la matricula como la escribe el picklist de AirVault.
+
+    Incluye los alias de :data:`_ALIAS_PICKLIST`, los aviones que AirVault
+    tiene con otro sufijo. Por aqui pasan tanto lo que se escribe como lo
+    que se lee de vuelta, asi que comparar una pagina remota con su
+    registro sigue funcionando.
+    """
     limpio = str(valor or "").strip().upper().replace(" ", "")
-    return limpio if _MATRICULA_RE.fullmatch(limpio) else ""
+    if not _MATRICULA_RE.fullmatch(limpio):
+        return ""
+    return _ALIAS_PICKLIST.get(limpio, limpio)
 
 
 def normalizar_log_number(valor: str) -> str:
@@ -418,6 +433,7 @@ def valores_de_indice(
     doc_type: str,
     audit_status: str,
     nombre_batch: str = "",
+    audit_status_discrepancia: str = "",
 ) -> Dict[int, str]:
     """Diccionario ``{fieldId: valor}`` que se manda al guardar la pagina.
 
@@ -425,7 +441,14 @@ def valores_de_indice(
     fuera a proposito: lo que no se manda, AirVault lo conserva tal como
     estaba, asi que un indexado no pisa datos que alguien haya puesto a
     mano.
+
+    Una bitacora marcada como discrepancia (la columna ``disc`` del CSV, la
+    que va bajo el separador «POSIBLES DISCREPANCIAS») lleva su propio
+    Audit Status cuando se da uno: es lo unico que la distingue en AirVault
+    de las demas paginas del batch.
     """
+    if registro.discrepancia and audit_status_discrepancia:
+        audit_status = audit_status_discrepancia
     valores: Dict[int, str] = {
         CAMPO_DOC_TYPE: doc_type,
         CAMPO_MATRICULA: registro.matricula,
