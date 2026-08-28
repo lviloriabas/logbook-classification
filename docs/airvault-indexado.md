@@ -123,7 +123,7 @@ la de hace dos minutos.
    dos minutos (o cuando se pulse **Comprobar ahora**) y va pasando los
    batches a **Listo para indexar** segun quedan. Solo deja de preguntar
    cuando ya no queda nada que esperar: mientras haya un batch sin terminar
-   sigue mirando, tambien despues de agotar el tope de reenvios, porque
+   sigue mirando, tambien despues de dar una carga por perdida, porque
    AirVault publica cargas horas despues de aceptarlas y preguntar no
    escribe nada.
 3. **Indexar.** Con la automatizacion inicial, en cuanto un batch aparece
@@ -244,9 +244,10 @@ esperado, la ventana hace primero **tres revisiones completas** de la cola.
 En cada una contrasta también nombres distintos, cantidad de páginas, Batch
 Name interno y Log Page Number para corregir el mismo ID sin resubir. Solo si
 las tres terminan sin identificarlo empieza la espera de **30 minutos**. Al
-final de esa espera ofrece **Subir a AirVault**; antes de reenviar vuelve a
-comprobar la cola. Los batches que aparecieron o pudieron corregirse no se
-repiten.
+final de esa espera avisa de que AirVault no publicó la carga y ofrece
+**Subir a AirVault**, pero no la manda otra vez sola: eso lo decide quien
+mire Web Index. Antes de reenviar vuelve a comprobar la cola. Los batches
+que aparecieron o pudieron corregirse no se repiten.
 
 Cada ejecución activa vive en su propia ventana y su propio hilo. Mientras
 una sube, espera o indexa, se puede elegir otra ejecución en el historial o
@@ -426,21 +427,26 @@ mira AirVault, asi que la marca se quita a mano: clic derecho sobre la fila y
 **No es duplicado: volver a permitirlo**. Lo que el programa no hace es
 seguir solo mientras la duda este puesta.
 
-### El tope de reenvios
+### Ninguna carga se reenvia sola
 
-Una carga que Quick Upload acepto y AirVault nunca publico se vuelve a
-mandar sola, con una espera que crece en cada intento. Se reenvia **como
-mucho dos veces** (`MAXIMO_REENVIOS`). Las tres senales que dan una carga por
-perdida (la cola entera sin encontrarla, las partes siguientes ya indexadas,
-o el tiempo de espera vencido) pueden dispararse mientras AirVault todavia
-la esta procesando; al tercer intento lo que falla ya no es el envio, y
-seguir mandando el mismo PDF es como aparecen tres copias del mismo batch el
-dia que AirVault los publica todos. Agotado el tope, el resumen lo dice y
-queda la orden a mano desde la cola, que si sube.
+Una carga que Quick Upload acepto y AirVault nunca publico **no se vuelve a
+mandar sola**, por mucho que tarde. Las tres senales que la dan por perdida
+(la cola entera sin encontrarla, las partes siguientes ya indexadas, o el
+tiempo de espera vencido) pueden dispararse mientras AirVault todavia la
+esta procesando, y mandar el mismo PDF otra vez es como aparecen dos copias
+del mismo batch el dia que la cola las publica todas. El programa no
+distingue una carga perdida de una cola lenta; quien mira Web Index si.
 
-El tope apaga el envio, no la busqueda: la comprobacion periodica sigue
-mirando la cola por si AirVault acaba publicando la carga, y si aparece se
-indexa sola. Lo que necesita una mano es volver a mandarla.
+Lo que hace solo es avisar: el resumen dice que batches no aparecieron y por
+que motivo, y la orden queda a mano en la cola (clic derecho sobre la fila,
+**Subir a AirVault ahora**), que si sube en el acto.
+
+Buscarla si la sigue buscando: la comprobacion periodica mira la cola por si
+AirVault acaba publicando la carga, y si aparece se indexa sola. Mirar la
+cola no escribe nada. Lo unico que necesita una mano es volver a mandarla.
+
+Lo que si sale sin pedirlo es lo que **nunca llego** a Quick Upload
+(`partes_por_subir`): un archivo que no se subio no puede estar duplicado.
 
 ### El PDF que se manda
 
@@ -762,7 +768,7 @@ indexar cuando ese mismo ID aparece con el titulo esperado. Si el renombrado
 falla, se detiene ese batch con un mensaje que incluye su ID; **Revisar en
 AirVault** vuelve a intentar la identificacion y el renombrado.
 Si el ID no corresponde al PDF esperado, se confirma en Web Index, se elimina
-alli y **Subir a AirVault** lo reenvia despues de la espera de seguridad.
+alli y se manda otra vez con **Subir a AirVault ahora** desde su fila.
 
 La marca de tiempo no es decoracion. El filtro "Filter by" de AirVault es
 una coincidencia de subcadena sin distinguir mayusculas, asi que escribir

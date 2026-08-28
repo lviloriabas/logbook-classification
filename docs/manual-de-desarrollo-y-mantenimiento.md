@@ -341,11 +341,13 @@ indexadas, así que la cola pasó de largo (`subida_rebasada`). El segundo son
 que Quick Upload aceptó el archivo) y no desde que el programa se dio cuenta:
 una ejecución retomada días después estrena esa marca al abrirla y volvía a
 esperar media hora por una carga perdida hacía días (`subida_estancada`).
-`partes_por_subir` reúne ambos motivos con las partes que nunca llegaron a
-subirse, y es la única regla que consultan el botón y la comprobación
-periódica. No hay tope de reenvíos: rendirse dejaba el batch fuera de AirVault
-para siempre. Lo que crece es el margen entre intentos, `espera_de_reenvio`,
-que multiplica la espera configurada por los reenvíos ya hechos.
+Esos motivos alimentan `subida_perdida`, que es lo que hace **avisar**;
+ninguno vuelve a mandar el archivo. `partes_por_subir` deja salir sin pedirlo
+solo las partes que nunca llegaron a subirse, y es la única regla que
+consultan el botón y la comprobación periódica: un archivo que no se subió no
+puede duplicarse, y uno que sí se subió solo lo remanda quien mire Web Index.
+`espera_para_darla_por_perdida` es la espera configurada tal cual, sin
+multiplicadores: lo único que vence con ella es el aviso.
 
 La orden manual de subir no pasa por ese camino. `EstadoParte.se_puede_subir`
 la habilita sobre cualquier fila sin batch confirmado (`lote is None` y no
@@ -371,7 +373,7 @@ cada batch y cuáles llegaron a AirVault, de modo que `preparar_partes` sepa qu�
 falta por subir aunque cambie el reparto o desaparezca un manifiesto. Conserva
 hasta `MAXIMO_HISTORIAL` repartos anteriores y se borra junto con el resto de
 la memoria local de la ejecución. Un nuevo clic en
-**Subir a AirVault** vuelve a consultar Web Index, reenvía solo las ausentes y
+**Subir a AirVault** vuelve a consultar Web Index, manda solo las ausentes y
 ejecuta su descubrimiento hasta obtener el ID. Cada ventana mantiene un
 `TrabajoAirVaultWorker` independiente, por lo que varias ejecuciones pueden
 avanzar a la vez; el cierre principal reúne y detiene todos esos hilos.
