@@ -591,7 +591,6 @@ class TrabajoAirVaultWorker(QThread):
                 cliente=cliente, dormir=self._dormir,
                 al_finalizar_subidas=self._notificar_subidas,
                 al_encontrar=al_encontrar,
-                reintentar_estancados=True,
                 en_la_ejecucion=trabajos,
                 forzados=estado.get("forzados") or (),
                 buscador=estado.get("buscador"),
@@ -944,7 +943,7 @@ class AirVaultWindow(QDialog):
         # ciclo. Una subida que falla deja la fila otra vez en «sin subir», y
         # sin esta marca comprobar y subir se llamarían el uno al otro sin
         # parar. Se vacía en cada vuelta del reloj y en cada acción manual.
-        self._reenvios_del_ciclo: set[str] = set()
+        self._subidas_del_ciclo: set[str] = set()
         # Acciones pedidas desde la tabla mientras habia algo en vuelo.
         # Se van lanzando en orden segun el hilo queda libre.
         self._cola_de_acciones: list[tuple[str, list]] = []
@@ -1739,7 +1738,7 @@ class AirVaultWindow(QDialog):
                 estado["forzados"] = [
                     str(trabajo.carpeta) for trabajo in trabajos
                 ]
-            self._reenvios_del_ciclo.clear()
+            self._subidas_del_ciclo.clear()
         elif modo == "indexar":
             planes = estado.get("planes") or {}
             listos = [
@@ -2981,17 +2980,17 @@ class AirVaultWindow(QDialog):
         """Si queda algún batch que AirVault todavía no ha terminado.
 
         Mientras una parte no esté terminada ni lista para escribir, se
-        sigue preguntando. También cuando ya se agotó el tope de reenvíos:
-        ese tope apaga el envío, no la búsqueda. AirVault publica cargas
-        horas después de aceptarlas, y pararse ahí dejaba el batch en la
-        tabla esperando a que alguien volviera a pulsar; preguntar no
-        escribe nada, y es lo que hace que la carga aparezca sola y se
-        indexe sola cuando por fin sale de la cola.
+        sigue preguntando. También cuando ya se dio la carga por perdida:
+        no se vuelve a enviar sola, pero sí se sigue buscando. AirVault
+        publica cargas horas después de aceptarlas, y pararse ahí dejaba el
+        batch en la tabla esperando a que alguien volviera a pulsar;
+        preguntar no escribe nada, y es lo que hace que la carga aparezca
+        sola y se indexe sola cuando por fin sale de la cola.
 
         La única que no cuenta es la marcada como posible duplicado:
-        mientras la marca esté puesta nadie la sube, la reenvía ni la
-        completa, así que no hay nada que preguntar por ella hasta que
-        alguien mire AirVault y la quite.
+        mientras la marca esté puesta nadie la sube ni la completa, así que
+        no hay nada que preguntar por ella hasta que alguien mire AirVault
+        y la quite.
         """
         from app.airvault.flujo import POSIBLE_DUPLICADO
 
@@ -3016,15 +3015,20 @@ class AirVaultWindow(QDialog):
             if subida_perdida(parte, ejecucion)
         ]
 
-    def _por_reenviar(self) -> list:
-        """Batches que la comprobación periódica va a mandar sola."""
+    def _sin_subir_todavia(self) -> list:
+        """Batches que la comprobación periódica va a mandar sola.
+
+        Solo los que nunca llegaron a Quick Upload. Una carga que AirVault
+        aceptó y no publicó no vuelve a salir sola por mucho que tarde: se
+        avisa y la manda quien mire Web Index.
+        """
         from app.airvault.flujo import partes_por_subir
 
         if not self.auto_check.isChecked():
             return []
         return [
             trabajo for trabajo in partes_por_subir(self._estados)
-            if str(trabajo.carpeta) not in self._reenvios_del_ciclo
+            if str(trabajo.carpeta) not in self._subidas_del_ciclo
         ]
 
     @staticmethod
@@ -3058,10 +3062,16 @@ class AirVaultWindow(QDialog):
         )
 
     def _aviso_para_volver_a_subir(self) -> str:
+        """Dice qué cargas AirVault no publicó y deja la decisión a quien mire.
+
+        El programa no vuelve a mandar ninguna solo: no puede distinguir una
+        carga perdida de una cola lenta, y por ese margen es por donde
+        aparecen dos copias del mismo batch. Seguir buscándolas sí lo hace
+        solo, que mirar la cola no escribe nada.
+        """
         from app.airvault.flujo import (
-            MAXIMO_REENVIOS,
             busqueda_amplia_sin_hallar,
-            espera_de_reenvio,
+            espera_para_darla_por_perdida,
             subida_rebasada,
         )
 
@@ -3070,11 +3080,13 @@ class AirVaultWindow(QDialog):
             return ""
         ejecucion = self._ejecucion()
         nombres = ", ".join(parte.nombre for parte in perdidas)
-        cuantos = "ese batch" if len(perdidas) == 1 else "esos batches"
         minutos = max(
             1,
             round(
-                max(espera_de_reenvio(parte.trabajo) for parte in perdidas) / 60
+                max(
+                    espera_para_darla_por_perdida(parte.trabajo)
+                    for parte in perdidas
+                ) / 60
             ),
         )
         sin_hallar = [
@@ -3108,38 +3120,30 @@ class AirVaultWindow(QDialog):
                 "probable que la carga no vaya a aparecer."
             )
         cabeza = f" AirVault no publicó en Web Index: {nombres}. {razon}"
-        agotadas = [
-            parte for parte in perdidas
-            if int(parte.trabajo.manifiesto.reenvios or 0) >= MAXIMO_REENVIOS
-        ]
-        if len(agotadas) == len(perdidas):
-            # Con el tope agotado la decisión de *volver a mandarlos* pasa a
-            # quien mira AirVault. El programa no puede distinguir «la carga
-            # se perdió» de «AirVault va lento», y por ese margen es por
-            # donde aparecen dos copias del mismo batch cuando la cola acaba
-            # publicándolas todas. Buscarlos sí sigue haciéndolo solo: mirar
-            # la cola no escribe nada y no duplica nada.
-            sigue = (
+        varios = len(perdidas) > 1
+        sigue = (
+            (
                 " Se sigue mirando la cola por si AirVault acaba "
                 "publicándolos; si aparecen, se indexan solos."
-                if self.auto_check.isChecked() else ""
+                if varios else
+                " Se sigue mirando la cola por si AirVault acaba "
+                "publicándolo; si aparece, se indexa solo."
             )
-            return (
-                f"{cabeza} Ya se reenviaron {MAXIMO_REENVIOS} veces sin que "
-                "AirVault los publique, así que no se vuelven a mandar solos: "
-                "insistir es como acaban varias copias del mismo batch en la "
-                f"cola.{sigue} Mírelos en Web Index y, si de verdad no están, "
-                "clic derecho sobre su fila y «Subir a AirVault ahora»."
-            )
-        if self.auto_check.isChecked():
-            return (
-                f"{cabeza} Se comprueba la cola una vez más y se vuelve "
-                f"a enviar solamente {cuantos}, sin pulsar nada. Cada "
-                f"reenvío que tampoco aparezca espera más que el anterior."
-            )
+            if self.auto_check.isChecked() else ""
+        )
+        no_se_mandan = (
+            "No se vuelven a mandar solos" if varios
+            else "No se vuelve a mandar solo"
+        )
+        mirelos = (
+            "Mírelos en Web Index y, si de verdad no están" if varios
+            else "Mírelo en Web Index y, si de verdad no está"
+        )
         return (
-            f"{cabeza} Pulse «Subir a AirVault» para comprobar la cola "
-            f"una vez más y volver a enviar solamente {cuantos}."
+            f"{cabeza} {no_se_mandan}: insistir con el mismo archivo es como "
+            f"acaban varias copias del mismo batch en la cola.{sigue} "
+            f"{mirelos}, clic derecho sobre su fila y «Subir a AirVault "
+            "ahora»."
         )
 
     # ── la comprobación periódica ──────────────────────────────────
@@ -3170,9 +3174,9 @@ class AirVaultWindow(QDialog):
         """Lo que dispara el reloj. Se salta el turno si hay algo en vuelo."""
         if self.hilo() is not None:
             return
-        # Cada vuelta del reloj vuelve a dar permiso de reenvío: lo que no
+        # Cada vuelta del reloj vuelve a dar permiso de subida: lo que no
         # se pudo subir hace cinco minutos se intenta otra vez ahora.
-        self._reenvios_del_ciclo.clear()
+        self._subidas_del_ciclo.clear()
         self._comprobar()
 
     # ── acciones ───────────────────────────────────────────────────
@@ -3245,7 +3249,7 @@ class AirVaultWindow(QDialog):
         estado = self._base_del_estado()
         if estado is None:
             return
-        self._reenvios_del_ciclo.clear()
+        self._subidas_del_ciclo.clear()
         self._lanzar("subir", estado)
 
     def _comprobar(self) -> None:
@@ -3289,7 +3293,7 @@ class AirVaultWindow(QDialog):
         """Retoma el primer paso necesario sin duplicar trabajo terminado."""
         from app.airvault.model import EstadoEtapa
 
-        self._reenvios_del_ciclo.clear()
+        self._subidas_del_ciclo.clear()
         estado = self._base_del_estado()
         if estado is None:
             return
@@ -3597,22 +3601,24 @@ class AirVaultWindow(QDialog):
             )
         )
         self.estado_label.setText("Comprobado")
-        # Lo que no llegó a AirVault vuelve a Quick Upload sin esperar a que
-        # nadie pulse nada. Antes la comprobación periódica solo preguntaba,
-        # así que un archivo sin subir se quedaba en la lista para siempre
-        # mientras el reloj seguía consultando el servidor por él.
-        por_reenviar = [] if acotado else self._por_reenviar()
-        if por_reenviar:
-            self._estado["pendientes_subida"] = por_reenviar
+        # Lo que nunca llegó a AirVault sale a Quick Upload sin esperar a
+        # que nadie pulse nada. Antes la comprobación periódica solo
+        # preguntaba, así que un archivo sin subir se quedaba en la lista
+        # para siempre mientras el reloj seguía consultando por él. Lo que
+        # sí llegó y AirVault no publicó no entra aquí: eso se avisa y lo
+        # manda quien mire Web Index.
+        sin_subir = [] if acotado else self._sin_subir_todavia()
+        if sin_subir:
+            self._estado["pendientes_subida"] = sin_subir
             self._estado["indexar_al_encontrar"] = self._opciones.indexar
             self._estado["completar"] = self.completar_check.isChecked()
-            self._reenvios_del_ciclo.update(
-                str(trabajo.carpeta) for trabajo in por_reenviar
+            self._subidas_del_ciclo.update(
+                str(trabajo.carpeta) for trabajo in sin_subir
             )
             self._subir_al_terminar = True
             self._anotar(
                 "Faltan por subir; se envían ahora:",
-                [t.manifiesto.nombre_batch for t in por_reenviar],
+                [t.manifiesto.nombre_batch for t in sin_subir],
             )
         if listos:
             self.resumen.setText(

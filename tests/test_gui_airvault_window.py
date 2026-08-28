@@ -549,14 +549,13 @@ class ManifiestoFalso:
         self.lotes_previos = []
         self.intentos_identificacion = 0
         self.espera_reenvio_desde = ""
-        self.reenvios = 0
         self.busquedas_amplias_sin_hallar = 0
         self.completado_automatico = False
         self.cancelado = False
         self.posible_duplicado = ""
         # Que una parte este verificada es lo que demuestra que AirVault
-        # publico lo que se subio despues de otra, asi que la regla de
-        # reenvio lo pregunta.
+        # publico lo que se subio despues de otra, asi que la regla que da
+        # una carga por perdida lo pregunta.
         self.verificado = False
 
     def bitacoras(self):
@@ -870,7 +869,6 @@ def test_mientras_falte_un_lote_se_sigue_preguntando_solo(ventana):
 
 def estancada(
     nombre="DP | BITS SIN PUBLICAR",
-    reenvios=0,
     carpeta="job",
     subida="2020-01-01T00:00:00",
     espera="2020-01-01T00:00:00",
@@ -886,7 +884,6 @@ def estancada(
     )
     fila.trabajo.manifiesto.intentos_identificacion = 3
     fila.trabajo.manifiesto.espera_reenvio_desde = espera
-    fila.trabajo.manifiesto.reenvios = reenvios
     return fila
 
 
@@ -903,18 +900,24 @@ def indexada(nombre, carpeta, subida):
     return fila
 
 
-def test_una_subida_que_no_aparece_se_vuelve_a_enviar_sola(ventana):
-    """Esperar sin fin a que alguien pulse un boton no es esperar."""
+def test_una_subida_que_no_aparece_se_avisa_y_no_se_manda_sola(ventana):
+    """Insistir es como acaban varias copias del mismo batch en la cola.
+
+    Las tres señales que dan una carga por perdida pueden dispararse
+    mientras AirVault todavía la está procesando, así que la decisión de
+    volver a mandarla es de quien mira Web Index: es el único que distingue
+    «no llegó» de «va lento».
+    """
     ventana._al_comprobar({
         "estados": [estancada()], "planes": {}, "partes": [],
     })
 
     assert "probable que la carga no vaya a aparecer" in ventana.resumen.text()
-    assert "sin pulsar nada" in ventana.resumen.text()
-    assert ventana._subir_al_terminar
-    assert ventana._estado["pendientes_subida"]
-    # Mientras quede un reenvio por hacer, el reloj sigue en marcha.
-    assert ventana._vigilante is not None and ventana._vigilante.isActive()
+    assert "No se vuelve a mandar solo" in ventana.resumen.text()
+    assert "Subir a AirVault ahora" in ventana.resumen.text()
+    assert not ventana._subir_al_terminar
+    # El aviso dice el tiempo de espera configurado, sin multiplicarlo.
+    assert "30 minutos" in ventana.resumen.text()
 
 
 def test_sin_comprobacion_automatica_la_resubida_se_pide_a_mano(ventana):
@@ -927,56 +930,16 @@ def test_sin_comprobacion_automatica_la_resubida_se_pide_a_mano(ventana):
     assert not ventana._subir_al_terminar
 
 
-def test_cada_reenvio_espera_mas_que_el_anterior(ventana):
-    """Una cola que solo va lenta no recibe el mismo archivo cada vuelta."""
-    from app.airvault.flujo import MAXIMO_REENVIOS
-
-    ventana._al_comprobar({
-        "estados": [estancada(reenvios=MAXIMO_REENVIOS - 1)],
-        "planes": {}, "partes": [],
-    })
-
-    assert "sin pulsar nada" in ventana.resumen.text()
-    assert "espera más que el anterior" in ventana.resumen.text()
-    assert ventana._subir_al_terminar
-    # Dos veces la espera configurada, en minutos, en el propio aviso.
-    assert "60 minutos" in ventana.resumen.text()
-    assert ventana._vigilante is not None and ventana._vigilante.isActive()
-
-
-def test_agotado_el_tope_de_reenvios_deja_de_mandarlo_solo(ventana):
-    """Insistir es como acaban varias copias del mismo batch en la cola.
-
-    Las tres señales que dan una carga por perdida pueden dispararse
-    mientras AirVault todavía la está procesando. Al tercer intento lo que
-    falla ya no es el envío, así que la decisión pasa a quien mira Web
-    Index, que es el único que distingue «no llegó» de «va lento».
-    """
-    from app.airvault.flujo import MAXIMO_REENVIOS
-
-    ventana._al_comprobar({
-        "estados": [estancada(reenvios=MAXIMO_REENVIOS)],
-        "planes": {}, "partes": [],
-    })
-
-    assert "no se vuelven a mandar solos" in ventana.resumen.text()
-    assert "Subir a AirVault ahora" in ventana.resumen.text()
-    assert not ventana._subir_al_terminar
-
-
-def test_agotado_el_tope_de_reenvios_se_sigue_mirando_la_cola(ventana):
-    """El tope apaga el envío, no la búsqueda.
+def test_una_carga_perdida_se_sigue_mirando_en_la_cola(ventana):
+    """No mandarla otra vez no es dejar de buscarla.
 
     AirVault publica cargas horas después de aceptarlas. Parar el reloj al
-    agotar los reenvíos dejaba el batch en la tabla esperando a que alguien
+    darla por perdida dejaba el batch en la tabla esperando a que alguien
     volviera a pulsar, cuando lo único que hacía falta era seguir mirando:
     preguntar no escribe nada y no duplica nada.
     """
-    from app.airvault.flujo import MAXIMO_REENVIOS
-
     ventana._al_comprobar({
-        "estados": [estancada(reenvios=MAXIMO_REENVIOS)],
-        "planes": {}, "partes": [],
+        "estados": [estancada()], "planes": {}, "partes": [],
     })
 
     assert ventana._vigilante is not None and ventana._vigilante.isActive()
@@ -1015,7 +978,7 @@ def test_una_subida_fallida_no_se_reintenta_hasta_la_vuelta_siguiente(
     assert not ventana._subir_al_terminar
 
     # El reloj da permiso otra vez.
-    ventana._reenvios_del_ciclo.clear()
+    ventana._subidas_del_ciclo.clear()
     ventana._al_comprobar(datos)
     assert ventana._subir_al_terminar
 
@@ -1514,12 +1477,14 @@ def test_una_cancelacion_no_se_confunde_con_el_fallo_de_una_pagina(app):
     assert not issubclass(TrabajoCancelado, Exception)
 
 
-def test_una_carga_que_rebasaron_las_siguientes_se_reenvia_sola(ventana):
+def test_una_carga_que_rebasaron_las_siguientes_se_da_por_perdida(ventana):
     """Lo que se subio despues ya esta indexado: no hay nada que esperar.
 
     Sin esta regla la fila se quedaba en «Subido pendiente confirmación»
     hasta que alguien la mirara: la espera del reloj empieza cuando el
     programa se da cuenta, y en una ejecución recién abierta eso es ahora.
+    Darla por perdida es lo que avisa; mandarla otra vez sigue siendo una
+    orden a mano.
     """
     ahora = datetime.now()
     perdida = estancada(
@@ -1537,11 +1502,8 @@ def test_una_carga_que_rebasaron_las_siguientes_se_reenvia_sola(ventana):
     })
 
     assert "ya están indexadas" in ventana.resumen.text()
-    assert ventana._subir_al_terminar
-    assert [
-        trabajo.manifiesto.nombre_batch
-        for trabajo in ventana._estado["pendientes_subida"]
-    ] == ["DP | BITS -2"]
+    assert "No se vuelve a mandar solo" in ventana.resumen.text()
+    assert not ventana._subir_al_terminar
 
 
 def test_un_batch_que_cerro_el_programa_se_pinta_como_terminado(ventana):

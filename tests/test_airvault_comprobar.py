@@ -56,8 +56,8 @@ from app.airvault.flujo import (
     reiniciar_trabajos_incompletos,
     ruta_indice_paginas,
     partes_por_subir,
-    reenvio_pendiente,
     subida_estancada,
+    subida_perdida,
     subida_rebasada,
     subir_partes,
 )
@@ -567,12 +567,7 @@ def test_un_candidato_provisional_no_se_reenvia_por_antiguo(
     )
 
     estados = comprobar_partes([trabajo], cliente)
-    subir_partes(
-        [trabajo],
-        SesionFalsa(),
-        cliente=cliente,
-        reintentar_estancados=True,
-    )
+    subir_partes([trabajo], SesionFalsa(), cliente=cliente)
 
     assert estados[0].estado == PROCESANDO
     assert subidas == []
@@ -1515,78 +1510,72 @@ def test_subir_de_nuevo_reenvia_el_que_no_aparecio_durante_mucho_tiempo(
         [trabajo],
         SesionFalsa(),
         cliente=cliente,
-        reintentar_estancados=True,
+        forzados=[str(trabajo.carpeta)],
     )
 
     assert subidas == ["DP | BIT -2"]
     assert trabajo.manifiesto.batch_id == "003NUE"
 
 
-def test_cada_reenvio_automatico_se_cuenta_y_espera_mas(tmp_path, monkeypatch):
-    """El margen entre intentos crece, y al segundo reenvio se para solo."""
-    from app.airvault.flujo import MAXIMO_REENVIOS, espera_de_reenvio
+def test_una_carga_perdida_se_avisa_pero_no_se_reenvia_sola(
+    tmp_path, monkeypatch
+):
+    """Nadie manda el mismo archivo dos veces sin que lo pidan.
 
-    trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
-    subida = trabajo.manifiesto.etapa("subir")
-    subida.marcar(EstadoEtapa.HECHA, "division-02.pdf")
-    subida.actualizada = "2020-01-01T00:00:00"
-    trabajo.manifiesto.intentos_identificacion = 3
-    trabajo.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
-    trabajo.guardar()
-    cliente = ClienteFalso()
-    subidas = []
+    El programa no distingue una carga perdida de una cola lenta, y por ese
+    margen es por donde aparecen dos copias del mismo batch el dia que
+    AirVault las publica todas. Se avisa, se sigue mirando la cola, y subir
+    otra vez es la orden expresa de quien mira Web Index.
+    """
+    from app.airvault.flujo import espera_para_darla_por_perdida
 
-    def subir(self, sesion, pdf="", avisar=None, cliente=None):
-        subidas.append(self.manifiesto.nombre_batch)
-        self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "reenviado")
-        cliente.lotes.append(lote("003NUE", self.manifiesto.nombre_batch, 2))
-        self.guardar()
-
-    monkeypatch.setattr(Trabajo, "subir", subir)
-    subir_partes(
-        [trabajo], SesionFalsa(), cliente=cliente,
-        reintentar_estancados=True,
-    )
-
-    assert subidas == ["DP | BIT -2"]
-    # Encontrarlo cierra el asunto: el contador vuelve a cero para la
-    # proxima vez que este manifiesto tenga que subir algo.
-    assert trabajo.manifiesto.batch_id == "003NUE"
-    assert trabajo.manifiesto.reenvios == 0
-
-    # Cada reenvio ya hecho pide un multiplo mas de la espera configurada.
-    perdida = _trabajos_principal_division_y_revisar(tmp_path / "otra")[1]
+    perdida = _trabajos_principal_division_y_revisar(tmp_path)[1]
     perdida.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "x.pdf")
     perdida.manifiesto.intentos_identificacion = 3
     perdida.manifiesto.espera_reenvio_desde = "2020-01-01T00:00:00"
     perdida.guardar()
-    base = perdida.config.espera_reenvio_s
-    assert espera_de_reenvio(perdida) == base
-    perdida.manifiesto.reenvios = 3
-    assert espera_de_reenvio(perdida) == base * 4
 
-    # Con un reenvio hecho todavia se insiste: puede ser una cola lenta.
-    perdida.manifiesto.reenvios = MAXIMO_REENVIOS - 1
-    perdida.guardar()
+    # La espera es la configurada, sin multiplicadores: lo unico que vence
+    # con ella es el aviso.
+    assert (
+        espera_para_darla_por_perdida(perdida)
+        == perdida.config.espera_reenvio_s
+    )
     estado = EstadoParte(perdida, BUSCANDO, "no aparecio")
-    assert subida_estancada(perdida, espera_de_reenvio(perdida))
-    assert reenvio_pendiente(estado)
-    assert [t.carpeta for t in partes_por_subir([estado])] == [perdida.carpeta]
-
-    # Agotado el tope, el programa deja de mandarlo solo. Lo que falla ya
-    # no es el envio, y seguir insistiendo es como aparecen tres copias del
-    # mismo batch el dia que AirVault los publica todos. Queda la orden a
-    # mano desde la cola, que si sube.
-    perdida.manifiesto.reenvios = MAXIMO_REENVIOS
-    perdida.guardar()
-    estado = EstadoParte(perdida, BUSCANDO, "no aparecio")
-    assert subida_estancada(perdida, espera_de_reenvio(perdida))
-    assert not reenvio_pendiente(estado)
+    assert subida_estancada(perdida, espera_para_darla_por_perdida(perdida))
+    assert subida_perdida(estado)
+    # Darla por perdida avisa; no la pone en la lista de lo que sale solo.
     assert partes_por_subir([estado]) == []
+
+    cliente = ClienteFalso()
+    subidas = []
+    monkeypatch.setattr(
+        Trabajo, "subir", lambda *args, **kwargs: subidas.append(True)
+    )
+    monkeypatch.setattr(
+        Trabajo,
+        "descubrir",
+        lambda self, *a, **k: setattr(self.manifiesto, "batch_id", "003NUE"),
+    )
+
+    subir_partes([perdida], SesionFalsa(), cliente=cliente)
+    assert subidas == []
+
+    # La orden expresa si la manda.
+    subir_partes(
+        [perdida], SesionFalsa(), cliente=cliente,
+        forzados=[str(perdida.carpeta)],
+    )
+    assert subidas == [True]
 
 
 def test_lo_que_falta_por_subir_sale_de_una_sola_regla(tmp_path):
-    """La ventana y el boton tienen que decidir exactamente lo mismo."""
+    """La ventana y el boton tienen que decidir exactamente lo mismo.
+
+    Y lo que sale solo es unicamente lo que nunca llego a Quick Upload: el
+    estancado ya se subio una vez, asi que se avisa de el y lo manda quien
+    mire Web Index.
+    """
     trabajos = _trabajos_principal_division_y_revisar(tmp_path)
     sin_subir, estancado, listo = trabajos
     subida = estancado.manifiesto.etapa("subir")
@@ -1604,11 +1593,14 @@ def test_lo_que_falta_por_subir_sale_de_una_sola_regla(tmp_path):
     estados = comprobar_partes(trabajos, cliente)
 
     assert [t.carpeta for t in partes_por_subir(estados)] == [
-        sin_subir.carpeta, estancado.carpeta,
+        sin_subir.carpeta
     ]
+    assert subida_perdida(
+        next(e for e in estados if e.trabajo is estancado), trabajos
+    )
 
 
-def test_una_carga_vieja_que_no_esta_en_la_cola_se_reenvia_enseguida(
+def test_una_carga_vieja_que_no_esta_en_la_cola_se_da_por_perdida_enseguida(
     tmp_path, monkeypatch,
 ):
     """La búsqueda amplia se hace igual; lo que no se hace es repetirla.
@@ -1619,6 +1611,9 @@ def test_una_carga_vieja_que_no_esta_en_la_cola_se_reenvia_enseguida(
     mucho, no viene en camino: se volvió a borrar o nunca entró. Repetir esa
     misma búsqueda dos veces más y esperar después media hora es tiempo
     perdido.
+
+    Darla por perdida es lo que avisa; mandarla otra vez sigue siendo una
+    orden a mano.
     """
     trabajo = _trabajos_principal_division_y_revisar(tmp_path)[1]
     subida = trabajo.manifiesto.etapa("subir")
@@ -1641,14 +1636,19 @@ def test_una_carga_vieja_que_no_esta_en_la_cola_se_reenvia_enseguida(
     assert estado.estado == BUSCANDO
     assert "ningún nombre" in estado.detalle
     assert trabajo.manifiesto.busquedas_amplias_sin_hallar == 1
+    assert subida_perdida(estado)
+    assert partes_por_subir([estado]) == []
+
+    subir_partes([trabajo], SesionFalsa(), cliente=cliente)
+    assert subidas == []
+
     subir_partes(
         [trabajo], SesionFalsa(), cliente=cliente,
-        reintentar_estancados=True,
+        forzados=[str(trabajo.carpeta)],
     )
     assert subidas == [True]
-    assert trabajo.manifiesto.reenvios == 1
-    # Reenviada, la cuenta vuelve a cero: la carga nueva empieza de nuevo
-    # con todo el margen de identificacion por delante.
+    # Reenviada a mano, la cuenta vuelve a cero: la carga nueva empieza de
+    # nuevo con todo el margen de identificacion por delante.
     assert trabajo.manifiesto.busquedas_amplias_sin_hallar == 0
 
 
@@ -2240,7 +2240,7 @@ def _subida_en(trabajo, momento: datetime) -> None:
     trabajo.guardar()
 
 
-def test_una_carga_que_rebasaron_las_siguientes_se_reenvia_sin_esperar(
+def test_una_carga_que_rebasaron_las_siguientes_se_pierde_sin_esperar(
     tmp_path,
 ):
     """Si las partes posteriores ya se indexaron, la cola paso de largo.
@@ -2274,8 +2274,9 @@ def test_una_carga_que_rebasaron_las_siguientes_se_reenvia_sin_esperar(
     # perdida es que las dos que se enviaron despues ya esten indexadas.
     assert not subida_estancada(primera, primera.config.espera_reenvio_s)
     assert subida_rebasada(primera, ejecucion)
-    assert reenvio_pendiente(estados[0], ejecucion)
-    assert [t.carpeta for t in partes_por_subir(estados)] == [primera.carpeta]
+    assert subida_perdida(estados[0], ejecucion)
+    # Se avisa de ella, pero sale a Quick Upload solo si alguien lo ordena.
+    assert partes_por_subir(estados) == []
 
 
 def test_la_carga_mas_reciente_no_se_pierde_por_las_anteriores(tmp_path):
@@ -2327,7 +2328,7 @@ def test_la_espera_se_cuenta_desde_que_se_subio_el_archivo(tmp_path):
     trabajo.guardar()
 
     assert subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
-    assert reenvio_pendiente(EstadoParte(trabajo, BUSCANDO, "no aparecio"))
+    assert subida_perdida(EstadoParte(trabajo, BUSCANDO, "no aparecio"))
 
 
 def test_una_subida_reciente_sigue_esperando_su_turno(tmp_path):
@@ -2342,7 +2343,7 @@ def test_una_subida_reciente_sigue_esperando_su_turno(tmp_path):
     trabajo.guardar()
 
     assert not subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
-    assert not reenvio_pendiente(EstadoParte(trabajo, BUSCANDO, "no aparecio"))
+    assert not subida_perdida(EstadoParte(trabajo, BUSCANDO, "no aparecio"))
 
 
 def test_el_batch_que_cierra_el_programa_queda_como_autocompletado(tmp_path):
@@ -2400,9 +2401,6 @@ def test_una_carga_recien_subida_no_se_reenvia_por_no_estar_todavia(
     assert trabajo.manifiesto.busquedas_amplias_sin_hallar == 0
     assert trabajo.manifiesto.intentos_identificacion == 3
     assert not subida_estancada(trabajo, trabajo.config.espera_reenvio_s)
-    assert not reenvio_pendiente(estados[-1], [trabajo])
-    subir_partes(
-        [trabajo], SesionFalsa(), cliente=cliente,
-        reintentar_estancados=True,
-    )
+    assert not subida_perdida(estados[-1], [trabajo])
+    subir_partes([trabajo], SesionFalsa(), cliente=cliente)
     assert subidas == []
