@@ -112,11 +112,12 @@ class AirVaultConfig:
     # Hasta donde llega el boton «Automatico» de la ventana principal. Son
     # preferencias de la interfaz, no del indexado, pero viven aqui por lo
     # mismo que «Completar batch»: es el unico archivo portable que la
-    # instalacion se lleva consigo, y tres de los cuatro pasos son de
-    # AirVault. Procesar y exportar no aparecen porque siempre se hacen.
+    # instalacion se lleva consigo, y dos de los tres pasos son de AirVault.
+    # Procesar y exportar no aparecen porque siempre se hacen; esperar a
+    # AirVault tampoco, porque va dentro de subir y no se elige aparte. Un
+    # «auto_esperar» de una version anterior se ignora al leer el archivo.
     auto_depurar: bool = False
     auto_subir: bool = True
-    auto_esperar: bool = True
     auto_indexar: bool = True
     # Si antes de subir se le pregunta a Web Search si esas bitacoras ya
     # estan publicadas. Apagado de fabrica: la ruta de busqueda no esta

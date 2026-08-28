@@ -23,10 +23,19 @@ alinear las páginas el OCR no lee, sin OCR no hay datos y sin salidas no hay
 nada que subir, así que aparecen marcados y apagados, para que la lista diga
 todo lo que va a pasar y no solo la parte opcional.
 
-Los cuatro de AirVault van uno detrás de otro y se marcan juntos: marcar
-«Indexar páginas» enciende subir y esperar, porque no se puede indexar lo
-que no está arriba; apagar «Subir a AirVault» apaga los tres de abajo, que
-sin la carga no tienen sobre qué trabajar.
+Los tres de AirVault van uno detrás de otro y se marcan juntos: marcar
+«Indexar páginas» enciende subir, porque no se puede indexar lo que no está
+arriba; apagar «Subir a AirVault» apaga los dos de abajo, que sin la carga
+no tienen sobre qué trabajar.
+
+Esperar a que AirVault deje los batches listos no es un paso que se elija:
+va dentro de subir. Subir sin esperar la respuesta no deja nada terminado
+—el batch se queda en la cola y nadie vuelve a mirarlo—, así que la casilla
+solo servía para dejar la cadena a medias. Por eso la entrada dice solo
+«Subir a AirVault» y no nombra la espera: la espera no es algo que se
+marque, sino parte de lo que hace subir. Se sigue viendo en la línea de
+pasos, que es donde importa saber que el tiempo se va ahí, y el intervalo
+se elige en «Comprobar cada», en la ventana de AirVault.
 """
 
 from __future__ import annotations
@@ -50,14 +59,17 @@ from app.airvault.config import (
 )
 
 # Pasos que la persona elige, en el orden en que ocurren. El primero va
-# suelto; los cuatro de AirVault forman la cadena.
+# suelto; los tres de AirVault forman la cadena.
 DEPURAR = "depurar"
 SUBIR = "subir"
-ESPERAR = "esperar"
 INDEXAR = "indexar"
 COMPLETAR = "completar"
 
-CADENA = (SUBIR, ESPERAR, INDEXAR, COMPLETAR)
+# La espera no se elige: ocurre dentro de subir. Es un paso del recorrido
+# (se ve en la línea y se cuenta), pero no una casilla del menú.
+ESPERAR = "esperar"
+
+CADENA = (SUBIR, INDEXAR, COMPLETAR)
 PASOS = (DEPURAR, *CADENA)
 
 # Los tres que siempre se hacen. No son opciones (no se pueden desmarcar),
@@ -101,7 +113,6 @@ NOMBRES_CORTOS = {
 _CLAVES = {
     DEPURAR: "auto_depurar",
     SUBIR: "auto_subir",
-    ESPERAR: "auto_esperar",
     INDEXAR: "auto_indexar",
     COMPLETAR: "completar_batch",
 }
@@ -110,37 +121,26 @@ _CLAVES = {
 ETIQUETAS = {
     DEPURAR: "Depurar páginas repetidas y en blanco",
     SUBIR: "Subir a AirVault",
-    ESPERAR: "Esperar a que AirVault los deje listos",
     INDEXAR: "Indexar páginas",
     COMPLETAR: "Completar batch",
 }
 
 AYUDAS = {
     DEPURAR: (
-        "Quita de la ejecución las bitácoras repetidas y las páginas en "
-        "blanco antes de exportar, así que los PDF de la entrega salen ya "
-        "sin ellas. Se quitan las apariciones sobrantes de cada repetida, "
-        "nunca la primera. Sin marcar, la ejecución se exporta entera y "
-        "«Depurar» sigue disponible para revisarla a mano."
+        "Quita las bitácoras repetidas y las páginas en blanco antes de "
+        "exportar. Sin marcar, se puede depurar a mano después."
     ),
     SUBIR: (
-        "Manda a Quick Upload todos los batches de la entrega en cuanto la "
-        "exportación termina, sin abrir la ventana de AirVault a mano."
-    ),
-    ESPERAR: (
-        "Le pregunta a AirVault cada tantos minutos si ya terminó de "
-        "procesar lo subido. Es la misma casilla que «Comprobar cada» en la "
-        "ventana de AirVault, donde se elige el intervalo."
+        "Sube los batches a Quick Upload al terminar la exportación y espera "
+        "a que AirVault los deje listos."
     ),
     INDEXAR: (
-        "Escribe los datos de cada batch apenas AirVault lo deja entero, sin "
-        "esperar a los demás. También borra las páginas separadoras."
+        "Escribe los datos de cada batch en cuanto está listo, sin esperar a "
+        "los demás. También borra las páginas separadoras."
     ),
     COMPLETAR: (
-        "Al terminar de escribir, da el batch por terminado en AirVault: lo "
-        "indexa y lo manda a Web Search. Es la misma casilla que «Completar "
-        "batch» en la ventana de AirVault: marcarla en un sitio la marca en "
-        "el otro."
+        "Al terminar de escribir, da el batch por terminado y lo manda a Web "
+        "Search."
     ),
 }
 
@@ -148,8 +148,8 @@ AYUDAS = {
 FIJOS = (
     (
         "Preprocesar (enderezar y alinear)",
-        "Siempre se hace: es la primera parte del procesamiento, la que "
-        "endereza y alinea cada página para que el OCR lea donde debe.",
+        "Siempre se hace: endereza y alinea cada página para que el OCR "
+        "lea donde debe.",
     ),
     (
         "Procesar (OCR)",
@@ -166,8 +166,8 @@ class OpcionesAutomatizacion(QObject):
     """Los pasos elegidos, con memoria portable y una sola copia viva.
 
     La comparten la ventana principal y todas las de AirVault: «Completar
-    batch» y la espera se ven marcadas igual en los dos sitios porque son el
-    mismo valor, no dos casillas que había que acordarse de igualar.
+    batch» se ve marcado igual en los dos sitios porque es el mismo valor,
+    no dos casillas que había que acordarse de igualar.
     """
 
     cambiado = Signal(str, bool)
@@ -179,7 +179,6 @@ class OpcionesAutomatizacion(QObject):
         self._valores = {
             DEPURAR: bool(config.auto_depurar),
             SUBIR: bool(config.auto_subir),
-            ESPERAR: bool(config.auto_esperar),
             INDEXAR: bool(config.auto_indexar),
             # Sin preferencia guardada no se inventa ninguna ni se escribe
             # el archivo: quien nunca tocó la casilla la encuentra apagada.
@@ -189,7 +188,8 @@ class OpcionesAutomatizacion(QObject):
     # ── consulta ───────────────────────────────────────────────────
 
     def valor(self, paso: str) -> bool:
-        return self._valores[paso]
+        """Si ese paso se va a hacer. La espera va dentro de subir."""
+        return self._valores[SUBIR if paso == ESPERAR else paso]
 
     @property
     def depurar(self) -> bool:
@@ -198,10 +198,6 @@ class OpcionesAutomatizacion(QObject):
     @property
     def subir(self) -> bool:
         return self._valores[SUBIR]
-
-    @property
-    def esperar(self) -> bool:
-        return self._valores[ESPERAR]
 
     @property
     def indexar(self) -> bool:
@@ -216,6 +212,8 @@ class OpcionesAutomatizacion(QObject):
     def fijar(self, paso: str, marcado: bool) -> None:
         """Cambia un paso, arrastra la cadena y lo deja guardado."""
         marcado = bool(marcado)
+        if paso not in self._valores:
+            raise KeyError(f"«{paso}» no es un paso que se elija")
         if self._valores[paso] == marcado:
             return
         cambios = {paso: marcado}
@@ -424,7 +422,11 @@ class CadenaAutomatica(QWidget):
     # ── consulta ───────────────────────────────────────────────────
 
     def elegido(self, paso: str) -> bool:
-        """Si ese paso se va a hacer con las opciones de ahora."""
+        """Si ese paso se va a hacer con las opciones de ahora.
+
+        «Esperar» no tiene casilla propia: se hace siempre que se suba,
+        porque es lo que convierte la carga en un batch listo para indexar.
+        """
         if paso in (PREPROCESAR, PROCESAR, EXPORTAR):
             return True
         return self._opciones.valor(paso)
