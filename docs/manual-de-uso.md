@@ -68,6 +68,8 @@ La lista instalada contiene 132 aeronaves:
 | 9801 a 9822 | sufijo `CMP` |
 | 9901 a 9932 | sufijo `CMP` |
 
+El `HP-1522WWP` es el único que no se indexa con el sufijo que tiene aquí: en AirVault ese avión es `HP-1522CMP`. La bitácora lo trae escrito de las dos maneras y da igual cuál se detecte, porque la subida lo traduce. La lista, el CSV y los nombres de archivo conservan `HP-1522WWP`.
+
 Use **Editar lista de matrículas…** para registrar altas y bajas. El archivo guarda cada matrícula por separado; los rangos de la tabla solo resumen su contenido actual.
 
 ### 3.3 Fecha
@@ -154,7 +156,7 @@ Antes de procesar, seleccione cómo se organizará la salida:
 
 - **Un solo PDF** inserta separadores para matrícula o mes;
 - **Varios PDF** genera archivos separados por los criterios marcados;
-- **Posibles discrepancias** aparta las páginas con firmas faltantes o inciertas;
+- **Posibles discrepancias** aparta las páginas con firmas faltantes o inciertas, que van al batch manual bajo su propio separador;
 - **Errores** genera un PDF auxiliar con datos críticos sin resolver;
 - **Fecha del CSV** conserva el día leído, usa fin de mes si falta el día, o fuerza fin de mes para todas las filas;
 - **Campos importantes** define las columnas del CSV mínimo y la vista resumida.
@@ -305,9 +307,11 @@ Las acciones del reporte significan:
 
 La columna **ya_indexada** indica si la página ya estaba válida. En ese caso, la acción es **bloqueada** y la página se omite.
 
-Las páginas con matrícula ausente, marcada, contradicha o sin respaldo suficiente forman un batch terminado en `REVISAR`. BITS lo sube y lo libera, pero su clasificación e indexado son manuales. No se envían allí todas las inferencias: las de libro coherentes y respaldadas continúan en los batches automáticos.
+Las páginas con matrícula ausente, marcada, contradicha o sin respaldo suficiente forman un batch terminado en `REVISAR`, junto con las marcadas como discrepancia (`disc=true`). BITS lo sube y lo libera, pero su clasificación e indexado son manuales. No se envían allí todas las inferencias: las de libro coherentes y respaldadas continúan en los batches automáticos.
 
-En el flujo normal, BITS escribe `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status`, `End Date` y `Batch Name`. Añade `Lessor` cuando está resuelto. `Description` queda como `<vuelo> AUTO INDEX` cuando se leyó el vuelo y como `AUTO INDEX` cuando no se leyó. La marca solo viaja a AirVault: no modifica el CSV ni el reporte de revisión. El batch `REVISAR` no la lleva: su `Description` va con el vuelo leído, y sin vuelo el campo ni se envía. Al indexar también borra en AirVault las páginas separadoras del batch automático. El batch `REVISAR` conserva sus páginas y se indexa a mano. No envía los demás campos.
+Ese batch va en dos secciones. Abre con **POSIBLES DISCREPANCIAS**, que reúne las páginas cuya firma falta o no se pudo leer, y sigue con **REVISAR**, que reúne el resto. Las de la primera sección se indexan con `Audit Status` en `AUDIT REQUIRED`; las demás, con el del trabajo.
+
+En el flujo normal, BITS escribe `Doc Type`, `Aircraft`, `Fleet`, `Log Page Number`, `Audit Status`, `End Date` y `Batch Name`. Añade `Lessor` cuando está resuelto. `Audit Status` es el del trabajo, salvo en las páginas marcadas como discrepancia, que llevan `AUDIT REQUIRED`. `Description` queda como `<vuelo> AUTO INDEX` cuando se leyó el vuelo y como `AUTO INDEX` cuando no se leyó. La marca solo viaja a AirVault: no modifica el CSV ni el reporte de revisión. El batch `REVISAR` no la lleva: su `Description` va con el vuelo leído, y sin vuelo el campo ni se envía. Al indexar también borra en AirVault las páginas separadoras del batch automático. El batch `REVISAR` conserva sus páginas y se indexa a mano. No envía los demás campos.
 
 `Fleet` se toma primero de `airvault_flota.json`, donde BITS guarda los valores confirmados por AirVault. Si no hay dato conocido, se infiere por familia y el reporte marca `fleet_inferido=si`; confirme esa fila antes de indexar.
 

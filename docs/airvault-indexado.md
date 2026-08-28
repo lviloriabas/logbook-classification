@@ -470,7 +470,7 @@ conserva, asi que un indexado no pisa lo que alguien haya puesto a mano.
 | Aircraft        | columna `matricula` del CSV                                                |
 | Fleet           | se deduce de la matricula                                                  |
 | Log Page Number | columna `log_number` del CSV                                               |
-| Audit Status    | valor del trabajo                                                          |
+| Audit Status    | valor del trabajo; `AUDIT REQUIRED` si la bitacora es discrepancia         |
 | End Date        | columna `date` del CSV en `MM/DD/YYYY`; si no se leyo, se deduce del libro |
 | Description     | `<flight_number> AUTO INDEX`, o solo `AUTO INDEX` si no se leyó vuelo; en REVISAR, el vuelo sin marca |
 | Lessor          | del cache de flota, solo si lo trae                                        |
@@ -486,6 +486,16 @@ cuando no hay vuelo ni siquiera manda el campo, para no borrar lo que
 alguien haya escrito. Es un campo por pagina, no
 del batch: el batch no lo lleva (Quick Upload ni siquiera expone
 `Description`).
+
+**La auditoria.** Una bitacora marcada como discrepancia (la columna `disc`
+del CSV, la que va bajo el separador `POSIBLES DISCREPANCIAS`) se escribe con
+un `Audit Status` propio, `AUDIT REQUIRED` de fabrica. Es lo unico que la
+distingue en AirVault de las demas paginas del batch: la firma que falta o
+que no se pudo leer no viaja a ningun campo del indice. El valor se cambia
+en `airvault.json` con `audit_status_discrepancia`, y vaciarlo deja a todas
+las paginas con el `Audit Status` normal del trabajo. Todas esas paginas van
+hoy en el batch de REVISAR, que es donde las deja la entrega, pero la marca
+es de la pagina y no del batch: se escribe igual en cualquiera de los dos.
 
 **La fecha.** `End Date` es obligatorio: una bitacora sin fecha deja su
 pagina bloqueada, y basta una para que el batch no se pueda cerrar. Cuando la
