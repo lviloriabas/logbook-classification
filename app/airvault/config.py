@@ -32,6 +32,9 @@ CAMPO_AUDIT_STATUS = 9754
 CAMPO_START_DATE = 9594
 CAMPO_END_DATE = 9593
 CAMPO_BATCH_NAME = 9631
+# Solo existe en Quick Upload. Viaja con el mismo nombre del batch: ver
+# :func:`app.airvault.uploader.valores_quick_upload`.
+CAMPO_BATCH_USERNAME = 9809
 
 # Los seis obligatorios del tipo de documento por defecto. Si alguno queda
 # vacio la pagina se guarda en amarillo (estado 3, "Need Correction"), asi
@@ -73,6 +76,7 @@ NOMBRE_CAMPO = {
     CAMPO_START_DATE: "Start Date",
     CAMPO_END_DATE: "End Date",
     CAMPO_BATCH_NAME: "Batch Name",
+    CAMPO_BATCH_USERNAME: "Batch Username",
 }
 
 

@@ -20,6 +20,8 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from loguru import logger
 
+from app.airvault.config import CAMPO_BATCH_NAME, CAMPO_BATCH_USERNAME
+
 # Campos que Quick Upload acepta hoy en el repositorio MXDocs.
 CAMPOS_QUICK_UPLOAD = {
     9586: "C_DocType",
@@ -49,10 +51,18 @@ def valores_quick_upload(valores: Mapping[int, str]) -> List[Dict[str, Any]]:
 
     Solo viajan los campos que el modulo admite; el resto se descarta en
     silencio porque el servidor los rechazaria.
+
+    ``C_BUName`` sale con el mismo nombre del batch cuando nadie le dio uno
+    propio. Es el otro campo de nombre que expone Quick Upload, y las cargas
+    que lo dejaban vacio son las que AirVault publicaba como
+    ``Empty-Batch``.
     """
+    nombre_batch = str(valores.get(CAMPO_BATCH_NAME, "") or "")
     salida: List[Dict[str, Any]] = []
     for field_id, columna in CAMPOS_QUICK_UPLOAD.items():
         valor = str(valores.get(field_id, "") or "")
+        if field_id == CAMPO_BATCH_USERNAME and not valor:
+            valor = nombre_batch
         salida.append({
             "FieldId": str(field_id),
             "WarnEmpty": False,
