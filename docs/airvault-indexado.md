@@ -17,19 +17,20 @@ delante.
 
 | Control                 | Que hace                                                                                                                                                      |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Historial               | Ultimas 25 ejecuciones procesadas, de la mas reciente a la mas antigua, con sus paginas y lo que tienen para subir. Viene señalada la exportada mas reciente. |
+| `Seleccionar ejecucion` | Desplegable con las ultimas 25 ejecuciones procesadas por su nombre, de la mas reciente a la mas antigua. Es el mismo control que el del visor de CSV y abre en «Seleccionar ejecucion»; viene señalada la exportada mas reciente, y las que todavia no se pueden subir salen en gris. Al posarse sobre una salen sus paginas y lo que tiene para subir. Con el boton derecho ofrece eliminar el registro de AirVault de la elegida, o la ejecucion entera. |
 | `Ejecucion:`            | CSV de la ejecucion elegida arriba. No se teclea.                                                                                                             |
 | `Otra ejecucion…`       | Elige el CSV de una ejecucion que no este en la lista.                                                                                                        |
 | `Batch:`                | Nombre con el que el batch queda en AirVault. Viene propuesto con la fecha y la hora de la ejecucion.                                                         |
 | `Sesion:`               | Respaldo, normalmente vacio: la sesion la resuelve el navegador. Lo que se pegue aqui no se guarda en el disco.                                               |
-| `Comprobar cada N min`  | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 2 minutos, y deja de preguntar cuando no queda nada por esperar. Es la misma casilla que `Esperar a que AirVault los deje listos` en **Automatización…** de la ventana principal. |
+| `Comprobar cada N min`  | Le pregunta solo a AirVault, sin que nadie pulse. Viene marcado, cada 2 minutos, y deja de preguntar cuando no queda nada por esperar. No decide si se espera (eso va dentro de `Subir a AirVault`, en **Automatización…**) sino cada cuanto se pregunta, y vale mientras la ventana este abierta: apagarlo deja la cadena parada ahi, y la linea de pasos de la ventana principal lo enseña en rojo. |
 | `Comprobar ahora`       | La misma pregunta, en el momento.                                                                                                                             |
 | `Subir a AirVault`      | Manda los PDF de la entrega. Termina cuando termina la subida. Es lo unico que ademas retoma los batches que quedaron a medias en ejecuciones anteriores: lo que arranca solo se ciñe a la ejecucion elegida. |
 | `Completar batch`       | Al terminar de escribir, da el batch por terminado en AirVault: lo indexa y lo manda a Web Search (ver mas abajo). Sin marcar, el batch se queda en la cola para revisarlo. Es la misma casilla que la de **Automatización…** en la ventana principal. |
-| `Automatizacion…`       | Menu con los pasos que se encadenan solos: subir, esperar, indexar y completar el batch, mas depurar la ejecucion. Es la misma eleccion que en la ventana principal y se conserva al cerrar el programa. |
+| `Automatizacion…`       | Menu con los pasos que se encadenan solos: subir a AirVault, indexar y completar el batch, mas depurar la ejecucion. Es la misma eleccion que en la ventana principal y se conserva al cerrar el programa. |
 | `Continuar pendiente`   | Consulta AirVault y sigue desde el primer paso que no haya terminado, sin repetir paginas que ya esten en verde.                                              |
 | `Reiniciar paso incompleto` | Reinicia el estado local del batch elegido, o de todos los incompletos si no hay ninguno elegido. No borra nada en AirVault.                              |
 | `Indexar`               | Escribe en los batches que ya estan listos.                                                                                                                   |
+| `Buscar:`               | Pregunta por una bitacora (Log Page Number, matricula, vuelo, fecha o archivo de origen) y resalta los batches de la cola que la llevan. Puede estar en varios a la vez. |
 | `Vista previa…`         | Enseña en cuantos batches quedaria repartida la ejecucion, con sus paginas y sus bitacoras. No prepara ni sube nada.                                          |
 | `Ver reporte…`          | Abre el detalle pagina por pagina de lo que se escribiria.                                                                                                    |
 | `Cancelar`              | Detiene en el acto lo que esté en marcha (sin esperar al servidor) y suelta los batches tomados.                                                                                                   |
@@ -54,6 +55,62 @@ y con el boton derecho sobre una fila de la tabla de batches, que es la
 via para un batch que ya esta subido. Los separadores no aparecen: ocupan
 pagina en el batch pero no son documentos que indexar, y se cuentan
 aparte en la linea de arriba.
+
+### La cola: el clic derecho
+
+Cada fila de la tabla de batches se maneja por separado, y con Ctrl o
+Mayusculas se eligen varias a la vez: el menu del boton derecho actua sobre
+todas las elegidas y hace en cada una lo que corresponda, asi que una
+seleccion de batches mezclados sube los que faltan por subir e indexa los que
+estan listos sin tocar a los demas. Lo que no vale para ninguna sale
+desactivado en vez de desaparecer, para que la fila diga siempre de que es
+capaz. Trabajando tambien se puede elegir: la accion se pone en cola y
+arranca en cuanto termine lo que hay en vuelo.
+
+**Cancelar en la cola** y **Eliminar el batch…** no son lo mismo:
+
+* **Cancelar** deja el batch donde esta. Conserva su ID y lo que ya se le
+  escribio, y solo deja de subirse, buscarse e indexarse hasta que alguien lo
+  reanude. Sus bitacoras siguen anotadas como enviadas, asi que ningun
+  reparto posterior las vuelve a mandar.
+* **Eliminar** borra la memoria local del batch. Su manifiesto se va a la
+  Papelera, su anotacion sale del registro de la entrega y sus bitacoras
+  vuelven a quedar libres: el proximo reparto de la ejecucion las repartira
+  otra vez, en otro batch. Una entrega repartida deja cada batch en su propia
+  carpeta (`parte-02`, `revisar`) y ahi se va la carpeta entera con el PDF que
+  se preparo para subirlo; sin repartir, el batch vive en la carpeta de la
+  ejecucion junto al registro que es de la entrega entera, y ahi solo se va su
+  manifiesto.
+
+Lo que ya este en AirVault no se toca en ninguno de los dos casos: el batch
+remoto se queda donde estaba, y eliminarlo aqui solo pierde el rastro de que
+fue este trabajo el que lo subio. No se elimina nada mientras la ventana esta
+subiendo o indexando —primero hay que cancelar el trabajo— ni de carpetas que
+no cuelguen de la de trabajos del programa.
+
+### Buscar una bitacora en la cola
+
+El campo **Buscar**, junto al titulo de la tabla de batches, responde en
+que batch esta una bitacora. Se busca por Log Page Number, matricula,
+vuelo, fecha (en el formato del CSV o en el de AirVault) o archivo de
+origen; los separadores se saltan, porque no son documentos que indexar.
+La pagina que se dice es la del batch, la misma que muestra Web Index, y
+no la del PDF del que salio la bitacora.
+
+La respuesta puede ser mas de un batch, y no es raro: una bitacora dudosa
+viaja en su parte y en el batch REVISAR, una ejecucion subida dos veces la
+deja en el batch anterior y en el nuevo, y la cola conserva los pendientes
+de ejecuciones anteriores. Se resaltan a la vez todas las filas que la
+llevan, y ‹ y › pasan de una a la siguiente sin soltar el resaltado. Se
+buscan todos los batches de la tabla en cualquier estado, terminados y
+cancelados incluidos, porque saber que una bitacora ya viajo en un batch
+cerrado es lo que explica que no haya que volver a subirla.
+
+Una coincidencia exacta manda sobre las parciales: pegar un Log Page
+Number completo responde por esa bitacora y no por los archivos que lo
+lleven dentro del nombre. La busqueda se rehace sola cada vez que la tabla
+se repinta, asi que la respuesta sigue siendo la de la cola de ahora y no
+la de hace dos minutos.
 
 ### Los tres tiempos
 
@@ -499,6 +556,51 @@ programa y esa sesion se queda. Lo que lo sostiene es
 guarda en disco las cookies **de sesion** (y la de federacion lo es) cuando
 el perfil arranca restaurando la sesion anterior. Sin esa bandera habria
 que entrar con segundo factor en cada ejecución.
+
+### El navegador que quedo abierto de la vez anterior
+
+Ese mismo «si Edge ya esta abierto, lanzarlo otra vez no arranca nada» vale
+tambien para el perfil del programa. Si una ejecucion deja el navegador vivo
+—se cierra el programa a media faena, o el puerto no llega a contestar y
+nadie cierra el navegador—, el Edge que se lanza despues le entrega la orden
+y se va sin abrir nada: su puerto de depuracion, que es otro cada vez, no
+contesta jamas. El perfil se queda tomado y el acceso moria en «Edge no
+llego a arrancar» ejecucion tras ejecucion, con todo lo que va detras
+parado.
+
+Por eso el programa **anota el puerto** dentro del propio perfil
+(`bits-puerto-depuracion`) en cuanto lanza el navegador, antes de saber si
+va a contestar. La ejecucion siguiente lo lee, y si ahi hay un navegador:
+
+- **Si solo hacen falta las cookies**, habla con el que ya esta en vez de
+  lanzar otro: son las cookies del mismo perfil, y visitar el enlace
+  federado renueva la sesion igual. Al terminar lo cierra, que es lo que
+  suelta el perfil.
+- **Si hace falta la ventana para entrar**, no sirve —el que quedo vivo
+  puede ser uno sin ventana, donde nadie puede teclear nada—, asi que le
+  pide el cierre y abre la propia.
+- **Si esta colgado** —contesta el `/json/version` pero no su protocolo,
+  que es como termina un navegador olvidado durante horas— se le cierra a
+  la fuerza: se pregunta por el puerto quien lo tiene abierto (`netstat`) y
+  se cierra ese proceso. Se busca por el puerto y no por el nombre del
+  programa, porque cerrar «msedge» a secas se llevaria por delante el
+  navegador de la persona.
+
+La anotacion se borra al cerrar el navegador, pero solo cuando de verdad se
+fue. Pedirle el cierre no siempre basta, y darlo por muerto dejaba a la
+ejecucion siguiente sin saber por donde buscarlo: si sigue en pie se cierra
+a la fuerza, y si ni asi se va, la anotacion se queda. Una que sobreviva a
+un apagon manda a un puerto mudo: se tira y se abre un navegador nuevo.
+
+Cuando no hay anotacion y aun asi el perfil esta tomado —un navegador que
+dejo una version anterior del programa, o uno que arranco sin llegar a
+anotarse— se le pregunta a Windows que Edge hay abiertos y con que linea de
+ordenes. El perfil es lo unico que distingue al navegador del programa del
+de la persona: por el nombre son el mismo `msedge.exe`. Con el que aparezca
+se hace lo de siempre, aprovecharlo o cerrarlo, y se vuelve a intentar una
+vez. Es la unica salida cuando el puerto no se sabe; sin ella el acceso se
+quedaba muerto hasta que alguien buscaba ese proceso sin ventana a mano en
+el administrador de tareas.
 
 Cuando la sesion guardada deja de valer, el programa **vuelve a abrir la
 ventana para entrar**, en vez de quedarse pidiendo que alguien copie una

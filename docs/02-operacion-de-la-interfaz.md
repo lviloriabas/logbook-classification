@@ -132,16 +132,16 @@ en el `airvault.json` de la carpeta portable.
 | Procesar (OCR) | No | Siempre se hace: es de donde salen los datos. |
 | Exportar CSV, JSON y PDF | No | Siempre se hace: es la entrega. |
 | Depurar páginas repetidas y en blanco | Sí, suelto | Quita las apariciones sobrantes de cada bitácora repetida (nunca la primera) y las páginas en blanco, antes de exportar, así que los PDF salen ya sin ellas. Sin marcar, la ejecución se exporta entera y **Depurar** sigue disponible para revisarla a mano. |
-| Subir a AirVault | Sí | Manda a Quick Upload todos los batches de la entrega en cuanto termina la exportación. |
-| Esperar a que AirVault los deje listos | Sí | Es la misma casilla que **Comprobar cada** en la ventana de AirVault, donde se elige el intervalo. |
+| Subir a AirVault | Sí | Manda a Quick Upload todos los batches de la entrega en cuanto termina la exportación y sigue la entrega hasta que AirVault deja cada batch entero. Cada cuánto se le pregunta se elige en **Comprobar cada**, en la ventana de AirVault. |
 | Indexar páginas | Sí | Escribe cada batch apenas AirVault lo deja entero. |
 | Completar batch | Sí | Es la misma casilla que **Completar batch** en la ventana de AirVault: marcarla en un sitio la marca en el otro. |
 
-Los cuatro pasos de AirVault ocurren uno detrás de otro y se marcan juntos:
-marcar **Indexar páginas** enciende subir y esperar, porque no se puede
-indexar lo que no está arriba; apagar **Subir a AirVault** apaga los tres de
-abajo, que sin la carga no tienen sobre qué trabajar. **Depurar** va suelto y
-no arrastra a ninguno.
+Los tres pasos de AirVault ocurren uno detrás de otro y se marcan juntos:
+marcar **Indexar páginas** enciende subir, porque no se puede indexar lo que
+no está arriba; apagar **Subir a AirVault** apaga los dos de abajo, que sin
+la carga no tienen sobre qué trabajar. **Depurar** va suelto y no arrastra a
+ninguno. La espera de AirVault no es una casilla: se ve en la línea de pasos
+y ocurre siempre que se suba.
 
 **Cancelar** corta la cadena entera, no solo el paso en curso: lo ya leído se
 guarda, pero no se exporta ni se sube nada más. Un error al procesar o al
@@ -236,14 +236,17 @@ Requiere una ejecución exportada. Si marcó **Repartir en**, la entrega sale
 en varios archivos y cada uno será un batch distinto en AirVault; la ventana
 los sube y los indexa todos, y cuenta el avance sobre el total.
 
-1. Pulse **Indexar en AirVault…**. La lista muestra las últimas 25
-   ejecuciones procesadas, de la más reciente a la más antigua, con sus
-   páginas y lo que tienen para subir.
+1. Pulse **Indexar en AirVault…**. El desplegable **Seleccionar ejecución**
+   —el mismo que el del visor de CSV— muestra por su nombre las últimas 25
+   ejecuciones procesadas, de la más reciente a la más antigua. Al posarse
+   sobre una salen sus páginas y lo que tiene para subir.
 2. Elija la ejecución. Viene señalada la exportada más reciente. Las que
    todavía no se pueden subir salen en gris: **Sin exportar** son las que no
    tienen PDF de entrega y **Falta reexportar** las exportadas antes de que
    existiera el índice de páginas. Con **Otra ejecución…** se elige el CSV
-   de una que no esté en la lista.
+   de una que no esté en la lista. El clic derecho sobre el desplegable
+   ofrece eliminar el registro de AirVault de la ejecución elegida, o la
+   ejecución entera.
 3. Revise el nombre en **Batch**. Lleva la fecha y la hora de la ejecución
    porque en la cola de AirVault conviven batches con nombres repetidos.
 4. Si necesita reducir el peso de la carga, marque **Compresión**. La copia
@@ -294,6 +297,12 @@ espera de AirVault se distingue de un cuelgue. En las etapas sin cuenta
 (entrar a AirVault, esperar a que el batch salga de la cola) la barra va en
 marcha continua.
 
+Los pasos que hablan de varios batches —lo que dio la comprobación, lo
+que falta por subir— los nombran uno por línea debajo del encabezado, no
+todos seguidos en el mismo renglón. Cuando el indexado se detiene, el
+motivo entero se lee en el resumen de abajo; en la lista queda solo con
+qué empieza, para que no tape las horas de alrededor.
+
 **Cancelar** detiene lo que esté en marcha y suelta los batches que se hayan
 tomado en AirVault. Está disponible siempre que haya trabajo en vuelo y
 corta en el acto: deja de reintentar, no espera a que el servidor conteste
@@ -333,6 +342,8 @@ escritas no se repiten y el PDF no se vuelve a subir.
 El botón derecho sobre una fila del historial ofrece dos eliminaciones. **Eliminar el registro de AirVault** manda a la Papelera lo que el programa recuerda de esa ejecución (sus manifiestos y el registro de batches de la entrega) para empezarla de nuevo. **Eliminar la ejecución…** manda a la Papelera su carpeta de `output/` entera, con su CSV, su JSON, sus estadísticas y sus PDF de entrega, y la quita de la lista. Ninguna de las dos modifica los batches que ya estén en AirVault. No se elimina la ejecución que se esté subiendo o indexando, ni un CSV abierto con **Otra ejecución…** que viva fuera de `output/`.
 
 **Vista previa…**, junto al título de la tabla de batches, adelanta el reparto sin preparar ni subir nada. De cada batch se abre la lista de sus bitácoras, que se mira como el visor de CSV: la hoja escaneada a la izquierda, la tabla a la derecha, un buscador encima y las columnas ordenables con un clic en su cabecera. Las dos son ventanas aparte, con su entrada en la barra de tareas: no bloquean la ventana de AirVault, que puede seguir subiendo mientras se las mira, y se pueden tener varias abiertas comparando batches. Cerrar la ventana de AirVault las cierra. Elija una fila (o haga doble clic) para ver su hoja. La columna **Estado** dice «Por indexar» mientras falte, «Indexada» cuando ya se escribió en AirVault y «Completada» cuando además se cerró el batch; si algo bloquea la página, dice qué.
+
+**Buscar**, en esa misma línea, pregunta por una bitácora y contesta en qué batches de la cola está. Escriba su `log_number`, su matrícula, su vuelo, su fecha (en el formato del CSV o en el de AirVault) o el archivo de origen, y pulse Intro: se resaltan las filas de los batches que la llevan y la línea de debajo de la tabla los nombra con la página que ocupa en cada uno, que es la que muestra Web Index. La respuesta puede ser más de un batch, y es lo normal cuando la bitácora era dudosa (va en su parte y en el batch REVISAR) o cuando la ejecución se subió dos veces. Con ‹ y ›, o repitiendo la búsqueda, pasa de un batch al siguiente sin soltar el resaltado de los demás. Se busca en todos los batches que enseña la tabla, en cualquier estado, incluidos los pendientes de ejecuciones anteriores y los ya terminados: que la bitácora esté en uno cerrado es parte de la respuesta. Una coincidencia exacta manda sobre las parciales, así que pegar un `log_number` completo responde por esa bitácora y no por los archivos que lo lleven en el nombre. Ctrl+F lleva el cursor al campo desde cualquier punto de la ventana.
 
 La descripción técnica está en [el manual del indexado](airvault-indexado.md).
 
