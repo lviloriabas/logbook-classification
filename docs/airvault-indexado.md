@@ -787,6 +787,14 @@ Hay dos caminos, en este orden:
    anota qué IDs habia en la cola. Los nuevos solo son candidatos: cantidad
    exacta de paginas y huella interna deciden cuál corresponde.
 
+Esa anotacion solo distingue si hay una sola carga sin identificar. AirVault
+junta las subidas que llegan seguidas y las publica como varios
+`Empty-Batch` a la vez: la diferencia contra la cola devuelve entonces mas
+de un candidato y no se renombra ninguno. Por eso las cargas van de una en
+una: se manda un PDF, se espera a que AirVault lo publique, se le pone su
+titulo, y solo entonces sale el siguiente. Asi la foto de la cola de cada
+subida ya incluye todos los batches anteriores.
+
 Si queda más de una coincidencia con la misma evidencia, se detiene sin
 renombrar ni escribir: la siguiente comprobacion vuelve a intentarlo.
 Mientras exista una carga provisional compatible, **Revisar en AirVault** no
