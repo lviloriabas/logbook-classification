@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.airvault.config import (
+    CAMPO_AUDIT_STATUS,
     CAMPO_DESCRIPCION,
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
@@ -122,6 +123,22 @@ def test_sin_vuelo_se_manda_solo_la_marca_automatica():
 
     _pagina, valores_remotos, _estado = cliente.escrituras[0]
     assert valores_remotos[CAMPO_DESCRIPCION] == "AUTO INDEX"
+
+
+def test_una_discrepancia_se_escribe_con_audit_required():
+    """La marca del batch REVISAR que dice cual hay que auditar."""
+    cliente = ClienteFalso(page_count=2)
+    m = manifiesto()
+    m.solo_subir = True
+    m.registros[0].discrepancia = True
+    indexador = Indexador(cliente, m, PICKLIST)
+    indexador.aplicar(indexador.planificar(2))
+
+    escritos = {
+        pagina: valores[CAMPO_AUDIT_STATUS]
+        for pagina, valores, _estado in cliente.escrituras
+    }
+    assert escritos == {1: "AUDIT REQUIRED", 2: "PUBLISHED"}
 
 
 def test_revisar_no_lleva_la_marca_automatica():
