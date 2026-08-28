@@ -91,8 +91,10 @@ Con separación por matrícula o mes, crea un solo PDF con páginas divisorias b
 
 1. matrícula ascendente;
 2. mes cronológico dentro de la matrícula;
-3. posibles discrepancias, si la opción está activa;
+3. **POSIBLES DISCREPANCIAS**, si hay páginas marcadas con `disc=true`;
 4. **REVISAR**, si existen páginas sin datos críticos seguros o detectadas en blanco.
+
+Las dos últimas secciones son el mismo batch manual: se escriben juntas, primero las discrepancias y después el resto.
 
 Las páginas fuente se insertan directamente desde el PDF original. No se rasterizan ni reciben anotaciones de BITS. Las páginas en blanco se conservan bajo **REVISAR**.
 
@@ -107,21 +109,24 @@ Los nombres dependen de los criterios seleccionados:
 | Matrícula y mes | `HP-XXXXCMP_YYYY-MMM.pdf` |
 | Mes no resuelto | `sf.pdf` o sufijo `_sf` |
 | Matrícula ausente, débil o en conflicto | `revisar.pdf` |
+| Marcada como discrepancia (`disc=true`) | `discrepancias.pdf`, con la opción marcada |
 
 Las páginas de cada archivo se ordenan por libro y `log_number`. Las páginas con número ilegible quedan al final, en su orden de entrada.
 
 ## 4.9 Posibles discrepancias
 
-Si la opción está activa, las páginas con una firma requerida cuya ausencia quedó confirmada salen de las secciones normales. Las firmas meramente inciertas conservan `disc=true` y su detalle de auditoría, pero permanecen en el flujo normal.
+Toda página marcada con `disc=true` sale de las secciones normales: tanto la que tiene una ausencia de firma confirmada como aquella cuya firma no se pudo leer con seguridad. Ambas necesitan que alguien mire la página, que es lo que la sección declara.
 
-- En PDF único, se agregan al final bajo **POSIBLES DISCREPANCIAS**.
-- En modo de varios PDF, se escriben en `discrepancias.pdf`.
+- En PDF único, abren la parte manual bajo **POSIBLES DISCREPANCIAS**, delante del separador **REVISAR** que encabeza al resto.
+- En modo de varios PDF, con la opción **Posibles discrepancias** marcada van en `discrepancias.pdf`, que abre con la misma página divisoria, y por eso no se repiten en `revisar.pdf`. Sin marcar, se quedan en `revisar.pdf` junto al resto.
 
 El orden es global por `log_number`. La sección no se subdivide por matrícula ni mes.
 
+Al indexar, estas páginas se escriben con el `Audit Status` de discrepancia (`AUDIT REQUIRED` de fábrica, configurable en `airvault.json`) en lugar del `Audit Status` normal del trabajo. Es lo único que las distingue en AirVault del resto del batch.
+
 ## 4.10 Páginas para revisar
 
-Una página sin matrícula o `log_number` confirmados no se asigna a un avión supuesto. Tampoco se asigna automáticamente cuando su propia lectura canónica contradice al consenso del libro, cuando un campo crítico quedó en `WARNING` o cuando una inferencia solo tiene una lectura de respaldo. Una inferencia coherente respaldada por dos o más lecturas, incluida una asociación fuerte recordada de otra ejecución, conserva la lógica normal. La alineación dudosa no basta para apartar una página si matrícula y `log_number` quedaron firmes. Las páginas detectadas en blanco también van a **REVISAR**.
+Una página marcada con `disc=true` va también a este batch, en su propia sección. Una página sin matrícula o `log_number` confirmados no se asigna a un avión supuesto. Tampoco se asigna automáticamente cuando su propia lectura canónica contradice al consenso del libro, cuando un campo crítico quedó en `WARNING` o cuando una inferencia solo tiene una lectura de respaldo. Una inferencia coherente respaldada por dos o más lecturas, incluida una asociación fuerte recordada de otra ejecución, conserva la lógica normal. La alineación dudosa no basta para apartar una página si matrícula y `log_number` quedaron firmes. Las páginas detectadas en blanco también van a **REVISAR**.
 
 Las advertencias de fecha no deciden esta separación. Mes, año y día pueden inferirse con las reglas del libro, incluido el último día del mes cuando corresponde.
 

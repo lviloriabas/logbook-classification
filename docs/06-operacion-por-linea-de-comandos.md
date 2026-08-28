@@ -50,7 +50,7 @@ La CLI no mueve los PDF terminados a `input/processed/`.
 | `--separar-por avion` | Crea grupos por matrícula. |
 | `--separar-por mes` | Crea grupos por mes. Puede repetirse junto con `avion`. |
 | `--un-solo-pdf` | Une los grupos en un PDF con páginas divisorias. Sin criterios, produce el mismo PDF plano predeterminado. |
-| `--discrepancias` | Separa las páginas con posibles discrepancias. |
+| `--discrepancias` | Escribe `discrepancias.pdf` con las páginas marcadas como discrepancia, en la salida de varios PDF. |
 | `--errores` | Genera `errores.pdf`. |
 | `--recortes-firmas` | Guarda los recortes usados por el detector de firmas. |
 | `--verificar-flota` | Activa la comparación contra el catálogo de aeronaves. |
