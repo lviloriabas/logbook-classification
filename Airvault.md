@@ -115,7 +115,9 @@ administrador al crear el repositorio.
 | 9631 | C_BatchName | BatchName | texto | no | si |
 
 Solo en Quick Upload: `9630` C_DocNo, `9750` C_SN, `9749` C_PN, `9809`
-C_BUName.
+C_BUName. La subida manda `9809` con el mismo nombre del batch que va en
+`9631`: las cargas que lo dejaban vacio son las que AirVault publicaba como
+`Empty-Batch`.
 
 **Los seis obligatorios son 9586, 9633, 9699, 9675, 9754 y 9593.** Si
 alguno queda vacio, la pagina se guarda en amarillo.

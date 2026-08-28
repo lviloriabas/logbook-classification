@@ -2,6 +2,24 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-28 - El nombre del batch tambien viaja en Batch Username
+
+La subida por Quick Upload mandaba el nombre del batch en un solo campo,
+`C_BatchName`, y dejaba vacio el otro campo de nombre que ese modulo expone,
+`C_BUName`. AirVault publicaba muchas de esas cargas como `Empty-Batch`, sin
+titulo, y entonces el programa tenia que adivinar cual de los batches sin
+nombre de la cola era el suyo comparando contra la foto tomada justo antes
+de subir.
+
+Ahora los dos campos salen con el mismo valor: el nombre del batch. Si
+alguna vez se le da a `C_BUName` un valor propio, ese se respeta.
+
+No se quita nada de lo que habia: la identificacion por foto de la cola y
+por cantidad de paginas sigue en pie, y es la que responde si AirVault
+publica igual sin titulo. Que el campo vacio fuera la causa es una
+hipotesis, no algo comprobado contra el servidor; hace falta una carga real
+para saberlo.
+
 ## 2026-08-28 - Ningun batch se vuelve a subir solo
 
 Una carga que Quick Upload aceptaba y AirVault nunca publicaba se volvia a
