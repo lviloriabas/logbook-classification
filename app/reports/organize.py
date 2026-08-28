@@ -5,17 +5,17 @@
   por avión (matrícula corregida) y/o mes inferido (YYYY-MM). En un
   PDF único, las secciones se ordenan por matrícula y fecha; dentro de cada
   sección las páginas siguen ``log_number`` y logpage.
-- **Posibles discrepancias**: en un PDF único forman una sola sección final;
-  en la salida de varios archivos se escriben en ``discrepancias.pdf``. En
-  ambos casos se ordenan únicamente por logpage y no se subdividen por avión
-  ni mes.
 - **Revisar**: las bitácoras que no son seguras para el indexado automático:
-  matrícula sin confirmar, lectura que contradice al consenso del libro o
-  confianza insuficiente en la matrícula. Se escriben siempre, con cualquier
-  combinación de opciones: en el PDF único cierran el archivo tras un
-  separador ``REVISAR`` y en la salida de varios archivos forman
+  matrícula sin confirmar, lectura que contradice al consenso del libro,
+  confianza insuficiente en la matrícula o una discrepancia de firmas. Se
+  escriben siempre, con cualquier combinación de opciones: en el PDF único
+  cierran el archivo y en la salida de varios archivos forman
   ``revisar.pdf``. No abren grupo de avión propio, porque una matrícula dudosa
   puesta como título se lee como un avión confirmado.
+- **Posibles discrepancias**: las marcadas como discrepancia abren «Revisar»
+  bajo su propio separador ``POSIBLES DISCREPANCIAS``, antes del separador
+  ``REVISAR`` que encabeza al resto. Van en el mismo archivo y se ordenan
+  únicamente por logpage, sin subdividirse por avión ni mes.
 - **Recortes de firmas**: volcado de las regiones de firma para auditar
   visualmente los bounding boxes.
 
@@ -77,6 +77,10 @@ SIN_MATRICULA = "sin_matricula"
 # asignar a un avión, y quedarse fuera de la entrega es peor que cualquier
 # opción de separación que se haya marcado.
 ETIQUETA_REVISAR = "REVISAR"
+# Dentro de «Revisar», las bitácoras marcadas como discrepancia abren su
+# propia sección: se completan a mano igual que el resto, pero lo que hay
+# que mirar en ellas es una firma, no un dato de índice que falte.
+ETIQUETA_DISCREPANCIAS = "POSIBLES DISCREPANCIAS"
 NOMBRE_PDF_REVISAR = "revisar.pdf"
 
 _DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
@@ -145,12 +149,17 @@ def por_revisar(page: PageResult) -> bool:
     apartarla cuando matrícula y número ya tienen valores utilizables; el
     indexador puede escribir esos valores y dejar la página en verde.
 
+    ``discrepancy`` aparta también las discrepancias inciertas: la firma no
+    se pudo leer con seguridad, y eso es justo lo que alguien tiene que
+    mirar. Todas ellas van a la sección «Posibles discrepancias».
+
     Las comprobaciones directas conservan segura esta función cuando se usa
     antes de escribir el CSV o con reportes antiguos que no traen la marca.
     """
     return (
         page.airvault_review
         or page.airvault_discrepancy
+        or page.discrepancy
         or page.blank
         or clave_avion(page) == SIN_MATRICULA
         or not has_log_number(page)
@@ -334,9 +343,17 @@ def generar_pdfs(
     Las rutas se devuelven en el orden de ``sorted(grupos)`` y, al final,
     ``revisar.pdf`` con las bitácoras que requieren revisión (siempre que
     haya alguna).
+
+    ``excluidas`` son las páginas que van a ``discrepancias.pdf``, así que
+    tampoco entran en ``revisar.pdf``: estarían dos veces en la misma
+    carpeta y nadie sabría cuál de las dos copias mirar.
     """
     grupos = agrupar_paginas(reports, separar_por, excluidas)
-    revisar = paginas_para_revisar(reports)
+    fuera = excluidas or set()
+    revisar = [
+        ref for ref in paginas_para_revisar(reports)
+        if (Path(ref.pdf_path).name, ref.page.page_number) not in fuera
+    ]
     rutas: List[Path] = []
     refs = [ref for grupo in grupos.values() for ref in grupo] + revisar
     with PdfDocumentCache(ref.pdf_path for ref in refs) as sources:
@@ -566,13 +583,27 @@ class ArchivoDeEntrega:
 def secuencia_de_revisar(
     reports: Sequence[ValidationReport],
 ) -> List[EntradaPdf]:
-    """Bitácoras que requieren revisión, bajo su separador."""
+    """Bitácoras que requieren revisión, en dos secciones.
+
+    Primero las marcadas como discrepancia, bajo «POSIBLES DISCREPANCIAS»,
+    y después las demás bajo «REVISAR». Las dos van en el mismo archivo:
+    son un solo batch que se completa a mano, y el separador solo dice qué
+    hay que mirar en cada tramo.
+    """
     refs = paginas_para_revisar(reports)
     if not refs:
         return []
-    return [EntradaPdf(separador=ETIQUETA_REVISAR)] + [
-        EntradaPdf(ref=ref) for ref in refs
-    ]
+    discrepantes = [ref for ref in refs if ref.page.discrepancy]
+    resto = [ref for ref in refs if not ref.page.discrepancy]
+    secuencia: List[EntradaPdf] = []
+    for etiqueta, tramo in (
+        (ETIQUETA_DISCREPANCIAS, discrepantes), (ETIQUETA_REVISAR, resto),
+    ):
+        if not tramo:
+            continue
+        secuencia.append(EntradaPdf(separador=etiqueta))
+        secuencia.extend(EntradaPdf(ref=ref) for ref in tramo)
+    return secuencia
 
 
 def secuencia_pdf_unico(
@@ -608,7 +639,7 @@ def secuencia_pdf_unico(
     if discrepancias_al_final:
         discrepantes = _preparar_paginas_incluidas(reports, excluidas)
         if discrepantes:
-            secuencia.append(EntradaPdf(separador="POSIBLES DISCREPANCIAS"))
+            secuencia.append(EntradaPdf(separador=ETIQUETA_DISCREPANCIAS))
             secuencia.extend(EntradaPdf(ref=ref) for ref in discrepantes)
 
     if incluir_revisar:
@@ -853,8 +884,9 @@ def escribir_entrega(
     elif partes:
         logger.info(f"[Organize] PDF único generado: {escritas[0].ruta}")
     if revisar:
+        cuantas = sum(1 for entrada in revisar if not entrada.es_separador)
         logger.info(
-            f"[Organize] {len(revisar) - 1} bitácoras para revisar "
+            f"[Organize] {cuantas} bitácoras para revisar "
             f"en {escritas[-1].ruta.name}"
         )
     return escritas
@@ -915,7 +947,7 @@ def escribir_pdf_discrepancias(
             )
             _pagina_divisoria(
                 doc,
-                "POSIBLES DISCREPANCIAS",
+                ETIQUETA_DISCREPANCIAS,
                 (source_page.rect.width, source_page.rect.height),
             )
             for _, entrada in ordenadas:

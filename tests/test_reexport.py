@@ -20,7 +20,18 @@ TEMPLATE = (
 )
 
 
-def _page(pn: int, log, mat) -> PageResult:
+def _firma(page: PageResult, field_id: str, value: str, confidence: float) -> None:
+    page.add_field(FieldResult(
+        page_number=page.page_number,
+        field_id=field_id,
+        field_type="signature",
+        value=value,
+        confidence=confidence,
+        status="OK",
+    ))
+
+
+def _page(pn: int, log, mat, firmas: bool = True) -> PageResult:
     # Estas pruebas ejercitan el re-export, no la ruta de datos incompletos:
     # la fila debe tener todos los obligatorios de AirVault.
     page = PageResult(page_number=pn, date="2026/08/23")
@@ -32,23 +43,20 @@ def _page(pn: int, log, mat) -> PageResult:
         page.add_field(FieldResult(page_number=pn, field_id="matricula",
                                    field_type="ocr", value=mat,
                                    confidence=1.0, status="OK"))
+    if firmas:
+        # Una entrada de vuelo con las tres firmas exigidas leidas. Sin
+        # ellas la pagina seria una discrepancia y se iria al batch de
+        # revisar, que no es lo que estas pruebas miden.
+        _firma(page, "technician_license", "false", 0.99)
+        _firma(page, "pilot_signature", "true", 0.99)
+        _firma(page, "captain_signature", "true", 0.99)
+        _firma(page, "captain_license", "true", 0.99)
     return page
 
 
 def _reporte(name: str, *pages: PageResult) -> ValidationReport:
     return ValidationReport(pdf_path=str(FIXTURES / name), template_name="fixture",
                             pages=list(pages))
-
-
-def _firma(page: PageResult, field_id: str, value: str, confidence: float) -> None:
-    page.add_field(FieldResult(
-        page_number=page.page_number,
-        field_id=field_id,
-        field_type="signature",
-        value=value,
-        confidence=confidence,
-        status="OK",
-    ))
 
 
 class TestReexport(unittest.TestCase):
@@ -63,7 +71,8 @@ class TestReexport(unittest.TestCase):
         ]
 
     def _options(
-        self, root: Path, separar_por=(), run_dir=None, skip_pdfs=False
+        self, root: Path, separar_por=(), run_dir=None, skip_pdfs=False,
+        discrepancias=False,
     ) -> OutputOptions:
         return OutputOptions(
             template=self.template,
@@ -73,6 +82,7 @@ class TestReexport(unittest.TestCase):
             separar_por=tuple(separar_por),
             run_dir=run_dir,
             skip_pdfs=skip_pdfs,
+            discrepancias=discrepancias,
         )
 
     def test_reexport_misma_carpeta(self):
@@ -238,9 +248,30 @@ class TestReexport(unittest.TestCase):
 
             assert page.airvault_review is False
 
+    def test_las_discrepancias_no_se_repiten_en_revisar(self):
+        """En varios PDF van a discrepancias.pdf, y solo ahi."""
+        with tempfile.TemporaryDirectory() as tmp:
+            discrepante = _page(1, "2147337", "HP-1534CMP", firmas=False)
+            _firma(discrepante, "technician_license", "false", 0.99)
+            _firma(discrepante, "pilot_signature", "false", 0.99)
+            _firma(discrepante, "captain_signature", "true", 0.99)
+            _firma(discrepante, "captain_license", "true", 0.99)
+            limpia = _page(2, "2147338", "HP-1534CMP")
+
+            run = write_outputs(
+                [_reporte("test.pdf", discrepante, limpia)],
+                self._options(
+                    Path(tmp), ("avion",), discrepancias=True
+                ),
+            )
+
+            assert (run / "discrepancias.pdf").is_file()
+            assert not (run / "revisar.pdf").exists()
+            assert (run / "HP-1534CMP.pdf").is_file()
+
     def test_una_discrepancia_confirmada_va_al_batch_revisar(self):
         with tempfile.TemporaryDirectory() as tmp:
-            page = _page(1, "2147337", "HP-1534CMP")
+            page = _page(1, "2147337", "HP-1534CMP", firmas=False)
             _firma(page, "technician_license", "false", 0.99)
             _firma(page, "pilot_signature", "true", 0.99)
             _firma(page, "captain_signature", "false", 0.99)

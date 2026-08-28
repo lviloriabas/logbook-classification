@@ -17,6 +17,7 @@ from app.reports.organize import (
     agrupar_paginas,
     paginas_para_revisar,
     por_revisar,
+    secuencia_de_revisar,
     clave_mes,
     escribir_pdf_discrepancias,
     escribir_pdf_unico,
@@ -258,6 +259,60 @@ class TestPrepararPaginas(unittest.TestCase):
                 ("HP-1534CMP", "2026-07"), ("avion", "mes")
             ),
             "HP-1534CMP\nJUL 2026",
+        )
+
+
+class TestSeccionRevisar(unittest.TestCase):
+    """«Revisar» abre con las discrepancias y sigue con el resto."""
+
+    def _pagina_discrepante(self, pn: int, log: str) -> PageResult:
+        page = _page(pn, log, "HP-1534CMP", date="2026/08/17")
+        page.discrepancy = True
+        return page
+
+    def test_una_discrepancia_va_a_revisar(self):
+        page = self._pagina_discrepante(1, "2147337")
+        self.assertTrue(por_revisar(page))
+
+    def test_dos_secciones_con_las_discrepancias_delante(self):
+        discrepante = self._pagina_discrepante(1, "2147337")
+        sin_matricula = _page(2, "2147338", None, date="2026/08/17")
+        secuencia = secuencia_de_revisar([_reporte(discrepante, sin_matricula)])
+
+        self.assertEqual(
+            [
+                entrada.separador if entrada.es_separador
+                else entrada.ref.page.page_number
+                for entrada in secuencia
+            ],
+            ["POSIBLES DISCREPANCIAS", 1, "REVISAR", 2],
+        )
+
+    def test_sin_discrepancias_no_se_abre_su_seccion(self):
+        secuencia = secuencia_de_revisar(
+            [_reporte(_page(1, "2147337", None, date="2026/08/17"))]
+        )
+        self.assertEqual(
+            [e.separador for e in secuencia if e.es_separador], ["REVISAR"]
+        )
+
+    def test_solo_discrepancias_no_abre_la_seccion_de_revisar(self):
+        secuencia = secuencia_de_revisar(
+            [_reporte(self._pagina_discrepante(1, "2147337"))]
+        )
+        self.assertEqual(
+            [e.separador for e in secuencia if e.es_separador],
+            ["POSIBLES DISCREPANCIAS"],
+        )
+
+    def test_una_discrepancia_no_abre_grupo_de_avion(self):
+        discrepante = self._pagina_discrepante(1, "2147337")
+        limpia = _page(2, "2147338", "HP-1534CMP", date="2026/08/17")
+        grupos = agrupar_paginas(
+            [_reporte(discrepante, limpia)], ["avion"], None
+        )
+        self.assertEqual(
+            [g.page.page_number for g in grupos[("HP-1534CMP",)]], [2]
         )
 
 

@@ -970,6 +970,22 @@ def _run_with_companion_json(tmp_path: Path, pdf_path: Path) -> tuple[Path, Path
                     status="OK",
                 )
             )
+        # Entrada de vuelo con sus tres firmas leidas: sin ellas la pagina
+        # seria una discrepancia y saldria del PDF de su matricula.
+        for field_id, value in (
+            ("technician_license", "false"), ("pilot_signature", "true"),
+            ("captain_signature", "true"), ("captain_license", "true"),
+        ):
+            page.add_field(
+                FieldResult(
+                    page_number=number,
+                    field_id=field_id,
+                    field_type="signature",
+                    value=value,
+                    confidence=0.99,
+                    status="OK",
+                )
+            )
         return page
 
     reports = [
