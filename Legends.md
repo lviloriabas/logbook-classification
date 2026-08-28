@@ -2,6 +2,25 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-27 - Un manifiesto ya confirmado tambien se rehidrata al retomarlo
+
+Los arreglos del cruce entre el CSV y el PDF (emparejar por posicion, por el
+nombre con el que se leyo la pagina) sanan una ejecucion nueva, pero no una
+que ya se habia guardado con el cruce viejo: esa carga su manifiesto tal
+cual quedo, con las paginas ``sin_fila`` y sin matricula, Log Page ni fecha.
+Si el batch ya estaba confirmado en AirVault, ese manifiesto tampoco se
+podia borrar y volver a preparar -se hubiera repetido la carga-, asi que se
+quedaba huerfano para siempre.
+
+Ahora, al retomar una ejecucion, cada parte que tenga paginas ``sin_fila`` o
+sin esos tres datos vuelve a cruzarse contra el CSV con la version actual
+del emparejador, sin tocar el ``batch_id`` ni las etapas ya hechas
+(**subir** sigue marcada; **indexar** y **verificar** vuelven a quedar
+pendientes porque los datos que escribieron eran los vacios). Si el numero
+de paginas reconstruidas no cuadra con el manifiesto, se deja como estaba y
+se avisa en el registro: mejor un batch huerfano y visible que uno a medio
+rehidratar.
+
 ## 2026-08-27 - Buscar una bitacora entre los batches de la cola
 
 La lista de bitacoras de un batch ya se podia buscar, pero solo dentro de

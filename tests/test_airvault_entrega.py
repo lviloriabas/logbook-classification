@@ -33,7 +33,7 @@ from app.airvault.flujo import (
 )
 from app.airvault.guards import verificar_cantidad
 from app.airvault.mapping import leer_csv_corrida
-from app.airvault.model import EstadoEtapa
+from app.airvault.model import EstadoEtapa, EstadoRegistro
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.reports.organize import (
     NOMBRE_INDICE_PAGINAS,
@@ -717,6 +717,56 @@ def test_una_pagina_suelta_sin_fila_no_para_la_entrega():
     ]
 
     _comprobar_que_el_csv_cuadra(registros, "datos/EJEC.CSV")
+
+
+def test_un_manifiesto_viejo_sin_filas_se_rehidrata_sin_resubir(tmp_path):
+    """Un arreglo de cruce tambien rescata el batch que ya estaba guardado."""
+    csv_path, _partes = corrida(tmp_path)
+    carpeta = tmp_path / "job"
+    [trabajo] = preparar_partes(AirVaultConfig(), carpeta, csv_path)
+    trabajo.fijar_lote("003VIEJO")
+    trabajo.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "enviado")
+    trabajo.manifiesto.etapa("indexar").marcar(
+        EstadoEtapa.HECHA, "escritas 0, omitidas 8"
+    )
+    trabajo.manifiesto.etapa("verificar").marcar(
+        EstadoEtapa.ERROR, "0/8 en Valid"
+    )
+    posiciones = {}
+    for registro in trabajo.manifiesto.bitacoras():
+        posiciones[registro.seq] = registro.seq + 20
+        registro.archivo_origen = "paginas-2.pdf"
+        registro.matricula = ""
+        registro.log_number = ""
+        registro.fecha = ""
+        registro.fleet = ""
+        registro.pagina_batch = posiciones[registro.seq]
+        registro.estado = EstadoRegistro.OMITIDA
+        registro.avisos = [
+            "[obligatorio_vacio] Aircraft, Log Page Number y End Date vacios"
+        ]
+    trabajo.guardar()
+
+    [retomado] = cargar_partes(AirVaultConfig(), carpeta, csv_path)
+
+    assert retomado.manifiesto.batch_id == "003VIEJO"
+    assert retomado.manifiesto.etapa_hecha("subir")
+    assert retomado.manifiesto.etapa("indexar").estado is EstadoEtapa.PENDIENTE
+    assert retomado.manifiesto.etapa("verificar").estado is EstadoEtapa.PENDIENTE
+    assert len(retomado.manifiesto.bitacoras()) == len(BITACORAS)
+    for registro in retomado.manifiesto.bitacoras():
+        assert registro.archivo_origen == "paginas.pdf"
+        assert registro.matricula
+        assert registro.log_number
+        assert registro.fecha
+        assert registro.fleet
+        assert registro.pagina_batch == posiciones[registro.seq]
+        assert registro.estado is EstadoRegistro.PENDIENTE
+        assert not registro.avisos
+
+    reanudados = preparar_partes(AirVaultConfig(), carpeta, csv_path)
+    assert len(reanudados) == 1
+    assert reanudados[0].manifiesto.batch_id == "003VIEJO"
 
 
 def test_sin_bitacoras_sueltas_no_hay_lote_de_revisar(tmp_path):
