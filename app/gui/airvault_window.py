@@ -37,13 +37,11 @@ from PySide6.QtCore import (
     QSignalBlocker,
     QThread,
     QTimer,
-    QUrl,
     Signal,
 )
 from PySide6.QtGui import (
     QBrush,
     QColor,
-    QDesktopServices,
     QGuiApplication,
     QKeySequence,
     QShortcut,
@@ -131,6 +129,13 @@ MINUTOS_POR_DEFECTO = 2
 # en Need Correction durante un instante. Se relee y reenvia en el mismo
 # proceso antes de devolver el control a la persona.
 INTENTOS_INDEXADO = 3
+
+# Fallos seguidos de la comprobación automática antes de parar el reloj.
+# Uno solo no significa nada: AirVault devuelve un 500 de vez en cuando y
+# la sesión se renueva sola, así que parar en el primero dejaba la ejecución
+# muerta hasta que alguien volviera a la ventana. Tres seguidos ya no son un
+# tropiezo, y repetir el mismo error toda la tarde no arregla nada.
+FALLOS_SEGUIDOS_ANTES_DE_PARAR = 3
 
 # Líneas que conserva la bitácora. Con la comprobación automática corriendo
 # toda una tarde, sin tope crecería sin fin.
@@ -684,14 +689,9 @@ class TrabajoAirVaultWorker(QThread):
             detectar_indexados,
         )
         from app.airvault.mapping import FLOTA_CACHE_FILENAME, ResolutorFlota
-        from app.airvault.report import (
-            escribir_csv_de_partes,
-            escribir_html_de_partes,
-        )
 
         estado = self.estado
         raiz = Path(estado["raiz"])
-        carpeta = Path(estado["carpeta_job"])
         planes: Dict[str, tuple] = estado.setdefault("planes", {})
 
         cliente = self._conectar()
@@ -745,24 +745,15 @@ class TrabajoAirVaultWorker(QThread):
         if nuevos:
             resolutor.guardar(raiz / FLOTA_CACHE_FILENAME)
 
-        # Un solo reporte para toda la ejecución: se aprueba de una vez, no
-        # batch por batch.
+        # Lo planificado de toda la ejecución, que es de donde sale el
+        # recuento de «se escribirían / bloqueadas» del resumen.
         partes = [
             (t.manifiesto.nombre_batch, planes[str(t.carpeta)][0])
             for t in trabajos if str(t.carpeta) in planes
         ]
-        reporte = estado.get("reporte")
-        if nuevos and partes:
-            self._avisar("Creando reporte de revisión", 0, 0)
-            escribir_csv_de_partes(partes, carpeta / "revision.csv")
-            reporte = escribir_html_de_partes(
-                partes, carpeta / "revision.html",
-                f"Indexado de {carpeta.name}",
-            )
-            estado["reporte"] = reporte
         self.comprobado.emit({
             "estados": estados, "planes": planes, "partes": partes,
-            "cliente": cliente, "reporte": reporte, "nuevos": nuevos,
+            "cliente": cliente,
             "acotado": seleccionados is not None,
         })
 
@@ -925,9 +916,9 @@ class AirVaultWindow(QDialog):
         self._opciones.cambiado.connect(self._al_cambiar_automatizacion)
         self._worker: Optional[TrabajoAirVaultWorker] = None
         # Todo lo que el hilo necesita y devuelve: la conexión abierta, los
-        # trabajos de cada parte, los planes ya calculados y el reporte.
-        # Vive aquí para que la comprobación periódica reuse la sesión en
-        # vez de volver al navegador cada cinco minutos.
+        # trabajos de cada parte y los planes ya calculados. Vive aquí para
+        # que la comprobación periódica reuse la sesión en vez de volver al
+        # navegador cada cinco minutos.
         self._estado: dict = {}
         self._trabajos: list = []
         self._estados: list = []
@@ -940,6 +931,10 @@ class AirVaultWindow(QDialog):
         self._ultimo_paso = ""
         # El que pregunta solo por los batches cada tantos minutos.
         self._vigilante: Optional[QTimer] = None
+        # Fallos seguidos sin ninguna comprobación buena por medio. Es lo
+        # que separa un tropiezo de AirVault de un problema que no se va a
+        # arreglar solo; ver `FALLOS_SEGUIDOS_ANTES_DE_PARAR`.
+        self._fallos_seguidos = 0
         # Encadena una comprobacion en cuanto termine lo que esta en vuelo:
         # subir e indexar dejan la lista desactualizada.
         self._comprobar_al_terminar = False
@@ -2336,13 +2331,6 @@ class AirVaultWindow(QDialog):
         )
         self.boton_indexar.clicked.connect(self._indexar)
 
-        self.boton_reporte = QPushButton("Ver reporte…")
-        self.boton_reporte.setEnabled(False)
-        self.boton_reporte.setToolTip(
-            "Abre el detalle página por página de lo que se escribiría"
-        )
-        self.boton_reporte.clicked.connect(self._abrir_reporte)
-
         # Siempre disponible mientras hay trabajo en vuelo. Es lo que
         # convierte una espera larga en algo de lo que se puede salir: sin
         # él, una sesión que no llega o un batch que AirVault no suelta
@@ -2359,7 +2347,7 @@ class AirVaultWindow(QDialog):
         self.boton_cerrar.clicked.connect(self.close)
 
         for boton in (
-            self.boton_reporte, self.boton_subir, self.boton_revisar,
+            self.boton_subir, self.boton_revisar,
             self.boton_indexar, self.boton_cancelar, self.boton_cerrar,
         ):
             fila.addWidget(boton)
@@ -2542,7 +2530,6 @@ class AirVaultWindow(QDialog):
         self.corrida_edit.setText(str(ruta))
         self.lote_edit.setText(nombre_desde_corrida(ruta))
         self.boton_indexar.setEnabled(False)
-        self.boton_reporte.setEnabled(False)
         self._marcar_en_historial(ruta)
         self._sincronizar_entrega(ruta)
         # Una ejecución que ya se subió en otro momento se retoma sin
@@ -2753,7 +2740,6 @@ class AirVaultWindow(QDialog):
         if movidos and abierta:
             self._parar_vigilancia()
             self._indexado_incompleto = False
-            self.boton_reporte.setEnabled(False)
             self._cargar_trabajos(carpeta, csv)
             self.estado_label.setText("Registro local eliminado")
             self.resumen.setText(
@@ -2875,7 +2861,6 @@ class AirVaultWindow(QDialog):
             self._pintar_lotes()
             self.boton_subir.setEnabled(False)
             self.boton_indexar.setEnabled(False)
-            self.boton_reporte.setEnabled(False)
             self.boton_previa.setEnabled(False)
         self._refrescar_historial()
 
@@ -2995,21 +2980,25 @@ class AirVaultWindow(QDialog):
     def _falta_esperar(self) -> bool:
         """Si queda algún batch que AirVault todavía no ha terminado.
 
-        Una carga que se dio por perdida sigue contando mientras la
-        automatización pueda reenviarla sola: parar el reloj ahí la dejaba
-        esperando a que alguien pulsara un botón. Cuando ya no quedan
-        reenvíos sí se deja de preguntar y se pide esa intervención.
-        """
-        from app.airvault.flujo import reenvio_pendiente
+        Mientras una parte no esté terminada ni lista para escribir, se
+        sigue preguntando. También cuando ya se agotó el tope de reenvíos:
+        ese tope apaga el envío, no la búsqueda. AirVault publica cargas
+        horas después de aceptarlas, y pararse ahí dejaba el batch en la
+        tabla esperando a que alguien volviera a pulsar; preguntar no
+        escribe nada, y es lo que hace que la carga aparezca sola y se
+        indexe sola cuando por fin sale de la cola.
 
-        ejecucion = self._ejecucion()
-        perdidas = self._subidas_perdidas()
+        La única que no cuenta es la marcada como posible duplicado:
+        mientras la marca esté puesta nadie la sube, la reenvía ni la
+        completa, así que no hay nada que preguntar por ella hasta que
+        alguien mire AirVault y la quite.
+        """
+        from app.airvault.flujo import POSIBLE_DUPLICADO
+
         return any(
-            not parte.se_acabo and not parte.se_puede_indexar
-            and (
-                parte not in perdidas
-                or reenvio_pendiente(parte, ejecucion)
-            )
+            not parte.se_acabo
+            and not parte.se_puede_indexar
+            and parte.estado != POSIBLE_DUPLICADO
             for parte in self._estados
         )
 
@@ -3124,16 +3113,23 @@ class AirVaultWindow(QDialog):
             if int(parte.trabajo.manifiesto.reenvios or 0) >= MAXIMO_REENVIOS
         ]
         if len(agotadas) == len(perdidas):
-            # Con el tope agotado la decisión pasa a quien mira AirVault. El
-            # programa no puede distinguir «la carga se perdió» de «AirVault
-            # va lento», y por ese margen es por donde aparecen dos copias
-            # del mismo batch cuando la cola acaba publicándolas todas.
+            # Con el tope agotado la decisión de *volver a mandarlos* pasa a
+            # quien mira AirVault. El programa no puede distinguir «la carga
+            # se perdió» de «AirVault va lento», y por ese margen es por
+            # donde aparecen dos copias del mismo batch cuando la cola acaba
+            # publicándolas todas. Buscarlos sí sigue haciéndolo solo: mirar
+            # la cola no escribe nada y no duplica nada.
+            sigue = (
+                " Se sigue mirando la cola por si AirVault acaba "
+                "publicándolos; si aparecen, se indexan solos."
+                if self.auto_check.isChecked() else ""
+            )
             return (
                 f"{cabeza} Ya se reenviaron {MAXIMO_REENVIOS} veces sin que "
                 "AirVault los publique, así que no se vuelven a mandar solos: "
                 "insistir es como acaban varias copias del mismo batch en la "
-                "cola. Mírelos en Web Index y, si de verdad no están, clic "
-                "derecho sobre su fila y «Subir a AirVault ahora»."
+                f"cola.{sigue} Mírelos en Web Index y, si de verdad no están, "
+                "clic derecho sobre su fila y «Subir a AirVault ahora»."
             )
         if self.auto_check.isChecked():
             return (
@@ -3567,6 +3563,9 @@ class AirVaultWindow(QDialog):
         )
 
     def _al_comprobar(self, datos: dict) -> None:
+        # Una comprobación buena borra la racha: lo que llevara fallando
+        # dejó de fallar.
+        self._fallos_seguidos = 0
         self._estado["planes"] = datos["planes"]
         self._trabajos = list(self._estado.get("trabajos") or self._trabajos)
         acotado = bool(datos.get("acotado"))
@@ -3589,8 +3588,6 @@ class AirVaultWindow(QDialog):
             self._parar_vigilancia()
         else:
             self._ajustar_vigilancia()
-        if datos.get("reporte"):
-            self.boton_reporte.setEnabled(True)
         listos = [p for p in revisados if p.se_puede_indexar]
         self.boton_indexar.setEnabled(
             bool(self._listos())
@@ -3778,13 +3775,29 @@ class AirVaultWindow(QDialog):
             self._trabajos = list(preparados)
             self._estados = [estado_local(t) for t in self._trabajos]
             self._pintar_lotes()
+        # Un fallo suelto no para nada: AirVault devuelve un error de vez en
+        # cuando y la sesión se renueva sola, así que el siguiente intervalo
+        # tiene todas las papeletas de salir bien, y nadie está delante para
+        # volver a pulsar. Lo que no tiene sentido es repetir el mismo error
+        # toda la tarde, y para eso está el tope.
+        self._fallos_seguidos += 1
+        sigue = (
+            self.auto_check.isChecked()
+            and self._vigilante is not None
+            and self._vigilante.isActive()
+            and self._fallos_seguidos < FALLOS_SEGUIDOS_ANTES_DE_PARAR
+        )
+        if sigue:
+            mensaje += (
+                f" Se vuelve a intentar solo dentro de "
+                f"{self.minutos_spin.value()} min."
+            )
+        else:
+            self._parar_vigilancia()
         self.resumen.setText(mensaje)
         self.estado_label.setText("El indexado no pudo continuar")
         # El mensaje entero queda en el resumen, que se lee de una vez.
         self._anotar(f"Se detuvo: {primera_frase(mensaje)}")
-        # Un fallo con la comprobación automática puesta se repetiría en el
-        # siguiente intervalo con el mismo error: se para y se vuelve a pulsar.
-        self._parar_vigilancia()
         self._limpiar_progreso()
 
     def _al_cancelar(self) -> None:
@@ -3900,11 +3913,6 @@ class AirVaultWindow(QDialog):
         self.progreso.setRange(0, 100)
         self.progreso.setValue(0)
         self._parar_reloj()
-
-    def _abrir_reporte(self) -> None:
-        reporte = self._estado.get("reporte")
-        if reporte and Path(reporte).is_file():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(reporte)))
 
     # ── cierre ─────────────────────────────────────────────────────
 

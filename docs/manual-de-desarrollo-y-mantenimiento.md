@@ -315,11 +315,14 @@ El flujo es:
 2. cargar cada PDF mediante Quick Upload;
 3. detectar el batch nuevo y asignarle nombre;
 4. leer páginas y construir un plan sin escribir;
-5. generar `revision.html` y `revision.csv`;
-6. escribir solo registros habilitados;
-7. releerlos y confirmar estado `Valid`;
-8. guardar el manifiesto después de cada página;
-9. liberar el batch al terminar, cancelar o abandonar.
+5. escribir solo registros habilitados;
+6. releerlos y confirmar estado `Valid`;
+7. guardar el manifiesto después de cada página;
+8. liberar el batch al terminar, cancelar o abandonar.
+
+Por consola, `run_airvault.py` intercala entre 4 y 5 la escritura de
+`revision.html` y `revision.csv`. La ventana no los genera: lo que enseña es
+el recuento del plan en su resumen.
 
 La recuperación de Quick Upload agota primero tres ciclos de identificación
 por nombre, páginas y contenido, salvo que la búsqueda amplia (la que recorre
@@ -381,7 +384,7 @@ El OCR y `fleet.json` solo admiten `HP-XXXXCMP` o `HP-XXXXWWP`. El adaptador de 
 
 Las validaciones comprueban la cantidad de páginas, los datos obligatorios, la coincidencia de `log_number` y el estado remoto. También comprueban la matrícula cuando el catálogo de AirVault se obtuvo y no está vacío. Un catálogo vacío desactiva esa guarda y debe tratarse como condición de revisión. Una diferencia en la cantidad de páginas detiene el batch. Los demás fallos bloquean la página afectada. La GUI no sobrescribe una página `Valid`.
 
-La sesión normal se obtiene con un perfil propio de Edge. Las peticiones usan `requests`, cookies de sesión y el token `AntiForgery` de cada aplicación de AirVault. Las respuestas transitorias se reintentan. El estado queda en `output/airvault/<job>/parte-XX/manifiesto.json`; `revision.html` y `revision.csv` documentan el plan. El manifiesto permite reanudar sin repetir páginas confirmadas.
+La sesión normal se obtiene con un perfil propio de Edge. Las peticiones usan `requests`, cookies de sesión y el token `AntiForgery` de cada aplicación de AirVault. Las respuestas transitorias se reintentan. El estado queda en `output/airvault/<job>/parte-XX/manifiesto.json`; por consola, `revision.html` y `revision.csv` documentan el plan. El manifiesto permite reanudar sin repetir páginas confirmadas.
 
 El PDF `REVISAR` recoge solo matrículas ausentes o marcadas, conflictos canónicos, alineaciones dudosas e inferencias con menos de dos respaldos. Se sube como batch separado, no se indexa y se libera para intervención manual; las advertencias de fecha no envían por sí solas una página a este batch.
 
