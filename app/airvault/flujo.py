@@ -945,6 +945,7 @@ class Trabajo:
             )
             misma_compresion = trabajo.manifiesto.compresion == bool(compresion)
             if mismo_csv and mismo_pdf and mismo_limite and misma_compresion:
+                trabajo.rehidratar_registros_huerfanos(csv, resolutor)
                 propuesto = (
                     parte.nombre_lote(nombre_lote)
                     if parte and nombre_lote
@@ -969,6 +970,110 @@ class Trabajo:
 
     def guardar(self) -> Path:
         return manifiestos.guardar(self.manifiesto, self.carpeta)
+
+    def rehidratar_registros_huerfanos(
+        self,
+        csv: Path | str,
+        resolutor: Optional[ResolutorFlota] = None,
+    ) -> int:
+        """Recupera del CSV las paginas que un cruce viejo dejo sin datos.
+
+        Algunos manifiestos se guardaron antes de que el cruce tolerara el
+        nombre numerado que recibe un PDF al archivarse. Esos manifiestos ya
+        pueden tener un batch confirmado en AirVault, asi que no se pueden
+        borrar ni preparar otra vez. Se reconstruyen solamente los registros
+        ``sin_fila`` o sin los tres datos del CSV y se conserva la identidad
+        completa del trabajo remoto.
+        """
+        manifiesto = self.manifiesto
+        if manifiesto.cancelado or manifiesto.etapa_hecha("completar"):
+            return 0
+
+        def huerfano(registro: Registro) -> bool:
+            marcado_sin_fila = any(
+                "sin_fila" in str(aviso).casefold()
+                for aviso in registro.avisos
+            )
+            sin_datos_del_csv = (
+                registro.pagina_origen > 0
+                and not any((
+                    registro.matricula.strip(),
+                    registro.log_number.strip(),
+                    registro.fecha.strip(),
+                ))
+            )
+            return marcado_sin_fila or sin_datos_del_csv
+
+        if not any(
+            huerfano(registro)
+            for registro in manifiesto.registros
+            if not registro.es_separador
+        ):
+            return 0
+
+        indice = [
+            {"separador": registro.separador}
+            if registro.es_separador
+            else {
+                "archivo": registro.archivo_origen,
+                "pagina": registro.pagina_origen,
+            }
+            for registro in manifiesto.registros
+        ]
+        try:
+            reconstruidos = registros_desde_entrega(
+                leer_csv_corrida(csv), indice, resolutor or ResolutorFlota()
+            )
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "No se pudieron recuperar los registros huerfanos de {}: {}",
+                manifiesto.nombre_batch or manifiesto.job_id,
+                exc,
+            )
+            return 0
+        if len(reconstruidos) != len(manifiesto.registros):
+            logger.warning(
+                "No se recupero {}: el manifiesto tiene {} paginas y el cruce {}",
+                manifiesto.nombre_batch or manifiesto.job_id,
+                len(manifiesto.registros),
+                len(reconstruidos),
+            )
+            return 0
+
+        reparados = 0
+        registros = []
+        for anterior, reconstruido in zip(
+            manifiesto.registros, reconstruidos, strict=True
+        ):
+            if (
+                anterior.es_separador
+                or not huerfano(anterior)
+                or huerfano(reconstruido)
+            ):
+                registros.append(anterior)
+                continue
+            reconstruido.pagina_batch = anterior.pagina_batch
+            reconstruido.estado = (
+                EstadoRegistro.ESCRITA
+                if anterior.estado is EstadoRegistro.ESCRITA
+                else EstadoRegistro.PENDIENTE
+            )
+            registros.append(reconstruido)
+            reparados += 1
+
+        if not reparados:
+            return 0
+        manifiesto.registros = registros
+        manifiesto.etapas["indexar"] = Etapa()
+        manifiesto.etapas["verificar"] = Etapa()
+        manifiesto.etapas["completar"] = Etapa()
+        self.guardar()
+        logger.info(
+            "Se recuperaron {} registros huerfanos de {} sin volver a subir el batch",
+            reparados,
+            manifiesto.nombre_batch or manifiesto.job_id,
+        )
+        return reparados
 
     # ── etapas ─────────────────────────────────────────────────────
 
@@ -1812,8 +1917,8 @@ def preparar_partes(
     comprometidos = [t for t in previos if trabajo_comprometido(t)]
     if comprometidos and avisar is not None:
         avisar(
-            f"{len(comprometidos)} batches ya subidos se conservan; se "
-            f"reparten las {len(cobertura.huecos)} bitácoras que faltan",
+            f"Se conservan {len(comprometidos)} batches ya subidos; se "
+            f"reparten {len(cobertura.huecos)} bitácoras",
             0,
             0,
         )
@@ -2505,7 +2610,7 @@ def subir_partes(
             )
             avisar(
                 f"AirVault confirmó {encontrados} de {len(a_confirmar)} "
-                f"{unidad}{espera}; se subirán {faltantes} faltantes",
+                f"{unidad}{espera}; faltan {faltantes} por subir",
                 0,
                 0,
             )
@@ -2516,8 +2621,7 @@ def subir_partes(
         if avisar is not None and cuantos:
             unidad = "batch" if cuantos == 1 else "batches"
             avisar(
-                f"Se sube {cuantos} {unidad} por orden expresa; solo se "
-                "mira la cola una vez, sin abrir ningún batch",
+                f"Se sube {cuantos} {unidad} por orden expresa",
                 0,
                 0,
             )
@@ -3186,6 +3290,7 @@ def trabajos_preparados(
             continue
         if not _reubicar_trabajo(trabajo, objetivo, carpeta):
             continue
+        trabajo.rehidratar_registros_huerfanos(objetivo)
         trabajos.append(trabajo)
     return trabajos
 
@@ -4380,8 +4485,8 @@ def comprobar_partes(
     if por_busqueda_amplia:
         if avisar is not None:
             avisar(
-                "Los nombres pendientes no aparecieron; buscando cargas "
-                "publicadas con otro nombre",
+                "Los nombres pendientes no aparecieron; se buscan por "
+                "contenido",
                 0,
                 0,
             )
