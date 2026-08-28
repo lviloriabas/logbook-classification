@@ -271,7 +271,7 @@ los sube y los indexa todos, y cuenta el avance sobre el total.
    pregunta en el momento. El estado y el resumen indican cuándo los batches
    ya están listos para indexar. Solo deja de preguntar cuando no queda nada
    que esperar: mientras haya un batch sin terminar sigue mirando, también
-   después de agotar el tope de reenvíos, porque AirVault publica cargas
+   después de dar una carga por perdida, porque AirVault publica cargas
    horas después de aceptarlas.
 9. Si quiere que el batch quede cerrado y fuera de la cola, marque
    **Completar batch**.

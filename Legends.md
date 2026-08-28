@@ -2,6 +2,37 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-28 - Ningun batch se vuelve a subir solo
+
+Una carga que Quick Upload aceptaba y AirVault nunca publicaba se volvia a
+mandar sola, hasta dos veces, con una espera que crecia entre intento e
+intento. La idea era que un archivo perdido acabara subiendo sin que nadie
+lo empujara. El problema es que las tres senales que dan una carga por
+perdida (la cola entera sin encontrarla, las partes siguientes ya
+indexadas, o el plazo vencido) tambien saltan cuando AirVault simplemente
+va lento y todavia esta procesando el archivo. El programa no distingue una
+cosa de la otra, y por ese margen es por donde aparecian dos copias del
+mismo batch el dia que la cola las publicaba todas de golpe.
+
+Ahora no se reenvia nada solo. Cuando una carga se da por perdida, el
+resumen lo dice con su motivo y ahi se detiene: la orden de mandarla otra
+vez queda en la tabla, con clic derecho sobre la fila y **Subir a AirVault
+ahora**, que sube en el acto. Quien mira Web Index es el unico que sabe si
+el batch esta o no esta.
+
+Lo que sigue saliendo sin que nadie pulse nada es lo que **nunca llego** a
+Quick Upload: un archivo que no se subio no puede duplicarse.
+
+Y no mandarla otra vez no es dejar de buscarla. Mientras **Comprobar cada**
+este marcado, la ventana sigue mirando la cola por si AirVault acaba
+publicando la carga horas despues, y si aparece se indexa sola. Mirar la
+cola no escribe nada.
+
+Detalles: desaparecen el tope `MAXIMO_REENVIOS`, la funcion
+`reenvio_pendiente` y el contador `reenvios` del manifiesto. La espera
+configurada (`espera_reenvio_s`, media hora) deja de multiplicarse por los
+reenvios hechos y pasa a ser lo unico que decide cuando avisar.
+
 ## 2026-08-28 - Las cargas a AirVault van de una en una
 
 Al subir una ejecucion repartida en varios batches, el programa mandaba

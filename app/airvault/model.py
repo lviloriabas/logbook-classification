@@ -135,11 +135,9 @@ class Manifiesto(BaseModel):
     # recorren nombres, cantidades y contenido. Solo al agotarlas empieza el
     # reloj de espera que eventualmente permite ofrecer una resubida.
     intentos_identificacion: int = 0
+    # Cuando arranco ese reloj. El nombre es historico: al vencer no se
+    # reenvia nada, solo se avisa y se ofrece subir el archivo a mano.
     espera_reenvio_desde: str = ""
-    # Reenvios que la automatizacion ya hizo de una carga que Quick Upload
-    # acepto pero AirVault nunca publico. Se cuenta para no seguir enviando
-    # el mismo archivo indefinidamente y acabar con batches duplicados.
-    reenvios: int = 0
     # Veces que se recorrio la cola entera de AirVault (por nombre visible,
     # nombre embebido, cantidad de paginas y Log Page Number) sin encontrar
     # esta carga. Una sola basta para darla por no publicada: ya no queda
