@@ -81,14 +81,6 @@ CARPETA_TRABAJOS = Path("output") / "airvault"
 # reenvíos: en todos se vuelve a leer la cola de AirVault.
 INTENTOS_IDENTIFICACION_ANTES_DE_ESPERA = 3
 
-# El programa no deja de reintentar una carga que no llego: quedarse
-# esperando no la arregla, y lo que hay que conseguir es que el batch acabe
-# en AirVault. Lo que crece es el margen entre un intento y el siguiente,
-# multiplicando la espera configurada por los reenvios ya hechos: media
-# hora, una hora, hora y media. Asi una cola que solo va lenta no recibe el
-# mismo archivo cada vuelta del reloj, y una carga realmente perdida acaba
-# subiendo igual.
-
 # La pantalla de Quick Upload declara 2048 MB por archivo. La compresion
 # conserva margen respecto de ese techo y usa una calidad JPEG moderada:
 # bajar de 300/600 DPI a 200 aporta la mayor parte del ahorro sin castigar
@@ -1278,9 +1270,6 @@ class Trabajo:
         self.manifiesto.intentos_identificacion = 0
         self.manifiesto.busquedas_amplias_sin_hallar = 0
         self.manifiesto.espera_reenvio_desde = ""
-        # AirVault lo publico: la carga no se perdio y el tope de reenvios
-        # vuelve a cero para el proximo trabajo que use este manifiesto.
-        self.manifiesto.reenvios = 0
         self.manifiesto.etapa("descubrir").marcar(
             EstadoEtapa.HECHA, f"{lote.batch_id} ({lote.paginas} paginas)"
         )
@@ -2384,13 +2373,13 @@ def _validar_nombres_de_batches(trabajos: Sequence["Trabajo"]) -> None:
 # publicado aunque lo subiera otra persona.
 
 
-# Reenvios automaticos de una carga que Quick Upload acepto y AirVault no
-# publico. El modelo ya decia que se cuentan «para no acabar con batches
-# duplicados», pero nada usaba la cuenta. Dos son suficientes: si tras dos
-# reenvios el batch sigue sin aparecer, el problema no es el envio, y seguir
-# mandando el mismo PDF es exactamente como se acaba con tres copias del
-# mismo batch el dia que AirVault los publica todos de golpe.
-MAXIMO_REENVIOS = 2
+# Una carga que Quick Upload acepto y AirVault nunca publico **no se vuelve
+# a mandar sola**. El programa no puede distinguir «la carga se perdio» de
+# «AirVault todavia la esta procesando», y por ese margen es por donde
+# aparecen dos copias del mismo batch el dia que la cola las publica todas
+# de golpe. Lo que si hace solo es avisar y seguir mirando la cola, que no
+# escribe nada; volver a enviar el archivo lo decide quien tiene Web Index
+# delante, con «Subir a AirVault ahora».
 
 
 def carpeta_del_libro(trabajo: "Trabajo") -> Path:
@@ -2506,7 +2495,6 @@ def subir_partes(
     dormir: Callable[[float], None] = time.sleep,
     al_finalizar_subidas: Optional[Callable[[Sequence["Trabajo"]], None]] = None,
     al_encontrar: Optional[Callable[["Trabajo", Sequence["Trabajo"]], None]] = None,
-    reintentar_estancados: bool = False,
     en_la_ejecucion: Sequence["Trabajo"] = (),
     forzados: Collection[str] = (),
     buscador: Optional[websearch.Buscador] = None,
@@ -2517,8 +2505,15 @@ def subir_partes(
     encontrados conservan o recuperan su ID. Si Quick Upload ya confirmo un
     archivo pero el titulo aun no aparece en Web Index, se conserva como
     ``BUSCANDO`` y no se vuelve a cargar: AirVault puede tardar en procesarlo.
-    Solo un trabajo local realmente pendiente vuelve a Quick Upload. Sin
-    cliente se conserva el recorrido local para los usos antiguos del modulo.
+    Sin cliente se conserva el recorrido local para los usos antiguos del
+    modulo.
+
+    Solo se manda a Quick Upload lo que nunca llego a subirse y lo que
+    alguien ordena expresamente en ``forzados``. Una carga que AirVault
+    acepto y no publico no se reenvia sola por mucho que tarde: el programa
+    no distingue una carga perdida de una cola lenta, y mandar el mismo PDF
+    otra vez es como acaban dos copias del mismo batch el dia que AirVault
+    las publica todas.
 
     Justo antes de cada carga se busca otra vez su nombre. Si apareció desde
     la primera pasada, se recupera el ID y no se crea un duplicado; si sigue
@@ -2559,7 +2554,6 @@ def subir_partes(
     _validar_sin_bitacoras_repetidas(trabajos, ejecucion)
     claves_forzadas = {str(clave) for clave in forzados or ()}
     por_subir = list(trabajos)
-    claves_estancadas: set[str] = set()
     if cliente is not None:
         # Lo que se mando subir a mano ni se consulta: se sube. Preguntar
         # otra vez por un batch que la persona acaba de buscar en AirVault
@@ -2578,13 +2572,7 @@ def subir_partes(
             if a_confirmar
             else []
         )
-        estancados = [
-            parte.trabajo
-            for parte in estados
-            if reintentar_estancados and reenvio_pendiente(parte, ejecucion)
-        ]
-        claves_estancadas = {str(trabajo.carpeta) for trabajo in estancados}
-        claves_por_subir = claves_forzadas | claves_estancadas | {
+        claves_por_subir = claves_forzadas | {
             str(parte.trabajo.carpeta)
             for parte in estados
             if parte.estado == SIN_SUBIR
@@ -2596,11 +2584,9 @@ def subir_partes(
             if str(trabajo.carpeta) in claves_por_subir
         ]
         procesandose = sum(
-            parte.estado in (BUSCANDO, PROCESANDO)
-            and parte.trabajo not in estancados
-            for parte in estados
+            parte.estado in (BUSCANDO, PROCESANDO) for parte in estados
         )
-        encontrados = len(a_confirmar) - len(estancados) - procesandose - sum(
+        encontrados = len(a_confirmar) - procesandose - sum(
             parte.estado == SIN_SUBIR for parte in estados
         )
         if avisar is not None and a_confirmar:
@@ -2645,7 +2631,6 @@ def subir_partes(
         cabeza = _prefijo(trabajo)
         clave = str(trabajo.carpeta)
         forzado = clave in claves_forzadas
-        permite_reenvio = clave in claves_estancadas
 
         if forzado and cliente is not None:
             # Una sola lectura de la cola. Es lo unico que separa obedecer
@@ -2698,10 +2683,7 @@ def subir_partes(
             estado_actual = detectar_indexados(
                 [estado_actual], cliente, avisar=avisar
             )[0]
-            permite_reenvio = permite_reenvio and reenvio_pendiente(
-                estado_actual, ejecucion
-            )
-            if estado_actual.estado != SIN_SUBIR and not permite_reenvio:
+            if estado_actual.estado != SIN_SUBIR:
                 if estado_actual.batch_id and trabajo not in encontrados_antes:
                     encontrados_antes.append(trabajo)
                 if avisar is not None:
@@ -2711,10 +2693,10 @@ def subir_partes(
                         0,
                     )
                 continue
-        # Ultimo filtro, y el unico por el que pasan las tres formas de
-        # llegar aqui: la carga nueva, la orden dada a mano y el reenvio de
-        # una que se dio por perdida. Todo lo anterior mira la cola de Web
-        # Index; esto mira lo que ya esta publicado.
+        # Ultimo filtro, y el unico por el que pasan las dos formas de
+        # llegar aqui: la carga nueva y la orden dada a mano. Todo lo
+        # anterior mira la cola de Web Index; esto mira lo que ya esta
+        # publicado.
         motivo = trabajo.manifiesto.posible_duplicado or revisar_duplicado(
             trabajo, buscador
         )
@@ -2734,27 +2716,6 @@ def subir_partes(
                 )
             continue
 
-        if permite_reenvio:
-            hechos = int(trabajo.manifiesto.reenvios or 0)
-            if hechos >= MAXIMO_REENVIOS:
-                # Dos reenvios y sigue sin aparecer: lo que falla no es el
-                # envio. Insistir es como acaban tres copias del mismo
-                # batch en la cola el dia que AirVault los publica todos.
-                detalle = (
-                    f"ya se reenvio {hechos} veces sin que AirVault lo "
-                    "publique; no se manda otra vez solo. Mirelo en Web "
-                    "Index y, si de verdad no esta, ordene la subida desde "
-                    "la cola."
-                )
-                fallos.append((trabajo, detalle))
-                if avisar is not None:
-                    avisar(f"{cabeza}{detalle}", 0, 0)
-                continue
-            # Se da por perdida una carga que Quick Upload si acepto. Se
-            # cuenta antes de reenviarla para que el tope valga aunque el
-            # envio se corte a mitad.
-            trabajo.manifiesto.reenvios = hechos + 1
-            trabajo.guardar()
         if cliente is not None or forzado:
             # Tambien en las forzadas: el manifiesto puede seguir creyendo
             # que el archivo ya se subio, y sin borrar esa creencia la
@@ -3064,10 +3025,8 @@ def subida_rebasada(
     perdio en el camino de subida, se perdio en AirVault, y esperar mas no
     la va a hacer aparecer.
 
-    Es la unica senal que no depende de un reloj. Con ella se resuelve el
-    caso que dejaba una parte «buscando» para siempre: la espera vencia,
-    se agotaban los reenvios y ahi se quedaba, con las siguientes ya
-    terminadas.
+    Es la unica senal que no depende de un reloj, y es la que distingue
+    una cola lenta de una carga que AirVault no va a publicar nunca.
     """
     propia = momento_de_subida(trabajo)
     if propia is None:
@@ -3111,6 +3070,10 @@ def subida_perdida(
     lleva subido mas tiempo del que AirVault tarda en publicar. Solo se
     pregunta de una carga que ya agoto las revisiones de identidad, que es
     lo que significa ``BUSCANDO``.
+
+    Darla por perdida no la vuelve a mandar: sirve para avisar y para
+    ofrecer la subida a mano. Ninguna de las tres senales es infalible y
+    las tres pueden saltar mientras AirVault todavia procesa la carga.
     """
     if parte.estado != BUSCANDO:
         return False
@@ -3119,51 +3082,28 @@ def subida_perdida(
         return True
     if subida_rebasada(trabajo, ejecucion):
         return True
-    return subida_estancada(trabajo, espera_de_reenvio(trabajo))
-
-
-def reenvio_pendiente(
-    parte: EstadoParte, ejecucion: Sequence["Trabajo"] = ()
-) -> bool:
-    """Si esta carga ya se puede volver a enviar sin pedirlo a mano.
-
-    Hacen falta dos cosas: darla por perdida y no haber agotado el tope de
-    reenvios. Las tres senales que la dan por perdida
-    (:func:`subida_perdida`) son buenas pero no infalibles, y todas pueden
-    dispararse mientras AirVault todavia esta procesando la carga. Al
-    tercer intento lo que falla ya no es el envio, y seguir mandando el
-    mismo PDF es como aparecen tres copias del mismo batch el dia que
-    AirVault los publica todos.
-
-    Lo que evita insistir contra una cola solo lenta es que cada reenvio
-    exige mas espera que el anterior (:func:`espera_de_reenvio`).
-    """
-    if int(parte.trabajo.manifiesto.reenvios or 0) >= MAXIMO_REENVIOS:
-        return False
-    return subida_perdida(parte, ejecucion)
+    return subida_estancada(trabajo, espera_para_darla_por_perdida(trabajo))
 
 
 def partes_por_subir(estados: Sequence[EstadoParte]) -> List["Trabajo"]:
-    """Trabajos que hay que mandar a Quick Upload, ahora o de nuevo.
+    """Trabajos que hay que mandar a Quick Upload sin pedirlo a mano.
 
-    Son los que nunca llegaron a subirse y los que se dieron por perdidos.
+    Son los que nunca llegaron a subirse, y solo esos. Una carga que
+    AirVault acepto y no publico se avisa (:func:`subida_perdida`) pero no
+    entra aqui: mandarla otra vez es una decision de quien mira Web Index.
+
     Vive aqui, y no en la ventana, porque la comprobacion periodica y el
     boton tienen que decidir exactamente lo mismo: si la lista se calculara
     en dos sitios, uno de los dos acabaria dejando archivos parados para
     siempre.
-
-    Recibe la ejecucion entera porque dar una carga por perdida depende de
-    las demas: son las partes siguientes, ya indexadas, las que demuestran
-    que AirVault paso de largo.
     """
-    ejecucion = [parte.trabajo for parte in estados]
     return [
         parte.trabajo
         for parte in estados
         # Un batch marcado como posible duplicado no entra ni por «sin
         # subir»: mientras la marca este puesta no lo manda nadie solo.
         if not es_posible_duplicado(parte.trabajo)
-        and (parte.estado == SIN_SUBIR or reenvio_pendiente(parte, ejecucion))
+        and parte.estado == SIN_SUBIR
     ]
 
 
@@ -3469,9 +3409,6 @@ def reiniciar_trabajos_incompletos(
         )
         if not subida_hecha:
             manifiesto.batch_id = None
-            # Reiniciar es una orden expresa: devuelve los reenvios que la
-            # automatizacion hubiera gastado sobre este mismo archivo.
-            manifiesto.reenvios = 0
             manifiesto.etapas["subir"] = Etapa()
             manifiesto.etapas["descubrir"] = Etapa()
             manifiesto.etapas["indexar"] = Etapa()
@@ -3889,8 +3826,8 @@ def _hay_candidato_provisional(
 ) -> bool:
     """Hay una carga remota plausible que aun no autoriza renombrar.
 
-    Su presencia evita que el boton de revision la reenvie solo por antigua:
-    primero se sigue intentando leer su identidad interna.
+    Su presencia evita que el boton de revision la de por perdida solo por
+    antigua: primero se sigue intentando leer su identidad interna.
     """
     manifiesto = trabajo.manifiesto
     compatibles = manifiesto.cantidades_paginas_compatibles()
@@ -4176,16 +4113,20 @@ def edad_de_la_carga(
         return None
 
 
-def espera_de_reenvio(trabajo: "Trabajo") -> float:
-    """Cuanto tiene que llevar sin publicarse antes de volver a mandarla.
+def espera_para_darla_por_perdida(trabajo: "Trabajo") -> float:
+    """Cuanto tiene que llevar sin publicarse para avisar de que se perdio.
 
-    La primera vez es la espera configurada; con cada reenvio ya hecho, un
-    multiplo mas. Espaciar los intentos es lo que evita insistir contra una
-    cola que solo va lenta; el tope de :data:`MAXIMO_REENVIOS` es lo que
-    evita que insistir acabe en varias copias del mismo batch.
+    Es la espera configurada, tal cual. Antes crecia con cada reenvio ya
+    hecho, para no insistir contra una cola que solo va lenta; ahora no hay
+    reenvios automaticos que espaciar y lo unico que vence con este plazo
+    es el aviso, que no escribe nada en AirVault.
+
+    El ajuste se sigue llamando ``espera_reenvio_s`` en la configuracion,
+    igual que la marca ``espera_reenvio_desde`` del manifiesto: son nombres
+    guardados en archivos que ya existen y renombrarlos no valdria lo que
+    cuesta.
     """
-    base = max(0.0, float(trabajo.config.espera_reenvio_s))
-    return base * (1 + max(0, int(trabajo.manifiesto.reenvios or 0)))
+    return max(0.0, float(trabajo.config.espera_reenvio_s))
 
 
 def _carga_vieja_sin_publicar(trabajo: "Trabajo") -> bool:
@@ -4199,11 +4140,11 @@ def _carga_vieja_sin_publicar(trabajo: "Trabajo") -> bool:
     edad = edad_de_la_carga(trabajo)
     if edad is None:
         return False
-    return edad >= espera_de_reenvio(trabajo)
+    return edad >= espera_para_darla_por_perdida(trabajo)
 
 
 def _registrar_busqueda_amplia_fallida(trabajo: "Trabajo") -> EstadoParte:
-    """Anota que la cola entera no tenia esta carga y la deja por reenviar."""
+    """Anota que la cola entera no tenia esta carga y avisa de que falta."""
     manifiesto = trabajo.manifiesto
     manifiesto.busquedas_amplias_sin_hallar = (
         int(manifiesto.busquedas_amplias_sin_hallar or 0) + 1
@@ -4218,7 +4159,7 @@ def _registrar_busqueda_amplia_fallida(trabajo: "Trabajo") -> EstadoParte:
         trabajo,
         BUSCANDO,
         "no está en AirVault con ningún nombre, ni por páginas ni por Log "
-        "Page Number; se vuelve a subir",
+        "Page Number; hay que volver a subirlo a mano",
     )
 
 
