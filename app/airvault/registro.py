@@ -254,3 +254,33 @@ def rutas_del_registro(carpeta: Path | str) -> List[Path]:
         )
     )
     return rutas
+
+
+def olvidar(
+    carpeta: Path | str, carpetas_de_batch: Sequence[Path | str]
+) -> RegistroDeEntrega:
+    """Borra del registro los batches indicados y conserva los demas.
+
+    Es la mitad que le falta a eliminar un batch. Mandar su manifiesto a la
+    Papelera lo saca de la cola, pero mientras su anotacion siga aqui sus
+    bitacoras cuentan como comprometidas y el reparto siguiente pasa de
+    largo por ellas: el batch desapareceria y sus paginas no volverian a
+    salir en ninguno. Al olvidarlo vuelven a estar libres.
+
+    Lo que ya viajo a AirVault no se deshace con esto: el batch remoto
+    sigue donde estaba. Quien lo elimina es quien sabe que ahi no hay nada
+    que conservar.
+    """
+    registro = leer(carpeta)
+    if not registro.batches:
+        return registro
+    fuera = {str(Path(ruta)).casefold() for ruta in carpetas_de_batch}
+    quedan = [
+        batch for batch in registro.batches
+        if str(Path(batch.carpeta)).casefold() not in fuera
+    ]
+    if len(quedan) == len(registro.batches):
+        return registro
+    registro.batches = quedan
+    guardar(registro, carpeta)
+    return registro

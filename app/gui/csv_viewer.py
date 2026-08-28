@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.csv_utils import (
+    TEXTO_ELEGIR_EJECUCION,
     csv_field_id,
     find_csv_files,
     find_run_dirs,
@@ -121,9 +122,8 @@ _HISTORY_LIMIT = 25
 # Lo que dice el indicador de búsqueda mientras no hay nada que buscar.
 _SEARCH_HINT = "Escriba lo que busca del CSV: bitácora, matrícula, archivo…"
 _EXPORT_TOOLTIP = (
-    "Volver a generar CSV, JSON y PDFs de esta ejecución con las opciones "
-    "actuales, sin reprocesar los archivos. Los PDFs ya exportados se "
-    "conservan: los nuevos se numeran (-2, -3…) si el nombre se repite"
+    "Volver a generar CSV, JSON y PDF con las opciones actuales, sin "
+    "reprocesar. Los PDF repetidos se numeran (-2, -3…)"
 )
 # El panel se estiliza a sí mismo para verse igual dentro y fuera del visor.
 _PDF_PANE_QSS = (
@@ -1469,11 +1469,9 @@ class CsvViewerWindow(QMainWindow):
         history_row = QHBoxLayout()
         history_row.addWidget(QLabel("Historial:"))
         self.history_combo = QComboBox()
-        self.history_combo.setPlaceholderText("Seleccione una ejecución…")
         self.history_combo.setToolTip(
-            "Ejecuciones ya procesadas, de la más reciente a la más antigua. "
-            "Al elegir una se cargan sus CSV; las anteriores siguen "
-            "disponibles con «Seleccionar carpeta…»"
+            "Ejecuciones procesadas, de la más reciente a la más antigua. Las "
+            "más viejas, con «Seleccionar carpeta…»"
         )
         self.history_combo.setAccessibleName("Ejecuciones procesadas recientes")
         # «activated» solo lo emite quien elige con el ratón o el teclado, así
@@ -1528,10 +1526,8 @@ class CsvViewerWindow(QMainWindow):
         )
         self.search_edit.setAccessibleName("Texto que se busca en el CSV")
         self.search_edit.setToolTip(
-            "Busca el texto en las columnas que muestra la tabla; con el CSV "
-            "completo busca también en las que la vista resumida oculta. "
-            "Cada coincidencia selecciona su fila y abre su página en el "
-            "visor; se recorren con ‹ y ›, o repitiendo la búsqueda."
+            "Busca en las columnas visibles; con el CSV completo, también en "
+            "las ocultas. Cada coincidencia abre su página en el visor."
         )
         self.search_edit.returnPressed.connect(self._find_in_csv)
         search_row.addWidget(self.search_edit, 1)
@@ -1581,12 +1577,9 @@ class CsvViewerWindow(QMainWindow):
         )
         self.table.setWordWrap(False)
         self.table.setToolTip(
-            "Cada fila es una página de la ejecución. Al seleccionarla se abre "
-            "su página en el visor, y Supr quita de la ejecución las páginas "
-            "elegidas. Para juntar páginas sueltas, marque su casilla en la "
-            "primera columna (o pulse la barra espaciadora sobre las filas "
-            "elegidas): la fila marcada queda sombreada y, mientras haya "
-            "alguna, son esas las que se eliminan."
+            "Una fila por página: al elegirla se abre en el visor y Supr la "
+            "quita de la ejecución. Marque casillas para borrar varias "
+            "sueltas."
         )
         # Supr solo mientras la tabla tiene el foco: es la que sabe qué
         # páginas hay elegidas, y desde el buscador o el cuadro de salidas la
@@ -1711,18 +1704,20 @@ class CsvViewerWindow(QMainWindow):
         """
         runs = find_run_dirs(self._start_folder, _HISTORY_LIMIT)
         self.history_combo.clear()
-        for run in runs:
-            self.history_combo.addItem(run.name, str(run))
-        if not runs:
+        if runs:
+            # La opción con la que abre. La primera ejecución no está
+            # cargada todavía, y dejar su nombre visible hacía creer que ya
+            # se había elegido aunque la tabla siguiera vacía hasta volver a
+            # seleccionarla; el texto de relleno solo se veía en un
+            # desplegable sin nada elegido, que no es lo que se ve aquí.
+            self.history_combo.addItem(TEXTO_ELEGIR_EJECUCION)
+        else:
             # Un desplegable vacío no dice nada; así se lee que todavía no
             # hay nada procesado, no que la lista falló.
             self.history_combo.addItem("No hay ejecuciones procesadas todavía")
-            self.history_combo.setCurrentIndex(0)
-        else:
-            # La primera ejecución no está cargada todavía. Dejar su nombre
-            # visible hacía creer que ya se había elegido, aunque la tabla
-            # siguiera vacía hasta volver a seleccionarla.
-            self.history_combo.setCurrentIndex(-1)
+        for run in runs:
+            self.history_combo.addItem(run.name, str(run))
+        self.history_combo.setCurrentIndex(0)
         self.history_combo.setEnabled(bool(runs))
         self._sync_history_selection()
 
@@ -1731,14 +1726,16 @@ class CsvViewerWindow(QMainWindow):
         csv_path = self._current_csv_path()
         current = run_dir_for_csv(csv_path) if csv_path is not None else None
         current = current or self._folder
-        if current is None:
-            return
-        key = _folder_key(current)
+        key = _folder_key(current) if current is not None else None
         for index in range(self.history_combo.count()):
             data = self.history_combo.itemData(index)
-            if data and _folder_key(data) == key:
+            if key is not None and data and _folder_key(data) == key:
                 self.history_combo.setCurrentIndex(index)
                 return
+        # Abierta con «Seleccionar carpeta…» desde fuera del historial: no
+        # está en la lista, y dejar marcada otra haría creer que se ve esa.
+        if self.history_combo.count():
+            self.history_combo.setCurrentIndex(0)
 
     def _on_history_activated(self, index: int) -> None:
         """Abre la ejecución elegida en el historial."""

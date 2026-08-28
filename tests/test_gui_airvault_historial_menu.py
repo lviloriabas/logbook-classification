@@ -52,11 +52,12 @@ def papelera(monkeypatch):
     return enviados
 
 
-def _acciones(ventana, fila: int = 0) -> list[str]:
-    """Textos del menú que abriría un clic derecho sobre esa fila."""
-    item = ventana.historial.item(fila, 0)
+def _acciones(ventana, indice: int = 1) -> list[str]:
+    """Textos del menú que abriría un clic derecho con esa opción elegida."""
+    ventana.historial.setCurrentIndex(indice)
     menu = ventana._acciones_del_historial(
-        Path(str(item.data(Qt.ItemDataRole.UserRole))), item.text()
+        Path(str(ventana.historial.currentData())),
+        ventana.historial.currentText(),
     )
     return [accion.text() for accion in menu.actions()]
 
@@ -66,7 +67,7 @@ def test_el_menu_ofrece_las_dos_eliminaciones(app, tmp_path):
     ventana = AirVaultWindow(tmp_path)
     try:
         ventana._refrescar_historial()
-        assert ventana.historial.rowCount() == 1
+        assert ventana.historial.count() == 2
 
         assert _acciones(ventana) == [
             "Eliminar el registro de AirVault",
@@ -78,18 +79,18 @@ def test_el_menu_ofrece_las_dos_eliminaciones(app, tmp_path):
         app.processEvents()
 
 
-def test_fuera_de_las_filas_no_hay_menu(app, tmp_path):
-    """Un clic derecho en el hueco de abajo no debe ofrecer nada."""
+def test_sobre_la_opcion_de_abrir_no_hay_menu(app, tmp_path):
+    """«Seleccionar ejecución» no nombra ninguna, así que no ofrece nada."""
     corrida(tmp_path)
     ventana = AirVaultWindow(tmp_path)
     try:
         ventana._refrescar_historial()
-        hueco = QPoint(5, ventana.historial.viewport().height() + 40)
+        ventana.historial.setCurrentIndex(0)
 
-        # No abre nada y, sobre todo, no actúa sobre la primera fila por
-        # descarte: sin fila no hay ejecución que nombrar.
-        assert ventana.historial.rowAt(hueco.y()) < 0
-        assert ventana._menu_del_historial(hueco) is None
+        # No abre nada y, sobre todo, no actúa sobre la primera ejecución
+        # por descarte: sin ejecución elegida no hay nada que nombrar.
+        assert ventana.historial.currentData() is None
+        assert ventana._menu_del_historial(QPoint(5, 5)) is None
     finally:
         ventana.close()
         app.processEvents()
@@ -136,7 +137,7 @@ def test_eliminar_la_ejecucion_la_manda_entera_a_la_papelera(
         # un fallo dejaría un registro hablando de lo que ya no está.
         assert papelera == [manifiesto.parent, carpeta]
         assert not carpeta.exists()
-        assert ventana.historial.rowCount() == 0
+        assert ventana.historial.count() == 1
     finally:
         ventana.close()
         app.processEvents()

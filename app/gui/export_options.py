@@ -59,9 +59,8 @@ class ExportOptionsGroup(QGroupBox):
         self.radio_varios.setToolTip("Genera un PDF por cada matrícula/mes marcado")
         self.radio_unico = QRadioButton("Un solo PDF")
         self.radio_unico.setToolTip(
-            "Genera un único PDF con el mismo nombre que la carpeta de la "
-            "ejecución, con páginas separadoras de matrícula/mes para los "
-            "criterios marcados"
+            "Un solo PDF con el nombre de la ejecución, con páginas "
+            "separadoras según lo marcado abajo"
         )
         self.modo_grupo.addButton(self.radio_varios)
         self.modo_grupo.addButton(self.radio_unico)
@@ -75,11 +74,8 @@ class ExportOptionsGroup(QGroupBox):
         formato_row.addSpacing(8)
         self.partes_check = QCheckBox("Repartir en")
         self.partes_check.setToolTip(
-            "Escribe la entrega en varios PDF en lugar de uno solo. Una "
-            "ejecución completa son cientos de páginas y casi dos gigas, que "
-            "en AirVault forman un batch incómodo de subir y de revisar; "
-            "cada parte es un batch aparte. El reparto corta entre secciones "
-            "para no separar las bitácoras de un mismo avión."
+            "Reparte la entrega en varios PDF, uno por batch. El corte "
+            "respeta las secciones para no separar las bitácoras de un avión."
         )
         formato_row.addWidget(self.partes_check)
         self.partes_spin = QSpinBox()
@@ -150,9 +146,8 @@ class ExportOptionsGroup(QGroupBox):
 
         self.errores_check = QCheckBox("Errores")
         self.errores_check.setToolTip(
-            "Genera errores.pdf con las páginas cuya matrícula, fecha o "
-            "número de bitácora quedaron sin resolver, para indexarlas a "
-            "mano."
+            "Genera errores.pdf con las páginas sin matrícula, fecha o "
+            "número de bitácora, para indexarlas a mano."
         )
         sep_row.addWidget(self.errores_check)
         sep_row.addStretch()

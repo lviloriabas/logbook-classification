@@ -42,9 +42,8 @@ from app.validation.depuracion import (
 )
 
 DEPURAR_TOOLTIP = (
-    "Quitar de la ejecución las páginas repetidas o en blanco. Se reescriben "
-    "el CSV, el JSON y las estadísticas sin ellas; los PDF se rehacen al "
-    "exportar."
+    "Quita de la ejecución las páginas repetidas o en blanco. El CSV y el "
+    "JSON se reescriben sin ellas."
 )
 
 # Lo que se contesta a quien intenta marcar la última aparición libre de una
@@ -124,21 +123,16 @@ class DepurarPaginasDialog(QDialog):
             f"Duplicados: {_texto_conteo(self._disponibles.duplicadas)}"
         )
         self.check_duplicados.setToolTip(
-            "Bitácoras que aparecen más de una vez. La tabla las señala "
-            "todas, pero aquí solo se marca la segunda y las siguientes: de "
-            "cada una se va la aparición más nueva y se queda una, porque "
-            "borrar el grupo entero dejaría la ejecución sin esa bitácora. "
-            "Abajo puede conservar otra en su lugar. Las páginas sin "
-            "log_number legible no se consideran repetidas."
+            "Bitácoras que aparecen más de una vez. Se quitan las "
+            "repeticiones y se queda una; abajo puede elegir cuál."
         )
         self.check_duplicados.setEnabled(bool(self._disponibles.duplicadas))
         self.check_duplicados.toggled.connect(self._marcar_duplicados)
         layout.addWidget(self.check_duplicados)
 
         self.arbol_duplicados = self._nuevo_arbol(
-            "Cada bitácora repetida con todas sus apariciones. Desmarque la "
-            "que quiera conservar y marque la que sobra. Una de cada grupo "
-            "se queda siempre: no se pueden marcar todas."
+            "Cada bitácora repetida con sus apariciones. Marque la que sobra; "
+            "una de cada grupo se queda siempre."
         )
         self._llenar_duplicados()
         layout.addWidget(self.arbol_duplicados, 1)

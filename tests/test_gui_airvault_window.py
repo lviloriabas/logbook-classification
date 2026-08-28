@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QLineEdit,
     QMessageBox,
-    QTableWidgetItem,
 )
 
 from app.airvault.config import AirVaultConfig
@@ -224,23 +223,22 @@ def test_los_pasos_automaticos_son_un_menu_y_no_un_panel(ventana):
     assert ventana.boton_reiniciar is not None
 
 
-def test_comprobar_cada_es_la_misma_espera_que_la_ventana_principal(
-    app, tmp_path,
-):
-    """Una casilla en cada ventana, un solo valor y con memoria."""
+def test_comprobar_cada_no_es_un_paso_de_la_automatizacion(app, tmp_path):
+    """Esperar va dentro de subir; esto solo decide cada cuánto se pregunta.
+
+    Apagarla para en el acto la comprobación periódica, pero no desmarca
+    nada del menú: los pasos elegidos siguen siendo los mismos.
+    """
     opciones = OpcionesAutomatizacion(tmp_path)
     ventana = AirVaultWindow(RAIZ, opciones)
 
     assert ventana.auto_check.isChecked()
 
     ventana.auto_check.setChecked(False)
-    assert not opciones.esperar
-    # Y sin espera no queda nada que indexar solo: la cadena se apaga entera.
-    assert not opciones.indexar
-    assert not opciones.completar
 
-    opciones.fijar("esperar", True)
-    assert ventana.auto_check.isChecked()
+    assert opciones.subir
+    assert opciones.indexar
+    assert ventana.menu_automatizacion.accion("subir").isChecked()
     ventana.close()
 
 
@@ -253,21 +251,19 @@ def test_la_ventana_usa_batch_en_sus_campos_y_tabla(ventana):
     assert "batch" in ventana.lote_edit.placeholderText().lower()
 
 
-def test_las_tablas_tienen_el_mismo_espacio_y_la_barra_bajo_el_header(
-    app, ventana,
-):
+def test_la_cola_tiene_su_espacio_y_la_barra_bajo_el_header(app, ventana):
+    """El historial ya no es tabla: el alto que ocupaba es de la cola."""
     from app.gui.widgets import FlatSelectionDelegate
 
     ventana.show()
     app.processEvents()
-    assert ventana.historial.minimumHeight() == ventana.lotes.minimumHeight()
-    assert ventana.historial.maximumHeight() == ventana.lotes.maximumHeight()
-    for tabla in (ventana.historial, ventana.lotes):
-        assert isinstance(tabla.itemDelegate(), FlatSelectionDelegate)
-        assert (
-            f"margin-top: {tabla.horizontalHeader().height()}px"
-            in tabla.verticalScrollBar().styleSheet()
-        )
+    tabla = ventana.lotes
+    assert tabla.minimumHeight() == ventana._densidad.airvault_table_min_height
+    assert isinstance(tabla.itemDelegate(), FlatSelectionDelegate)
+    assert (
+        f"margin-top: {tabla.horizontalHeader().height()}px"
+        in tabla.verticalScrollBar().styleSheet()
+    )
 
 
 def test_revisar_airvault_esta_a_la_derecha_de_subir(ventana):
@@ -315,19 +311,26 @@ def test_el_historial_lista_las_corridas_de_la_mas_reciente(app, tmp_path):
     corrida(tmp_path, "BITS 18 AUG 2026 05 42")
     ventana = AirVaultWindow(tmp_path)
     ventana._refrescar_historial()
+    # La primera opción es con la que abre la lista, no una ejecución.
+    assert ventana.historial.itemText(0) == "Seleccionar ejecución"
+    assert ventana.historial.itemData(0) is None
     nombres = [
-        ventana.historial.item(fila, 0).text()
-        for fila in range(ventana.historial.rowCount())
+        ventana.historial.itemText(indice)
+        for indice in range(1, ventana.historial.count())
     ]
     assert nombres == ["BITS 18 AUG 2026 05 42", "BITS 17 AUG 2026 05 50"]
 
 
-def test_el_historial_cuenta_paginas_y_entrega(app, tmp_path):
+def test_la_lista_ensena_el_nombre_y_el_resto_al_posarse_encima(app, tmp_path):
+    """En la línea va el nombre y nada más: es lo que se busca al abrirla."""
     corrida(tmp_path, paginas=19)
     ventana = AirVaultWindow(tmp_path)
     ventana._refrescar_historial()
-    assert ventana.historial.item(0, 1).text() == "19"
-    assert ventana.historial.item(0, 2).text() == "1 archivo"
+
+    assert ventana.historial.itemText(1) == "BITS 18 AUG 2026 05 42"
+    aviso = ventana.historial.itemData(1, Qt.ItemDataRole.ToolTipRole)
+    assert "19 pág." in aviso
+    assert "1 archivo" in aviso
 
 
 def test_elegir_del_historial_apunta_a_esa_corrida(app, tmp_path):
@@ -335,7 +338,7 @@ def test_elegir_del_historial_apunta_a_esa_corrida(app, tmp_path):
     csv = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
     ventana = AirVaultWindow(tmp_path)
     ventana._refrescar_historial()
-    ventana.historial.selectRow(0)
+    ventana._al_elegir_del_historial(1)
     assert ventana.corrida_edit.text() == str(csv)
     assert ventana.lote_edit.text() == "DP | BITS 18 AUG 2026 05 42"
 
@@ -363,7 +366,9 @@ def test_una_corrida_sin_exportar_se_ve_pero_no_se_sube(app, tmp_path):
     corrida(tmp_path, exportada=False)
     ventana = AirVaultWindow(tmp_path)
     ventana._refrescar_historial()
-    assert ventana.historial.item(0, 2).text() == "Sin exportar"
+    assert "Sin exportar" in ventana.historial.itemData(
+        1, Qt.ItemDataRole.ToolTipRole
+    )
     assert not ventana.boton_subir.isEnabled()
     assert "Expórtela" in ventana.resumen.text()
 
@@ -377,10 +382,10 @@ def test_una_corrida_exportada_se_puede_subir(app, tmp_path):
 
 
 def test_sin_corridas_procesadas_lo_dice(app, tmp_path):
-    """Una tabla vacía no dice nada; así se lee que aún no hay nada."""
+    """Una lista con solo su opción de abrir no dice que no hay nada."""
     ventana = AirVaultWindow(tmp_path)
     ventana._refrescar_historial()
-    assert ventana.historial.rowCount() == 0
+    assert ventana.historial.count() == 1
     assert "No hay ejecuciones procesadas" in ventana.resumen.text()
 
 
@@ -816,6 +821,42 @@ def test_un_indexado_cortado_dice_que_lo_que_falta_se_retoma(ventana):
     assert "sin repetir lo escrito" in texto
 
 
+def test_paginas_amarillas_agotan_sus_reintentos_y_el_proceso_termina(ventana):
+    """Lo que requiere correccion manual no mantiene vivo el vigilante."""
+    from app.airvault.flujo import LISTO
+
+    ventana._estados = [parte(LISTO)]
+    ventana._al_indexar({
+        "resultado": ResultadoFalso(),
+        "validas": 2,
+        "total": 3,
+        "incompleto": True,
+    })
+
+    assert ventana.estado_label.text() == "Indexado incompleto"
+    assert ventana._vigilante is None or not ventana._vigilante.isActive()
+
+
+def test_indexar_desde_la_cola_no_encadena_una_revision_global(ventana):
+    """Una accion acotada termina sin volver a recorrer toda la tabla."""
+    from app.airvault.flujo import PROCESANDO
+
+    ventana._estados = [parte(PROCESANDO, carpeta="otro-job")]
+    ventana._ajustar_vigilancia()
+    assert ventana._vigilante.isActive()
+
+    ventana._al_indexar({
+        "resultado": ResultadoFalso(),
+        "validas": 3,
+        "total": 3,
+        "incompleto": False,
+        "acotado": True,
+    })
+
+    assert not ventana._comprobar_al_terminar
+    assert not ventana._vigilante.isActive()
+
+
 # ── la espera de AirVault ──────────────────────────────────────────
 
 def test_mientras_falte_un_lote_se_sigue_preguntando_solo(ventana):
@@ -1101,16 +1142,16 @@ def test_elegir_otra_ejecucion_en_marcha_la_abre_en_paralelo(
     primera = corrida(tmp_path, "BITS 17 AUG 2026 05 50")
     segunda = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
     ventana.fijar_corrida(primera)
-    ventana.historial.setRowCount(1)
-    ventana.historial.setItem(0, 0, QTableWidgetItem("otra"))
-    ventana.historial.item(0, 0).setData(
-        Qt.ItemDataRole.UserRole, str(segunda)
-    )
+    # La ventana de esta prueba mira el historial real del repositorio, así
+    # que la otra ejecución se pone a mano en la lista.
+    ventana.historial.clear()
+    ventana.historial.addItem("Seleccionar ejecución")
+    ventana.historial.addItem("otra", str(segunda))
     solicitadas = []
     ventana.abrir_corrida_paralela.connect(solicitadas.append)
     monkeypatch.setattr(ventana, "hilo", lambda: object())
 
-    ventana.historial.selectRow(0)
+    ventana._al_elegir_del_historial(1)
 
     assert solicitadas == [str(segunda)]
     assert ventana.corrida_edit.text() == str(primera)
@@ -1511,6 +1552,64 @@ def test_la_cola_ofrece_completar_el_que_ya_esta_indexado(ventana):
     assert not acciones["Subir a AirVault ahora"].isEnabled()
 
 
+def test_revisar_desde_la_cola_solo_encola_los_batches_elegidos(ventana):
+    """El menu contextual no hereda el alcance global del boton inferior."""
+    from app.airvault.flujo import PROCESANDO
+
+    primera = parte(PROCESANDO, "DP | BITS -1", carpeta="job-1")
+    segunda = parte(PROCESANDO, "DP | BITS -2", carpeta="job-2")
+    ventana._estados = [primera, segunda]
+    encoladas = []
+    ventana._encolar = lambda modo, trabajos, texto: encoladas.append(
+        (modo, list(trabajos), texto)
+    )
+
+    acciones = _acciones(ventana, 0)
+    acciones["Comprobar en AirVault"].trigger()
+
+    assert encoladas[0][0] == "comprobar"
+    assert encoladas[0][1] == [primera.trabajo]
+
+
+def test_boton_inferior_conserva_el_alcance_global(ventana):
+    """El boton de abajo elimina cualquier seleccion contextual anterior."""
+    estado = {"comprobar_trabajos": [object()]}
+    lanzados = []
+    ventana._base_del_estado = lambda: estado
+    ventana._lanzar = lambda modo, datos: lanzados.append((modo, datos))
+
+    ventana._comprobar()
+
+    assert "comprobar_trabajos" not in estado
+    assert lanzados == [("comprobar", estado)]
+
+
+def test_una_revision_acotada_no_reemplaza_las_otras_filas(ventana):
+    """La respuesta parcial se mezcla con la tabla completa por carpeta."""
+    from app.airvault.flujo import LISTO, PROCESANDO
+
+    primera = parte(PROCESANDO, "DP | BITS -1", carpeta="job-1")
+    segunda = parte(PROCESANDO, "DP | BITS -2", carpeta="job-2")
+    revisada = parte(LISTO, "DP | BITS -1", carpeta="job-1")
+    ventana._trabajos = [primera.trabajo, segunda.trabajo]
+    ventana._estado["trabajos"] = list(ventana._trabajos)
+    ventana._estados = [primera, segunda]
+
+    ventana._al_comprobar({
+        "estados": [revisada],
+        "planes": {"job-1": (PlanFalso(), None)},
+        "partes": [("DP | BITS -1", PlanFalso())],
+        "reporte": "r.html",
+        "acotado": True,
+    })
+
+    assert [fila.nombre for fila in ventana._estados] == [
+        "DP | BITS -1", "DP | BITS -2",
+    ]
+    assert ventana._estados[0].estado == LISTO
+    assert ventana._estados[1] is segunda
+
+
 def test_cancelar_saca_el_batch_de_la_cola_sin_deshacer_nada(ventana):
     """Cancelar es dejar de trabajar en él, no borrar lo hecho."""
     from app.airvault.flujo import CANCELADO, SIN_SUBIR
@@ -1745,6 +1844,43 @@ def test_autorizado_una_vez_no_se_vuelve_a_preguntar(ventana, monkeypatch):
     ventana._subir_estas([fila])
 
     assert preguntas == []
+
+
+def test_la_bitacora_lista_cada_batch_en_su_propia_linea(ventana):
+    """Todos seguidos en una linea habia que leerla entera para dar con uno."""
+    from app.airvault.flujo import LISTO, SIN_SUBIR
+
+    ventana._al_comprobar({
+        "estados": [
+            parte(LISTO, "DP | BITS -1", carpeta="job-1"),
+            parte(SIN_SUBIR, "DP | BITS -2", carpeta="job-2"),
+        ],
+        "planes": {}, "partes": [], "reporte": None,
+    })
+
+    comprobado = [
+        ventana.bitacora.item(i).text()
+        for i in range(ventana.bitacora.count())
+        if "Comprobado:" in ventana.bitacora.item(i).text()
+    ][-1]
+    lineas = comprobado.splitlines()
+    assert len(lineas) == 3
+    assert "DP | BITS -1" in lineas[1]
+    assert "DP | BITS -2" in lineas[2]
+    # Sangradas bajo el encabezado, no bajo la hora: la columna de horas
+    # se sigue leyendo de un vistazo.
+    assert lineas[1].startswith(" " * 10)
+
+
+def test_un_mensaje_de_varios_parrafos_se_apunta_por_su_primera_frase(ventana):
+    """El motivo entero esta en el resumen; en la bitacora tapaba las horas."""
+    ventana._al_fallar(
+        "No se pudo abrir la sesion. Revise el usuario y la contrasenya en "
+        "la configuracion de AirVault y vuelva a intentarlo."
+    )
+
+    ultima = ventana.bitacora.item(ventana.bitacora.count() - 1).text()
+    assert ultima.endswith("Se detuvo: No se pudo abrir la sesion.")
 
 
 def test_una_carga_que_no_salio_no_se_cuenta_como_subida(ventana):

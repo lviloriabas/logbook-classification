@@ -2,6 +2,64 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-27 - Buscar una bitacora entre los batches de la cola
+
+La lista de bitacoras de un batch ya se podia buscar, pero solo dentro de
+ese batch: para saber por donde viajo una bitacora habia que abrir uno por
+uno los batches de «Indexar en AirVault». Ahora la cola tiene su propio
+campo de busqueda (o Ctrl+F desde cualquier punto de la ventana) que
+contesta la pregunta de verdad: en que batch esta.
+
+La respuesta puede ser mas de una, y no es raro. Una ejecucion repartida en
+partes manda las bitacoras dudosas al batch REVISAR ademas de a su parte;
+una que se subio dos veces deja la misma bitacora en el batch de antes y en
+el nuevo; y la cola conserva los pendientes de ejecuciones anteriores. Por
+eso la respuesta nombra todos los batches donde aparece, con la pagina que
+ocupa en cada uno, y los deja elegidos en la tabla; los botones «‹» y «›» -o
+repetir la busqueda- pasan de uno a otro. Se busca por matricula, Log
+Page, vuelo, fecha (en cualquiera de los dos formatos) o archivo de origen;
+la coincidencia exacta manda sobre la que solo lleva el texto dentro de
+otro dato, para que buscar un numero de bitacora no traiga tambien el
+archivo que lo tenga en el nombre.
+
+## 2026-08-27 - Eliminar un batch de la cola, y la ejecucion en una sola linea
+
+La cola de «Indexar en AirVault» solo dejaba **cancelar** un batch. Cancelar
+no borra nada: el batch se queda en la cola con su ID y con sus bitacoras
+anotadas como enviadas, asi que ningun reparto posterior las vuelve a
+mandar. Para un batch que no tenia que existir —uno preparado con el maximo
+de paginas equivocado, uno que se subio a mano por otro sitio— eso dejaba sus
+paginas atrapadas: la unica salida era eliminar el registro de la ejecucion
+entera y empezarla de cero.
+
+Ahora el clic derecho ofrece tambien **Eliminar el batch…**. Manda a la
+Papelera lo que el programa guarda de el, saca su anotacion del registro de
+la entrega y **libera sus bitacoras**, de modo que el proximo reparto de la
+ejecucion se las lleva en otro batch. Una entrega repartida deja cada batch
+en su propia carpeta (`parte-02`, `revisar`) y ahi se va la carpeta entera
+con el PDF que se habia preparado; sin repartir, el batch vive en la carpeta
+de la ejecucion junto al registro que es de todos, y ahi solo se va su
+manifiesto. Lo que ya esta en AirVault no se toca: el batch remoto se queda
+donde estaba, y lo que se pierde aqui es el rastro de que fue este trabajo el
+que lo subio. No se elimina mientras la ventana esta subiendo o indexando, ni
+de carpetas que no cuelguen de la de trabajos del programa; si el batch
+estaba tomado en AirVault, se suelta antes de borrarlo. Vale para varias
+filas a la vez, como el resto del menu.
+
+La lista de ejecuciones de esa ventana era una **tabla de tres columnas** que
+ocupaba el alto de una tabla, con una frase encima diciendo «Elija la
+ejecucion que se va a subir». Ahora es el mismo **desplegable** que el del
+visor de CSV, y ese alto se lo queda la cola de batches, que es lo que se
+mira mientras trabaja. En la linea va **solo el nombre** de la ejecucion,
+que es lo que se busca al desplegarla; sus paginas y en que quedo su entrega
+salen al posarse encima, y el gris sigue diciendo cual no se puede subir
+todavia. La frase de encima se fue: el desplegable abre en
+**«Seleccionar ejecucion»** y lo dice en el sitio donde se hace. El visor de
+CSV abre con esa misma opcion en lugar del texto de relleno que solo se veia
+con la lista sin nada elegido. El clic derecho sobre el desplegable sigue
+ofreciendo eliminar el registro de AirVault o la ejecucion entera, ahora
+sobre la que este elegida.
+
 ## 2026-08-27 - Un Edge olvidado dejaba de tumbar el acceso a AirVault
 
 El programa toma la sesion de AirVault del Edge que abre el mismo, con un
