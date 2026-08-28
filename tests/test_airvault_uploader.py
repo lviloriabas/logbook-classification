@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from app.airvault.config import (
+    CAMPO_BATCH_NAME,
+    CAMPO_BATCH_USERNAME,
     CAMPO_END_DATE,
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
@@ -83,3 +85,31 @@ def test_la_subida_no_lleva_el_vuelo():
     assert CAMPO_DESCRIPCION not in CAMPOS_QUICK_UPLOAD
     salida = valores_quick_upload({CAMPO_DESCRIPCION: "CM137"})
     assert all(v["FieldId"] != str(CAMPO_DESCRIPCION) for v in salida)
+
+
+def test_el_nombre_del_batch_tambien_viaja_en_batch_username():
+    """Los dos campos de nombre salen con el mismo valor.
+
+    Quick Upload expone ``C_BatchName`` y ``C_BUName``. Las cargas que
+    dejaban el segundo vacio son las que AirVault publicaba como
+    ``Empty-Batch``, asi que ahora los dos llevan el nombre del batch.
+    """
+    enviados = valores_quick_upload({CAMPO_BATCH_NAME: "BITS 28 AUG 2026"})
+    nombres = {
+        int(v["FieldId"]): v
+        for v in enviados
+        if int(v["FieldId"]) in (CAMPO_BATCH_NAME, CAMPO_BATCH_USERNAME)
+    }
+    assert nombres[CAMPO_BATCH_NAME]["Value"] == "BITS 28 AUG 2026"
+    assert nombres[CAMPO_BATCH_USERNAME]["Value"] == "BITS 28 AUG 2026"
+    assert nombres[CAMPO_BATCH_USERNAME]["Dirty"] is True
+
+
+def test_un_batch_username_propio_no_se_pisa():
+    enviados = valores_quick_upload({
+        CAMPO_BATCH_NAME: "BITS 28 AUG 2026",
+        CAMPO_BATCH_USERNAME: "otro",
+    })
+    usuario = next(v for v in enviados
+                   if int(v["FieldId"]) == CAMPO_BATCH_USERNAME)
+    assert usuario["Value"] == "otro"
