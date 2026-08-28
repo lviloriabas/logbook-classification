@@ -140,7 +140,8 @@ class AirVaultConfig:
     espera_maxima_s: float = 900.0
     # Quick Upload puede tardar bastante en publicar el batch en Web Index.
     # Tras agotar las revisiones de nombres y contenido empieza esta espera;
-    # solo al terminar se habilita una posible resubida.
+    # al terminar se avisa de que la carga se perdio y se ofrece subirla a
+    # mano. El nombre es historico: nada se reenvia solo.
     espera_reenvio_s: float = 1800.0
     # Tiempo limite de cada peticion. El servidor cuelga la peticion de
     # apertura cuando el mismo usuario tiene el batch abierto en otra sesion,
