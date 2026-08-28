@@ -17,6 +17,12 @@ fuera, y ademas mantiene su base abierta en exclusiva mientras corre. El
 navegador si sabe descifrar las suyas, y por el protocolo las entrega ya en
 claro. Ver :mod:`app.airvault.cookies`.
 
+Chromium admite **un solo navegador por perfil**. El segundo que se lanza
+sobre el mismo ``--user-data-dir`` no abre nada: le entrega la orden al que
+ya esta corriendo y se va. Por eso el programa apunta primero al navegador
+que quedo vivo de una ejecucion anterior, en vez de lanzar otro que nunca
+llegaria a abrir su puerto de depuracion.
+
 Nada de esto instala ni descarga nada: Edge ya viene con Windows y el perfil
 es una carpeta mas dentro de ``portable/``. Si no hay Edge, o si algo falla,
 se dice y se sigue con la cookie pegada a mano.
@@ -27,6 +33,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -35,7 +42,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -209,6 +216,179 @@ def _puerto_libre() -> int:
         return int(s.getsockname()[1])
 
 
+# Donde queda anotado el puerto de depuracion del navegador que el programa
+# tiene abierto sobre ese perfil.
+#
+# Hace falta porque el puerto es otro cada vez y Chromium admite un solo
+# navegador por perfil: si una ejecucion anterior dejo a Edge vivo (se cerro
+# el programa a media faena, o el puerto no llego a contestar y nadie mato
+# al navegador), el que se lanza despues le entrega la orden y se va sin
+# abrir nada. Su puerto nuevo no contesta jamas, y sin saber por donde
+# escucha el que quedo vivo el perfil se queda tomado **para siempre**: el
+# acceso a AirVault moria en «Edge no llego a arrancar» ejecucion tras
+# ejecucion, y con el se quedaba parado todo lo que va detras. El archivo va
+# dentro del perfil porque es de ese perfil de quien habla, y viaja con el
+# si la carpeta ``portable/`` se copia a otra maquina.
+_ANOTACION_DEL_PUERTO = "bits-puerto-depuracion"
+
+
+def _anotar_puerto(perfil: Path, puerto: int) -> None:
+    """Deja escrito por donde escucha el navegador de este perfil."""
+    try:
+        (perfil / _ANOTACION_DEL_PUERTO).write_text(str(puerto), encoding="ascii")
+    except OSError as exc:  # noqa: BLE001 - anotar no puede tumbar el acceso
+        logger.debug("No se pudo anotar el puerto de depuracion: {}", exc)
+
+
+def _olvidar_puerto(perfil: Path) -> None:
+    """Borra la anotacion: ese navegador ya no esta."""
+    try:
+        (perfil / _ANOTACION_DEL_PUERTO).unlink()
+    except OSError:
+        pass
+
+
+def _puerto_anotado(perfil: Path) -> Optional[int]:
+    """El puerto que dejo anotado la ultima apertura, si hay alguno."""
+    try:
+        texto = (perfil / _ANOTACION_DEL_PUERTO).read_text(encoding="ascii")
+        return int(texto.strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _version_en(puerto: int, timeout: float = 2.0) -> Optional[dict]:
+    """Lo que contesta ``/json/version``, o ``None`` si ahi no hay navegador.
+
+    Se comprueba que traiga ``webSocketDebuggerUrl`` y no solo que algo
+    conteste: el puerto anotado puede haberlo tomado despues cualquier otro
+    programa, y hablarle por el protocolo de Chromium a quien no lo es
+    dejaria el fallo lejos de su causa.
+    """
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{puerto}/json/version", timeout=timeout
+        ) as respuesta:
+            version = json.load(respuesta)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    if isinstance(version, dict) and version.get("webSocketDebuggerUrl"):
+        return version
+    return None
+
+
+# Con que se le pregunta a Windows por los Edge abiertos. Se pide la linea
+# de ordenes porque el perfil es lo unico que distingue al navegador del
+# programa del de la persona: por el nombre son el mismo msedge.exe.
+_CONSULTA_DE_EDGES = (
+    "Get-CimInstance Win32_Process -Filter \"Name='msedge.exe'\" | "
+    "ForEach-Object { $_.ProcessId.ToString() + ' ' + $_.CommandLine }"
+)
+
+_PUERTO_EN_LA_ORDEN = re.compile(r"--remote-debugging-port=(\d+)")
+
+
+def _edges_del_perfil(perfil: Path) -> List[Tuple[int, Optional[int]]]:
+    """Los navegadores que tienen abierto ese perfil, con su puerto si lo hay.
+
+    Es el ultimo recurso para saber quien tiene tomado el perfil cuando no
+    hay anotacion que leer: uno que dejo una version anterior del programa,
+    o uno que arranco y nunca llego a anotarse. Sin esto, ese navegador no
+    se puede ni reusar ni cerrar, y el acceso se queda muerto hasta que
+    alguien lo busca a mano en el administrador de tareas.
+
+    Se saltan los procesos hijo (``--type=``): se van con su navegador, y
+    cerrarlos por separado solo dejaria el perfil a medias.
+    """
+    try:
+        salida = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive",
+             "-Command", _CONSULTA_DE_EDGES],
+            capture_output=True, text=True, timeout=30,
+        ).stdout or ""
+    except Exception as exc:  # noqa: BLE001 - preguntar no puede fallar aqui
+        logger.debug("No se pudo mirar que Edge hay abiertos: {}", exc)
+        return []
+    aguja = str(perfil).lower()
+    encontrados: List[Tuple[int, Optional[int]]] = []
+    for linea in salida.splitlines():
+        baja = linea.lower()
+        if aguja not in baja or "--type=" in baja:
+            continue
+        cabeza = linea.split(None, 1)
+        if not cabeza or not cabeza[0].isdigit():
+            continue
+        hallado = _PUERTO_EN_LA_ORDEN.search(linea)
+        encontrados.append((
+            int(cabeza[0]), int(hallado.group(1)) if hallado else None
+        ))
+    if encontrados:
+        logger.info(
+            "El perfil {} lo tienen abierto {} navegador(es): {}",
+            perfil, len(encontrados), encontrados,
+        )
+    return encontrados
+
+
+def _matar_proceso(pid: int) -> bool:
+    """Cierra ese proceso y los suyos. Windows no pregunta dos veces."""
+    try:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception as exc:  # noqa: BLE001 - se sigue igual sin poder matarlo
+        logger.debug("No se pudo cerrar el proceso {}: {}", pid, exc)
+        return False
+    logger.info("Se cerro a la fuerza el Edge que tenia tomado el perfil "
+                "(proceso {})", pid)
+    return True
+
+
+def _pid_que_escucha(puerto: int) -> Optional[int]:
+    """Quien tiene abierto ese puerto, preguntandoselo a Windows.
+
+    Hace falta cuando el navegador que quedo vivo se colgo: contesta el
+    ``/json/version`` pero no su protocolo, asi que no se le puede pedir el
+    cierre por las buenas y no hay otra forma de saber a quien cerrar. Se
+    pregunta por el puerto y no por el nombre del programa: matar «msedge»
+    a secas se llevaria por delante el navegador de la persona.
+    """
+    try:
+        salida = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"],
+            capture_output=True, text=True, timeout=20,
+        ).stdout
+    except Exception as exc:  # noqa: BLE001 - preguntar no puede fallar aqui
+        logger.debug("No se pudo preguntar quien escucha en {}: {}", puerto, exc)
+        return None
+    for linea in salida.splitlines():
+        partes = linea.split()
+        if len(partes) < 5 or partes[3].upper() != "LISTENING":
+            continue
+        if partes[1].rsplit(":", 1)[-1] != str(puerto):
+            continue
+        try:
+            return int(partes[4])
+        except ValueError:
+            return None
+    return None
+
+
+def _matar_al_del_puerto(puerto: int) -> bool:
+    """Cierra a la fuerza el navegador colgado que tiene tomado el perfil.
+
+    Es el ultimo recurso y solo se llega aqui cuando ya no contesta a
+    ``Browser.close``: mientras ese proceso siga vivo, ningun Edge nuevo
+    puede abrir el perfil, y el acceso a AirVault queda muerto ejecucion
+    tras ejecucion. Lo que se pierde por no cerrarlo por las buenas es lo
+    que Chromium guarda al salir; volver a entrar lo rehace, y quedarse sin
+    poder entrar no lo rehace nada.
+    """
+    pid = _pid_que_escucha(puerto)
+    return _matar_proceso(pid) if pid is not None else False
+
+
 class SesionDeNavegador:
     """Una ventana de Edge con perfil propio, abierta por el programa."""
 
@@ -223,10 +403,152 @@ class SesionDeNavegador:
         # Lo que contesto /json/version: hace falta para pedirle el cierre
         # por el mismo protocolo por el que se le piden las cookies.
         self._version: Optional[dict] = None
+        # Si el navegador con el que se habla lo abrio otra ejecucion. No
+        # hay proceso propio que esperar, pero si hay que cerrarlo al
+        # terminar: es lo que suelta el perfil para la vez siguiente.
+        self._adoptado = False
 
     def abrir(self, url: str, espera_s: float = 30.0) -> dict:
-        """Arranca el navegador y espera a que conteste el protocolo."""
+        """Deja un navegador abierto sobre este perfil y lo devuelve.
+
+        Antes de lanzar nada mira si el perfil ya lo tiene tomado un Edge de
+        una ejecucion anterior. Lanzar otro no serviria: Chromium admite un
+        solo navegador por perfil, asi que el segundo le pasa la orden al
+        primero y se va sin abrir su puerto, que es como el acceso se
+        quedaba muerto hasta que alguien cerraba aquella ventana a mano.
+
+        Lo mira por el puerto que dejo anotado la ultima apertura y, si el
+        lanzamiento choca igual con el perfil tomado, preguntandole a
+        Windows que Edge hay abiertos sobre este perfil.
+        """
         self.perfil.mkdir(parents=True, exist_ok=True)
+        version = self._reusar_el_que_tiene_el_perfil(url)
+        if version is not None:
+            return version
+        try:
+            return self._lanzar(url, espera_s)
+        except ErrorDeNavegador:
+            # El perfil lo tiene un Edge que no dejo anotado su puerto: uno
+            # de una version anterior del programa, o uno que arranco sin
+            # llegar a anotarse. Se busca por el perfil, se aprovecha o se
+            # cierra, y se vuelve a intentar una vez. Sin esto no habia
+            # salida: el acceso se quedaba muerto ejecucion tras ejecucion.
+            version, habia = self._soltar_el_perfil(url)
+            if version is not None:
+                return version
+            if not habia:
+                raise
+            return self._lanzar(url, espera_s)
+
+    def _soltar_el_perfil(self, url: str) -> Tuple[Optional[dict], bool]:
+        """Aprovecha o quita de en medio a los Edge que tienen este perfil.
+
+        Devuelve el navegador con el que se va a trabajar (o ``None``) y si
+        habia alguno, que es lo que distingue «se solto, vuelve a intentar»
+        de «el perfil estaba libre y el fallo era otro».
+        """
+        encontrados = _edges_del_perfil(self.perfil)
+        for pid, puerto in encontrados:
+            if puerto is not None:
+                version = self._aprovechar(puerto, url)
+                if version is not None:
+                    return version, True
+                if _version_en(puerto) is None:
+                    continue
+            # Sin puerto por donde hablarle, o sordo: no queda otra.
+            _matar_proceso(pid)
+        return None, bool(encontrados)
+
+    def _reusar_el_que_tiene_el_perfil(self, url: str) -> Optional[dict]:
+        """El navegador que ya tenia el perfil, listo para trabajar con el.
+
+        Para pedirle las cookies sirve igual de bien que uno recien lanzado:
+        son las del perfil, y visitar la pagina de entrada dispara el acceso
+        federado lo mismo. No sirve en dos casos, y en los dos hay que
+        quitarlo de en medio antes de abrir el propio: cuando hace falta una
+        ventana que la persona vea (el que quedo vivo puede ser uno sin
+        ventana) y cuando ya no contesta a su protocolo, que es como termina
+        un navegador olvidado durante horas: el ``/json/version`` sigue
+        respondiendo y todo lo demas se queda esperando.
+
+        ``None`` cuando no hay ninguno, o cuando el que habia ya se fue.
+        """
+        puerto = _puerto_anotado(self.perfil)
+        if puerto is None:
+            return None
+        version = self._aprovechar(puerto, url)
+        if version is None:
+            # O el navegador ya no esta, o se quito de en medio. En los dos
+            # casos la anotacion sobra.
+            _olvidar_puerto(self.perfil)
+        return version
+
+    def _aprovechar(self, puerto: int, url: str) -> Optional[dict]:
+        """Trabaja con el navegador de ese puerto, o lo quita de en medio."""
+        version = _version_en(puerto)
+        if version is None:
+            # La anotacion sobrevivio al navegador (un cierre a la fuerza,
+            # un apagon). No es un fallo: se abre uno nuevo.
+            return None
+        if not self.visible and self._abrir_pagina(version, url):
+            logger.info(
+                "Se reusa el Edge que ya tenia abierto el perfil {} "
+                "(puerto {})", self.perfil, puerto,
+            )
+            self.puerto = puerto
+            self._version = version
+            self._adoptado = True
+            return version
+        logger.info(
+            "Un Edge de otra ejecucion tenia tomado el perfil {}; se le pide "
+            "paso para abrir el propio", self.perfil,
+        )
+        self._quitar_de_en_medio(puerto, version)
+        return None
+
+    def _quitar_de_en_medio(self, puerto: int, version: dict) -> None:
+        """Suelta el perfil que tiene tomado otro navegador.
+
+        Primero por las buenas, que es lo que le deja guardar la sesion. Si
+        despues de pedirselo sigue contestando es que esta colgado, y ahi
+        no queda mas remedio que cerrarlo a la fuerza: mientras el viva,
+        ningun Edge nuevo abre ese perfil.
+        """
+        self._pedir_que_se_cierre(version)
+        self._esperar_a_que_se_vaya(espera_s=10.0, puerto=puerto)
+        if _version_en(puerto) is not None:
+            _matar_al_del_puerto(puerto)
+        _olvidar_puerto(self.perfil)
+
+    def _abrir_pagina(self, version: dict, url: str,
+                      timeout: float = 5.0) -> bool:
+        """Manda al navegador que ya estaba a la pagina de entrada.
+
+        Es lo mismo que hace la orden de arranque cuando el navegador se
+        lanza: esa visita es la que rehace el acceso federado y renueva la
+        sesion sin que nadie teclee nada.
+
+        Devuelve si el navegador contesto, que es ademas la prueba de que
+        se puede trabajar con el: si no atiende su protocolo tampoco va a
+        entregar las cookies, y lo que hay que hacer con el es cerrarlo, no
+        esperarlo. Por eso se le da poco tiempo: uno colgado no mejora.
+        """
+        try:
+            ws = _WebSocket(version["webSocketDebuggerUrl"], timeout=timeout)
+        except (ErrorDeNavegador, OSError, KeyError) as exc:
+            logger.debug("El Edge que estaba no acepto la conexion: {}", exc)
+            return False
+        try:
+            ws.pedir("Target.createTarget", url=url)
+            return True
+        except (ErrorDeNavegador, OSError, ValueError) as exc:
+            logger.debug("El Edge que estaba no abrio la pagina: {}", exc)
+            return False
+        finally:
+            ws.cerrar()
+
+    def _lanzar(self, url: str, espera_s: float = 30.0) -> dict:
+        """Arranca el navegador y espera a que conteste el protocolo."""
         orden = [
             str(self.edge),
             f"--remote-debugging-port={self.puerto}",
@@ -240,10 +562,19 @@ class SesionDeNavegador:
         # no arranco (perfil tomado, bandera rechazada, politica de la
         # empresa) y tirarla dejaba el fallo en «Edge se cerro», que no se
         # puede diagnosticar.
+        if self._quejas is not None:
+            # Puede haber un intento anterior: el que descubrio que el perfil
+            # estaba tomado.
+            self._quejas.close()
         self._quejas = tempfile.TemporaryFile()
         self._proceso = subprocess.Popen(
             orden, stdout=subprocess.DEVNULL, stderr=self._quejas,
         )
+        # Se anota antes de saber si contesta, no despues: si el puerto no
+        # llega a abrirse pero el navegador queda vivo, esta anotacion es lo
+        # unico que le deja a la ejecucion siguiente para dar con el en vez
+        # de tropezar otra vez con el perfil tomado.
+        _anotar_puerto(self.perfil, self.puerto)
         limite = time.monotonic() + espera_s
         # ``msedge.exe`` no *es* el navegador: entrega el encargo a un proceso
         # suelto y se va enseguida, con codigo 0 o 21 («ya avise a otro»).
@@ -271,7 +602,7 @@ class SesionDeNavegador:
                             f"Edge no llego a arrancar: el proceso termino "
                             f"(codigo {self._proceso.returncode}) y nadie "
                             f"contesto por el puerto de depuracion. "
-                            f"{self._por_que()}"
+                            f"{self._perfil_tomado()}{self._por_que()}"
                         )
                 time.sleep(0.5)
         raise ErrorDeNavegador(
@@ -280,6 +611,15 @@ class SesionDeNavegador:
             f"Casi siempre es que el perfil {self.perfil} ya esta abierto en "
             f"otra ventana: hay que cerrarla y volver a intentar. "
             f"{self._por_que()}"
+        )
+
+    def _perfil_tomado(self) -> str:
+        """Lo que casi siempre pasa cuando el lanzador se va sin abrir nada."""
+        return (
+            f"Casi siempre es que otro Edge tiene abierto el perfil "
+            f"{self.perfil}: Chromium admite un solo navegador por perfil, y "
+            f"el que se lanza despues le entrega la orden y se va. Hay que "
+            f"cerrar esa ventana y volver a intentar. "
         )
 
     def _por_que(self) -> str:
@@ -322,7 +662,7 @@ class SesionDeNavegador:
         siguiente apertura del mismo perfil se encuentra un candado que ya
         no tiene dueno.
         """
-        if self._proceso is None:
+        if self._proceso is None and not self._adoptado:
             return
         version = version or self._version
         if version:
@@ -332,23 +672,47 @@ class SesionDeNavegador:
         # contestar justo cuando termina de guardar el perfil y suelta el
         # candado. Eso es lo que hay que ver antes de volver a abrirlo.
         self._esperar_a_que_se_vaya()
-        try:
-            self._proceso.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            self._proceso.terminate()
+        if self._proceso is not None:
+            try:
+                self._proceso.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self._proceso.terminate()
+        if _version_en(self.puerto) is not None:
+            # Pedirselo no basto. Mientras ese proceso viva, ningun Edge
+            # nuevo abre el perfil: es justo lo que dejaba el acceso muerto,
+            # y encima la ventana de entrar es la siguiente en necesitarlo.
+            logger.info(
+                "Edge no se fue cuando se le pidio; se cierra a la fuerza "
+                "para dejar libre el perfil {}", self.perfil,
+            )
+            _matar_al_del_puerto(self.puerto)
+        # La anotacion vale mientras ese navegador este vivo. Borrarla con el
+        # todavia en pie dejaria a la ejecucion siguiente sin saber por donde
+        # buscarlo; dejarla despues de cerrarlo la manda a un puerto mudo.
+        if _version_en(self.puerto) is None:
+            _olvidar_puerto(self.perfil)
+        else:
+            logger.warning(
+                "No se pudo cerrar el Edge del perfil {}; queda anotado su "
+                "puerto {} para poder aprovecharlo despues",
+                self.perfil, self.puerto,
+            )
         self._proceso = None
         self._version = None
+        self._adoptado = False
         if self._quejas is not None:
             self._quejas.close()
             self._quejas = None
 
-    def _esperar_a_que_se_vaya(self, espera_s: float = 15.0) -> None:
+    def _esperar_a_que_se_vaya(self, espera_s: float = 15.0,
+                               puerto: Optional[int] = None) -> None:
         """Espera a que el puerto de depuracion deje de contestar."""
+        puerto = self.puerto if puerto is None else int(puerto)
         limite = time.monotonic() + espera_s
         while time.monotonic() < limite:
             try:
                 with urllib.request.urlopen(
-                    f"http://127.0.0.1:{self.puerto}/json/version", timeout=2
+                    f"http://127.0.0.1:{puerto}/json/version", timeout=2
                 ):
                     pass
             except (urllib.error.URLError, OSError, ValueError):
@@ -356,7 +720,7 @@ class SesionDeNavegador:
             time.sleep(0.5)
         logger.debug(
             "Edge sigue contestando en {} despues de pedirle el cierre",
-            self.puerto,
+            puerto,
         )
 
     def _pedir_que_se_cierre(self, version: dict) -> None:
