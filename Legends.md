@@ -2,6 +2,27 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-28 - Las bitacoras de REVISAR van sin la marca AUTO INDEX
+
+Al indexar, el programa escribia `Description` con la marca `AUTO INDEX`
+detras del vuelo leido, y con la marca sola cuando no habia vuelo. Lo hacia
+en todos los batches por igual, incluido el que termina en `REVISAR`.
+
+La marca esta para reconocer de un vistazo lo que escribio el programa por
+la API. En `REVISAR` no dice la verdad: ese batch se revisa y se completa a
+mano, pagina por pagina, asi que su `Description` acababa mintiendo sobre
+quien puso el dato, y encima pisaba con `AUTO INDEX` el campo de las
+paginas sin vuelo.
+
+Ahora la marca sale solo en los batches automaticos. Las paginas de
+`REVISAR` mandan el vuelo tal como lo dejo la lectura, y cuando no hay
+vuelo el campo ni se envia, para no borrar lo que alguien haya escrito
+ahi. Nada mas cambia: siguen viajando con estado **Need Correction** y con
+los mismos campos de siempre.
+
+El CSV y el reporte de revision nunca llevaron la marca, y siguen sin
+llevarla.
+
 ## 2026-08-28 - El nombre del batch tambien viaja en Batch Username
 
 La subida por Quick Upload mandaba el nombre del batch en un solo campo,
