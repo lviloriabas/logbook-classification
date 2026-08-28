@@ -2,6 +2,33 @@
 
 Registro de los cambios de comportamiento del sistema. Cada entrada indica qué hacía antes, qué hace ahora y por qué se cambió. La descripción técnica completa vive en [docs](docs/README.md).
 
+## 2026-08-28 - Las cargas a AirVault van de una en una
+
+Al subir una ejecucion repartida en varios batches, el programa mandaba
+todos los PDF seguidos y solo despues buscaba cada uno en la cola de Web
+Index. AirVault junta las subidas que llegan juntas: publicaba dos o tres
+`Empty-Batch` a la vez, y entonces la foto de la cola tomada justo antes de
+cada carga, que es lo unico que distingue una carga sin nombre de otra,
+devolvia mas de un candidato. Con mas de un candidato no se renombra
+ninguno, asi que esos batches se quedaban sin titulo y sin indexar,
+esperando a que alguien los mirara en AirVault.
+
+Ahora cada carga se cierra antes de empezar la siguiente: se manda un PDF,
+se espera a que AirVault lo publique, se identifica su ID y se le pone su
+titulo, y solo entonces sale el siguiente. La foto de la cola de cada
+subida ya incluye todos los batches anteriores, de modo que solo puede
+quedar un candidato nuevo.
+
+No cambia la barrera del indexado: no se escribe en ningun batch hasta
+haber intentado todos los archivos. Tampoco cambia el aislamiento de
+fallos: un batch que AirVault tarde en publicar se anota y no detiene la
+cola, se sube el siguiente igual.
+
+El precio es el tiempo. La espera de descubrimiento llega a 15 minutos por
+batch, y ahora retrasa las cargas siguientes en vez de correr al final de
+todas. A cambio, ningun batch se queda sin nombre por no poderse distinguir
+de otro.
+
 ## 2026-08-28 - El modo automatico deja de pararse solo
 
 Puesta a trabajar sola, la ventana de AirVault se paraba al cabo de un rato
