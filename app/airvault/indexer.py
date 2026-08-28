@@ -390,13 +390,17 @@ class Indexador:
                 continue
             try:
                 valores = dict(entrada.valores)
-                vuelo = registro.flight_number.strip()
                 # La marca identifica exclusivamente la escritura por API.
                 # Con vuelo va despues de el; sin vuelo es todo el contenido.
-                # No forma parte del CSV ni del plan/reporte local.
-                valores[CAMPO_DESCRIPCION] = (
-                    f"{vuelo} AUTO INDEX" if vuelo else "AUTO INDEX"
-                )
+                # No forma parte del CSV ni del plan/reporte local. Las
+                # bitacoras de REVISAR se terminan a mano, asi que no la
+                # llevan: su Description queda con el vuelo leido, y sin
+                # vuelo el campo ni se manda para no borrar lo escrito.
+                if not self.manifiesto.solo_subir:
+                    vuelo = registro.flight_number.strip()
+                    valores[CAMPO_DESCRIPCION] = (
+                        f"{vuelo} AUTO INDEX" if vuelo else "AUTO INDEX"
+                    )
                 # Work Location no se usa en este flujo. Se envia de forma
                 # explicita para limpiar cualquier valor que AirVault haya
                 # heredado o completado por su cuenta.

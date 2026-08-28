@@ -199,7 +199,7 @@ portable\python312\tools\python.exe run_airvault.py verificar --job varias24
 
 El reporte es el mismo artefacto en los tres modos. Conserva el vuelo leido
 tal como aparece en el CSV; la marca `AUTO INDEX` se agrega solo al enviar
-la pagina a AirVault.
+la pagina a AirVault, y solo en los batches automaticos.
 
 ## Repartir en varios batches
 
@@ -472,7 +472,7 @@ conserva, asi que un indexado no pisa lo que alguien haya puesto a mano.
 | Log Page Number | columna `log_number` del CSV                                               |
 | Audit Status    | valor del trabajo                                                          |
 | End Date        | columna `date` del CSV en `MM/DD/YYYY`; si no se leyo, se deduce del libro |
-| Description     | `<flight_number> AUTO INDEX`, o solo `AUTO INDEX` si no se leyó vuelo      |
+| Description     | `<flight_number> AUTO INDEX`, o solo `AUTO INDEX` si no se leyó vuelo; en REVISAR, el vuelo sin marca |
 | Lessor          | del cache de flota, solo si lo trae                                        |
 
 **El vuelo.** `Description` lleva el vuelo de esa bitacora, pagina por
@@ -480,7 +480,10 @@ pagina: un vuelo numerado (`703`, `CM137`) o un codigo de mantenimiento
 (`TCK`, `SPV`), seguido por la marca `AUTO INDEX`. Cuando no se pudo leer
 el vuelo, `Description` lleva solamente `AUTO INDEX`. La marca se agrega
 solo al payload que se guarda en AirVault: el CSV y el reporte de revision
-conservan el vuelo tal como lo dejo la lectura. Es un campo por pagina, no
+conservan el vuelo tal como lo dejo la lectura. El batch de REVISAR se
+termina a mano y por eso no la lleva: manda el vuelo leido tal cual, y
+cuando no hay vuelo ni siquiera manda el campo, para no borrar lo que
+alguien haya escrito. Es un campo por pagina, no
 del batch: el batch no lo lleva (Quick Upload ni siquiera expone
 `Description`).
 

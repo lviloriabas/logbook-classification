@@ -124,6 +124,32 @@ def test_sin_vuelo_se_manda_solo_la_marca_automatica():
     assert valores_remotos[CAMPO_DESCRIPCION] == "AUTO INDEX"
 
 
+def test_revisar_no_lleva_la_marca_automatica():
+    """El batch de REVISAR se termina a mano: su Description va sin marca."""
+    cliente = ClienteFalso(page_count=1)
+    m = manifiesto(1)
+    m.solo_subir = True
+    m.registros[0].flight_number = "CM137"
+    indexador = Indexador(cliente, m, PICKLIST)
+    indexador.aplicar(indexador.planificar(1))
+
+    _pagina, valores_remotos, estado = cliente.escrituras[0]
+    assert valores_remotos[CAMPO_DESCRIPCION] == "CM137"
+    assert estado == ESTADO_NECESITA_CORRECCION
+
+
+def test_revisar_sin_vuelo_no_manda_description():
+    """Sin vuelo no hay nada que poner: el campo no viaja y no borra nada."""
+    cliente = ClienteFalso(page_count=1)
+    m = manifiesto(1)
+    m.solo_subir = True
+    indexador = Indexador(cliente, m, PICKLIST)
+    indexador.aplicar(indexador.planificar(1))
+
+    _pagina, valores_remotos, _estado = cliente.escrituras[0]
+    assert CAMPO_DESCRIPCION not in valores_remotos
+
+
 def test_pagina_ya_valida_se_respeta():
     cliente = ClienteFalso(paginas={1: pagina(1, estado=ESTADO_VALIDO)},
                            page_count=1)
