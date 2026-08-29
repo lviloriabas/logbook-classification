@@ -1544,7 +1544,7 @@ class CsvViewerWindow(QMainWindow):
         self.search_next.clicked.connect(lambda: self._move_search(1))
         search_row.addWidget(self.search_next)
         self.search_context = QLabel(_SEARCH_HINT)
-        self.search_context.setStyleSheet("color: #57606a;")
+        self.search_context.setStyleSheet("color: #c9d1d9;")
         search_row.addWidget(self.search_context, 1)
         layout.addLayout(search_row)
 
@@ -1623,7 +1623,7 @@ class CsvViewerWindow(QMainWindow):
 
         status_row = QHBoxLayout()
         self.status_label = QLabel(self._summary)
-        self.status_label.setStyleSheet("color: #57606a;")
+        self.status_label.setStyleSheet("color: #c9d1d9;")
         status_row.addWidget(self.status_label, 1)
         self.btn_depurar = QPushButton("Depurar")
         self.btn_depurar.setEnabled(False)

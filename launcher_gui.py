@@ -1,13 +1,13 @@
 #! /usr/bin/env python3
-"""Launcher de doble clic de Logbook Classification.
+"""Launcher de doble clic de BITS - Clasificación de Bitácoras.
 
-Convierte a ``LogbookClassification.exe`` (via PyInstaller) un pequeño
+Convierte a ``BITSBitacoras.exe`` (via PyInstaller) un pequeño
 lanzador que arranca la GUI con el Python portable incluido en la carpeta,
 sin mostrar consola y sin instalar nada. Toda la aplicación vive dentro de
 la misma carpeta; solo hay que copiar la carpeta completa a otra máquina.
 
 Métodos de uso:
-    - Doble clic en ``LogbookClassification.exe`` → abre la GUI.
+    - Doble clic en ``BITSBitacoras.exe`` → abre la GUI.
     - ``python launcher_gui.py`` → equivalente durante el desarrollo.
 """
 
@@ -17,6 +17,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from app.branding import APPLICATION_SHORT_NAME
 
 
 def app_root() -> Path:
@@ -41,7 +43,7 @@ def _show_error(message: str) -> int:
     import ctypes
 
     ctypes.windll.user32.MessageBoxW(
-        None, str(message), "Logbook Classification", 0x10
+        None, str(message), APPLICATION_SHORT_NAME, 0x10
     )
     return 1
 

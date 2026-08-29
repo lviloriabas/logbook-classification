@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Punto de entrada de la GUI principal de Logbook Classification."""
+"""Punto de entrada de la GUI principal de BITS."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from app.utils.portable import ensure_portable_env
 ensure_portable_env()
 os.chdir(_ROOT)
 
+from app.branding import APPLICATION_DISPLAY_NAME, APPLICATION_NAME
 from app.utils.logging import setup_logging
 from app.utils.app_identity import (
     set_windows_process_taskbar_identity,
@@ -33,6 +34,7 @@ def main() -> int:
         from PySide6.QtWidgets import QApplication
         from app.gui.main_window import MainWindow
         from app.gui.text_copy import install_text_copy_support
+        from app.gui.theme import install_application_theme
     except ImportError as exc:
         print("PySide6 no está instalado. Ejecute:\n"
               "  python -m pip install --user -r requirements.txt",
@@ -46,9 +48,10 @@ def main() -> int:
     if not icon.exists():
         icon = root / "assets" / "icon.png"
     app = QApplication(sys.argv)
-    app.setApplicationName("Logbook Classification")
-    app.setApplicationDisplayName("Logbook Classification")
+    app.setApplicationName(APPLICATION_NAME)
+    app.setApplicationDisplayName(APPLICATION_DISPLAY_NAME)
     app.setOrganizationName("BITS")
+    install_application_theme(app)
     install_text_copy_support(app)
     app_icon = QIcon(str(icon))
     app.setWindowIcon(app_icon)

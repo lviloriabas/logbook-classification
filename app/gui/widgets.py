@@ -179,60 +179,245 @@ ZOOM_OVERLAY_QSS = """
 }
 """
 
-# Tipografía y controles de la aplicación. Las dos ventanas parten de esta
-# hoja: sin ella el visor de CSV heredaba el estilo nativo de Windows y sus
-# cuadros salían con las esquinas en pico y los botones de otro alto.
-APP_CHROME_QSS = """
-QMainWindow, QWidget {
-    font-family: "Segoe UI", "Noto Sans", sans-serif;
+# Tipografia y controles de la aplicacion. Los colores salen de las mismas
+# superficies oscuras de las tablas y visores para que todas las ventanas se
+# lean como una sola aplicacion. El marco del sistema lo completa theme.py.
+APP_CHROME_QSS = f"""
+QMainWindow, QDialog {{
+    background-color: {PANE_SURFACE_BG};
+}}
+QWidget {{
+    color: {PANE_TEXT};
+    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
     font-size: 10pt;
-}
-QPushButton {
+}}
+QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {{
+    color: #8c959f;
+}}
+QPushButton, QToolButton {{
     min-height: 26px;
     padding: 4px 12px;
-}
-#primaryButton {
-    background-color: rgb(49, 49, 49);
-    color: #ffffff;
-}
-#primaryButton:hover {
-    background-color: rgb(64, 64, 64);
-}
-#primaryButton:pressed {
-    background-color: rgb(38, 38, 38);
-}
-QPushButton:disabled { color: #8c959f; }
-QToolButton { padding: 2px 6px; }
-QToolButton#spinStepButton {
+    color: {PANE_TEXT};
+    background-color: {PANE_CONTROL_BG};
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
+}}
+QPushButton:hover, QToolButton:hover {{
+    background-color: {PANE_CONTROL_HOVER};
+}}
+QPushButton:pressed, QToolButton:pressed,
+QPushButton:checked, QToolButton:checked {{
+    background-color: {PANE_SURFACE_BG};
+}}
+QPushButton:focus, QToolButton:focus {{
+    border-color: {TABLE_SELECTION_BG};
+}}
+QPushButton:default {{
+    border-bottom: 2px solid {TABLE_SELECTION_BG};
+}}
+QPushButton:disabled, QToolButton:disabled {{
+    color: #8c959f;
+    background-color: {TABLE_HEADER_BG};
+    border-color: {PANE_BG};
+}}
+#primaryButton {{
+    background-color: {TABLE_BASE_BG};
+    color: {PANE_TEXT};
+}}
+#primaryButton:hover {{
+    background-color: {PANE_CONTROL_HOVER};
+}}
+#primaryButton:pressed {{
+    background-color: {TABLE_HEADER_BG};
+}}
+QToolButton {{ padding: 2px 6px; }}
+QToolButton#spinStepButton {{
     min-width: 18px; max-width: 18px; min-height: 0;
     padding: 0;
-    border: 1px solid #c9d1d9;
-    border-radius: 3px;
-    background-color: transparent;
-}
-QToolButton#spinStepButton:hover,
-QToolButton#spinStepButton:pressed {
-    background-color: transparent;
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
+    background-color: {PANE_CONTROL_BG};
+}}
+QToolButton#spinStepButton:hover {{
+    background-color: {PANE_CONTROL_HOVER};
     border-color: #8c959f;
-}
-QToolButton#spinStepButton:disabled {
-    background-color: transparent;
+}}
+QToolButton#spinStepButton:pressed {{
+    background-color: {PANE_SURFACE_BG};
+    border-color: #8c959f;
+}}
+QToolButton#spinStepButton:disabled {{
+    background-color: {TABLE_HEADER_BG};
     color: #8c959f;
-}
-QGroupBox {
+}}
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
+QDateEdit, QTimeEdit, QDateTimeEdit {{
+    padding: 3px 7px;
+    color: {PANE_TEXT};
+    background-color: {PANE_CONTROL_BG};
+    border: 1px solid {PANE_BORDER};
+    border-bottom: 2px solid #8c959f;
+    border-radius: {TABLE_RADIUS}px;
+    selection-background-color: {TABLE_SELECTION_BG};
+    selection-color: {PANE_TEXT};
+}}
+QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover,
+QDateEdit:hover, QTimeEdit:hover, QDateTimeEdit:hover {{
+    background-color: {PANE_CONTROL_HOVER};
+}}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus,
+QDateEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus {{
+    border-bottom-color: {TABLE_SELECTION_BG};
+}}
+QLineEdit:read-only {{
+    background-color: {PANE_BG};
+}}
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled,
+QComboBox:disabled, QDateEdit:disabled, QTimeEdit:disabled,
+QDateTimeEdit:disabled {{
+    color: #8c959f;
+    background-color: {TABLE_HEADER_BG};
+    border-color: {PANE_BG};
+}}
+QComboBox::drop-down {{
+    width: 24px;
+    border: 0;
+    background: transparent;
+}}
+QComboBox QAbstractItemView {{
+    color: {PANE_TEXT};
+    background-color: {PANE_BG};
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
+    selection-background-color: {TABLE_SELECTION_BG};
+    outline: 0;
+}}
+QGroupBox {{
+    color: {PANE_TEXT};
+    background-color: {TABLE_BASE_BG};
     font-weight: 600;
-    border: 1px solid #c9d1d9; border-radius: 6px;
-    margin-top: 8px; padding: 8px 8px 6px 8px;
-}
-QGroupBox::title {
-    subcontrol-origin: margin; left: 8px; padding: 0 4px;
-}
-QProgressBar {
-    border: 1px solid #c9d1d9; border-radius: 5px;
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
+    margin-top: 8px;
+    padding: 8px 8px 6px 8px;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    left: 8px;
+    padding: 0 4px;
+    color: {PANE_TEXT};
+    background-color: {TABLE_BASE_BG};
+}}
+QCheckBox, QRadioButton {{ spacing: 6px; }}
+QCheckBox::indicator, QRadioButton::indicator {{
+    width: 16px;
+    height: 16px;
+}}
+QProgressBar {{
+    color: {PANE_TEXT};
+    background-color: {TABLE_HEADER_BG};
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
     text-align: center;
-}
-QProgressBar::chunk { background-color: #2f81f7; border-radius: 4px; }
-QSpinBox, QComboBox, QLineEdit { padding: 3px; }
+}}
+QProgressBar::chunk {{
+    background-color: {TABLE_SELECTION_BG};
+    border-radius: 5px;
+}}
+QPlainTextEdit, QTextEdit, QListView, QListWidget, QTreeView, QTreeWidget {{
+    color: {PANE_TEXT};
+    background-color: {PANE_BG};
+    alternate-background-color: {TABLE_ALTERNATE_BG};
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
+    selection-background-color: {TABLE_SELECTION_BG};
+    selection-color: {PANE_TEXT};
+    outline: 0;
+}}
+QToolBar {{
+    color: {PANE_TEXT};
+    background-color: {PANE_SURFACE_BG};
+    border: 0;
+    border-bottom: 1px solid {PANE_BORDER};
+    spacing: 4px;
+    padding: 4px;
+}}
+QToolBar::separator {{
+    width: 1px;
+    margin: 5px 4px;
+    background-color: {PANE_BORDER};
+}}
+QMenu {{
+    color: {PANE_TEXT};
+    background-color: {PANE_BG};
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
+    padding: 4px;
+}}
+QMenu::item {{
+    border-radius: {TABLE_RADIUS}px;
+    padding: 6px 24px 6px 10px;
+}}
+QMenu::item:selected {{ background-color: {PANE_CONTROL_HOVER}; }}
+QMenu::item:disabled {{ color: #8c959f; }}
+QMenu::separator {{
+    height: 1px;
+    margin: 4px 8px;
+    background-color: {PANE_BORDER};
+}}
+QTabWidget::pane {{
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
+    background-color: {TABLE_BASE_BG};
+}}
+QTabBar::tab {{
+    color: {PANE_TEXT};
+    background-color: transparent;
+    border: 0;
+    border-radius: {TABLE_RADIUS}px;
+    padding: 6px 12px;
+}}
+QTabBar::tab:hover {{ background-color: {PANE_CONTROL_HOVER}; }}
+QTabBar::tab:selected {{
+    background-color: {PANE_CONTROL_BG};
+    border-bottom: 2px solid {TABLE_SELECTION_BG};
+}}
+QSplitter::handle {{ background-color: {PANE_SURFACE_BG}; }}
+QSplitter::handle:hover {{ background-color: {PANE_BORDER}; }}
+QScrollBar:vertical, QScrollBar:horizontal {{
+    background: {TABLE_HEADER_BG};
+    border: 0;
+    margin: 0;
+}}
+QScrollBar:vertical {{ width: 12px; }}
+QScrollBar:horizontal {{ height: 12px; }}
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{
+    background: {PANE_BORDER};
+    border-radius: 6px;
+    margin: 2px;
+}}
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover {{ background: #5f5f5f; }}
+QScrollBar::handle:vertical {{ min-height: 24px; }}
+QScrollBar::handle:horizontal {{ min-width: 24px; }}
+QScrollBar::add-line, QScrollBar::sub-line {{
+    width: 0;
+    height: 0;
+    border: 0;
+    background: none;
+}}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
+QToolTip {{
+    color: {PANE_TEXT};
+    background-color: {PANE_CONTROL_BG};
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
+    padding: 4px 7px;
+}}
+QStatusBar {{
+    color: {PANE_TEXT};
+    background-color: {PANE_SURFACE_BG};
+}}
 """ + ZOOM_OVERLAY_QSS
 
 

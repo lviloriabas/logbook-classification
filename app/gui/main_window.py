@@ -1,4 +1,4 @@
-"""Ventana principal de Logbook Classification.
+"""Ventana principal de BITS.
 
 Permite seleccionar los archivos (PDFs), la plantilla, configurar el
 procesamiento (motor OCR, páginas, corrección de inclinación, alineación…)
@@ -68,6 +68,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.branding import APPLICATION_DISPLAY_NAME
 from app.core.config import AppConfig
 from app.core.page_range import FileSlice, PageRange, slice_batch, total_pages
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
@@ -213,15 +214,15 @@ def _visible_preview_fields(
 
 _QSS = APP_CHROME_QSS + """
 QWidget#previewContext, QLabel#previewContext {
-    color: #57606a;
+    color: #c9d1d9;
     font-weight: 600;
     padding: 4px 2px;
 }
 #timeBar {
-    background-color: #e1e7ee;
-    font-size: 9pt; font-weight: 600; color: #24292f;
+    background-color: #3d3d3d;
+    font-size: 9pt; font-weight: 600; color: #ffffff;
 }
-#filePages { color: #57606a; }
+#filePages { color: #c9d1d9; }
 #timeSummary {
     background-color: rgb(49, 49, 49);
     border: 1px solid rgb(49, 49, 49);
@@ -388,7 +389,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Logbook Classification")
+        self.setWindowTitle(APPLICATION_DISPLAY_NAME)
         # La ventana se abre con lo que dé la pantalla, no con una medida
         # fija: en un portátil de 1366x768 el alto que pedía no existe y la
         # franja de abajo se quedaba fuera del escritorio. La densidad que
@@ -1009,7 +1010,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.btn_csv_viewer, 1, 4)
 
         self.estimate_label = ElidedLabel("")
-        self.estimate_label.setStyleSheet("color: #667085;")
+        self.estimate_label.setStyleSheet("color: #c9d1d9;")
         self.estimate_label.setToolTip(
             "Estimación del tiempo total para procesar la entrada actual"
         )
@@ -1059,7 +1060,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.page_to_control)
 
         self.page_range_label = ElidedLabel("")
-        self.page_range_label.setStyleSheet("color: #667085;")
+        self.page_range_label.setStyleSheet("color: #c9d1d9;")
         self.page_range_label.setToolTip(range_tip)
         row.addWidget(self.page_range_label)
 
@@ -1479,7 +1480,7 @@ class MainWindow(QMainWindow):
             self._density.preview_min_width, self._density.preview_min_height
         )
         self.preview_label.setStyleSheet(
-            f"border: 1px solid #bbb; border-radius: {TABLE_RADIUS}px;"
+            f"border: 1px solid #4a4a4a; border-radius: {TABLE_RADIUS}px;"
             " background: transparent;"
         )
         self.preview_label.setAccessibleName("Vista previa de la página")
@@ -1645,7 +1646,7 @@ class MainWindow(QMainWindow):
         self.duplicates_label.setToolTip(
             "No hay log_number repetidos en el batch procesado."
         )
-        self.duplicates_label.setStyleSheet("color: #57606a;")
+        self.duplicates_label.setStyleSheet("color: #c9d1d9;")
         table_controls.addWidget(self.duplicates_label)
         table_controls.addStretch()
         self.csv_columns_toggle = CsvColumnModeButton()
@@ -4038,7 +4039,7 @@ class MainWindow(QMainWindow):
         count = len(repeated)
         self.duplicates_label.setText(f"Duplicados: {count}")
         if not count:
-            self.duplicates_label.setStyleSheet("color: #57606a;")
+            self.duplicates_label.setStyleSheet("color: #c9d1d9;")
             self.duplicates_label.setToolTip(
                 "No hay log_number repetidos en el batch procesado."
             )
@@ -4253,7 +4254,7 @@ class MainWindow(QMainWindow):
         # la entera en el tooltip; un QLabel a secas la cortaba a media
         # palabra contra el borde de la ventana, en cualquier tamaño.
         self.search_context = ElidedLabel(_PISTA_BUSQUEDA)
-        self.search_context.setStyleSheet("color: #57606a;")
+        self.search_context.setStyleSheet("color: #c9d1d9;")
         self.search_context.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
