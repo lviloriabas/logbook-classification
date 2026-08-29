@@ -60,7 +60,7 @@ from app.gui.widgets import (
 from app.utils.important_fields import default_important_columns
 
 # El mismo gris con el que las dos ventanas escriben sus líneas de ayuda.
-COLOR_AYUDA = "#57606a"
+COLOR_AYUDA = "#c9d1d9"
 COLOR_HECHO = PANE_STATUS_COLORS["OK"]
 
 # Reparto del ancho entre la página y la tabla, el mismo del visor de CSV.

@@ -9,6 +9,7 @@ from app.utils.app_identity import (
     ICON_SMALL,
     WM_SETICON,
     set_windows_process_taskbar_identity,
+    set_windows_native_window_style,
     set_windows_taskbar_icon,
 )
 
@@ -26,7 +27,7 @@ def test_each_windows_process_gets_its_own_taskbar_group():
 
         app_id = set_windows_process_taskbar_identity()
 
-    assert app_id == "BITS.LogbookClassification.Instance.4321"
+    assert app_id == "BITS.ClasificacionBitacoras.Instance.4321"
     windll.shell32.SetCurrentProcessExplicitAppUserModelID.assert_called_once_with(
         app_id
     )
@@ -44,6 +45,26 @@ def test_process_taskbar_identity_reports_native_failure():
         windll.shell32.SetCurrentProcessExplicitAppUserModelID.return_value = -1
 
         assert set_windows_process_taskbar_identity() is None
+
+
+def test_native_window_style_uses_supported_dwm_attributes():
+    with patch("sys.platform", "win32"), patch(
+        "ctypes.windll", create=True
+    ) as windll:
+        windll.dwmapi.DwmSetWindowAttribute.return_value = 0
+
+        assert set_windows_native_window_style(_Window()) is True
+
+    attributes = [
+        call_args.args[1]
+        for call_args in windll.dwmapi.DwmSetWindowAttribute.call_args_list
+    ]
+    assert attributes == [20, 33, 38]
+
+
+def test_native_window_style_is_a_safe_noop_outside_windows():
+    with patch("sys.platform", "linux"):
+        assert set_windows_native_window_style(_Window()) is False
 
 
 def test_installs_big_and_small_icons_on_the_native_window(tmp_path):

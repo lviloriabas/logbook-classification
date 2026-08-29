@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interfaz de línea de comandos de Logbook Classification.
+"""Interfaz de línea de comandos de BITS - Clasificación de Bitácoras.
 
 Por defecto procesa TODOS los PDFs de la carpeta ``input/`` y genera un
 único CSV consolidado en ``output/`` con nombre en mayúsculas en el formato

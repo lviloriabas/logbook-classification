@@ -156,7 +156,7 @@ class DepurarPaginasDialog(QDialog):
         layout.addWidget(self.arbol_blancas, 1)
 
         self.total_label = QLabel()
-        self.total_label.setStyleSheet("color: #57606a;")
+        self.total_label.setStyleSheet("color: #c9d1d9;")
         self.total_label.setWordWrap(True)
         layout.addWidget(self.total_label)
 

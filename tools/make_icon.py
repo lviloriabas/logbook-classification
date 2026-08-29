@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Genera los iconos de Logbook Classification.
+"""Genera los iconos de BITS - Clasificación de Bitácoras.
 
 Crea ``assets/icon.png`` (512) y ``assets/icon.ico`` (multi-tamaño) a
 partir del diseño de ``assets/icon.svg``. Requiere Pillow, que ya está

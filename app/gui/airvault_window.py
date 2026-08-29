@@ -101,7 +101,7 @@ from app.gui.widgets import (
 from app.utils.io import send_to_trash
 
 # Gris con el que la ventana principal escribe las líneas de ayuda.
-COLOR_AYUDA = "#57606a"
+COLOR_AYUDA = "#c9d1d9"
 COLOR_INDEXADO = PANE_STATUS_COLORS["OK"]
 
 # Lo que se lee debajo de la tabla de batches mientras no se ha buscado

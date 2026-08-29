@@ -1,4 +1,4 @@
-"""Editor visual de plantillas para Logbook Classification.
+"""Editor visual de plantillas para BITS.
 
 Los campos que se muestran son los definidos en la plantilla usada por el
 pipeline (template/aircraft_log.json). No se pueden renombrar
@@ -55,8 +55,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.branding import APPLICATION_DISPLAY_NAME
 from app.gui.responsive import fit_to_screen
-from app.gui.widgets import hide_overlay_when_tight, load_zoom_icon
+from app.gui.widgets import ZOOM_OVERLAY_QSS, hide_overlay_when_tight, load_zoom_icon
 from app.templates.manager import TEMPLATES_DIR, TemplateManager
 from app.templates.schema import FieldTemplate, FieldType, Template
 
@@ -305,7 +306,9 @@ class EditorWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Logbook Classification - Editor de Plantillas")
+        self.setWindowTitle(
+            f"{APPLICATION_DISPLAY_NAME} - Editor de plantillas"
+        )
         # El tamaño lo pone la pantalla: 1200x800 no entra en un portátil de
         # 1366x768 y la fila de botones de abajo se quedaba fuera.
         self._density = fit_to_screen(self, 1200, 800)
@@ -421,39 +424,7 @@ class EditorWindow(QMainWindow):
         view_layout.setContentsMargins(0, 0, 0, 0)
         view_layout.addWidget(self.view, 0, 0)
 
-        self.setStyleSheet(
-            "#zoomOverlay {"
-            "  background-color: rgb(49, 49, 49);"
-            "  border: 1px solid rgb(49, 49, 49);"
-            "  border-radius: 8px;"
-            "}"
-            "#zoomOverlay QLabel {"
-            "  border: 0; background: transparent; color: #ffffff;"
-            "  font-size: 10px; font-weight: 600;"
-            "}"
-            "#zoomOverlay QToolButton#zoomControl {"
-            "  min-width: 28px; max-width: 28px;"
-            "  min-height: 28px; max-height: 28px;"
-            "  padding: 0; border: 1px solid transparent;"
-            "  border-radius: 6px; background-color: rgb(49, 49, 49);"
-            "}"
-            "#zoomOverlay QToolButton#zoomControl:hover {"
-            "  background-color: rgb(64, 64, 64);"
-            "  border-color: rgb(102, 102, 102);"
-            "}"
-            "#zoomOverlay QToolButton#zoomControl:pressed {"
-            "  background-color: rgb(38, 38, 38);"
-            "  border-color: rgb(102, 102, 102);"
-            "}"
-            "#zoomOverlay QToolButton#zoomControl:disabled {"
-            "  background-color: rgb(49, 49, 49);"
-            "}"
-            "#zoomOverlay QLabel#zoomCaption,"
-            "#zoomOverlay QLabel#zoomValue {"
-            "  min-width: 28px; max-width: 28px; padding: 0;"
-            "  color: #ffffff; font-size: 10px; font-weight: 600;"
-            "}"
-        )
+        self.setStyleSheet(ZOOM_OVERLAY_QSS)
 
         zoom_overlay = QFrame(view_container)
         zoom_overlay.setObjectName("zoomOverlay")
@@ -535,7 +506,7 @@ class EditorWindow(QMainWindow):
             "Los nombres y reglas son fijos (los usa el código)."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666; padding: 4px;")
+        hint.setStyleSheet("color: #c9d1d9; padding: 4px;")
         layout.addWidget(hint)
 
         layout.addWidget(QLabel("Campos (fijos):"))
