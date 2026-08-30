@@ -72,7 +72,8 @@ class FleetEditorDialog(QDialog):
 
         add_row = QHBoxLayout()
         self.entry = QLineEdit()
-        self.entry.setPlaceholderText("Ejemplo: HP-1234CMP")
+        self.entry.setPlaceholderText("Agregar o buscar: HP-1234CMP")
+        self.entry.textChanged.connect(self._filter_values)
         self.entry.returnPressed.connect(self._add_value)
         add_row.addWidget(self.entry, 1)
         add = QPushButton("Agregar")
@@ -99,6 +100,21 @@ class FleetEditorDialog(QDialog):
     def _load_values(self) -> None:
         self.values.clear()
         self.values.addItems(self.store.load())
+
+    def _filter_values(self, text: str) -> None:
+        query = self._search_key(text)
+        self.values.clearSelection()
+        for index in range(self.values.count()):
+            item = self.values.item(index)
+            item.setHidden(query not in self._search_key(item.text()))
+
+    @staticmethod
+    def _search_key(value: str) -> str:
+        return "".join(
+            character
+            for character in value.upper()
+            if not character.isspace() and character != "-"
+        )
 
     def _add_value(self) -> None:
         value = normalise_matricula(self.entry.text())
