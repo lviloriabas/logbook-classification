@@ -107,6 +107,8 @@ from app.gui.widgets import (
     ElidedLabel,
     ZoomableScrollArea,
     ZoomOverlay,
+    configure_combo_box,
+    configure_menu_button,
     hide_overlay_when_tight,
     load_icon,
     style_data_table,
@@ -960,17 +962,12 @@ class MainWindow(QMainWindow):
         self.btn_clear_output.triggered.connect(self._clear_output_folder)
         self.input_actions_button = QToolButton()
         self.input_actions_button.setText("Carpetas")
-        self.input_actions_button.setMenu(input_menu)
-        self.input_actions_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.input_actions_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.input_actions_button, input_menu)
         grid.addWidget(self.input_actions_button, 0, 3)
 
         grid.addWidget(QLabel("Plantilla:"), 1, 0)
         self.template_combo = QComboBox()
+        configure_combo_box(self.template_combo, 18)
         self.template_combo.setMinimumWidth(
             _COMPACT_TEMPLATE_MIN_WIDTH
             if self._density.compact
@@ -1000,13 +997,7 @@ class MainWindow(QMainWindow):
         self.btn_csv_viewer.triggered.connect(self._open_csv_viewer)
         self.template_actions_button = QToolButton()
         self.template_actions_button.setText("Herramientas")
-        self.template_actions_button.setMenu(template_menu)
-        self.template_actions_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.template_actions_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.template_actions_button, template_menu)
         grid.addWidget(self.template_actions_button, 1, 3)
 
         self.estimate_label = ElidedLabel("")
@@ -1065,13 +1056,7 @@ class MainWindow(QMainWindow):
         important_fields_action.triggered.connect(self._open_important_fields)
         self.view_button = QToolButton()
         self.view_button.setText("Vista")
-        self.view_button.setMenu(view_menu)
-        self.view_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.view_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.view_button, view_menu)
         self.view_button.setToolTip(
             "Elegir qué campos se muestran en la vista previa."
         )
@@ -1250,13 +1235,7 @@ class MainWindow(QMainWindow):
 
         self.more_actions_button = QToolButton()
         self.more_actions_button.setText("Más")
-        self.more_actions_button.setMenu(actions_menu)
-        self.more_actions_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.more_actions_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.more_actions_button, actions_menu)
         self.more_actions_button.setToolTip(
             "Preprocesar, exportar o depurar la ejecución."
         )
@@ -1275,12 +1254,8 @@ class MainWindow(QMainWindow):
         self.menu_automatizacion = MenuAutomatizacion(
             self._automatizacion, self
         )
-        self.btn_automatico.setMenu(self.menu_automatizacion)
-        self.btn_automatico.setPopupMode(
-            QToolButton.ToolButtonPopupMode.MenuButtonPopup
-        )
-        self.btn_automatico.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        configure_menu_button(
+            self.btn_automatico, self.menu_automatizacion, split=True
         )
         self.btn_automatico.clicked.connect(self._start_automatico)
         row.addWidget(self.btn_automatico)

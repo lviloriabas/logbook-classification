@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QAbstractItemView,
     QApplication,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -214,6 +215,31 @@ QToolButton#primaryButton {{
     min-height: 26px;
     padding: 4px 12px;
 }}
+QToolButton[menuRole="dropdown"] {{
+    min-height: 26px;
+    padding: 3px 28px 3px 10px;
+}}
+QToolButton[menuRole="dropdown"]::menu-indicator {{
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+    width: 22px;
+}}
+QToolButton[menuRole="split"] {{
+    min-height: 26px;
+    padding: 4px 38px 4px 12px;
+}}
+QToolButton[menuRole="split"]::menu-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 28px;
+    border: 0;
+    border-left: 1px solid {PANE_BORDER};
+    border-top-right-radius: {TABLE_RADIUS}px;
+    border-bottom-right-radius: {TABLE_RADIUS}px;
+}}
+QToolButton[menuRole="split"]::menu-button:hover {{
+    background-color: {PANE_CONTROL_HOVER};
+}}
 QPushButton:hover, QToolButton:hover {{
     background-color: {PANE_CONTROL_HOVER};
 }}
@@ -291,17 +317,33 @@ QDateTimeEdit:disabled {{
     border-color: {PANE_BG};
 }}
 QComboBox::drop-down {{
-    width: 24px;
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 28px;
     border: 0;
+    border-left: 1px solid transparent;
     background: transparent;
+}}
+QComboBox {{
+    padding: 3px 30px 3px 8px;
+}}
+QComboBox:hover::drop-down, QComboBox:on::drop-down {{
+    background-color: {PANE_CONTROL_HOVER};
+    border-left-color: {PANE_BORDER};
 }}
 QComboBox QAbstractItemView {{
     color: {PANE_TEXT};
     background-color: {PANE_BG};
     border: 1px solid {PANE_BORDER};
     border-radius: {TABLE_RADIUS}px;
+    padding: 4px;
     selection-background-color: {TABLE_SELECTION_BG};
     outline: 0;
+}}
+QComboBox QAbstractItemView::item {{
+    min-height: 26px;
+    padding: 3px 8px;
+    border-radius: 4px;
 }}
 QGroupBox {{
     color: {PANE_TEXT};
@@ -363,10 +405,15 @@ QMenu {{
 }}
 QMenu::item {{
     border-radius: {TABLE_RADIUS}px;
-    padding: 6px 24px 6px 10px;
+    min-height: 22px;
+    padding: 5px 28px 5px 30px;
 }}
 QMenu::item:selected {{ background-color: {PANE_CONTROL_HOVER}; }}
 QMenu::item:disabled {{ color: #8c959f; }}
+QMenu::indicator {{
+    width: 16px;
+    height: 16px;
+}}
 QMenu::separator {{
     height: 1px;
     margin: 4px 8px;
@@ -814,32 +861,34 @@ def align_vertical_scrollbar_to_header(table: QAbstractItemView) -> None:
     filtro._aplicar(cabecera.height())
 
 
-def fit_combo_to_items(combo, extra: int = 0) -> None:
-    """Da al desplegable el ancho de su opción más larga.
-
-    El ``sizeHint`` de un ``QComboBox`` mide el texto con la tipografía del
-    widget, pero no cuenta el relleno que le añade la hoja de estilo (los
-    ``padding`` de ``APP_CHROME_QSS``), así que el desplegable se quedaba
-    unos píxeles corto y la última opción aparecía cortada: «Día específico
-    (si falta, fin de mes» sin el paréntesis de cierre. Aquí se mide el
-    texto a mano y se le suman la flecha, los bordes y ese relleno.
-    """
-    metricas = combo.fontMetrics()
-    texto = max(
-        (metricas.horizontalAdvance(combo.itemText(i))
-         for i in range(combo.count())),
-        default=0,
+def configure_combo_box(combo: QComboBox, minimum_contents: int = 16) -> None:
+    """Aplica el comportamiento compacto de un desplegable de Windows."""
+    combo.setSizeAdjustPolicy(
+        QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
     )
-    flecha = combo.style().pixelMetric(
-        QStyle.PixelMetric.PM_ScrollBarExtent, None, combo
+    combo.setMinimumContentsLength(minimum_contents)
+    combo.setMaxVisibleItems(12)
+    view = combo.view()
+    view.setTextElideMode(Qt.TextElideMode.ElideRight)
+    view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    view.setUniformItemSizes(True)
+
+
+def configure_menu_button(
+    button: QToolButton,
+    menu,
+    *,
+    split: bool = False,
+) -> None:
+    """Configura un botón de menú o un botón dividido al estilo de Windows."""
+    button.setMenu(menu)
+    button.setPopupMode(
+        QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        if split
+        else QToolButton.ToolButtonPopupMode.InstantPopup
     )
-    combo.setMinimumWidth(texto + flecha + _COMBO_PADDING + extra)
-
-
-# Bordes y relleno alrededor del texto de un desplegable: lo que la hoja de
-# estilo pone a cada lado más el aire que deja el estilo nativo.
-_COMBO_PADDING = 18
-
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    button.setProperty("menuRole", "split" if split else "dropdown")
 
 def style_dark_pane(pane: QWidget) -> None:
     """Deja un panel completo en el gris oscuro, con sus controles.
