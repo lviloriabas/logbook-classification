@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.airvault.config import AirVaultConfig
+from app.core.parallelism import available_cpu_threads
 from app.gui.automatizacion import OpcionesAutomatizacion
 from app.gui.airvault_window import (
     ANCHO_MAXIMO_NOMBRE_BATCH,
@@ -1255,16 +1256,20 @@ def test_cancelado_se_cuenta_y_no_deja_la_barra_girando(ventana):
 
 # ── integración con la ventana principal ───────────────────────────
 
-def test_el_boton_va_en_la_fila_de_opciones_avanzadas(app):
-    """Donde estaba la flecha del panel, que ya no existe."""
+def test_las_acciones_quedan_juntas_sin_panel_avanzado(app):
     from app.gui.main_window import MainWindow
 
     principal = MainWindow()
     try:
-        fila = principal._desplegables_row
+        fila = principal._actions_row
         widgets = [fila.itemAt(i).widget() for i in range(fila.count())]
-        assert principal.advanced_btn in widgets
         assert principal.btn_airvault in widgets
+        assert principal.btn_automatizacion in widgets
+        assert not hasattr(principal, "advanced_btn")
+        assert principal._reference_page == 1
+        assert principal._effective_threads() == max(
+            1, available_cpu_threads() - 1
+        )
         assert principal._airvault_window is None
     finally:
         principal.close()

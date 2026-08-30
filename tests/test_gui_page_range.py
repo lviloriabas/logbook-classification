@@ -60,8 +60,6 @@ def test_page_range_fields_do_not_mix_arrows_with_the_number(tmp_path):
         for spin, control in (
             (window.page_from_spin, window.page_from_control),
             (window.page_to_spin, window.page_to_control),
-            (window.threads_spin, window.threads_control),
-            (window.ref_spin, window.ref_control),
         ):
             assert isinstance(control, SpinBoxWithButtons)
             assert control.spin is spin
