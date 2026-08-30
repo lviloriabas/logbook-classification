@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 _ASSETS = Path(__file__).resolve().parents[2] / "assets"
+_DROPDOWN_ARROW = (_ASSETS / "dropdown_arrow.svg").as_posix()
 
 # Grises oscuros de las tablas de datos: el mismo rgb(49, 49, 49) del botón
 # principal y del panel de tiempos, para que la tabla pertenezca a la
@@ -197,8 +198,8 @@ QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {{
     color: #8c959f;
 }}
 QPushButton {{
-    min-height: 26px;
-    padding: 4px 12px;
+    min-height: 20px;
+    padding: 3px 10px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
     border: 1px solid {PANE_BORDER};
@@ -212,21 +213,22 @@ QToolButton {{
     border-radius: {TABLE_RADIUS}px;
 }}
 QToolButton#primaryButton {{
-    min-height: 26px;
-    padding: 4px 12px;
+    min-height: 20px;
+    padding: 3px 10px;
 }}
 QToolButton[menuRole="dropdown"] {{
-    min-height: 26px;
-    padding: 3px 28px 3px 10px;
+    min-height: 20px;
+    padding: 2px 28px 2px 10px;
 }}
 QToolButton[menuRole="dropdown"]::menu-indicator {{
     subcontrol-origin: padding;
     subcontrol-position: right center;
     width: 22px;
+    image: url("{_DROPDOWN_ARROW}");
 }}
 QToolButton[menuRole="split"] {{
-    min-height: 26px;
-    padding: 4px 38px 4px 12px;
+    min-height: 20px;
+    padding: 2px 38px 2px 10px;
 }}
 QToolButton[menuRole="split"]::menu-button {{
     subcontrol-origin: border;
@@ -239,6 +241,9 @@ QToolButton[menuRole="split"]::menu-button {{
 }}
 QToolButton[menuRole="split"]::menu-button:hover {{
     background-color: {PANE_CONTROL_HOVER};
+}}
+QToolButton[menuRole="split"]::menu-arrow {{
+    image: url("{_DROPDOWN_ARROW}");
 }}
 QPushButton:hover, QToolButton:hover {{
     background-color: {PANE_CONTROL_HOVER};
@@ -289,6 +294,7 @@ QToolButton#spinStepButton:disabled {{
 }}
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
 QDateEdit, QTimeEdit, QDateTimeEdit {{
+    min-height: 20px;
     padding: 3px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
@@ -324,8 +330,17 @@ QComboBox::drop-down {{
     border-left: 1px solid transparent;
     background: transparent;
 }}
+QSpinBox, QDoubleSpinBox {{
+    padding-top: 2px;
+    padding-bottom: 2px;
+}}
 QComboBox {{
     padding: 3px 30px 3px 8px;
+}}
+QComboBox::down-arrow {{
+    width: 10px;
+    height: 6px;
+    image: url("{_DROPDOWN_ARROW}");
 }}
 QComboBox:hover::drop-down, QComboBox:on::drop-down {{
     background-color: {PANE_CONTROL_HOVER};
@@ -359,7 +374,7 @@ QGroupBox::title {{
     left: 8px;
     padding: 0 4px;
     color: {PANE_TEXT};
-    background-color: {PANE_SURFACE_BG};
+    background-color: {TABLE_BASE_BG};
 }}
 QCheckBox, QRadioButton {{ spacing: 6px; }}
 QProgressBar {{

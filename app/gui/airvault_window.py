@@ -1045,7 +1045,6 @@ class AirVaultWindow(QDialog):
         """
         combo = QComboBox()
         configure_combo_box(combo, 22)
-        combo.setMaximumWidth(420)
         combo.setToolTip(
             "Ejecuciones procesadas, de la más reciente a la más antigua. "
             "Solo se suben las exportadas; más atrás de las últimas "
@@ -1125,22 +1124,14 @@ class AirVaultWindow(QDialog):
             "CSV de la ejecución cuyos datos se escriben en AirVault. Lo "
             "pone la ejecución elegida arriba."
         )
-        grid.addWidget(self.corrida_edit, 0, 1)
+        grid.addWidget(self.corrida_edit, 0, 1, 1, 2)
 
         self.boton_buscar = QPushButton("Otra ejecución…")
         self.boton_buscar.setToolTip(
             "Elegir el CSV de una ejecución que no está en la lista"
         )
         self.boton_buscar.clicked.connect(self._elegir_corrida)
-        grid.addWidget(self.boton_buscar, 0, 2)
-
-        self.boton_eliminar_registro = QPushButton("Eliminar registros")
-        self.boton_eliminar_registro.setEnabled(False)
-        self.boton_eliminar_registro.setToolTip(TOOLTIP_ELIMINAR_REGISTROS)
-        self.boton_eliminar_registro.clicked.connect(
-            lambda: self._eliminar_registro()
-        )
-        grid.addWidget(self.boton_eliminar_registro, 0, 3)
+        grid.addWidget(self.boton_buscar, 0, 3)
 
         self.lote_edit = QLineEdit()
         self.lote_edit.setPlaceholderText("Nombre del batch en AirVault")
@@ -1148,7 +1139,7 @@ class AirVaultWindow(QDialog):
             "Nombre con el que el batch queda en AirVault. Lleva fecha y hora "
             "para no confundirlo con otro de la cola."
         )
-        grid.addWidget(self.lote_edit, 1, 1, 1, 2)
+        grid.addWidget(self.lote_edit, 1, 1, 1, 3)
 
         self.limite_batch_spin = QSpinBox()
         self.limite_batch_spin.setRange(10, 5000)
@@ -1167,6 +1158,7 @@ class AirVaultWindow(QDialog):
             self._guardar_limite_batch
         )
         self.limite_batch_control = SpinBoxWithButtons(self.limite_batch_spin)
+        self.limite_batch_control.setMaximumWidth(180)
         grid.addWidget(self.limite_batch_control, 2, 1)
 
         self.compresion_check = QCheckBox("Compresión")
@@ -1188,7 +1180,7 @@ class AirVaultWindow(QDialog):
             "Edge. Si eso falla, pegue aquí la cookie de AirVault. No se "
             "guarda en el disco."
         )
-        grid.addWidget(self.cookie_edit, 3, 1, 1, 2)
+        grid.addWidget(self.cookie_edit, 3, 1, 1, 3)
         return grid
 
     def _cabecera_de_lotes(self) -> QHBoxLayout:
@@ -1261,6 +1253,15 @@ class AirVaultWindow(QDialog):
         )
         self.boton_eliminar_batches.triggered.connect(
             self._eliminar_seleccionados
+        )
+        batch_menu.addSeparator()
+        self.boton_eliminar_registro = batch_menu.addAction(
+            "Eliminar registros locales…"
+        )
+        self.boton_eliminar_registro.setEnabled(False)
+        self.boton_eliminar_registro.setToolTip(TOOLTIP_ELIMINAR_REGISTROS)
+        self.boton_eliminar_registro.triggered.connect(
+            lambda: self._eliminar_registro()
         )
         self.batch_actions_button = QToolButton()
         self.batch_actions_button.setText("Acciones")

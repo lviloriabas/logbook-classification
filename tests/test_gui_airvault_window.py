@@ -317,7 +317,6 @@ def test_el_historial_lista_las_corridas_de_la_mas_reciente(app, tmp_path):
     assert ventana.historial.itemData(0) is None
     assert ventana.historial.minimumContentsLength() == 22
     assert ventana.historial.maxVisibleItems() == 12
-    assert ventana.historial.maximumWidth() == 420
     nombres = [
         ventana.historial.itemText(indice)
         for indice in range(1, ventana.historial.count())

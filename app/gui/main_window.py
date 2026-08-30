@@ -893,13 +893,10 @@ class MainWindow(QMainWindow):
     def _controls_columns_for(self, width: int) -> int:
         """Columnas que le tocan a los cuadros de arriba con este ancho.
 
-        Dos solo cuando el alto aprieta y el ancho llega al que se midió para
-        ese reparto: en una ventana alta no hay nada que ganar moviéndolos de
-        sitio, y en una estrecha el reparto en dos columnas pediría más ancho
-        del que hay y volvería a sacar contenido fuera.
+        Dos cuando el ancho llega al que se midió para ese reparto. Usar una
+        sola columna en un monitor ancho dejaba casi toda cada fila vacía y
+        le quitaba ese alto al visor, aunque ambos cuadros cabían en paralelo.
         """
-        if not self._density.compact:
-            return 1
         return 2 if width >= self._two_column_width else 1
 
     def _button_text_color(self) -> QColor:
@@ -1453,6 +1450,7 @@ class MainWindow(QMainWindow):
         table_layout.addLayout(self._build_search_row())
         table_layout.addWidget(self.table, 1)
         table_controls = QHBoxLayout()
+        table_controls.addWidget(self.search_context, 1)
         self.duplicates_label = QLabel("Duplicados: 0")
         self.duplicates_label.setAccessibleName("Resumen de duplicados")
         self.duplicates_label.setToolTip(
@@ -1460,7 +1458,6 @@ class MainWindow(QMainWindow):
         )
         self.duplicates_label.setStyleSheet("color: #c9d1d9;")
         table_controls.addWidget(self.duplicates_label)
-        table_controls.addStretch()
         self.csv_columns_toggle = CsvColumnModeButton()
         self.csv_columns_toggle.setEnabled(False)
         self.csv_columns_toggle.setVisible(False)
@@ -4014,7 +4011,6 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
         self.search_context.setMinimumWidth(0)
-        row.addWidget(self.search_context, 1)
         return row
 
     def _columnas_buscables(self) -> list[int]:
