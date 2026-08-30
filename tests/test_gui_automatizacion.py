@@ -21,6 +21,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QToolButton
 
 from app.gui.airvault_window import AirVaultWindow
@@ -240,6 +242,37 @@ def test_marcar_un_paso_actualiza_la_opcion(app, tmp_path):
 
         assert opciones.depurar
     finally:
+        menu.deleteLater()
+        app.processEvents()
+
+
+def test_el_menu_no_se_cierra_entre_varias_marcas(app, tmp_path):
+    """Una lista multiseleccion se termina al salir, no en cada casilla."""
+    opciones = OpcionesAutomatizacion(tmp_path)
+    menu = MenuAutomatizacion(opciones)
+    try:
+        menu.popup(menu.pos())
+        app.processEvents()
+        accion = menu.accion(DEPURAR)
+        menu.setActiveAction(accion)
+
+        QTest.mouseClick(
+            menu,
+            Qt.MouseButton.LeftButton,
+            pos=menu.actionGeometry(accion).center(),
+        )
+        app.processEvents()
+
+        assert opciones.depurar
+        assert menu.isVisible()
+
+        QTest.keyClick(menu, Qt.Key.Key_Space)
+        app.processEvents()
+
+        assert not opciones.depurar
+        assert menu.isVisible()
+    finally:
+        menu.close()
         menu.deleteLater()
         app.processEvents()
 
