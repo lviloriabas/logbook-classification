@@ -17,6 +17,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QAbstractItemView,
+    QApplication,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -188,15 +189,22 @@ QMainWindow, QDialog {{
 }}
 QWidget {{
     color: {PANE_TEXT};
-    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    font-family: "Segoe UI", "Segoe UI Variable Text", sans-serif;
     font-size: 10pt;
 }}
 QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {{
     color: #8c959f;
 }}
-QPushButton, QToolButton {{
+QPushButton {{
     min-height: 26px;
     padding: 4px 12px;
+    color: {PANE_TEXT};
+    background-color: {PANE_CONTROL_BG};
+    border: 1px solid {PANE_BORDER};
+    border-radius: {TABLE_RADIUS}px;
+}}
+QToolButton {{
+    padding: 2px 6px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
     border: 1px solid {PANE_BORDER};
@@ -230,7 +238,6 @@ QPushButton:disabled, QToolButton:disabled {{
 #primaryButton:pressed {{
     background-color: {TABLE_HEADER_BG};
 }}
-QToolButton {{ padding: 2px 6px; }}
 QToolButton#spinStepButton {{
     min-width: 18px; max-width: 18px; min-height: 0;
     padding: 0;
@@ -252,7 +259,7 @@ QToolButton#spinStepButton:disabled {{
 }}
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
 QDateEdit, QTimeEdit, QDateTimeEdit {{
-    padding: 3px 7px;
+    padding: 3px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
     border: 1px solid {PANE_BORDER};
@@ -309,10 +316,6 @@ QGroupBox::title {{
     background-color: {TABLE_BASE_BG};
 }}
 QCheckBox, QRadioButton {{ spacing: 6px; }}
-QCheckBox::indicator, QRadioButton::indicator {{
-    width: 16px;
-    height: 16px;
-}}
 QProgressBar {{
     color: {PANE_TEXT};
     background-color: {TABLE_HEADER_BG};
@@ -419,6 +422,17 @@ QStatusBar {{
     background-color: {PANE_SURFACE_BG};
 }}
 """ + ZOOM_OVERLAY_QSS
+
+
+_APPLICATION_THEME_PROPERTY = "bitsApplicationThemeInstalled"
+
+
+def window_stylesheet(local_qss: str) -> str:
+    """Compone una hoja local sin duplicar el tema global instalado."""
+    app = QApplication.instance()
+    if app is not None and app.property(_APPLICATION_THEME_PROPERTY):
+        return local_qss
+    return APP_CHROME_QSS + local_qss
 
 
 class SpinBoxWithButtons(QWidget):

@@ -71,7 +71,6 @@ from app.gui.responsive import ROOMY, Density, density_for, fit_to_screen
 from app.gui.table_sort import ModelSortController
 from app.reports.csv_reporter import CsvReporter
 from app.gui.widgets import (
-    APP_CHROME_QSS,
     DATA_TABLE_QSS,
     PANE_BG,
     PANE_BORDER,
@@ -88,6 +87,7 @@ from app.gui.widgets import (
     hide_overlay_when_tight,
     scrollbars_qss,
     style_data_table,
+    window_stylesheet,
     style_dark_pane,
     style_pdf_surface,
 )
@@ -1643,7 +1643,9 @@ class CsvViewerWindow(QMainWindow):
 
     def _apply_density_stylesheet(self) -> None:
         """Hoja de la ventana con el fragmento de medidas de la densidad."""
-        self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS + self._density.qss)
+        self.setStyleSheet(
+            window_stylesheet(DATA_TABLE_QSS + self._density.qss)
+        )
 
     def _update_responsive_layout(self) -> None:
         """Aprieta o suelta las medidas según el alto que tenga la ventana."""

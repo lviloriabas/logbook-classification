@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication, QDialog, QMainWindow
 
 from app.gui.widgets import (
+    _APPLICATION_THEME_PROPERTY,
     APP_CHROME_QSS,
     PANE_BG,
     PANE_BORDER,
@@ -35,9 +36,9 @@ class _NativeWindowTheme(QObject):
 def _application_font() -> QFont:
     families = set(QFontDatabase.families())
     family = (
-        "Segoe UI Variable Text"
-        if "Segoe UI Variable Text" in families
-        else "Segoe UI"
+        "Segoe UI"
+        if "Segoe UI" in families
+        else "Segoe UI Variable Text"
     )
     return QFont(family, 10)
 
@@ -74,6 +75,7 @@ def install_application_theme(app: QApplication) -> None:
     app.setFont(_application_font())
     app.setPalette(_dark_palette())
     app.setStyleSheet(APP_CHROME_QSS)
+    app.setProperty(_APPLICATION_THEME_PROPERTY, True)
     native_theme = _NativeWindowTheme(app)
     app.installEventFilter(native_theme)
     app._bits_native_window_theme = native_theme

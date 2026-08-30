@@ -90,13 +90,13 @@ from app.gui.csv_utils import (
 from app.gui.responsive import available_area, fit_to_screen
 from app.gui.text_copy import CopyableListWidget
 from app.gui.widgets import (
-    APP_CHROME_QSS,
     DATA_TABLE_QSS,
     PANE_STATUS_COLORS,
     SpinBoxWithButtons,
     ElidedLabel,
     align_vertical_scrollbar_to_header,
     style_data_table,
+    window_stylesheet,
 )
 from app.utils.io import send_to_trash
 
@@ -981,7 +981,7 @@ class AirVaultWindow(QDialog):
         # resumen es lo que decide si la ventana entra en un escritorio bajo.
         self._densidad = fit_to_screen(self, 780, 800)
         self.setStyleSheet(
-            APP_CHROME_QSS + DATA_TABLE_QSS + self._densidad.qss
+            window_stylesheet(DATA_TABLE_QSS + self._densidad.qss)
         )
         self._build_ui()
 
