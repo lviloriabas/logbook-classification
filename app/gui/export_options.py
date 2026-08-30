@@ -88,10 +88,9 @@ class ExportOptionsGroup(QGroupBox):
             self.partes_spin.setValue(guardadas)
         self.partes_spin.setSuffix(" pág.")
         self.partes_spin.setEnabled(False)
-        # Igualado en alto a los redondeles de al lado: con su alto natural
-        # el cuadro crecía 8 px y la ventana no cabía en un escritorio de
-        # 1280x720 con el escalado de Windows al 150%.
-        self.partes_spin.setFixedHeight(self.radio_unico.sizeHint().height())
+        # El campo conserva su alto natural. Fijarlo al alto del redondel
+        # recortaba el valor y el sufijo cuando el tema dibujaba borde y aire
+        # interior propios de un campo de Windows.
         self.partes_spin.setToolTip(
             "Páginas como máximo en cada parte, contando las separadoras"
         )

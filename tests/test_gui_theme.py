@@ -11,6 +11,7 @@ from app.gui.widgets import (
     PANE_SURFACE_BG,
     PANE_TEXT,
     TABLE_SELECTION_BG,
+    window_stylesheet,
 )
 
 
@@ -29,6 +30,9 @@ def test_application_theme_uses_the_fluent_dark_palette():
     assert app.styleSheet() == APP_CHROME_QSS
     assert app.font().pointSize() == 10
     assert app._bits_native_window_theme is not None
+    assert window_stylesheet("QWidget { padding: 1px; }") == (
+        "QWidget { padding: 1px; }"
+    )
 
 
 def test_application_name_describes_the_bits_workflow():

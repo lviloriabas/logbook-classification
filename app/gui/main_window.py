@@ -102,7 +102,6 @@ from app.gui.automatizacion import (
 )
 from app.gui.depuracion_dialog import DEPURAR_TOOLTIP, DepurarPaginasDialog
 from app.gui.widgets import (
-    APP_CHROME_QSS,
     DATA_TABLE_QSS,
     ICON_SIZE,
     TABLE_RADIUS,
@@ -113,6 +112,7 @@ from app.gui.widgets import (
     hide_overlay_when_tight,
     load_icon,
     style_data_table,
+    window_stylesheet,
 )
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
 from app.models.schemas import PageResult, Status, ValidationReport
@@ -212,7 +212,7 @@ def _visible_preview_fields(
         return [field for field in template.fields if field.required]
     return [field for field in template.fields if field.id in important_ids]
 
-_QSS = APP_CHROME_QSS + """
+_WINDOW_QSS = """
 QWidget#previewContext, QLabel#previewContext {
     color: #c9d1d9;
     font-weight: 600;
@@ -561,6 +561,10 @@ class MainWindow(QMainWindow):
         self._file_page_counts: list[int] = []
 
         self._build_ui()
+        # El estilo ya esta instalado antes de construir la ventana. Pulir
+        # aqui deja definitivas las metricas de los controles y evita medir
+        # y reaplicar las dos densidades una segunda vez al mostrarla.
+        self.ensurePolished()
         self._refresh_minimum_size()
         self._grow_to_fit_content()
         # Si la aplicación termina sin pasar por el cierre de la ventana
@@ -588,7 +592,9 @@ class MainWindow(QMainWindow):
         colores, las tipografías y el radio de 6 px salen de la base y son los
         mismos en las dos densidades.
         """
-        self.setStyleSheet(_QSS + self._density.qss)
+        qss = window_stylesheet(_WINDOW_QSS + self._density.qss)
+        if self.styleSheet() != qss:
+            self.setStyleSheet(qss)
 
     def _register_density_layout(self, layout: QLayout, stacked: bool) -> None:
         """Anota un layout de cuadro para re-medirlo al cambiar la densidad.
@@ -881,6 +887,11 @@ class MainWindow(QMainWindow):
             grid.addWidget(self._options_group, 0, 1)
             grid.addWidget(self._process_group, 1, 0, 1, 2)
             grid.addWidget(self._advanced_group, 2, 0, 1, 2)
+        grid.invalidate()
+        grid.parentWidget().updateGeometry()
+        central = self.centralWidget()
+        if central is not None and central.layout() is not None:
+            central.layout().invalidate()
 
     def _place_airvault_button(self, wide: bool) -> None:
         """Ubica «Indexar en AirVault…» según si el ancho sobra o no.
@@ -1339,13 +1350,6 @@ class MainWindow(QMainWindow):
         self.advanced_btn.setArrowType(
             Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
         )
-        # El panel desplegado pide más sitio del que se midió al abrir.
-        self._refresh_minimum_size()
-        if checked and self.height() < self.minimumSizeHint().height():
-            # Crecer lo que pida el panel, pero nunca más allá del escritorio:
-            # en una pantalla baja esto dejaba la ventana con la franja de
-            # abajo fuera y sin forma de recuperarla.
-            fit_to_screen(self, self.width(), self.minimumSizeHint().height())
 
     def _build_progress_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -4632,12 +4636,6 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if not self._shown_once:
             self._shown_once = True
-            # Parte de lo que pide el contenido solo es cierto con la ventana
-            # ya pulida por el estilo: unos veinte píxeles de alto que antes
-            # de mostrarla nadie declara. Se vuelve a medir aquí, que es la
-            # primera vez que el número es el definitivo.
-            self._refresh_minimum_size()
-            self._grow_to_fit_content()
         self._update_responsive_layout()
         QTimer.singleShot(0, self._balance_bottom_splitter)
         QTimer.singleShot(0, self._balance_content_splitter)

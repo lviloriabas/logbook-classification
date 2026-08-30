@@ -139,8 +139,8 @@ ROOMY = Density(
 
 COMPACT = Density(
     name="compacta",
-    window_margin=5,
-    root_spacing=3,
+    window_margin=4,
+    root_spacing=2,
     group_spacing=3,
     group_margin_v=3,
     group_row_spacing=3,
