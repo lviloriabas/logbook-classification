@@ -214,7 +214,6 @@ def test_en_pantalla_baja_los_cuadros_se_reparten_en_dos_columnas():
                 cuadro.minimumSizeHint().height()
                 for cuadro in (
                     ventana._input_group,
-                    ventana._process_group,
                     ventana._options_group,
                 )
             )

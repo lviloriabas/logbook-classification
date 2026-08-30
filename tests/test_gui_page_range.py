@@ -1,4 +1,4 @@
-"""Control de rango de páginas de la ventana principal."""
+"""Valores fijos de procesamiento en la ventana principal."""
 
 from __future__ import annotations
 
@@ -9,10 +9,9 @@ import pymupdf as fitz
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QAbstractSpinBox, QApplication
+from PySide6.QtWidgets import QApplication
 
 from app.gui.main_window import MainWindow
-from app.gui.widgets import SpinBoxWithButtons
 
 
 def _pdf(path: Path, pages: int) -> Path:
@@ -37,198 +36,36 @@ def _window(tmp_path: Path, sizes=(10, 20, 5)) -> MainWindow:
     return window
 
 
-def test_the_batch_starts_on_the_first_and_last_page_of_the_input(tmp_path):
-    """Los dos extremos son números reales: 1 y la última del batch."""
+def test_la_interfaz_procesa_el_batch_completo(tmp_path):
     window = _window(tmp_path)
     try:
-        assert window.page_from_spin.value() == 1
-        assert window.page_to_spin.value() == 35
-        assert window.page_to_spin.specialValueText() == ""
         assert window._page_range().is_full
         assert window._batch_total_pages() == 35
         assert len(window._resolved_paths()) == 3
-        assert window.page_range_label.text() == "de 35 pág."
+        assert not hasattr(window, "_process_group")
     finally:
         window.close()
 
 
-def test_page_range_fields_do_not_mix_arrows_with_the_number(tmp_path):
+def test_cambiar_la_entrada_mantiene_el_batch_completo(tmp_path):
     window = _window(tmp_path)
     try:
-        window.show()
-        QApplication.instance().processEvents()
-        for spin, control in (
-            (window.page_from_spin, window.page_from_control),
-            (window.page_to_spin, window.page_to_control),
-        ):
-            assert isinstance(control, SpinBoxWithButtons)
-            assert control.spin is spin
-            assert spin.parentWidget() is control
-            assert spin.buttonSymbols() == (
-                QAbstractSpinBox.ButtonSymbols.NoButtons
-            )
-            assert control.up_button.parentWidget() is control
-            assert control.down_button.parentWidget() is control
-
-        for spin, control in (
-            (window.page_from_spin, window.page_from_control),
-            (window.page_to_spin, window.page_to_control),
-        ):
-            assert control.up_button.geometry().left() > spin.geometry().right()
-            assert control.down_button.geometry().left() > spin.geometry().right()
-            assert control.height() == spin.height()
-
-        # Las flechas externas cambian el valor y reflejan los límites.
-        assert not window.page_from_control.down_button.isEnabled()
-        window.page_from_control.up_button.click()
-        assert window.page_from_spin.value() == 2
-        window.page_from_control.down_button.click()
-        assert window.page_from_spin.value() == 1
-        assert not window.page_from_control.down_button.isEnabled()
-
-        assert not window.page_to_control.up_button.isEnabled()
-        window.page_to_control.down_button.click()
-        assert window.page_to_spin.value() == 34
-        window.page_to_control.up_button.click()
-        assert window.page_to_spin.value() == 35
-    finally:
-        window.close()
-
-
-def test_changing_the_input_moves_the_end_to_the_new_last_page(tmp_path):
-    window = _window(tmp_path)
-    try:
-        assert window.page_to_spin.value() == 35
         window._set_input_paths([_pdf(tmp_path / "otra.pdf", 7)])
         window.esperar_lectura_de_entrada()
-        assert window.page_from_spin.value() == 1
-        assert window.page_to_spin.value() == 7
-        assert window.page_range_label.text() == "de 7 pág."
-    finally:
-        window.close()
-
-
-def test_an_empty_input_leaves_the_controls_at_one(tmp_path):
-    window = _window(tmp_path)
-    try:
-        window._set_input_paths([])
-        window.esperar_lectura_de_entrada()
-        assert window.page_from_spin.value() == 1
-        assert window.page_to_spin.value() == 1
-        assert window.page_range_label.text() == ""
-        assert window._batch_slices() == []
-    finally:
-        window.close()
-
-
-def test_a_range_across_two_files_cuts_each_one(tmp_path):
-    """8-22 del batch: las tres últimas del primero y doce del segundo."""
-    window = _window(tmp_path)
-    try:
-        window.page_from_spin.setValue(8)
-        window.page_to_spin.setValue(22)
-        tramos = window._batch_slices()
-        assert [(item.path.name, item.pages.first, item.pages.last)
-                for item in tramos] == [
-            ("book_0.pdf", 8, 10), ("book_1.pdf", 1, 12)
-        ]
-        assert window.page_range_label.text() == "15 de 35 pág."
-    finally:
-        window.close()
-
-
-def test_the_last_file_alone_is_reachable_by_its_global_pages(tmp_path):
-    window = _window(tmp_path)
-    try:
-        window.page_from_spin.setValue(31)
-        assert [item.path.name for item in window._batch_slices()] == [
-            "book_2.pdf"
-        ]
-    finally:
-        window.close()
-
-
-def test_the_controls_cannot_go_past_the_batch(tmp_path):
-    window = _window(tmp_path)
-    try:
-        window.page_to_spin.setValue(999)
-        assert window.page_to_spin.value() == 35
-        window.page_from_spin.setValue(999)
-        assert window.page_from_spin.value() == 35
-    finally:
-        window.close()
-
-
-def test_an_end_below_the_start_drags_the_start_down(tmp_path):
-    """Un rango invertido no describe nada: se corrige en vez de vaciarse."""
-    window = _window(tmp_path)
-    try:
-        window.page_from_spin.setValue(20)
-        window.page_to_spin.setValue(12)
-        assert window.page_from_spin.value() == 12
-        assert window._batch_slices()
-    finally:
-        window.close()
-
-
-def test_a_start_above_the_end_drags_the_end_up(tmp_path):
-    window = _window(tmp_path)
-    try:
-        window.page_to_spin.setValue(10)
-        window.page_from_spin.setValue(25)
-        assert window.page_to_spin.value() == 25
-        assert [(item.path.name, item.pages.first, item.pages.last)
-                for item in window._batch_slices()] == [("book_1.pdf", 15, 15)]
-    finally:
-        window.close()
-
-
-def test_reaching_the_last_page_counts_as_the_whole_batch(tmp_path):
-    """El control muestra 35, pero el rango se trata como abierto."""
-    window = _window(tmp_path)
-    try:
-        window.page_to_spin.setValue(20)
-        assert not window._page_range().is_full
-        window.page_to_spin.setValue(35)
         assert window._page_range().is_full
-        assert window._page_range().last is None
+        assert window._batch_total_pages() == 7
+        assert len(window._resolved_paths()) == 1
     finally:
         window.close()
 
 
-def test_the_estimate_counts_only_the_selected_pages(tmp_path):
+def test_las_opciones_fijas_conservan_los_valores_recomendados(tmp_path):
     window = _window(tmp_path)
     try:
-        window._ms_per_page = 1000.0
-        window.page_from_spin.setValue(1)
-        window.page_to_spin.setValue(10)
-        assert "10 páginas" in window.estimate_label.text()
-        assert "1 archivos" in window.estimate_label.text()
-    finally:
-        window.close()
-
-
-def test_the_file_rows_show_the_pages_of_the_slice(tmp_path):
-    window = _window(tmp_path)
-    try:
-        window.page_from_spin.setValue(8)
-        window.page_to_spin.setValue(22)
-        window._set_file_page_counts(window._batch_slices())
-        assert window._file_page_counts == [3, 12]
-    finally:
-        window.close()
-
-
-def test_the_message_for_a_range_outside_the_batch(tmp_path):
-    window = _window(tmp_path)
-    try:
-        window.page_from_spin.setValue(30)
-        # El tope de los controles impide llegar aquí desde la interfaz; la
-        # comprobación protege una entrada que cambió bajo un rango ya fijado.
-        window._input_page_counts = [2, 2, 1]
-        assert window._batch_slices() == []
-        message = window._empty_range_message()
-        assert "no incluye ninguna página" in message
-        assert "5 en total" in message
+        config = window._current_processing_config()
+        assert config.deskew is True
+        assert config.align is True
+        assert config.crop_preprocess is True
+        assert window._reference_page == 1
     finally:
         window.close()
