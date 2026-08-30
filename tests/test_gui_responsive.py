@@ -323,29 +323,6 @@ def test_el_panel_de_avance_no_recorta_sus_rotulos_en_la_ventana_mas_pequena():
             ventana.close()
 
 
-@pytest.mark.parametrize("ancho,alto", [(1366, 768), (1920, 1080)])
-def test_opciones_avanzadas_no_redimensiona_la_ventana(ancho, alto):
-    """El contenido se redistribuye dentro del cliente que ya esta abierto."""
-    app = _app()
-    area = _area_de_trabajo(ancho, alto)
-    with patch.object(responsive, "available_area", return_value=area):
-        ventana = MainWindow()
-        try:
-            ventana.show()
-            app.processEvents()
-            tamano = ventana.size()
-            with patch.object(ventana, "_refresh_minimum_size") as medir:
-                ventana.advanced_btn.setChecked(True)
-                app.processEvents()
-                assert ventana.size() == tamano
-                ventana.advanced_btn.setChecked(False)
-                app.processEvents()
-                assert ventana.size() == tamano
-                medir.assert_not_called()
-        finally:
-            ventana.close()
-
-
 def test_el_limite_de_paginas_muestra_valor_y_sufijo_completos():
     app = _app()
     area = _area_de_trabajo(1366, 768)

@@ -137,6 +137,7 @@ from app.validation.duplicates import DuplicateLogPage, detect_duplicate_log_pag
 SCRIPT_DIR = Path(__file__).resolve().parents[2]
 PERF_CACHE = SCRIPT_DIR / "output" / ".performance.json"
 _DEFAULT_MS_PER_PAGE = 2500.0  # costo nominal antes de la primera ejecución
+_DEFAULT_REFERENCE_PAGE = 1
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 # Celdas (no filas) por tick del QTimer. El costo de llenar la tabla es por
@@ -237,10 +238,6 @@ QWidget#previewContext, QLabel#previewContext {
     font-size: 10px;
     font-weight: 600;
 }
-/* Mismo alto que QPushButton: sin esto «Opciones avanzadas» queda más
-   alto que «Indexar en AirVault…», a su lado en la misma fila. La
-   densidad compacta redefine esta regla con sus propias medidas. */
-QToolButton#advancedToggle { min-height: 26px; padding: 4px 12px; }
 """ + DATA_TABLE_QSS
 
 
@@ -397,9 +394,9 @@ class MainWindow(QMainWindow):
         # nada, porque de ella salen todos los márgenes.
         self._density = fit_to_screen(self, _PREFERRED_WIDTH, _PREFERRED_HEIGHT)
         self._controls_columns = 0
-        # Arranca igual que queda construido el botón: junto a «Opciones
-        # avanzadas». ``_update_responsive_layout`` lo corrige apenas se
-        # conoce el ancho real de la ventana.
+        # Arranca con AirVault en la fila de acciones.
+        # ``_update_responsive_layout`` lo corrige apenas se conoce el ancho
+        # real de la ventana.
         self._airvault_wide = False
         self._density_layouts: list[tuple] = []
         # Ancho a partir del cual caben dos columnas de cuadros. Se mide con
@@ -459,6 +456,10 @@ class MainWindow(QMainWindow):
 
         self._detected_dpi = 200
         self._detected_dpis: dict[str, int] = {}
+        # Las opciones que antes se mostraban como avanzadas quedan fijas en
+        # sus valores recomendados.
+        self._selected_threads = available_cpu_threads()
+        self._reference_page = _DEFAULT_REFERENCE_PAGE
         # Páginas de cada PDF de la entrada, alineado con ``_pdf_paths``: es
         # lo que convierte el rango global del batch en tramos por archivo.
         self._input_page_counts: list[int] = []
@@ -835,7 +836,7 @@ class MainWindow(QMainWindow):
         self._input_group = self._build_input_group()
         self._process_group = self._build_process_group()
         self._options_group = self._build_options_group()
-        self._advanced_group = self._build_advanced_panel()
+        self._actions_group = self._build_action_row()
         # El reparto se decide antes del primer dibujado. Empezar siempre en
         # una columna y corregir después dejaba a la ventana estirada al alto
         # de la versión apilada, que es justo el que no cabía.
@@ -855,8 +856,8 @@ class MainWindow(QMainWindow):
         su fila de controles no se parte, mide más que cualquiera de los
         otros dos cuadros y metida en una columna obligaba a la ventana a ser
         50 px más ancha de lo que da un escritorio de 1280 px. Cruzando cabe,
-        y además queda pegada a la fila del botón de procesar. Las opciones
-        avanzadas siguen debajo del todo, que es donde han estado siempre.
+        y además queda pegada a la fila del botón de procesar. La fila de
+        acciones sigue debajo del todo.
 
         El mismo ancho de sobra que junta «Entrada» y «Salidas» es el que le
         sobra a «Indexar en AirVault…» para mudarse a esa fila: se decide
@@ -874,19 +875,19 @@ class MainWindow(QMainWindow):
             self._input_group,
             self._process_group,
             self._options_group,
-            self._advanced_group,
+            self._actions_group,
         ):
             grid.removeWidget(widget)
         if columns == 1:
             grid.addWidget(self._input_group, 0, 0, 1, 2)
             grid.addWidget(self._process_group, 1, 0, 1, 2)
             grid.addWidget(self._options_group, 2, 0, 1, 2)
-            grid.addWidget(self._advanced_group, 3, 0, 1, 2)
+            grid.addWidget(self._actions_group, 3, 0, 1, 2)
         else:
             grid.addWidget(self._input_group, 0, 0)
             grid.addWidget(self._options_group, 0, 1)
             grid.addWidget(self._process_group, 1, 0, 1, 2)
-            grid.addWidget(self._advanced_group, 2, 0, 1, 2)
+            grid.addWidget(self._actions_group, 2, 0, 1, 2)
         grid.invalidate()
         grid.parentWidget().updateGeometry()
         central = self.centralWidget()
@@ -897,9 +898,8 @@ class MainWindow(QMainWindow):
         """Ubica «Indexar en AirVault…» según si el ancho sobra o no.
 
         Con ancho de sobra queda a la derecha de «Salidas», la sección de la
-        que sale lo que se sube a AirVault. En una ventana angosta ahí no
-        cabe y vuelve junto a «Opciones avanzadas», que es donde ha vivido
-        siempre.
+        que sale lo que se sube a AirVault. En una ventana angosta vuelve a
+        la fila de acciones, junto a «Automatización…».
         """
         boton = getattr(self, "btn_airvault", None)
         if boton is None:
@@ -907,12 +907,12 @@ class MainWindow(QMainWindow):
         if wide == self._airvault_wide:
             return
         self._airvault_wide = wide
-        for fila in (self._fleet_row, self._desplegables_row):
+        for fila in (self._fleet_row, self._actions_row):
             fila.removeWidget(boton)
         if wide:
             self._fleet_row.addWidget(boton)
         else:
-            self._desplegables_row.insertWidget(1, boton)
+            self._actions_row.insertWidget(0, boton)
 
     def _controls_columns_for(self, width: int) -> int:
         """Columnas que le tocan a los cuadros de arriba con este ancho.
@@ -1180,76 +1180,11 @@ class MainWindow(QMainWindow):
         layout.addSpacing(4)
         return group
 
-    def _build_advanced_panel(self) -> QWidget:
+    def _build_action_row(self) -> QWidget:
         panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        self.advanced_btn = QToolButton()
-        self.advanced_btn.setText("Opciones avanzadas")
-        self.advanced_btn.setCheckable(True)
-        self.advanced_btn.setArrowType(Qt.ArrowType.RightArrow)
-        self.advanced_btn.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
-        # QToolButton no lleva el min-height de QPushButton; el nombre trae
-        # esa regla de ``_QSS`` (y su versión compacta), para que quede a la
-        # misma altura que «Indexar en AirVault…», a su lado en la fila.
-        self.advanced_btn.setObjectName("advancedToggle")
-        self.advanced_btn.toggled.connect(self._toggle_advanced)
-
-        # Las dos flechas comparten fila. Apiladas, la segunda le costaba a
-        # la ventana 15 px de alto y en una pantalla de 1024x768 la sacaba
-        # del escritorio.
-        self._desplegables_row = QHBoxLayout()
-        self._desplegables_row.setSpacing(12)
-        self._desplegables_row.addWidget(self.advanced_btn)
-        self._desplegables_row.addStretch()
-        layout.addLayout(self._desplegables_row)
-
-        self.advanced_panel = QWidget()
-        self.advanced_panel.setVisible(False)
-        adv = QVBoxLayout(self.advanced_panel)
-        adv.setContentsMargins(0, 0, 0, 0)
-
-        top_row = QHBoxLayout()
-        available = available_cpu_threads()
-        self._available_cpu_threads = available
-
-        top_row.addWidget(QLabel("Hilos del procesador:"))
-        self.threads_spin = QSpinBox()
-        self.threads_spin.setRange(1, available)
-        self.threads_spin.setValue(available)
-        self.threads_spin.setToolTip(
-            "Hilos que puede usar el procesamiento. "
-            f"Detectados: {available}."
-        )
-        self.threads_control = SpinBoxWithButtons(self.threads_spin)
-        top_row.addWidget(self.threads_control)
-
-        top_row.addSpacing(12)
-        top_row.addWidget(QLabel("Página de referencia:"))
-        self.ref_spin = QSpinBox()
-        self.ref_spin.setRange(1, 1000)
-        self.ref_spin.setValue(1)
-        self.ref_spin.setToolTip("Página usada como referencia de alineación")
-        self.ref_control = SpinBoxWithButtons(self.ref_spin)
-        top_row.addWidget(self.ref_control)
-
-        top_row.addSpacing(16)
-        self.reserve_core_check = QCheckBox(
-            "Reservar un núcleo para la interfaz (recomendado)"
-        )
-        self.reserve_core_check.setChecked(True)
-        self.reserve_core_check.setToolTip(
-            "Deja un hilo libre para que la interfaz no se trabe; el OCR usa "
-            "el resto."
-        )
-        top_row.addWidget(self.reserve_core_check)
-        top_row.addStretch()
-        adv.addLayout(top_row)
-
-        layout.addWidget(self.advanced_panel)
+        self._actions_row = QHBoxLayout(panel)
+        self._actions_row.setContentsMargins(0, 0, 0, 0)
+        self._actions_row.setSpacing(12)
 
         # El indexado ya no cuelga de este cuadro: vive en su propia ventana
         # y de aquí solo sale el botón que la abre. Empotrado, desplegarlo
@@ -1259,7 +1194,7 @@ class MainWindow(QMainWindow):
         self.btn_airvault = QPushButton("Indexar en AirVault…")
         self.btn_airvault.setToolTip(AIRVAULT_TOOLTIP)
         self.btn_airvault.clicked.connect(lambda: self._open_airvault())
-        self._desplegables_row.insertWidget(1, self.btn_airvault)
+        self._actions_row.addWidget(self.btn_airvault)
 
         # Los pasos de «Automático». Estaban en la ventana de AirVault, donde
         # solo se veían después de procesar y solo decidían el tramo final;
@@ -1280,7 +1215,8 @@ class MainWindow(QMainWindow):
                 self.btn_automatizacion
             )
         )
-        self._desplegables_row.insertWidget(2, self.btn_automatizacion)
+        self._actions_row.addWidget(self.btn_automatizacion)
+        self._actions_row.addStretch()
         return panel
 
     def _open_airvault(self) -> None:
@@ -1338,18 +1274,9 @@ class MainWindow(QMainWindow):
             return
         self._airvault_window.fijar_corrida(csv)
 
-    def _effective_threads(self, selected: int) -> int:
-        """Hilos efectivos del pipeline según la reserva para la interfaz."""
-        checkbox = getattr(self, "reserve_core_check", None)
-        if checkbox is not None and checkbox.isChecked() and selected > 1:
-            return selected - 1
-        return selected
-
-    def _toggle_advanced(self, checked: bool) -> None:
-        self.advanced_panel.setVisible(checked)
-        self.advanced_btn.setArrowType(
-            Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow
-        )
+    def _effective_threads(self) -> int:
+        """Reserva un hilo para la interfaz cuando hay mas de uno."""
+        return max(1, self._selected_threads - 1)
 
     def _build_progress_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -2874,7 +2801,7 @@ class MainWindow(QMainWindow):
             self._pdf_paths,
             self._config,
             page_range=self._page_range(),
-            reference_page=self.ref_spin.value(),
+            reference_page=self._reference_page,
             parent=self,
         )
         self._preprocess_worker = worker
@@ -3148,8 +3075,7 @@ class MainWindow(QMainWindow):
         self._pending_csv_refresh = False
         self._last_run_cancelled = False
 
-        selected_threads = self.threads_spin.value()
-        effective_threads = self._effective_threads(selected_threads)
+        effective_threads = self._effective_threads()
         workers, threads = recommended_parallelism(effective_threads)
 
         # Igual que en el preprocesado: el worker recibe el batch completo y
@@ -3159,7 +3085,7 @@ class MainWindow(QMainWindow):
             Path(self.template_combo.currentData()),
             self._config,
             page_range=self._page_range(),
-            reference_page=self.ref_spin.value(),
+            reference_page=self._reference_page,
             workers=workers,
             cpu_threads=threads,
         )
