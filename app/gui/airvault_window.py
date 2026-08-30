@@ -96,6 +96,8 @@ from app.gui.widgets import (
     SpinBoxWithButtons,
     ElidedLabel,
     align_vertical_scrollbar_to_header,
+    configure_combo_box,
+    configure_menu_button,
     style_data_table,
     window_stylesheet,
 )
@@ -1042,6 +1044,8 @@ class AirVaultWindow(QDialog):
         la más reciente no parezca elegida antes de que nadie la elija.
         """
         combo = QComboBox()
+        configure_combo_box(combo, 22)
+        combo.setMaximumWidth(420)
         combo.setToolTip(
             "Ejecuciones procesadas, de la más reciente a la más antigua. "
             "Solo se suben las exportadas; más atrás de las últimas "
@@ -1260,13 +1264,7 @@ class AirVaultWindow(QDialog):
         )
         self.batch_actions_button = QToolButton()
         self.batch_actions_button.setText("Acciones")
-        self.batch_actions_button.setMenu(batch_menu)
-        self.batch_actions_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.batch_actions_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.batch_actions_button, batch_menu)
         fila.addWidget(self.batch_actions_button)
         return fila
 
@@ -2252,12 +2250,8 @@ class AirVaultWindow(QDialog):
             "La misma elección que en la ventana principal."
         )
         self.menu_automatizacion = MenuAutomatizacion(self._opciones, self)
-        self.boton_automatizacion.setMenu(self.menu_automatizacion)
-        self.boton_automatizacion.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.boton_automatizacion.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        configure_menu_button(
+            self.boton_automatizacion, self.menu_automatizacion
         )
         fila.addWidget(self.boton_automatizacion)
 
@@ -2521,7 +2515,9 @@ class AirVaultWindow(QDialog):
         indice = self.historial.count()
         self.historial.addItem(carpeta.name, str(csv))
         self.historial.setItemData(
-            indice, f"{cuenta} · {entrega}", Qt.ItemDataRole.ToolTipRole
+            indice,
+            f"{carpeta.name}\n{cuenta} - {entrega}",
+            Qt.ItemDataRole.ToolTipRole,
         )
         self.historial.setItemData(indice, listo, ROL_SE_PUEDE_SUBIR)
         if not listo:

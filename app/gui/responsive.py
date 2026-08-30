@@ -59,8 +59,11 @@ QPushButton { min-height: 20px; padding: 2px 8px; }
 QPushButton#iconButton { padding-left: 4px; padding-right: 6px; }
 QToolButton { padding: 1px 4px; }
 QToolButton#primaryButton { min-height: 20px; padding: 2px 8px; }
+QToolButton[menuRole="dropdown"] { min-height: 20px; padding: 1px 26px 1px 8px; }
+QToolButton[menuRole="split"] { min-height: 20px; padding: 2px 36px 2px 8px; }
 QGroupBox { margin-top: 6px; padding: 4px 6px 3px 6px; }
-QSpinBox, QComboBox, QLineEdit { padding: 1px; }
+QSpinBox, QLineEdit { padding: 1px; }
+QComboBox { padding: 1px 28px 1px 6px; }
 """
 
 

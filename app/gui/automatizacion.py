@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtCore import QObject, QSignalBlocker, QSize, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -119,7 +119,7 @@ _CLAVES = {
 
 # Lo que dice cada casilla y qué se explica al pasar por encima.
 ETIQUETAS = {
-    DEPURAR: "Depurar páginas repetidas y en blanco",
+    DEPURAR: "Depurar antes de exportar",
     SUBIR: "Subir a AirVault",
     INDEXAR: "Indexar páginas",
     COMPLETAR: "Completar batch",
@@ -143,24 +143,6 @@ AYUDAS = {
         "Search."
     ),
 }
-
-# Los tres que no se eligen, con el motivo por el que no se eligen.
-FIJOS = (
-    (
-        "Preprocesar (enderezar y alinear)",
-        "Siempre se hace: endereza y alinea cada página para que el OCR "
-        "lea donde debe.",
-    ),
-    (
-        "Procesar (OCR)",
-        "Siempre se hace: es de donde salen los datos de la entrega.",
-    ),
-    (
-        "Exportar CSV, JSON y PDF",
-        "Siempre se hace: es la entrega, y sin ella no hay nada que subir.",
-    ),
-)
-
 
 class OpcionesAutomatizacion(QObject):
     """Los pasos elegidos, con memoria portable y una sola copia viva.
@@ -239,14 +221,7 @@ class OpcionesAutomatizacion(QObject):
 
 
 class MenuAutomatizacion(QMenu):
-    """La lista de pasos, encima de la ventana y no dentro de ella.
-
-    Se abre pegada al botón que la pide, como el menú del botón derecho, y
-    no se cierra al marcar: se marcan los pasos que hagan falta y se sale
-    con un clic fuera o con Escape.
-    """
-
-    TITULO = "Hasta dónde continuar automáticamente"
+    """Opciones marcables de la cadena automática en un menú estándar."""
 
     def __init__(
         self,
@@ -259,18 +234,10 @@ class MenuAutomatizacion(QMenu):
         # enseña las ayudas de sus acciones a menos que se le pida.
         self.setToolTipsVisible(True)
 
-        self.addSection(self.TITULO)
-        for texto, ayuda in FIJOS:
-            fijo = self.addAction(texto)
-            fijo.setCheckable(True)
-            fijo.setChecked(True)
-            fijo.setEnabled(False)
-            fijo.setToolTip(ayuda)
-
         self._acciones: dict[str, object] = {}
         for paso in PASOS:
-            if paso in (DEPURAR, SUBIR):
-                # Lo suelto y la cadena de AirVault, cada uno en su bloque.
+            if paso == SUBIR:
+                # La preparación local y la cadena de AirVault van separadas.
                 self.addSeparator()
             accion = self.addAction(ETIQUETAS[paso])
             accion.setCheckable(True)
@@ -294,32 +261,6 @@ class MenuAutomatizacion(QMenu):
         alto, la sube por encima del botón en vez de recortarla.
         """
         self.popup(boton.mapToGlobal(boton.rect().bottomLeft()))
-
-    # ── que no se cierre en el primer clic ─────────────────────────
-
-    def mouseReleaseEvent(self, event) -> None:
-        """Marca sin cerrar: son varias casillas, no una orden."""
-        accion = self.activeAction()
-        if accion is not None and accion.isEnabled() and accion.isCheckable():
-            accion.trigger()
-            return
-        super().mouseReleaseEvent(event)
-
-    def keyPressEvent(self, event) -> None:
-        """Lo mismo con el teclado, para no obligar a usar el ratón."""
-        teclas = (
-            Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter,
-        )
-        accion = self.activeAction()
-        if (
-            event.key() in teclas
-            and accion is not None
-            and accion.isEnabled()
-            and accion.isCheckable()
-        ):
-            accion.trigger()
-            return
-        super().keyPressEvent(event)
 
     def _refrescar(self, paso: str, marcado: bool) -> None:
         """Refleja lo que cambió en otro sitio sin volver a anunciarlo."""
