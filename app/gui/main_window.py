@@ -228,8 +228,8 @@ QWidget#previewContext, QLabel#previewContext {
 }
 #filePages { color: #c9d1d9; }
 #timeSummary {
-    background-color: rgb(49, 49, 49);
-    border: 1px solid rgb(49, 49, 49);
+    background-color: #3d3d3d;
+    border: 1px solid #4a4a4a;
     border-radius: 6px;
 }
 #timeSummary QLabel[role="caption"] {
@@ -995,6 +995,14 @@ class MainWindow(QMainWindow):
         self.template_actions_button = QToolButton()
         self.template_actions_button.setText("Herramientas")
         configure_menu_button(self.template_actions_button, template_menu)
+        for menu_button in (
+            self.input_actions_button,
+            self.template_actions_button,
+        ):
+            menu_button.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Preferred,
+            )
         grid.addWidget(self.template_actions_button, 1, 3)
 
         self.estimate_label = ElidedLabel("")
@@ -1054,6 +1062,12 @@ class MainWindow(QMainWindow):
         self.view_button = QToolButton()
         self.view_button.setText("Vista")
         configure_menu_button(self.view_button, view_menu)
+        menu_width = max(
+            button.fontMetrics().horizontalAdvance(button.text())
+            for button in (group.separation_button, self.view_button)
+        ) + 44
+        group.separation_button.setFixedWidth(menu_width)
+        self.view_button.setFixedWidth(menu_width)
         self.view_button.setToolTip(
             "Elegir qué campos se muestran en la vista previa."
         )
@@ -1147,7 +1161,9 @@ class MainWindow(QMainWindow):
         row.setSpacing(10)
 
         self.status_label = ElidedLabel("Listo.")
-        row.addWidget(self.status_label, 1)
+        self.status_label.setMinimumWidth(120)
+        self.status_label.setMaximumWidth(240)
+        row.addWidget(self.status_label)
 
         self.busy_label = QLabel("")
         self.busy_label.setMinimumWidth(24)
@@ -3981,12 +3997,12 @@ class MainWindow(QMainWindow):
         )
         self.search_edit.returnPressed.connect(self._buscar_en_la_tabla)
         row.addWidget(self.search_edit, 1)
-        buscar = QPushButton("Buscar")
-        buscar.setToolTip(
+        self.search_button = QPushButton("Buscar")
+        self.search_button.setToolTip(
             "Buscar el texto; repetido, pasa a la coincidencia siguiente"
         )
-        buscar.clicked.connect(self._buscar_en_la_tabla)
-        row.addWidget(buscar)
+        self.search_button.clicked.connect(self._buscar_en_la_tabla)
+        row.addWidget(self.search_button)
         self.search_prev = QPushButton("‹")
         self.search_prev.setToolTip("Coincidencia anterior")
         self.search_prev.setEnabled(False)

@@ -322,6 +322,54 @@ def test_el_panel_de_avance_no_recorta_sus_rotulos_en_la_ventana_mas_pequena():
             ventana.close()
 
 
+def test_los_controles_vecinos_comparten_alto_y_ancho():
+    """La métrica visual es una sola, incluso entre tipos de control."""
+    app = _app()
+    area = _area_de_trabajo(1920, 1080)
+    with patch.object(responsive, "available_area", return_value=area):
+        ventana = MainWindow()
+        try:
+            ventana.resize(1920, 1000)
+            ventana.show()
+            app.processEvents()
+            salidas = ventana.export_options
+            controles = (
+                ventana.input_edit,
+                ventana.template_combo,
+                ventana.input_actions_button,
+                ventana.template_actions_button,
+                salidas.output_mode_combo,
+                salidas.csv_date_mode_combo,
+                salidas.separation_button,
+                ventana.view_button,
+                salidas.partes_control,
+                ventana.progress,
+                ventana.btn_process,
+                ventana.btn_cancel,
+                ventana.more_actions_button,
+                ventana.btn_automatico,
+                ventana.search_edit,
+                ventana.search_button,
+                ventana.search_prev,
+                ventana.search_next,
+            )
+            assert {control.height() for control in controles} == {30}
+            assert (
+                ventana.input_actions_button.width()
+                == ventana.template_actions_button.width()
+            )
+            assert (
+                salidas.separation_button.width()
+                == ventana.view_button.width()
+            )
+            assert ventana.progress.x() < ventana.width() // 5
+            ventana.resize(1366, 680)
+            app.processEvents()
+            assert {control.height() for control in controles} == {28}
+        finally:
+            ventana.close()
+
+
 def test_el_limite_de_paginas_muestra_valor_y_sufijo_completos():
     app = _app()
     area = _area_de_trabajo(1366, 768)
@@ -331,8 +379,7 @@ def test_el_limite_de_paginas_muestra_valor_y_sufijo_completos():
             ventana.show()
             app.processEvents()
             campo = ventana.export_options.partes_spin
-            assert campo.height() >= campo.sizeHint().height()
-            assert campo.height() >= campo.fontMetrics().height()
+            assert campo.height() >= campo.fontMetrics().lineSpacing() + 8
         finally:
             ventana.close()
 
