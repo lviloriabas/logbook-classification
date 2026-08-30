@@ -19,6 +19,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QItemSelectionModel
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.airvault import registro
@@ -160,9 +161,19 @@ def test_eliminar_varios_a_la_vez_se_los_lleva_todos(
     assert len(trabajos) > 2, "hacen falta al menos tres partes"
     ventana = cargada(tmp_path, trabajos)
     try:
-        elegidos = ventana._estados[:2]
+        modelo = ventana.lotes.model()
+        seleccion = ventana.lotes.selectionModel()
+        for fila in (0, 1):
+            seleccion.select(
+                modelo.index(fila, 0),
+                QItemSelectionModel.SelectionFlag.Select
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+        app.processEvents()
 
-        ventana._eliminar_estas(elegidos)
+        assert ventana.boton_eliminar_batches.isEnabled()
+        assert "(2)" in ventana.boton_eliminar_batches.text()
+        ventana.boton_eliminar_batches.trigger()
 
         assert len(papelera) == 2
         assert ventana.lotes.rowCount() == len(trabajos) - 2

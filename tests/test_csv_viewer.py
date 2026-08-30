@@ -1084,7 +1084,7 @@ def test_exporting_rewrites_the_run_without_reprocessing(tmp_path: Path):
         # Un archivo por matrícula y sin apartar las posibles discrepancias:
         # el cuadro arranca en un solo PDF y con ellas marcadas, así que aquí
         # se elige lo que comprueban las rutas de abajo.
-        viewer.export_options.radio_varios.setChecked(True)
+        viewer.export_options.set_un_solo_pdf(False)
         viewer.export_options.matricula_check.setChecked(True)
         viewer.export_options.discrepancias_check.setChecked(False)
         viewer._exportar()

@@ -19,6 +19,7 @@ from PySide6.QtCore import (
     QObject,
     QProcess,
     QRectF,
+    QSignalBlocker,
     QSize,
     Qt,
     QThread,
@@ -53,6 +54,7 @@ from PySide6.QtWidgets import (
     QLayout,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -75,7 +77,6 @@ from app.gui.csv_utils import template_field_ids_for_columns
 from app.gui.csv_viewer import (
     CsvColumnModeButton,
     CsvViewerWindow,
-    ImportantFieldsButton,
     apply_csv_column_visibility,
 )
 from app.gui.eta import estimate_remaining_seconds, wall_ms_per_page
@@ -102,7 +103,6 @@ from app.gui.depuracion_dialog import DEPURAR_TOOLTIP, DepurarPaginasDialog
 from app.gui.widgets import (
     APP_CHROME_QSS,
     DATA_TABLE_QSS,
-    ICON_SIZE,
     TABLE_RADIUS,
     ElidedLabel,
     ZoomableScrollArea,
@@ -394,10 +394,6 @@ class MainWindow(QMainWindow):
         # nada, porque de ella salen todos los márgenes.
         self._density = fit_to_screen(self, _PREFERRED_WIDTH, _PREFERRED_HEIGHT)
         self._controls_columns = 0
-        # Arranca con AirVault en la fila de acciones.
-        # ``_update_responsive_layout`` lo corrige apenas se conoce el ancho
-        # real de la ventana.
-        self._airvault_wide = False
         self._density_layouts: list[tuple] = []
         # Ancho a partir del cual caben dos columnas de cuadros. Se mide con
         # la ventana ya construida; hasta entonces vale el que se pidió, que
@@ -451,6 +447,7 @@ class MainWindow(QMainWindow):
         self._log_sink = QtLogSink()
         self._log_handler_id: int | None = None
         self._processed_template: Template | None = None
+        self._template_cache: tuple[Path, int, Template] | None = None
         self._processed_dpi: int | None = None
         self._last_run_cancelled = False
 
@@ -552,6 +549,10 @@ class MainWindow(QMainWindow):
         self._resize_preview_timer.setSingleShot(True)
         self._resize_preview_timer.setInterval(_PREVIEW_RESIZE_MS)
         self._resize_preview_timer.timeout.connect(self._render_preview_pixmap)
+        self._responsive_timer = QTimer(self)
+        self._responsive_timer.setSingleShot(True)
+        self._responsive_timer.setInterval(40)
+        self._responsive_timer.timeout.connect(self._finish_resize_layout)
 
         self._bottom_splitter_adjusted = False
         self._content_splitter_adjusted = False
@@ -731,7 +732,9 @@ class MainWindow(QMainWindow):
             if self._controls_columns == 2
             else self._stacked_minimum
         )
-        self.setMinimumSize(self._stacked_minimum.width(), floor.height())
+        minimum = QSize(self._stacked_minimum.width(), floor.height())
+        if self.minimumSize() != minimum:
+            self.setMinimumSize(minimum)
 
     def _layout_minimum(self, columns: int) -> QSize:
         """Lo que pide el contenido con los cuadros repartidos así.
@@ -829,7 +832,6 @@ class MainWindow(QMainWindow):
         self._controls_grid = grid
         self._input_group = self._build_input_group()
         self._options_group = self._build_options_group()
-        self._actions_group = self._build_action_row()
         # El reparto se decide antes del primer dibujado. Empezar siempre en
         # una columna y corregir después dejaba a la ventana estirada al alto
         # de la versión apilada, que es justo el que no cabía.
@@ -845,17 +847,9 @@ class MainWindow(QMainWindow):
         pasa en esas pantallas) «Entrada» y «Salidas» se ponen una al lado de
         la otra y el bloque pasa a medir lo que mide el más alto de los dos.
 
-        La fila de acciones cruza por debajo de los cuadros para conservar
-        juntos sus botones en cualquier ancho.
-
-        El mismo ancho de sobra que junta «Entrada» y «Salidas» es el que le
-        sobra a «Indexar en AirVault…» para mudarse a esa fila: se decide
-        aquí, y no aparte, para que ``_refresh_minimum_size`` lo mida al
-        calcular el mínimo de dos columnas. Medido en otro sitio, la ventana
-        podía abrirse ya en modo ancho sin que el mínimo contara el botón, y
-        entonces no cabía en el escritorio que la midió.
+        Los controles secundarios viven dentro de «Salidas», donde no crean
+        una tercera fila ni cambian de sitio al redimensionar la ventana.
         """
-        self._place_airvault_button(columns == 2)
         if columns == self._controls_columns:
             return
         self._controls_columns = columns
@@ -863,37 +857,29 @@ class MainWindow(QMainWindow):
         for widget in (
             self._input_group,
             self._options_group,
-            self._actions_group,
         ):
             grid.removeWidget(widget)
         if columns == 1:
             grid.addWidget(self._input_group, 0, 0, 1, 2)
             grid.addWidget(self._options_group, 1, 0, 1, 2)
-            grid.addWidget(self._actions_group, 2, 0, 1, 2)
         else:
-            grid.addWidget(self._input_group, 0, 0)
-            grid.addWidget(self._options_group, 0, 1)
-            grid.addWidget(self._actions_group, 1, 0, 1, 2)
-
-    def _place_airvault_button(self, wide: bool) -> None:
-        """Ubica «Indexar en AirVault…» según si el ancho sobra o no.
-
-        Con ancho de sobra queda a la derecha de «Salidas», la sección de la
-        que sale lo que se sube a AirVault. En una ventana angosta vuelve a
-        la fila de acciones, junto a «Automatización…».
-        """
-        boton = getattr(self, "btn_airvault", None)
-        if boton is None:
-            return
-        if wide == self._airvault_wide:
-            return
-        self._airvault_wide = wide
-        for fila in (self._fleet_row, self._actions_row):
-            fila.removeWidget(boton)
-        if wide:
-            self._fleet_row.addWidget(boton)
-        else:
-            self._actions_row.insertWidget(0, boton)
+            grid.addWidget(
+                self._input_group,
+                0,
+                0,
+                alignment=Qt.AlignmentFlag.AlignTop,
+            )
+            grid.addWidget(
+                self._options_group,
+                0,
+                1,
+                alignment=Qt.AlignmentFlag.AlignTop,
+            )
+        grid.invalidate()
+        grid.parentWidget().updateGeometry()
+        central = self.centralWidget()
+        if central is not None and central.layout() is not None:
+            central.layout().invalidate()
 
     def _controls_columns_for(self, width: int) -> int:
         """Columnas que le tocan a los cuadros de arriba con este ancho.
@@ -933,42 +919,48 @@ class MainWindow(QMainWindow):
         self.input_edit.setAccessibleName("Archivos seleccionados")
         grid.addWidget(self.input_edit, 0, 1)
 
-        btn_pick = QPushButton("Seleccionar archivos…")
+        btn_pick = QPushButton("Seleccionar…")
         btn_pick.setToolTip("Elegir uno o varios PDF de cualquier carpeta")
         btn_pick.clicked.connect(self._browse_pdfs)
         grid.addWidget(btn_pick, 0, 2)
 
-        btn_input = QPushButton("Detectar")
+        input_menu = QMenu(group)
+        input_menu.setToolTipsVisible(True)
+        btn_input = input_menu.addAction("Detectar input")
         btn_input.setToolTip("Detectar los PDF de la carpeta input/ del programa")
-        btn_input.clicked.connect(self._load_default_input)
-        grid.addWidget(btn_input, 0, 3)
+        btn_input.triggered.connect(self._load_default_input)
 
-        btn_clear_input = QPushButton("Vaciar input")
+        input_menu.addSeparator()
+        btn_clear_input = input_menu.addAction("Vaciar input")
         # Los dos botones que mandan archivos a la Papelera llevan el mismo
         # dibujo: es la única acción de la fila que borra algo y así se
         # distingue de «Detectar» o «Seleccionar» sin leer el texto. Va del
         # color del texto del botón para que se lea con el tema claro y con
         # el oscuro, y para que no cante al lado de la palabra.
         trash_icon = load_icon("trash", self._button_text_color())
-        btn_clear_input.setObjectName("iconButton")
         btn_clear_input.setIcon(trash_icon)
-        btn_clear_input.setIconSize(ICON_SIZE)
         btn_clear_input.setToolTip(
             "Mover los archivos de input/ a la Papelera. Los de "
             "input/processed se conservan"
         )
-        btn_clear_input.clicked.connect(self._clear_input_folder)
-        grid.addWidget(btn_clear_input, 0, 4)
+        btn_clear_input.triggered.connect(self._clear_input_folder)
 
-        self.btn_clear_output = QPushButton("Vaciar output")
-        self.btn_clear_output.setObjectName("iconButton")
+        self.btn_clear_output = input_menu.addAction("Vaciar output")
         self.btn_clear_output.setIcon(trash_icon)
-        self.btn_clear_output.setIconSize(ICON_SIZE)
         self.btn_clear_output.setToolTip(
             "Mover todas las ejecuciones de output/ a la Papelera de reciclaje"
         )
-        self.btn_clear_output.clicked.connect(self._clear_output_folder)
-        grid.addWidget(self.btn_clear_output, 0, 5)
+        self.btn_clear_output.triggered.connect(self._clear_output_folder)
+        self.input_actions_button = QToolButton()
+        self.input_actions_button.setText("Carpetas")
+        self.input_actions_button.setMenu(input_menu)
+        self.input_actions_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.input_actions_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        grid.addWidget(self.input_actions_button, 0, 3)
 
         grid.addWidget(QLabel("Plantilla:"), 1, 0)
         self.template_combo = QComboBox()
@@ -987,26 +979,35 @@ class MainWindow(QMainWindow):
         btn_tpl.clicked.connect(self._browse_template)
         grid.addWidget(btn_tpl, 1, 2)
 
-        self.btn_editor = QPushButton("Abrir editor")
+        template_menu = QMenu(group)
+        template_menu.setToolTipsVisible(True)
+        self.btn_editor = template_menu.addAction("Abrir editor")
         self.btn_editor.setToolTip("Abrir el editor visual de plantillas")
-        self.btn_editor.setAccessibleName("Abrir editor de plantillas")
-        self.btn_editor.clicked.connect(self._open_template_editor)
-        grid.addWidget(self.btn_editor, 1, 3)
+        self.btn_editor.triggered.connect(self._open_template_editor)
 
-        self.btn_csv_viewer = QPushButton("Visor de CSV…")
+        self.btn_csv_viewer = template_menu.addAction("Visor de CSV…")
         self.btn_csv_viewer.setToolTip(
             "Abrir una ventana independiente con el historial de ejecuciones "
             "procesadas y sus CSV"
         )
-        self.btn_csv_viewer.clicked.connect(self._open_csv_viewer)
-        grid.addWidget(self.btn_csv_viewer, 1, 4)
+        self.btn_csv_viewer.triggered.connect(self._open_csv_viewer)
+        self.template_actions_button = QToolButton()
+        self.template_actions_button.setText("Herramientas")
+        self.template_actions_button.setMenu(template_menu)
+        self.template_actions_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.template_actions_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        grid.addWidget(self.template_actions_button, 1, 3)
 
         self.estimate_label = ElidedLabel("")
         self.estimate_label.setStyleSheet("color: #667085;")
         self.estimate_label.setToolTip(
             "Estimación del tiempo total para procesar la entrada actual"
         )
-        grid.addWidget(self.estimate_label, 2, 0, 1, 6)
+        grid.addWidget(self.estimate_label, 2, 0, 1, 4)
         return group
 
     def _build_options_group(self) -> QGroupBox:
@@ -1015,9 +1016,6 @@ class MainWindow(QMainWindow):
         group = self.export_options = ExportOptionsGroup(raiz=SCRIPT_DIR)
         layout = group.layout()
         self._register_density_layout(layout, stacked=True)
-        self.modo_grupo = group.modo_grupo
-        self.radio_varios = group.radio_varios
-        self.radio_unico = group.radio_unico
         self.matricula_check = group.matricula_check
         self.mes_check = group.mes_check
         self.discrepancias_check = group.discrepancias_check
@@ -1026,110 +1024,75 @@ class MainWindow(QMainWindow):
             self._on_csv_date_mode_changed
         )
 
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.HLine)
-        divider.setFrameShadow(QFrame.Shadow.Sunken)
-        layout.addWidget(divider)
-
-        info_row = QHBoxLayout()
-        info_label = QLabel("Opciones:")
-        info_label.setStyleSheet("font-weight: 600;")
-        info_row.addWidget(info_label)
-        info_row.addSpacing(8)
-        self.fields_check = QCheckBox("Visualizar campos")
+        tools_row = QHBoxLayout()
+        tools_row.setSpacing(8)
+        view_menu = QMenu(group)
+        view_menu.setToolTipsVisible(True)
+        self.fields_check = view_menu.addAction("Visualizar campos")
+        self.fields_check.setCheckable(True)
         self.fields_check.setToolTip(
             "Dibuja los recuadros de los campos solo en la vista previa; los "
             "PDF exportados salen sin marcas."
         )
         self.fields_check.toggled.connect(self._on_fields_toggled)
-        info_row.addWidget(self.fields_check)
-        self.important_fields_check = QCheckBox("Mostrar solo columnas importantes")
+        self.important_fields_check = view_menu.addAction(
+            "Solo campos importantes"
+        )
+        self.important_fields_check.setCheckable(True)
         self.important_fields_check.setEnabled(False)
         self.important_fields_check.setToolTip(
-            "Muestra solo los campos importantes (botón de al lado). Sin "
-            "marcar, se dibuja la plantilla completa."
+            "Muestra solo los campos importantes. Sin marcar, se dibuja la "
+            "plantilla completa."
         )
         self.important_fields_check.toggled.connect(self._on_fields_toggled)
         self.fields_check.toggled.connect(
             self.important_fields_check.setEnabled
         )
-        info_row.addWidget(self.important_fields_check)
-        self.important_fields_button = ImportantFieldsButton()
-        self.important_fields_button.setToolTip(
+        important_fields_action = view_menu.addAction(
+            "Elegir campos importantes…"
+        )
+        important_fields_action.setToolTip(
             "Seleccionar los campos importantes; la lista se guarda por "
             "plantilla y decide qué recuadros y columnas se muestran."
         )
-        self.important_fields_button.clicked.connect(self._open_important_fields)
-        info_row.addWidget(self.important_fields_button)
-        info_row.addStretch()
-        layout.addLayout(info_row)
+        important_fields_action.triggered.connect(self._open_important_fields)
+        self.view_button = QToolButton()
+        self.view_button.setText("Vista")
+        self.view_button.setMenu(view_menu)
+        self.view_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.view_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.view_button.setToolTip(
+            "Elegir qué campos se muestran en la vista previa."
+        )
+        tools_row.addWidget(self.view_button)
 
-        fleet_row = QHBoxLayout()
-        fleet_label = QLabel("Flota")
-        fleet_label.setStyleSheet("font-weight: 600;")
-        fleet_row.addWidget(fleet_label)
         self.fleet_check = QCheckBox("Verificar matrículas")
         self.fleet_check.setChecked(True)
         self.fleet_check.setToolTip(
             "Corrige la matrícula leída contra la lista de aviones: la que no "
             "esté se cambia por la más parecida y queda marcada para revisar."
         )
-        fleet_row.addWidget(self.fleet_check)
-        fleet_button = QPushButton("Editar lista de matrículas…")
+        tools_row.addWidget(self.fleet_check)
+        fleet_button = QPushButton("Editar flota…")
         fleet_button.setToolTip(
             "Abre la lista de matrículas de la flota. Debe estar al día con "
             f"las altas y las bajas; se guarda en {FLEET_FILENAME}."
         )
         fleet_button.clicked.connect(self._open_fleet_editor)
-        fleet_row.addWidget(fleet_button)
-        fleet_row.addStretch()
-        layout.addLayout(fleet_row)
-        # En ventana ancha, «Indexar en AirVault…» se muda a esta fila,
-        # pegado al borde derecho: ver ``_place_airvault_button``.
-        self._fleet_row = fleet_row
-        # Sin este hueco el botón de editar matrículas queda pegado al
-        # borde inferior del cuadro, tocando la línea del marco.
-        layout.addSpacing(4)
-        return group
+        tools_row.addWidget(fleet_button)
 
-    def _build_action_row(self) -> QWidget:
-        panel = QWidget()
-        self._actions_row = QHBoxLayout(panel)
-        self._actions_row.setContentsMargins(0, 0, 0, 0)
-        self._actions_row.setSpacing(12)
-
-        # El indexado ya no cuelga de este cuadro: vive en su propia ventana
-        # y de aquí solo sale el botón que la abre. Empotrado, desplegarlo
-        # cambiaba el mínimo de la ventana y descuadraba el reparto de los
-        # cuadros; y la ejecución que se sube ya no tiene por qué ser la que
-        # acaba de terminar, que es lo que ese sitio daba a entender.
         self.btn_airvault = QPushButton("Indexar en AirVault…")
         self.btn_airvault.setToolTip(AIRVAULT_TOOLTIP)
         self.btn_airvault.clicked.connect(lambda: self._open_airvault())
-        self._actions_row.addWidget(self.btn_airvault)
-
-        # Los pasos de «Automático». Estaban en la ventana de AirVault, donde
-        # solo se veían después de procesar y solo decidían el tramo final;
-        # aquí deciden la cadena entera, que es lo que el botón ejecuta.
-        # Van en un menú y no en un panel desplegable: empotrados le quitaban
-        # alto a la vista previa y a la tabla, y en una pantalla baja los
-        # últimos pasos quedaban fuera del borde de la ventana.
-        self.btn_automatizacion = QPushButton("Automatización…")
-        self.btn_automatizacion.setToolTip(
-            "Hasta dónde continúa «Automático»: qué pasos encadena después "
-            "de procesar y cuáles se saltan."
-        )
-        self.menu_automatizacion = MenuAutomatizacion(
-            self._automatizacion, self
-        )
-        self.btn_automatizacion.clicked.connect(
-            lambda: self.menu_automatizacion.abrir_sobre(
-                self.btn_automatizacion
-            )
-        )
-        self._actions_row.addWidget(self.btn_automatizacion)
-        self._actions_row.addStretch()
-        return panel
+        tools_row.addWidget(self.btn_airvault)
+        tools_row.addStretch()
+        layout.addLayout(tools_row)
+        self._fleet_row = tools_row
+        return group
 
     def _open_airvault(self) -> None:
         """Abre una ventana libre o crea otra para trabajar en paralelo.
@@ -1210,7 +1173,7 @@ class MainWindow(QMainWindow):
 
         time_summary = QFrame()
         time_summary.setObjectName("timeSummary")
-        time_summary.setMinimumWidth(270)
+        time_summary.setMinimumWidth(240)
         # Alto de suelo, no fijo: dentro van dos líneas (el rótulo y su
         # reloj) y con 30 px clavados no cabían las dos, así que los números
         # salían con la base cortada. Con suelo se ven enteros aquí y siguen
@@ -1250,12 +1213,13 @@ class MainWindow(QMainWindow):
         self.btn_process.setDefault(True)
         self.btn_process.clicked.connect(self._start_processing)
 
-        self.btn_preprocess = QPushButton("Preprocesar")
+        actions_menu = QMenu(self)
+        actions_menu.setToolTipsVisible(True)
+        self.btn_preprocess = actions_menu.addAction("Preprocesar")
         self.btn_preprocess.setToolTip(
             "Aplica corrección de inclinación y alineación sin ejecutar OCR."
         )
-        self.btn_preprocess.clicked.connect(self._start_preprocessing)
-        row.addWidget(self.btn_preprocess)
+        self.btn_preprocess.triggered.connect(self._start_preprocessing)
         row.addWidget(self.btn_process)
 
         self.btn_cancel = QPushButton("Cancelar")
@@ -1264,29 +1228,52 @@ class MainWindow(QMainWindow):
         self.btn_cancel.clicked.connect(self._request_cancel)
         row.addWidget(self.btn_cancel)
 
-        self.btn_export = QPushButton("Exportar")
+        self.btn_export = actions_menu.addAction("Exportar")
         self.btn_export.setEnabled(False)
         self.btn_export.setToolTip(
             "Volver a generar CSV, JSON y PDF con las opciones actuales, sin "
             "reprocesar. Los PDF repetidos se numeran (-2, -3…)"
         )
-        self.btn_export.clicked.connect(self._exportar)
-        row.addWidget(self.btn_export)
+        self.btn_export.triggered.connect(self._exportar)
 
-        self.btn_depurar = QPushButton("Depurar")
+        self.btn_depurar = actions_menu.addAction("Depurar")
         self.btn_depurar.setEnabled(False)
         self.btn_depurar.setToolTip(DEPURAR_TOOLTIP)
-        self.btn_depurar.clicked.connect(self._depurar_paginas)
-        row.addWidget(self.btn_depurar)
+        self.btn_depurar.triggered.connect(self._depurar_paginas)
+
+        self.more_actions_button = QToolButton()
+        self.more_actions_button.setText("Más")
+        self.more_actions_button.setMenu(actions_menu)
+        self.more_actions_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.more_actions_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.more_actions_button.setToolTip(
+            "Preprocesar, exportar o depurar la ejecución."
+        )
+        row.addWidget(self.more_actions_button)
 
         # El de siempre, pero sin volver a pulsar nada entre paso y paso.
         # Se lleva el azul porque es el que hace la entrega entera; los
         # demás siguen ahí para hacer un solo tramo cuando hace falta.
-        self.btn_automatico = QPushButton("Automático")
+        self.btn_automatico = QToolButton()
+        self.btn_automatico.setText("Automático")
         self.btn_automatico.setObjectName("primaryButton")
         self.btn_automatico.setToolTip(
-            "Encadena todos los pasos marcados en «Automatización…», uno tras "
-            "otro. «Cancelar» corta la cadena."
+            "El botón ejecuta la cadena completa. La flecha permite elegir "
+            "hasta qué paso continúa; «Cancelar» corta la cadena."
+        )
+        self.menu_automatizacion = MenuAutomatizacion(
+            self._automatizacion, self
+        )
+        self.btn_automatico.setMenu(self.menu_automatizacion)
+        self.btn_automatico.setPopupMode(
+            QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        )
+        self.btn_automatico.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
         self.btn_automatico.clicked.connect(self._start_automatico)
         row.addWidget(self.btn_automatico)
@@ -2267,9 +2254,10 @@ class MainWindow(QMainWindow):
     def _refresh_templates(self) -> None:
         manager = TemplateManager()
         paths = manager.list_templates_with_fallback()
-        self.template_combo.clear()
-        for path in paths:
-            self.template_combo.addItem(path.stem, str(path))
+        with QSignalBlocker(self.template_combo):
+            self.template_combo.clear()
+            for path in paths:
+                self.template_combo.addItem(path.stem, str(path))
 
     def _browse_pdfs(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
@@ -2548,7 +2536,7 @@ class MainWindow(QMainWindow):
                 self._config.crop_padding if self._config is not None else 0.01
             ),
             separar_por=tuple(self._separator_value() or ()),
-            un_solo_pdf=self.radio_unico.isChecked(),
+            un_solo_pdf=self.export_options.un_solo_pdf(),
             paginas_por_parte=self._paginas_por_parte(),
             discrepancias=self.discrepancias_check.isChecked(),
             errores=self.export_options.errores_check.isChecked(),
@@ -2565,7 +2553,10 @@ class MainWindow(QMainWindow):
     def _paginas_por_parte(self) -> int:
         """Tope de páginas por parte, o cero si la entrega no se reparte."""
         grupo = self.export_options
-        if not (self.radio_unico.isChecked() and grupo.partes_check.isChecked()):
+        if not (
+            self.export_options.un_solo_pdf()
+            and grupo.partes_check.isChecked()
+        ):
             return 0
         return int(grupo.partes_spin.value())
 
@@ -2584,10 +2575,21 @@ class MainWindow(QMainWindow):
 
     def _load_template(self) -> Template | None:
         selected = self.template_combo.currentData()
-        if not selected or not Path(selected).exists():
+        path = Path(selected) if selected else None
+        if path is None or not path.exists():
             return None
         try:
-            return TemplateManager().load(Path(selected))
+            modified = path.stat().st_mtime_ns
+            cached = self._template_cache
+            if (
+                cached is not None
+                and cached[0] == path
+                and cached[1] == modified
+            ):
+                return cached[2]
+            template = TemplateManager().load(path)
+            self._template_cache = (path, modified, template)
+            return template
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"No se pudo cargar la plantilla: {exc}")
             return None
@@ -4424,11 +4426,17 @@ class MainWindow(QMainWindow):
         """
         super().resizeEvent(event)
         self._update_responsive_layout()
-        QTimer.singleShot(0, self._balance_bottom_splitter)
-        QTimer.singleShot(0, self._balance_content_splitter)
+        self._responsive_timer.start()
         if self._preview_source_pixmap is not None:
             self._resize_preview_timer.start()
         else:
+            self._resize_preview_placeholder()
+
+    def _finish_resize_layout(self) -> None:
+        """Equilibra una sola vez al terminar una ráfaga de redimensionado."""
+        self._balance_bottom_splitter()
+        self._balance_content_splitter()
+        if self._preview_source_pixmap is None:
             self._resize_preview_placeholder()
 
     # ── Cierre ──────────────────────────────────────────────────────────

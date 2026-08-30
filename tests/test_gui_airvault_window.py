@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QLineEdit,
     QMessageBox,
+    QToolButton,
 )
 
 from app.airvault.config import AirVaultConfig
@@ -1256,15 +1257,27 @@ def test_cancelado_se_cuenta_y_no_deja_la_barra_girando(ventana):
 
 # ── integración con la ventana principal ───────────────────────────
 
-def test_las_acciones_quedan_juntas_sin_panel_avanzado(app):
+def test_las_acciones_quedan_compactas_sin_panel_avanzado(app):
     from app.gui.main_window import MainWindow
 
     principal = MainWindow()
     try:
-        fila = principal._actions_row
+        fila = principal._fleet_row
         widgets = [fila.itemAt(i).widget() for i in range(fila.count())]
         assert principal.btn_airvault in widgets
-        assert principal.btn_automatizacion in widgets
+        assert isinstance(principal.btn_automatico, QToolButton)
+        assert principal.btn_automatico.menu() is principal.menu_automatizacion
+        for desplegable in (
+            principal.input_actions_button,
+            principal.template_actions_button,
+            principal.view_button,
+            principal.more_actions_button,
+        ):
+            assert isinstance(desplegable, QToolButton)
+            assert desplegable.menu() is not None
+            assert desplegable.popupMode() == (
+                QToolButton.ToolButtonPopupMode.InstantPopup
+            )
         assert not hasattr(principal, "advanced_btn")
         assert principal._reference_page == 1
         assert principal._effective_threads() == max(
