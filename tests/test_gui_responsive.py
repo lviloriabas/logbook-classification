@@ -223,8 +223,8 @@ def test_en_pantalla_baja_los_cuadros_se_reparten_en_dos_columnas():
             ventana.close()
 
 
-def test_en_pantalla_grande_la_ventana_es_la_de_siempre():
-    """Nada de esto puede cambiar el aspecto donde ya cabía: una columna."""
+def test_en_pantalla_grande_aprovecha_el_ancho_en_dos_columnas():
+    """Entrada y Salidas no gastan dos filas completas en un monitor ancho."""
     _app()
     area = _area_de_trabajo(1920, 1080)
     with patch.object(responsive, "available_area", return_value=area):
@@ -232,7 +232,7 @@ def test_en_pantalla_grande_la_ventana_es_la_de_siempre():
         try:
             ventana.show()
             assert ventana._density is ROOMY
-            assert ventana._controls_columns == 1
+            assert ventana._controls_columns == 2
         finally:
             ventana.close()
 
@@ -254,7 +254,7 @@ def test_la_ventana_se_readapta_al_cambiar_de_tamano():
             holgado = ventana._roomy_minimum.height()
             ventana.resize(1400, holgado + responsive.DENSITY_HYSTERESIS)
             assert ventana._density is ROOMY
-            assert ventana._controls_columns == 1
+            assert ventana._controls_columns == 2
         finally:
             ventana.close()
 

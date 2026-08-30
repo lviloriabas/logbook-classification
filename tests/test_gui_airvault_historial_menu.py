@@ -135,7 +135,7 @@ def test_el_boton_elimina_registros_de_todas_las_ejecuciones_presentes(
         ventana._refrescar_historial()
 
         assert ventana.boton_eliminar_registro.isEnabled()
-        ventana.boton_eliminar_registro.click()
+        ventana.boton_eliminar_registro.trigger()
 
         assert set(papelera) == manifiestos
         assert all(not ruta.exists() for ruta in manifiestos)

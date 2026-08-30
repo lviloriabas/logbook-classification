@@ -10,6 +10,7 @@ from app.gui.widgets import (
     PANE_CONTROL_BG,
     PANE_SURFACE_BG,
     PANE_TEXT,
+    TABLE_BASE_BG,
     TABLE_SELECTION_BG,
     window_stylesheet,
 )
@@ -39,7 +40,7 @@ def test_application_name_describes_the_bits_workflow():
     assert APPLICATION_DISPLAY_NAME == "BITS - Clasificación de Bitácoras"
 
 
-def test_group_titles_blend_with_the_window_surface():
+def test_group_titles_blend_with_the_group_surface():
     title_rule = APP_CHROME_QSS.split("QGroupBox::title", 1)[1].split("}", 1)[0]
-    assert f"background-color: {PANE_SURFACE_BG};" in title_rule
+    assert f"background-color: {TABLE_BASE_BG};" in title_rule
     assert f"background-color: {PANE_CONTROL_BG};" not in title_rule
