@@ -203,6 +203,10 @@ QPushButton {
 }
 QPushButton:disabled { color: #8c959f; }
 QToolButton { padding: 2px 6px; }
+QToolButton#primaryButton {
+    min-height: 26px;
+    padding: 4px 12px;
+}
 QToolButton#spinStepButton {
     min-width: 18px; max-width: 18px; min-height: 0;
     padding: 0;

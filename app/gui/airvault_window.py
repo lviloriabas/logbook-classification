@@ -66,6 +66,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -280,6 +281,10 @@ def estado_de_entrega(
 TOOLTIP_ELIMINAR_REGISTRO = (
     "Borra el estado local de AirVault de esta ejecución para empezar de "
     "nuevo. No toca el CSV, los PDF ni lo que ya esté en AirVault."
+)
+TOOLTIP_ELIMINAR_REGISTROS = (
+    "Borra el estado local de AirVault de todas las ejecuciones presentes "
+    "en el historial. No toca sus CSV, PDF ni los batches remotos."
 )
 
 
@@ -1125,9 +1130,9 @@ class AirVaultWindow(QDialog):
         self.boton_buscar.clicked.connect(self._elegir_corrida)
         grid.addWidget(self.boton_buscar, 0, 2)
 
-        self.boton_eliminar_registro = QPushButton("Eliminar registro")
+        self.boton_eliminar_registro = QPushButton("Eliminar registros")
         self.boton_eliminar_registro.setEnabled(False)
-        self.boton_eliminar_registro.setToolTip(TOOLTIP_ELIMINAR_REGISTRO)
+        self.boton_eliminar_registro.setToolTip(TOOLTIP_ELIMINAR_REGISTROS)
         self.boton_eliminar_registro.clicked.connect(
             lambda: self._eliminar_registro()
         )
@@ -1232,14 +1237,37 @@ class AirVaultWindow(QDialog):
             QKeySequence.StandardKey.Find, self,
             activated=self.buscar_bitacora_edit.setFocus,
         )
-        self.boton_previa = QPushButton("Vista previa…")
+        batch_menu = QMenu(self)
+        batch_menu.setToolTipsVisible(True)
+        self.boton_previa = batch_menu.addAction("Vista previa…")
         self.boton_previa.setEnabled(False)
         self.boton_previa.setToolTip(
             "Muestra cómo quedaría repartida la ejecución en batches y qué "
             "lleva cada uno. No prepara ni sube nada."
         )
-        self.boton_previa.clicked.connect(self._vista_previa)
-        fila.addWidget(self.boton_previa)
+        self.boton_previa.triggered.connect(self._vista_previa)
+        batch_menu.addSeparator()
+        self.boton_eliminar_batches = batch_menu.addAction(
+            "Eliminar seleccionados…"
+        )
+        self.boton_eliminar_batches.setEnabled(False)
+        self.boton_eliminar_batches.setToolTip(
+            "Envía a la Papelera todos los batches seleccionados en la tabla. "
+            "No modifica los batches que ya estén en AirVault."
+        )
+        self.boton_eliminar_batches.triggered.connect(
+            self._eliminar_seleccionados
+        )
+        self.batch_actions_button = QToolButton()
+        self.batch_actions_button.setText("Acciones")
+        self.batch_actions_button.setMenu(batch_menu)
+        self.batch_actions_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.batch_actions_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        fila.addWidget(self.batch_actions_button)
         return fila
 
     def _vista_previa(self) -> None:
@@ -1338,6 +1366,9 @@ class AirVaultWindow(QDialog):
             Qt.ContextMenuPolicy.CustomContextMenu
         )
         tabla.customContextMenuRequested.connect(self._menu_de_la_cola)
+        tabla.itemSelectionChanged.connect(
+            self._actualizar_eliminar_seleccionados
+        )
         self._ajustar_tabla(tabla)
         self.lotes = tabla
         return tabla
@@ -1494,6 +1525,30 @@ class AirVaultWindow(QDialog):
             self._estados[numero] for numero in filas
             if numero < len(self._estados)
         ]
+
+    def _seleccionadas(self) -> list:
+        """Batches de todas las filas seleccionadas en la tabla."""
+        seleccion = self.lotes.selectionModel()
+        if seleccion is None:
+            return []
+        filas = sorted({indice.row() for indice in seleccion.selectedRows()})
+        return [
+            self._estados[fila] for fila in filas
+            if fila < len(self._estados)
+        ]
+
+    def _actualizar_eliminar_seleccionados(self) -> None:
+        elegidos = self._seleccionadas()
+        self.boton_eliminar_batches.setEnabled(bool(elegidos))
+        self.boton_eliminar_batches.setText(
+            "Eliminar seleccionado…" if len(elegidos) == 1
+            else f"Eliminar seleccionados ({len(elegidos)})…"
+            if elegidos else "Eliminar seleccionados…"
+        )
+
+    def _eliminar_seleccionados(self) -> None:
+        """Elimina en una sola operación toda la selección visible."""
+        self._eliminar_estas(self._seleccionadas())
 
     def _acciones_de_la_cola(self, partes) -> QMenu:
         """Lo que se puede hacer con los batches elegidos, y lo que no.
@@ -2144,9 +2199,7 @@ class AirVaultWindow(QDialog):
         self._ajustar_vigilancia()
         self.boton_revisar.setEnabled(bool(self._trabajos))
         self.boton_reiniciar.setEnabled(bool(self._trabajos))
-        self.boton_eliminar_registro.setEnabled(
-            bool(self._rutas_del_registro())
-        )
+        self._actualizar_boton_eliminar_registros()
         for parte in idas:
             self._anotar(
                 f"{parte.nombre or '(sin nombre)'}: eliminado de la cola"
@@ -2192,16 +2245,19 @@ class AirVaultWindow(QDialog):
         # es una copia sino el mismo ajuste visto desde aquí, que es donde
         # se está mirando mientras AirVault trabaja. Empotrado ocupaba media
         # ventana; en un menú no le quita sitio a la bitácora.
-        self.boton_automatizacion = QPushButton("Automatización…")
+        self.boton_automatizacion = QToolButton()
+        self.boton_automatizacion.setText("Automatización")
         self.boton_automatizacion.setToolTip(
             "Hasta dónde sigue el trabajo solo: subir, indexar y completar. "
             "La misma elección que en la ventana principal."
         )
         self.menu_automatizacion = MenuAutomatizacion(self._opciones, self)
-        self.boton_automatizacion.clicked.connect(
-            lambda: self.menu_automatizacion.abrir_sobre(
-                self.boton_automatizacion
-            )
+        self.boton_automatizacion.setMenu(self.menu_automatizacion)
+        self.boton_automatizacion.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.boton_automatizacion.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
         fila.addWidget(self.boton_automatizacion)
 
@@ -2421,6 +2477,7 @@ class AirVaultWindow(QDialog):
             for carpeta, csv in corridas:
                 if csv is not None:
                     self._agregar_ejecucion(carpeta, csv)
+        self._actualizar_boton_eliminar_registros()
         if combo.count() <= 1:
             self.resumen.setText(
                 "No hay ejecuciones procesadas todavía. Procese y exporte una, "
@@ -2445,11 +2502,6 @@ class AirVaultWindow(QDialog):
                 return combo.itemData(indice)
         return combo.itemData(1)
 
-    def _limite_vigente(self) -> int:
-        """Máximo de páginas por batch que hay puesto ahora mismo."""
-        spin = getattr(self, "limite_batch_spin", None)
-        return int(spin.value()) if spin is not None else 0
-
     def _agregar_ejecucion(self, carpeta: Path, csv: Path) -> None:
         """Mete una ejecución en la lista, con su nombre y nada más.
 
@@ -2459,7 +2511,11 @@ class AirVaultWindow(QDialog):
         preguntando. Van al aviso que sale al posarse encima, que es donde
         se miran cuando hacen falta.
         """
-        entrega, listo = estado_de_entrega(csv, self._limite_vigente())
+        # El historial solo necesita saber si se puede subir. Calcular aquí
+        # el reparto completo de cada CSV repetía hasta 25 recorridos grandes
+        # al abrir la ventana; el número de batches se calcula en la vista
+        # previa, donde sí se usa.
+        entrega, listo = estado_de_entrega(csv)
         paginas = paginas_de_corrida(carpeta)
         cuenta = "sin contar" if paginas is None else f"{paginas} pág."
         indice = self.historial.count()
@@ -2636,9 +2692,7 @@ class AirVaultWindow(QDialog):
         self.boton_indexar.setEnabled(bool(self.corrida_edit.text().strip()))
         self.boton_previa.setEnabled(bool(self.corrida_edit.text().strip()))
         self.boton_revisar.setEnabled(bool(self._trabajos))
-        self.boton_eliminar_registro.setEnabled(
-            bool(self._rutas_del_registro())
-        )
+        self._actualizar_boton_eliminar_registros()
         self.boton_reiniciar.setEnabled(bool(self._trabajos))
         self._ajustar_vigilancia()
 
@@ -2696,60 +2750,111 @@ class AirVaultWindow(QDialog):
         )
         return sorted(rutas)
 
-    def _eliminar_registro(self, corrida: Path | str = "") -> None:
-        """Reinicia una ejecución borrando solo su memoria local de AirVault.
+    def _corridas_presentes(self) -> list[Path]:
+        """Ejecuciones visibles en el historial, incluida la abierta."""
+        corridas: list[Path] = []
+        vistas: set[str] = set()
+        for indice in range(1, self.historial.count()):
+            dato = self.historial.itemData(indice)
+            if not dato:
+                continue
+            ruta = Path(str(dato))
+            clave = str(ruta).casefold()
+            if clave not in vistas:
+                corridas.append(ruta)
+                vistas.add(clave)
+        abierta = self.corrida_edit.text().strip()
+        if abierta and abierta.casefold() not in vistas:
+            corridas.append(Path(abierta))
+        return corridas
 
-        Sin ``corrida`` es la ejecución abierta, que es lo que pulsa el
-        botón; el menú del historial nombra la fila elegida, que puede ser
-        cualquier otra de la lista.
-        """
-        csv = Path(str(corrida or self.corrida_edit.text()).strip())
-        if not str(csv).strip():
+    def _registros_presentes(self) -> dict[Path, list[Path]]:
+        """Registros locales de todas las ejecuciones que muestra la lista."""
+        return {
+            corrida: rutas
+            for corrida in self._corridas_presentes()
+            if (rutas := self._rutas_del_registro(corrida))
+        }
+
+    def _actualizar_boton_eliminar_registros(self) -> None:
+        boton = getattr(self, "boton_eliminar_registro", None)
+        if boton is None:
             return
-        abierta = self._es_la_ejecucion_abierta(csv)
-        rutas = self._rutas_del_registro(csv)
-        if not rutas:
+        boton.setEnabled(
+            self.hilo() is None and bool(self._registros_presentes())
+        )
+
+    def _eliminar_registro(self, corrida: Path | str = "") -> None:
+        """Borra memoria local de una ejecución o de todas las presentes.
+
+        El menú del historial pasa una ``corrida`` y actúa solo sobre ella.
+        El botón no la pasa y limpia todas las ejecuciones de la lista.
+        """
+        texto = str(corrida).strip()
+        individual = bool(texto)
+        if individual:
+            csv = Path(texto)
+            registros = {csv: self._rutas_del_registro(csv)}
+            registros = {
+                csv: rutas for csv, rutas in registros.items() if rutas
+            }
+        else:
+            registros = self._registros_presentes()
+        if not registros:
             QMessageBox.information(
                 self,
                 "Eliminar registro",
-                "Esta ejecución no tiene un registro local de AirVault.",
+                "No hay registros locales de AirVault en las ejecuciones "
+                "presentes.",
             )
             return
-        cuenta = f"{len(rutas)} batch" + (
-            "es" if len(rutas) != 1 else ""
-        )
+        rutas = sorted({ruta for grupo in registros.values() for ruta in grupo})
+        cantidad = len(registros)
+        if individual:
+            alcance = f"la ejecución «{next(iter(registros)).stem}»"
+        else:
+            alcance = (
+                "todas las ejecuciones presentes "
+                f"({cantidad} con registro)"
+            )
         respuesta = QMessageBox.warning(
             self,
-            "Eliminar registro de AirVault",
-            f"Se enviará a la Papelera el registro local de «{csv.stem}» "
-            f"({cuenta}).\n\n"
-            "No se borrarán el CSV, los PDF ni los batches existentes en "
-            "AirVault. Al volver a subir, se reconstruirá el proceso y se "
-            "buscarán otra vez por título.\n\n¿Desea continuar?",
+            "Eliminar registros de AirVault",
+            f"Se enviará a la Papelera la memoria local de {alcance} "
+            f"({len(rutas)} archivo(s) de registro).\n\n"
+            "No se borrarán los CSV, los PDF ni los batches existentes en "
+            "AirVault. Las cargas se reconstruirán y se buscarán otra vez "
+            "por título.\n\n¿Desea continuar?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         if respuesta != QMessageBox.StandardButton.Yes:
             return
 
-        carpeta = self._carpeta_del_registro(csv)
-        if carpeta is None:
-            return
+        abierta = self.corrida()
+        rutas_abiertas = (
+            set(self._rutas_del_registro(abierta))
+            if abierta is not None else set()
+        )
         movidos, fallidos = send_to_trash(rutas)
-        if movidos and abierta:
+        movidos_set = set(movidos)
+        if abierta is not None and movidos_set & rutas_abiertas:
+            carpeta = self._carpeta_del_registro(abierta)
             self._parar_vigilancia()
             self._indexado_incompleto = False
-            self._cargar_trabajos(carpeta, csv)
+            if carpeta is not None:
+                self._cargar_trabajos(carpeta, abierta)
             self.estado_label.setText("Registro local eliminado")
             self.resumen.setText(
-                "Se eliminó el registro local de AirVault. La ejecución "
-                "puede iniciarse nuevamente; los batches remotos no se "
-                "modificaron."
+                "Se eliminaron los registros locales de AirVault. Las "
+                "ejecuciones pueden iniciarse nuevamente; los batches "
+                "remotos no se modificaron."
             )
-        if movidos:
-            self._anotar(
-                f"Registro local de AirVault eliminado: {csv.stem}"
-            )
+        for csv, grupo in registros.items():
+            if movidos_set.intersection(grupo):
+                self._anotar(
+                    f"Registro local de AirVault eliminado: {csv.stem}"
+                )
 
         if fallidos:
             detalle = "\n".join(
@@ -2761,6 +2866,7 @@ class AirVaultWindow(QDialog):
                 f"Se eliminaron {len(movidos)} de {len(rutas)} registros.\n\n"
                 "No se pudieron eliminar:\n" + detalle,
             )
+        self._actualizar_boton_eliminar_registros()
 
     def _es_la_ejecucion_abierta(self, csv: Path | str) -> bool:
         """Si esa ejecución es la que la ventana tiene cargada ahora."""
@@ -3402,7 +3508,7 @@ class AirVaultWindow(QDialog):
         self.boton_subir.setEnabled(activo and self._listo_para_subir)
         self.boton_buscar.setEnabled(True)
         self.boton_eliminar_registro.setEnabled(
-            activo and bool(self._rutas_del_registro())
+            activo and bool(self._registros_presentes())
         )
         self.lote_edit.setEnabled(activo)
         self.cookie_edit.setEnabled(activo)

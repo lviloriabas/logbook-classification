@@ -21,7 +21,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QToolButton
 
 from app.gui.airvault_window import AirVaultWindow
 from app.gui.automatizacion import (
@@ -212,9 +212,13 @@ def test_el_menu_se_abre_encima_y_no_ocupa_sitio_en_la_ventana(app, tmp_path):
         assert not ventana.menu_automatizacion.isVisible()
         # No cuelga de ningún layout: un panel empotrado sí lo haría.
         assert ventana.menu_automatizacion.parentWidget() is ventana
-        assert not ventana.btn_automatizacion.isCheckable()
+        assert isinstance(ventana.btn_automatico, QToolButton)
+        assert ventana.btn_automatico.menu() is ventana.menu_automatizacion
+        assert ventana.btn_automatico.popupMode() == (
+            QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        )
 
-        ventana.menu_automatizacion.abrir_sobre(ventana.btn_automatizacion)
+        ventana.menu_automatizacion.abrir_sobre(ventana.btn_automatico)
         app.processEvents()
 
         assert ventana.menu_automatizacion.isVisible()

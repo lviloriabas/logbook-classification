@@ -121,6 +121,31 @@ def test_eliminar_el_registro_de_una_fila_que_no_es_la_abierta(
         app.processEvents()
 
 
+def test_el_boton_elimina_registros_de_todas_las_ejecuciones_presentes(
+    app, tmp_path, papelera
+):
+    primera = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
+    segunda = corrida(tmp_path, "BITS 19 AUG 2026 06 10")
+    manifiestos = {
+        registrar_en_airvault(tmp_path, primera),
+        registrar_en_airvault(tmp_path, segunda),
+    }
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        ventana._refrescar_historial()
+
+        assert ventana.boton_eliminar_registro.isEnabled()
+        ventana.boton_eliminar_registro.click()
+
+        assert set(papelera) == manifiestos
+        assert all(not ruta.exists() for ruta in manifiestos)
+        assert primera.exists() and segunda.exists()
+        assert not ventana.boton_eliminar_registro.isEnabled()
+    finally:
+        ventana.close()
+        app.processEvents()
+
+
 def test_eliminar_la_ejecucion_la_manda_entera_a_la_papelera(
     app, tmp_path, papelera
 ):
