@@ -25,7 +25,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QRect, QSize
+from PySide6.QtCore import QPoint, QRect, QSize
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication, QLabel
 
@@ -362,12 +362,49 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
                 salidas.separation_button.width()
                 == ventana.view_button.width()
             )
+            assert ventana._input_group.height() == ventana._options_group.height()
+            automatico_texto = (
+                ventana.btn_automatico.fontMetrics().horizontalAdvance(
+                    ventana.btn_automatico.text()
+                )
+            )
+            assert ventana.btn_automatico.width() >= automatico_texto + 50
             assert ventana.progress.x() < ventana.width() // 5
+            assert all(
+                etiqueta.text() == "00:00:00"
+                for etiqueta in ventana.time_labels.values()
+            )
             ventana.resize(1366, 680)
             app.processEvents()
             assert {control.height() for control in controles} == {28}
         finally:
             ventana.close()
+
+
+def test_el_buscador_no_desalinea_el_visor_y_la_tabla():
+    """La busqueda es una barra comun y los dos cuadros comparten limites."""
+    app = _app()
+    area = _area_de_trabajo(1920, 1080)
+    with patch.object(responsive, "available_area", return_value=area):
+        ventana = MainWindow()
+        try:
+            ventana.show()
+            for _ in range(4):
+                app.processEvents()
+
+            visor = ventana.preview_scroll.mapTo(ventana, QPoint())
+            tabla = ventana.table.mapTo(ventana, QPoint())
+            buscador = ventana.search_edit.mapTo(ventana, QPoint())
+            assert buscador.y() < visor.y()
+            assert abs(visor.y() - tabla.y()) <= 1
+            assert abs(
+                visor.y() + ventana.preview_scroll.height()
+                - tabla.y()
+                - ventana.table.height()
+            ) <= 1
+        finally:
+            ventana.close()
+            app.processEvents()
 
 
 def test_el_limite_de_paginas_muestra_valor_y_sufijo_completos():

@@ -47,7 +47,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLayout,
-    QMenu,
     QSizePolicy,
     QWidget,
 )
@@ -57,6 +56,7 @@ from app.airvault.config import (
     AirVaultConfig,
     guardar_preferencias,
 )
+from app.gui.widgets import MultiSelectMenu
 
 # Pasos que la persona elige, en el orden en que ocurren. El primero va
 # suelto; los tres de AirVault forman la cadena.
@@ -220,7 +220,7 @@ class OpcionesAutomatizacion(QObject):
             self.cambiado.emit(nombre, valor)
 
 
-class MenuAutomatizacion(QMenu):
+class MenuAutomatizacion(MultiSelectMenu):
     """Opciones marcables de la cadena automática en un menú estándar."""
 
     def __init__(

@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QSpinBox,
     QToolButton,
     QVBoxLayout,
@@ -24,22 +23,12 @@ from app.airvault.config import (
     guardar_paginas_por_batch,
 )
 from app.gui.widgets import (
+    MultiSelectMenu,
     SpinBoxWithButtons,
     configure_combo_box,
     configure_menu_button,
 )
 from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
-
-
-class _MultiSelectMenu(QMenu):
-    """Menu de casillas que permanece abierto mientras se ajustan opciones."""
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - API Qt
-        action = self.activeAction()
-        if action is not None and action.isEnabled() and action.isCheckable():
-            action.trigger()
-            return
-        super().mouseReleaseEvent(event)
 
 
 class ExportOptionsGroup(QGroupBox):
@@ -60,7 +49,9 @@ class ExportOptionsGroup(QGroupBox):
 
         main_row = QHBoxLayout()
         main_row.setSpacing(8)
-        main_row.addWidget(QLabel("PDF"))
+        pdf_label = QLabel("PDF:")
+        main_row.addWidget(pdf_label)
+        self.controls_indent = pdf_label.sizeHint().width() + main_row.spacing()
         self.output_mode_combo = QComboBox()
         self.output_mode_combo.addItem("Un solo PDF", True)
         self.output_mode_combo.addItem("Varios PDF", False)
@@ -72,7 +63,7 @@ class ExportOptionsGroup(QGroupBox):
         main_row.addWidget(self.output_mode_combo)
 
         main_row.addSpacing(8)
-        main_row.addWidget(QLabel("Fecha del CSV"))
+        main_row.addWidget(QLabel("Fecha del CSV:"))
         self.csv_date_mode_combo = QComboBox()
         self.csv_date_mode_combo.addItem("Día específico", CSV_DATE_SPECIFIC)
         self.csv_date_mode_combo.addItem("Fin de mes", CSV_DATE_MONTH_END)
@@ -97,7 +88,8 @@ class ExportOptionsGroup(QGroupBox):
 
         detail_row = QHBoxLayout()
         detail_row.setSpacing(8)
-        self.separation_menu = _MultiSelectMenu(self)
+        detail_row.addSpacing(self.controls_indent)
+        self.separation_menu = MultiSelectMenu(self)
         self.matricula_check = self._checkable_action(
             "Matrícula",
             "Separa la entrega por matrícula.",

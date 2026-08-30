@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
@@ -520,6 +521,31 @@ def window_stylesheet(local_qss: str) -> str:
     return APP_CHROME_QSS + local_qss
 
 
+class MultiSelectMenu(QMenu):
+    """Menu de casillas que no se cierra entre selecciones."""
+
+    def _trigger_active_check(self) -> bool:
+        action = self.activeAction()
+        if action is None or not action.isEnabled() or not action.isCheckable():
+            return False
+        action.trigger()
+        return True
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - API Qt
+        if self._trigger_active_check():
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - API Qt
+        if event.key() in (
+            Qt.Key.Key_Space,
+            Qt.Key.Key_Return,
+            Qt.Key.Key_Enter,
+        ) and self._trigger_active_check():
+            return
+        super().keyPressEvent(event)
+
+
 class SpinBoxWithButtons(QWidget):
     """Campo numérico con las flechas fuera del área de texto.
 
@@ -531,6 +557,10 @@ class SpinBoxWithButtons(QWidget):
     def __init__(self, spin: QSpinBox, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.spin = spin
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
 
         row = QHBoxLayout(self)

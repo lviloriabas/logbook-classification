@@ -105,6 +105,7 @@ from app.gui.widgets import (
     DATA_TABLE_QSS,
     TABLE_RADIUS,
     ElidedLabel,
+    MultiSelectMenu,
     ZoomableScrollArea,
     ZoomOverlay,
     configure_combo_box,
@@ -820,6 +821,7 @@ class MainWindow(QMainWindow):
         # AirVault y llegan aquí por su señal de avance.
         self.cadena = CadenaAutomatica(self._automatizacion)
         root.addWidget(self.cadena)
+        root.addLayout(self._build_search_row())
         root.addWidget(self._build_splitter(), stretch=1)
 
         bottom = self._build_bottom_splitter()
@@ -872,18 +874,8 @@ class MainWindow(QMainWindow):
             grid.addWidget(self._input_group, 0, 0, 1, 2)
             grid.addWidget(self._options_group, 1, 0, 1, 2)
         else:
-            grid.addWidget(
-                self._input_group,
-                0,
-                0,
-                alignment=Qt.AlignmentFlag.AlignTop,
-            )
-            grid.addWidget(
-                self._options_group,
-                0,
-                1,
-                alignment=Qt.AlignmentFlag.AlignTop,
-            )
+            grid.addWidget(self._input_group, 0, 0)
+            grid.addWidget(self._options_group, 0, 1)
         grid.invalidate()
         grid.parentWidget().updateGeometry()
         central = self.centralWidget()
@@ -1029,7 +1021,8 @@ class MainWindow(QMainWindow):
 
         tools_row = QHBoxLayout()
         tools_row.setSpacing(8)
-        view_menu = QMenu(group)
+        tools_row.addSpacing(group.controls_indent)
+        view_menu = MultiSelectMenu(group)
         view_menu.setToolTipsVisible(True)
         self.fields_check = view_menu.addAction("Visualizar campos")
         self.fields_check.setCheckable(True)
@@ -1174,7 +1167,7 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        row.addWidget(self.progress, 2)
+        row.addWidget(self.progress, 1)
 
         time_summary = QFrame()
         time_summary.setObjectName("timeSummary")
@@ -1197,15 +1190,15 @@ class MainWindow(QMainWindow):
         time_layout.setSpacing(12)
         self.time_labels: dict[str, QLabel] = {}
         for key, caption in (
-            ("elapsed", "TRANSCURRIDO"),
-            ("remaining", "RESTANTE"),
-            ("total", "ESTIMADO"),
+            ("elapsed", "Transcurrido"),
+            ("remaining", "Restante"),
+            ("total", "Estimado"),
         ):
             metric = QVBoxLayout()
             metric.setSpacing(0)
             caption_label = QLabel(caption)
             caption_label.setProperty("role", "caption")
-            value_label = QLabel("--:--:--")
+            value_label = QLabel("00:00:00")
             value_label.setProperty("role", "value")
             value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             metric.addWidget(caption_label, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -1270,6 +1263,10 @@ class MainWindow(QMainWindow):
         configure_menu_button(
             self.btn_automatico, self.menu_automatizacion, split=True
         )
+        self.btn_automatico.setMinimumWidth(
+            self.btn_automatico.fontMetrics().horizontalAdvance("Automático")
+            + 50
+        )
         self.btn_automatico.clicked.connect(self._start_automatico)
         row.addWidget(self.btn_automatico)
         return row
@@ -1288,7 +1285,7 @@ class MainWindow(QMainWindow):
         }
         for key, value in values.items():
             self.time_labels[key].setText(
-                _format_clock(value) if value is not None else "--:--:--"
+                _format_clock(value) if value is not None else "00:00:00"
             )
 
     def _build_splitter(self) -> QSplitter:
@@ -1463,7 +1460,6 @@ class MainWindow(QMainWindow):
         table_panel = QWidget()
         table_layout = QVBoxLayout(table_panel)
         table_layout.setContentsMargins(0, 0, 0, 0)
-        table_layout.addLayout(self._build_search_row())
         table_layout.addWidget(self.table, 1)
         table_controls = QHBoxLayout()
         table_controls.addWidget(self.search_context, 1)
