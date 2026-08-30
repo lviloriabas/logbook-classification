@@ -13,7 +13,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QComboBox, QToolButton
 
 from app.gui.csv_utils import find_run_dirs
 from app.gui.csv_viewer import CsvViewerWindow
@@ -109,8 +109,10 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
     QApplication.instance() or QApplication([])
     options = ExportOptionsGroup()
 
-    assert options.radio_unico.isChecked()
-    assert not options.radio_varios.isChecked()
+    assert isinstance(options.output_mode_combo, QComboBox)
+    assert options.un_solo_pdf()
+    assert isinstance(options.separation_button, QToolButton)
+    assert options.separation_button.menu() is options.separation_menu
     assert options.matricula_check.isChecked()
     assert not options.mes_check.isChecked()
     assert options.separar_por() == ["avion"]
@@ -126,6 +128,10 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
     options.partes_check.setChecked(True)
     assert options.partes_control.up_button.isEnabled()
     assert options.partes_control.down_button.isEnabled()
+
+    options.set_un_solo_pdf(False)
+    assert not options.un_solo_pdf()
+    assert not options.partes_check.isEnabled()
 
 
 def test_la_cantidad_de_paginas_se_recuerda_entre_los_dos_lugares(tmp_path):
