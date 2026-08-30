@@ -313,7 +313,7 @@ QGroupBox::title {{
     left: 8px;
     padding: 0 4px;
     color: {PANE_TEXT};
-    background-color: {TABLE_BASE_BG};
+    background-color: {PANE_SURFACE_BG};
 }}
 QCheckBox, QRadioButton {{ spacing: 6px; }}
 QProgressBar {{
