@@ -2410,7 +2410,7 @@ class CsvViewerWindow(QMainWindow):
             dpi=dpi,
             crop_padding=config.crop_padding,
             separar_por=tuple(self.export_options.separar_por() or ()),
-            un_solo_pdf=self.export_options.radio_unico.isChecked(),
+            un_solo_pdf=self.export_options.un_solo_pdf(),
             discrepancias=self.export_options.discrepancias_check.isChecked(),
             errores=self.export_options.errores_check.isChecked(),
             debug=False,

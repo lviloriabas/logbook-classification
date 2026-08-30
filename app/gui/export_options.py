@@ -1,24 +1,19 @@
-"""Opciones de salida compartidas por la ventana principal y el visor de CSV.
-
-Las dos ventanas exportan la misma ejecución con los mismos criterios, así que
-el cuadro «Salidas» se construye una sola vez: el formato del PDF, los
-criterios de separación y la fecha representada en el CSV son exactamente los
-mismos textos y las mismas casillas en ambas.
-"""
+"""Opciones compactas de salida compartidas por las ventanas."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QGroupBox,
-    QSpinBox,
     QHBoxLayout,
     QLabel,
-    QRadioButton,
+    QMenu,
+    QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -28,12 +23,23 @@ from app.airvault.config import (
     AirVaultConfig,
     guardar_paginas_por_batch,
 )
-from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
 from app.gui.widgets import SpinBoxWithButtons, fit_combo_to_items
+from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
+
+
+class _MultiSelectMenu(QMenu):
+    """Menu de casillas que permanece abierto mientras se ajustan opciones."""
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - API Qt
+        action = self.activeAction()
+        if action is not None and action.isEnabled() and action.isCheckable():
+            action.trigger()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class ExportOptionsGroup(QGroupBox):
-    """Cuadro «Salidas»: formato, separación y fecha del CSV."""
+    """Salida, separacion y fecha en dos filas compactas."""
 
     def __init__(
         self,
@@ -48,116 +54,21 @@ class ExportOptionsGroup(QGroupBox):
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(4)
 
-        formato_row = QHBoxLayout()
-        formato_row.setSpacing(10)
-        formato_label = QLabel("Salida")
-        formato_label.setStyleSheet("font-weight: 600;")
-        formato_row.addWidget(formato_label)
-        formato_row.addSpacing(8)
-        self.modo_grupo = QButtonGroup(self)
-        self.radio_varios = QRadioButton("Varios PDF")
-        self.radio_varios.setToolTip("Genera un PDF por cada matrícula/mes marcado")
-        self.radio_unico = QRadioButton("Un solo PDF")
-        self.radio_unico.setToolTip(
-            "Un solo PDF con el nombre de la ejecución, con páginas "
-            "separadoras según lo marcado abajo"
+        main_row = QHBoxLayout()
+        main_row.setSpacing(8)
+        main_row.addWidget(QLabel("PDF"))
+        self.output_mode_combo = QComboBox()
+        self.output_mode_combo.addItem("Un solo PDF", True)
+        self.output_mode_combo.addItem("Varios PDF", False)
+        self.output_mode_combo.setToolTip(
+            "El PDF unico conserva las secciones en una entrega; varios PDF "
+            "crea un archivo por cada separacion marcada."
         )
-        self.modo_grupo.addButton(self.radio_varios)
-        self.modo_grupo.addButton(self.radio_unico)
-        # La entrega habitual es un único PDF separado por matrícula: es lo
-        # que se marcaba a mano en cada ejecución. El mes no entra porque
-        # subdivide de más una entrega que ya va por avión.
-        self.radio_unico.setChecked(True)
-        formato_row.addWidget(self.radio_varios)
-        formato_row.addWidget(self.radio_unico)
+        fit_combo_to_items(self.output_mode_combo)
+        main_row.addWidget(self.output_mode_combo)
 
-        formato_row.addSpacing(8)
-        self.partes_check = QCheckBox("Repartir en")
-        self.partes_check.setToolTip(
-            "Reparte la entrega en varios PDF, uno por batch. El corte "
-            "respeta las secciones para no separar las bitácoras de un avión."
-        )
-        formato_row.addWidget(self.partes_check)
-        self.partes_spin = QSpinBox()
-        self.partes_spin.setRange(10, 5000)
-        self.partes_spin.setSingleStep(50)
-        guardadas = AirVaultConfig.load(
-            self._ruta_preferencias
-        ).paginas_por_batch
-        if guardadas is not None:
-            self.partes_spin.setValue(guardadas)
-        self.partes_spin.setSuffix(" pág.")
-        self.partes_spin.setEnabled(False)
-        # El campo conserva su alto natural. Fijarlo al alto del redondel
-        # recortaba el valor y el sufijo cuando el tema dibujaba borde y aire
-        # interior propios de un campo de Windows.
-        self.partes_spin.setToolTip(
-            "Páginas como máximo en cada parte, contando las separadoras"
-        )
-        self.partes_check.toggled.connect(self.partes_spin.setEnabled)
-        self.partes_spin.valueChanged.connect(
-            lambda cantidad: guardar_paginas_por_batch(
-                self._ruta_preferencias, cantidad
-            )
-        )
-        self.partes_control = SpinBoxWithButtons(self.partes_spin)
-        formato_row.addWidget(self.partes_control)
-
-        # Repartir solo tiene sentido sobre el PDF único: «Varios PDF» ya
-        # escribe un archivo por matrícula.
-        self.radio_unico.toggled.connect(self.partes_check.setEnabled)
-        self.radio_unico.toggled.connect(
-            lambda activo: self.partes_spin.setEnabled(
-                activo and self.partes_check.isChecked()
-            )
-        )
-        formato_row.addStretch()
-        layout.addLayout(formato_row)
-
-        sep_row = QHBoxLayout()
-        sep_row.setSpacing(10)
-        sep_label = QLabel("Separar")
-        sep_label.setStyleSheet("font-weight: 600;")
-        sep_row.addWidget(sep_label)
-        sep_row.addSpacing(8)
-        self.matricula_check = QCheckBox("Matrícula")
-        self.matricula_check.setChecked(True)
-        self.matricula_check.setToolTip(
-            "Varios PDF: un archivo por matrícula. "
-            "Un solo PDF: página separadora por matrícula."
-        )
-        sep_row.addWidget(self.matricula_check)
-        self.mes_check = QCheckBox("Mes")
-        self.mes_check.setToolTip(
-            "Varios PDF: un archivo por mes. Un solo PDF: página separadora por mes."
-        )
-        sep_row.addWidget(self.mes_check)
-
-        # El nombre es el del apartado que sale en el PDF: lo que se marca
-        # es una sospecha de firma distinta, no una discrepancia confirmada.
-        self.discrepancias_check = QCheckBox("Posibles discrepancias")
-        self.discrepancias_check.setChecked(True)
-        self.discrepancias_check.setToolTip(
-            "Un solo PDF: agrega al final una sección 'Posibles "
-            "discrepancias'. Varios PDF: genera discrepancias.pdf."
-        )
-        sep_row.addWidget(self.discrepancias_check)
-
-        self.errores_check = QCheckBox("Errores")
-        self.errores_check.setToolTip(
-            "Genera errores.pdf con las páginas sin matrícula, fecha o "
-            "número de bitácora, para indexarlas a mano."
-        )
-        sep_row.addWidget(self.errores_check)
-        sep_row.addStretch()
-        layout.addLayout(sep_row)
-
-        date_row = QHBoxLayout()
-        date_row.setSpacing(10)
-        date_label = QLabel("Fecha del CSV")
-        date_label.setStyleSheet("font-weight: 600;")
-        date_row.addWidget(date_label)
-        date_row.addSpacing(8)
+        main_row.addSpacing(8)
+        main_row.addWidget(QLabel("Fecha del CSV"))
         self.csv_date_mode_combo = QComboBox()
         self.csv_date_mode_combo.addItem(
             "Día específico (si falta, fin de mes)", CSV_DATE_SPECIFIC
@@ -170,12 +81,98 @@ class ExportOptionsGroup(QGroupBox):
             "El resultado OCR original se conserva."
         )
         fit_combo_to_items(self.csv_date_mode_combo)
-        date_row.addWidget(self.csv_date_mode_combo)
-        date_row.addStretch()
-        layout.addLayout(date_row)
+        main_row.addWidget(self.csv_date_mode_combo)
+        main_row.addStretch()
+        layout.addLayout(main_row)
+
+        detail_row = QHBoxLayout()
+        detail_row.setSpacing(8)
+        self.separation_menu = _MultiSelectMenu(self)
+        self.matricula_check = self._checkable_action(
+            "Matrícula",
+            "Separa la entrega por matrícula.",
+            checked=True,
+        )
+        self.mes_check = self._checkable_action(
+            "Mes", "Separa la entrega por mes."
+        )
+        self.discrepancias_check = self._checkable_action(
+            "Posibles discrepancias",
+            "Agrega una sección con posibles discrepancias de firma.",
+            checked=True,
+        )
+        self.errores_check = self._checkable_action(
+            "Errores",
+            "Genera errores.pdf con las páginas que requieren revisión manual.",
+        )
+        self.separation_button = QToolButton()
+        self.separation_button.setText("Separación")
+        self.separation_button.setToolTip(
+            "Elegir cómo se separan los PDF y qué apartados adicionales salen."
+        )
+        self.separation_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.separation_button.setMenu(self.separation_menu)
+        self.separation_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        detail_row.addWidget(self.separation_button)
+
+        self.partes_check = QCheckBox("Repartir en")
+        self.partes_check.setToolTip(
+            "Reparte el PDF único en varias partes sin cortar secciones."
+        )
+        detail_row.addWidget(self.partes_check)
+        self.partes_spin = QSpinBox()
+        self.partes_spin.setRange(10, 5000)
+        self.partes_spin.setSingleStep(50)
+        guardadas = AirVaultConfig.load(
+            self._ruta_preferencias
+        ).paginas_por_batch
+        if guardadas is not None:
+            self.partes_spin.setValue(guardadas)
+        self.partes_spin.setSuffix(" pág.")
+        self.partes_spin.setToolTip(
+            "Páginas como máximo en cada parte, contando las separadoras"
+        )
+        self.partes_spin.valueChanged.connect(
+            lambda cantidad: guardar_paginas_por_batch(
+                self._ruta_preferencias, cantidad
+            )
+        )
+        self.partes_control = SpinBoxWithButtons(self.partes_spin)
+        detail_row.addWidget(self.partes_control)
+        detail_row.addStretch()
+        layout.addLayout(detail_row)
+
+        self.output_mode_combo.currentIndexChanged.connect(self._sync_parts)
+        self.partes_check.toggled.connect(self._sync_parts)
+        self._sync_parts()
+
+    def _checkable_action(
+        self, text: str, tooltip: str, checked: bool = False
+    ):
+        action = self.separation_menu.addAction(text)
+        action.setCheckable(True)
+        action.setChecked(checked)
+        action.setToolTip(tooltip)
+        return action
+
+    def _sync_parts(self, *_args) -> None:
+        single = self.un_solo_pdf()
+        self.partes_check.setEnabled(single)
+        self.partes_spin.setEnabled(single and self.partes_check.isChecked())
+
+    def un_solo_pdf(self) -> bool:
+        return bool(self.output_mode_combo.currentData())
+
+    def set_un_solo_pdf(self, single: bool) -> None:
+        index = self.output_mode_combo.findData(bool(single))
+        if index >= 0:
+            self.output_mode_combo.setCurrentIndex(index)
 
     def separar_por(self) -> list[str] | None:
-        """Devuelve las claves para generar_pdfs según las casillas."""
         separator = []
         if self.matricula_check.isChecked():
             separator.append("avion")
@@ -184,5 +181,4 @@ class ExportOptionsGroup(QGroupBox):
         return separator or None
 
     def csv_date_mode(self) -> str:
-        """Política reversible usada únicamente al representar el CSV."""
         return self.csv_date_mode_combo.currentData() or CSV_DATE_SPECIFIC

@@ -210,6 +210,10 @@ QToolButton {{
     border: 1px solid {PANE_BORDER};
     border-radius: {TABLE_RADIUS}px;
 }}
+QToolButton#primaryButton {{
+    min-height: 26px;
+    padding: 4px 12px;
+}}
 QPushButton:hover, QToolButton:hover {{
     background-color: {PANE_CONTROL_HOVER};
 }}
