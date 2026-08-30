@@ -198,7 +198,8 @@ QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {{
     color: #8c959f;
 }}
 QPushButton {{
-    min-height: 20px;
+    min-height: 22px;
+    max-height: 22px;
     padding: 3px 10px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
@@ -217,17 +218,22 @@ QToolButton#primaryButton {{
     padding: 3px 10px;
 }}
 QToolButton[menuRole="dropdown"] {{
-    min-height: 20px;
-    padding: 2px 28px 2px 10px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 2px 22px 2px 10px;
 }}
 QToolButton[menuRole="dropdown"]::menu-indicator {{
-    subcontrol-origin: padding;
+    subcontrol-origin: border;
     subcontrol-position: right center;
-    width: 22px;
+    position: relative;
+    right: 7px;
+    width: 10px;
+    height: 6px;
     image: url("{_DROPDOWN_ARROW}");
 }}
 QToolButton[menuRole="split"] {{
-    min-height: 20px;
+    min-height: 22px;
+    max-height: 22px;
     padding: 2px 38px 2px 10px;
 }}
 QToolButton[menuRole="split"]::menu-button {{
@@ -243,7 +249,13 @@ QToolButton[menuRole="split"]::menu-button:hover {{
     background-color: {PANE_CONTROL_HOVER};
 }}
 QToolButton[menuRole="split"]::menu-arrow {{
+    width: 10px;
+    height: 6px;
     image: url("{_DROPDOWN_ARROW}");
+}}
+QToolButton#primaryButton[menuRole="split"] {{
+    min-height: 22px;
+    max-height: 22px;
 }}
 QPushButton:hover, QToolButton:hover {{
     background-color: {PANE_CONTROL_HOVER};
@@ -256,7 +268,7 @@ QPushButton:focus, QToolButton:focus {{
     border-color: {TABLE_SELECTION_BG};
 }}
 QPushButton:default {{
-    border-bottom: 2px solid {TABLE_SELECTION_BG};
+    border-color: {TABLE_SELECTION_BG};
 }}
 QPushButton:disabled, QToolButton:disabled {{
     color: #8c959f;
@@ -292,9 +304,10 @@ QToolButton#spinStepButton:disabled {{
     background-color: {TABLE_HEADER_BG};
     color: #8c959f;
 }}
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox,
+QLineEdit, QComboBox,
 QDateEdit, QTimeEdit, QDateTimeEdit {{
-    min-height: 20px;
+    min-height: 21px;
+    max-height: 21px;
     padding: 3px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
@@ -313,7 +326,7 @@ QDateEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus {{
     border-bottom-color: {TABLE_SELECTION_BG};
 }}
 QLineEdit:read-only {{
-    background-color: {PANE_BG};
+    background-color: {PANE_CONTROL_BG};
 }}
 QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled,
 QComboBox:disabled, QDateEdit:disabled, QTimeEdit:disabled,
@@ -331,8 +344,12 @@ QComboBox::drop-down {{
     background: transparent;
 }}
 QSpinBox, QDoubleSpinBox {{
-    padding-top: 2px;
-    padding-bottom: 2px;
+    min-height: 24px;
+    max-height: 24px;
+    padding-left: 3px;
+    padding-right: 3px;
+    padding-top: 0;
+    padding-bottom: 0;
 }}
 QComboBox {{
     padding: 3px 30px 3px 8px;
@@ -378,8 +395,10 @@ QGroupBox::title {{
 }}
 QCheckBox, QRadioButton {{ spacing: 6px; }}
 QProgressBar {{
+    min-height: 28px;
+    max-height: 28px;
     color: {PANE_TEXT};
-    background-color: {TABLE_HEADER_BG};
+    background-color: {PANE_CONTROL_BG};
     border: 1px solid {PANE_BORDER};
     border-radius: {TABLE_RADIUS}px;
     text-align: center;
