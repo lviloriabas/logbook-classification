@@ -1,8 +1,8 @@
 """Ventana principal de BITS.
 
-Permite seleccionar los archivos (PDFs), la plantilla, configurar el
-procesamiento (motor OCR, páginas, corrección de inclinación, alineación…)
-y las salidas (discrepancia, PDFs por matrícula/mes, visualizar campos),
+Permite seleccionar los archivos (PDFs) y la plantilla, procesar el batch
+completo con la configuración recomendada y definir las salidas
+(discrepancia, PDFs por matrícula/mes, visualizar campos),
 con barra de progreso, tiempos estimados/transcurridos y tiempo por
 archivo. Los resultados OCR se pueden exportar de nuevo con otra separación
 sin volver a ejecutar el procesamiento.
@@ -58,7 +58,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -106,7 +105,6 @@ from app.gui.widgets import (
     ICON_SIZE,
     TABLE_RADIUS,
     ElidedLabel,
-    SpinBoxWithButtons,
     ZoomableScrollArea,
     ZoomOverlay,
     hide_overlay_when_tight,
@@ -138,6 +136,9 @@ SCRIPT_DIR = Path(__file__).resolve().parents[2]
 PERF_CACHE = SCRIPT_DIR / "output" / ".performance.json"
 _DEFAULT_MS_PER_PAGE = 2500.0  # costo nominal antes de la primera ejecución
 _DEFAULT_REFERENCE_PAGE = 1
+_DEFAULT_DESKEW = True
+_DEFAULT_ALIGN = True
+_DEFAULT_CROP_PREPROCESS = True
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 # Celdas (no filas) por tick del QTimer. El costo de llenar la tabla es por
@@ -834,7 +835,6 @@ class MainWindow(QMainWindow):
         grid.setColumnStretch(0, 1)
         self._controls_grid = grid
         self._input_group = self._build_input_group()
-        self._process_group = self._build_process_group()
         self._options_group = self._build_options_group()
         self._actions_group = self._build_action_row()
         # El reparto se decide antes del primer dibujado. Empezar siempre en
@@ -852,12 +852,8 @@ class MainWindow(QMainWindow):
         pasa en esas pantallas) «Entrada» y «Salidas» se ponen una al lado de
         la otra y el bloque pasa a medir lo que mide el más alto de los dos.
 
-        «Procesamiento» cruza entero por debajo en vez de ir en una columna:
-        su fila de controles no se parte, mide más que cualquiera de los
-        otros dos cuadros y metida en una columna obligaba a la ventana a ser
-        50 px más ancha de lo que da un escritorio de 1280 px. Cruzando cabe,
-        y además queda pegada a la fila del botón de procesar. La fila de
-        acciones sigue debajo del todo.
+        La fila de acciones cruza por debajo de los cuadros para conservar
+        juntos sus botones en cualquier ancho.
 
         El mismo ancho de sobra que junta «Entrada» y «Salidas» es el que le
         sobra a «Indexar en AirVault…» para mudarse a esa fila: se decide
@@ -873,21 +869,18 @@ class MainWindow(QMainWindow):
         grid = self._controls_grid
         for widget in (
             self._input_group,
-            self._process_group,
             self._options_group,
             self._actions_group,
         ):
             grid.removeWidget(widget)
         if columns == 1:
             grid.addWidget(self._input_group, 0, 0, 1, 2)
-            grid.addWidget(self._process_group, 1, 0, 1, 2)
-            grid.addWidget(self._options_group, 2, 0, 1, 2)
-            grid.addWidget(self._actions_group, 3, 0, 1, 2)
+            grid.addWidget(self._options_group, 1, 0, 1, 2)
+            grid.addWidget(self._actions_group, 2, 0, 1, 2)
         else:
             grid.addWidget(self._input_group, 0, 0)
             grid.addWidget(self._options_group, 0, 1)
-            grid.addWidget(self._process_group, 1, 0, 1, 2)
-            grid.addWidget(self._actions_group, 2, 0, 1, 2)
+            grid.addWidget(self._actions_group, 1, 0, 1, 2)
         grid.invalidate()
         grid.parentWidget().updateGeometry()
         central = self.centralWidget()
@@ -1026,75 +1019,6 @@ class MainWindow(QMainWindow):
             "Estimación del tiempo total para procesar la entrada actual"
         )
         grid.addWidget(self.estimate_label, 2, 0, 1, 6)
-        return group
-
-    def _build_process_group(self) -> QGroupBox:
-        group = QGroupBox("Procesamiento")
-        row = QHBoxLayout(group)
-        row.setContentsMargins(8, 5, 8, 5)
-        row.setSpacing(8)
-        self._register_density_layout(row, stacked=False)
-
-        engine_label = QLabel("OCR: Paddle v5 (CPU)")
-        engine_label.setToolTip(
-            "Motor y dispositivo fijos; no hay nada que configurar."
-        )
-        row.addWidget(engine_label)
-
-        # El batch se numera de corrido, igual que lo navega el visor: un solo
-        # rango decide qué páginas entran, caigan en los archivos que caigan.
-        range_tip = (
-            "Rango de páginas contando el batch de corrido: la página 1 es la "
-            "primera del primer archivo y la cuenta sigue en el siguiente. "
-            "Los archivos fuera del rango no se abren."
-        )
-        row.addWidget(QLabel("Páginas:"))
-        self.page_from_spin = QSpinBox()
-        self.page_from_spin.setRange(1, 1)
-        self.page_from_spin.setValue(1)
-        self.page_from_spin.setToolTip(range_tip)
-        self.page_from_spin.setAccessibleName("Primera página del rango")
-        self.page_from_spin.valueChanged.connect(self._on_page_from_changed)
-        self.page_from_control = SpinBoxWithButtons(self.page_from_spin)
-        row.addWidget(self.page_from_control)
-
-        row.addWidget(QLabel("a"))
-        self.page_to_spin = QSpinBox()
-        # Ambos extremos son números de página reales: el final arranca en la
-        # última del batch, para que se lea de un vistazo cuánto abarca.
-        self.page_to_spin.setRange(1, 1)
-        self.page_to_spin.setValue(1)
-        self.page_to_spin.setToolTip(range_tip)
-        self.page_to_spin.setAccessibleName("Última página del rango")
-        self.page_to_spin.valueChanged.connect(self._on_page_to_changed)
-        self.page_to_control = SpinBoxWithButtons(self.page_to_spin)
-        row.addWidget(self.page_to_control)
-
-        self.page_range_label = ElidedLabel("")
-        self.page_range_label.setStyleSheet("color: #c9d1d9;")
-        self.page_range_label.setToolTip(range_tip)
-        row.addWidget(self.page_range_label)
-
-        self.deskew_check = QCheckBox("Corrección de inclinación")
-        self.deskew_check.setChecked(True)
-        self.deskew_check.setToolTip("Enderezar páginas inclinadas antes de alinear")
-        row.addWidget(self.deskew_check)
-
-        self.align_check = QCheckBox("Alineación")
-        self.align_check.setChecked(True)
-        self.align_check.setToolTip(
-            "Alinear cada página contra la referencia de la plantilla"
-        )
-        row.addWidget(self.align_check)
-
-        self.crop_preprocess_check = QCheckBox("Preprocesar recortes")
-        self.crop_preprocess_check.setChecked(True)
-        self.crop_preprocess_check.setToolTip(
-            "Limpia y reescala cada recorte antes del OCR. Sin marcar, el "
-            "motor recibe el recorte crudo."
-        )
-        row.addWidget(self.crop_preprocess_check)
-        row.addStretch()
         return group
 
     def _build_options_group(self) -> QGroupBox:
@@ -2185,10 +2109,8 @@ class MainWindow(QMainWindow):
     def _start_input_scan(self) -> None:
         """Manda a leer la entrada en un hilo y deja la ventana usable.
 
-        Hasta que el hilo conteste no se sabe cuántas páginas hay, así que el
-        rango queda en blanco y no se puede procesar: arrancar con un batch
-        que se cree de cero páginas recortaría el trabajo sin que nadie lo
-        haya pedido. Son unas décimas y la ventana las pasa viva.
+        Hasta que el hilo conteste no se sabe cuántas páginas hay y no se
+        puede procesar. Son unas décimas y la ventana las pasa viva.
         """
         from app.gui.worker import InputScanWorker
 
@@ -2207,7 +2129,6 @@ class MainWindow(QMainWindow):
         # reabre ningún PDF por su cuenta mientras el hilo hace su pasada.
         self._input_page_counts = [0] * len(self._pdf_paths)
         self._set_preview_documents(self._pdf_paths, self._input_page_counts)
-        self._reset_page_range()
         if not self._pdf_paths:
             self._input_scan_worker = None
             self._input_scanning = False
@@ -2241,7 +2162,6 @@ class MainWindow(QMainWindow):
             self._detected_dpi = self._detected_dpis.get(
                 str(self._pdf_paths[0].resolve()), 200
             )
-        self._reset_page_range()
         self._set_preview_documents(self._pdf_paths, self._input_page_counts)
         # La vista previa se pidió antes de saber el total, así que su
         # navegación decía «de 0»; ahora ya se puede numerar.
@@ -2313,18 +2233,8 @@ class MainWindow(QMainWindow):
         self.input_edit.setToolTip("\n".join(str(p) for p in self._pdf_paths))
 
     def _page_range(self) -> PageRange:
-        """Rango elegido, contando el batch de corrido.
-
-        Un final que llega a la última página del batch se devuelve abierto:
-        es el mismo tramo y así el rango se reconoce como completo (nadie
-        vuelve a contar páginas y los mensajes lo dicen en esos términos),
-        aunque el control siga mostrando el número real.
-        """
-        last = self.page_to_spin.value()
-        return PageRange(
-            first=self.page_from_spin.value(),
-            last=None if last >= self._batch_total_pages() else last,
-        )
+        """La interfaz procesa siempre el batch completo."""
+        return PageRange()
 
     def _batch_total_pages(self) -> int:
         """Páginas de toda la entrada, antes de aplicar el rango."""
@@ -2339,57 +2249,6 @@ class MainWindow(QMainWindow):
     def _resolved_paths(self) -> list[Path]:
         """Archivos que aportan al menos una página al rango elegido."""
         return [item.path for item in self._batch_slices()]
-
-    @staticmethod
-    def _set_spin_silently(spin: QSpinBox, value: int) -> None:
-        """Cambia un control sin reentrar en su propio manejador."""
-        spin.blockSignals(True)
-        spin.setValue(value)
-        spin.blockSignals(False)
-
-    def _on_page_from_changed(self, value: int) -> None:
-        # Los dos extremos se arrastran: subir el inicio por encima del final
-        # deja un tramo de una página en vez de un rango imposible.
-        if value > self.page_to_spin.value():
-            self._set_spin_silently(self.page_to_spin, value)
-        self._refresh_page_range_label()
-        self._refresh_estimate()
-
-    def _on_page_to_changed(self, value: int) -> None:
-        if value < self.page_from_spin.value():
-            self._set_spin_silently(self.page_from_spin, value)
-        self._refresh_page_range_label()
-        self._refresh_estimate()
-
-    def _reset_page_range(self) -> None:
-        """Deja el rango cubriendo la entrada actual, de la primera a la última.
-
-        Se llama al cambiar los archivos: los números del rango anterior no
-        señalan las mismas páginas en otro batch, así que conservarlos
-        recortaría la ejecución sin que nadie lo haya pedido.
-        """
-        top = max(1, self._batch_total_pages())
-        for spin in (self.page_from_spin, self.page_to_spin):
-            spin.blockSignals(True)
-            spin.setMaximum(top)
-            spin.blockSignals(False)
-        self._set_spin_silently(self.page_from_spin, 1)
-        self._set_spin_silently(self.page_to_spin, top)
-        self.page_from_control.sync_buttons()
-        self.page_to_control.sync_buttons()
-        self._refresh_page_range_label()
-
-    def _refresh_page_range_label(self) -> None:
-        """Indica cuántas páginas del batch deja seleccionadas el rango."""
-        total = self._batch_total_pages()
-        if not total:
-            self.page_range_label.setText("")
-            return
-        selected = total_pages(self._batch_slices())
-        self.page_range_label.setText(
-            f"de {total} pág." if selected == total
-            else f"{selected} de {total} pág."
-        )
 
     def _refresh_estimate(self) -> None:
         if self._input_scanning:
@@ -2411,10 +2270,7 @@ class MainWindow(QMainWindow):
         elif slices:
             self.estimate_label.setText("Estimación no disponible")
         elif self._pdf_paths:
-            self.estimate_label.setText(
-                f"El rango ({self._page_range().label()}) no incluye ninguna "
-                f"página del batch"
-            )
+            self.estimate_label.setText("La entrada no contiene páginas")
         else:
             self.estimate_label.setText("")
 
@@ -2752,15 +2608,15 @@ class MainWindow(QMainWindow):
         """Captura las opciones compartidas por preprocesamiento y OCR."""
         return AppConfig(
             dpi=200,
-            deskew=self.deskew_check.isChecked(),
-            align=self.align_check.isChecked(),
+            deskew=_DEFAULT_DESKEW,
+            align=_DEFAULT_ALIGN,
             ocr_engine="paddle",
             ocr_lang="en",
             date_engine_name="",
             ocr_rec_model="PP-OCRv5_mobile_rec",
             ocr_det_model="PP-OCRv6_medium_det",
             remove_printed=True,  # mapa del fondo impreso: siempre activo
-            crop_preprocess=self.crop_preprocess_check.isChecked(),
+            crop_preprocess=_DEFAULT_CROP_PREPROCESS,
             date_slot_ocr=False,
             date_dynamic_geometry=True,
             verify_fleet=self.fleet_check.isChecked(),
@@ -2832,14 +2688,11 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _empty_range_message(self) -> str:
-        """Explica por qué no hay nada que procesar con el rango actual."""
+        """Explica por qué la entrada completa no tiene páginas utilizables."""
         total = self._batch_total_pages()
         if not total:
             return "No hay archivos para procesar."
-        return (
-            f"El rango elegido ({self._page_range().label()}) no incluye "
-            f"ninguna página: el batch tiene {total} en total."
-        )
+        return "La entrada no contiene páginas procesables."
 
     def _confirm_discard_results(self) -> bool:
         """Pide confirmación antes de borrar de la vista una ejecución previa.
