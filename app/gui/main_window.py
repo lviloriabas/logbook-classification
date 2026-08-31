@@ -837,9 +837,10 @@ class MainWindow(QMainWindow):
         grid = QGridLayout(panel)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(self._density.group_spacing)
-        # El ancho de sobra se lo queda «Entrada», que es quien tiene el campo
-        # de archivos; «Salidas» son casillas y no gana nada estirándose.
+        # Los dos cuadros forman la cabecera de trabajo y se reparten el ancho
+        # por mitades para que ninguno pese visualmente más que el otro.
         grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
         self._controls_grid = grid
         self._input_group = self._build_input_group()
         self._options_group = self._build_options_group()
@@ -3979,12 +3980,12 @@ class MainWindow(QMainWindow):
         manera de encontrar una bitácora tiene que ser la misma en las dos.
         """
         row = QHBoxLayout()
-        self.search_caption = QLabel("Buscar:")
-        row.addWidget(self.search_caption)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText(
-            "Bitácora, matrícula, archivo, página… cualquier texto de la tabla"
+            "Buscar bitácora, matrícula, archivo o página"
         )
+        self.search_edit.setMinimumWidth(280)
+        self.search_edit.setMaximumWidth(420)
         self.search_edit.setAccessibleName("Texto que se busca en la tabla")
         self.search_edit.setToolTip(
             "Busca en las columnas visibles; con el CSV completo, también en "
@@ -4009,6 +4010,7 @@ class MainWindow(QMainWindow):
         self.search_next.setEnabled(False)
         self.search_next.clicked.connect(lambda: self._mover_busqueda(1))
         row.addWidget(self.search_next)
+        row.addStretch(1)
         # La pista es una frase larga, y un QLabel pide de ancho mínimo la
         # frase entera: metida en el panel de la tabla, ese mínimo era el que
         # empujaba el separador y dejaba la bitácora en su franja más

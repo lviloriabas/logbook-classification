@@ -121,7 +121,7 @@ class Density:
 
 ROOMY = Density(
     name="holgada",
-    window_margin=8,
+    window_margin=16,
     root_spacing=5,
     group_spacing=4,
     group_margin_v=5,
@@ -144,7 +144,7 @@ ROOMY = Density(
 
 COMPACT = Density(
     name="compacta",
-    window_margin=4,
+    window_margin=8,
     root_spacing=2,
     group_spacing=3,
     group_margin_v=3,
