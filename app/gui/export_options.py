@@ -65,7 +65,7 @@ class ExportOptionsGroup(QGroupBox):
         main_row.addSpacing(8)
         main_row.addWidget(QLabel("Fecha del CSV:"))
         self.csv_date_mode_combo = QComboBox()
-        self.csv_date_mode_combo.addItem("Día específico", CSV_DATE_SPECIFIC)
+        self.csv_date_mode_combo.addItem("Día exacto", CSV_DATE_SPECIFIC)
         self.csv_date_mode_combo.addItem("Fin de mes", CSV_DATE_MONTH_END)
         self.csv_date_mode_combo.setItemData(
             0,

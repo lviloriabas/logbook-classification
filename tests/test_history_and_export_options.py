@@ -111,7 +111,7 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
 
     assert isinstance(options.output_mode_combo, QComboBox)
     assert options.un_solo_pdf()
-    assert options.csv_date_mode_combo.itemText(0) == "Día específico"
+    assert options.csv_date_mode_combo.itemText(0) == "Día exacto"
     assert options.csv_date_mode_combo.itemText(1) == "Fin de mes"
     assert options.csv_date_mode_combo.maxVisibleItems() == 12
     assert options.csv_date_mode_combo.minimumContentsLength() == 14

@@ -1153,16 +1153,15 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(10)
 
-        self.status_label = ElidedLabel("Listo.")
-        self.status_label.setMinimumWidth(120)
-        self.status_label.setMaximumWidth(240)
-        row.addWidget(self.status_label)
+        # El detalle del proceso vive en la bitácora inferior. Se conserva
+        # el último texto solo como estado interno para no mezclar mensajes
+        # variables con la barra de progreso ni quitarle ancho.
+        self.status_label = ElidedLabel("", parent=self)
+        self.status_label.hide()
 
-        self.busy_label = QLabel("")
-        self.busy_label.setMinimumWidth(24)
-        self.busy_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.busy_label = QLabel("", self)
+        self.busy_label.hide()
         self.busy_label.setToolTip("Procesamiento en curso")
-        row.addWidget(self.busy_label)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -1206,7 +1205,6 @@ class MainWindow(QMainWindow):
             time_layout.addLayout(metric, 1)
             self.time_labels[key] = value_label
         row.addWidget(time_summary)
-
         self.btn_process = QPushButton("Procesar")
         self.btn_process.setDefault(True)
         self.btn_process.clicked.connect(self._start_processing)
@@ -1263,7 +1261,7 @@ class MainWindow(QMainWindow):
         configure_menu_button(
             self.btn_automatico, self.menu_automatizacion, split=True
         )
-        self.btn_automatico.setMinimumWidth(
+        self.btn_automatico.setFixedWidth(
             self.btn_automatico.fontMetrics().horizontalAdvance("Automático")
             + 50
         )
@@ -1362,7 +1360,8 @@ class MainWindow(QMainWindow):
         file_row = QHBoxLayout(self.preview_file_indicator)
         file_row.setContentsMargins(0, 0, 10, 0)
         file_row.setSpacing(4)
-        file_row.addWidget(QLabel("Archivo:"))
+        self.preview_file_caption = QLabel("Archivo:")
+        file_row.addWidget(self.preview_file_caption)
         file_row.addWidget(self.preview_file_label)
 
         # Una sola barra: el archivo queda anclado a la izquierda y el
@@ -1731,7 +1730,7 @@ class MainWindow(QMainWindow):
         self._log_handler_id = lg.add(
             self._log_sink,
             level="INFO",
-            format="{time:HH:mm:ss} | {level: <8} | {message}",
+            format="{time:HH:mm:ss} | {level} | {message}",
             enqueue=True,
         )
         self._log_sink.message.connect(self._on_log_message)
@@ -3980,7 +3979,8 @@ class MainWindow(QMainWindow):
         manera de encontrar una bitácora tiene que ser la misma en las dos.
         """
         row = QHBoxLayout()
-        row.addWidget(QLabel("Buscar:"))
+        self.search_caption = QLabel("Buscar:")
+        row.addWidget(self.search_caption)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText(
             "Bitácora, matrícula, archivo, página… cualquier texto de la tabla"

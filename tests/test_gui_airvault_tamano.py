@@ -15,7 +15,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QRect
+from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QApplication
 
 from app.gui import airvault_window as modulo
@@ -57,6 +57,36 @@ def test_la_ventana_cabe_en_la_pantalla(app, pantalla, ancho, alto):
             "el mínimo exigido no cabe: Qt la volvería a estirar"
         )
         assert ventana.minimumHeight() <= alto
+    finally:
+        ventana.close()
+        app.processEvents()
+
+
+def test_margen_avance_y_botones_coinciden_con_la_ventana_principal(
+    app, pantalla
+):
+    pantalla(1920, 1080)
+    ventana = AirVaultWindow(RAIZ)
+    try:
+        ventana.resize(1280, 800)
+        ventana.show()
+        app.processEvents()
+
+        margenes = ventana._root_layout.contentsMargins()
+        assert (
+            margenes.left(),
+            margenes.top(),
+            margenes.right(),
+            margenes.bottom(),
+        ) == (8, 8, 8, 8)
+        assert not ventana.estado_label.isVisibleTo(ventana)
+        progreso = ventana.progreso.mapTo(ventana, QPoint())
+        assert progreso.x() == margenes.left()
+        cerrar = ventana.boton_cerrar.mapTo(ventana, QPoint())
+        espacio_inferior = (
+            ventana.height() - cerrar.y() - ventana.boton_cerrar.height()
+        )
+        assert espacio_inferior >= margenes.bottom()
     finally:
         ventana.close()
         app.processEvents()
