@@ -21,12 +21,20 @@ from PySide6.QtWidgets import QApplication, QStyleFactory, QTableWidget, QTableW
 from app.gui.widgets import (
     DATA_TABLE_QSS,
     FlatSelectionDelegate,
+    PANE_BORDER,
     TABLE_SELECTION_BG,
     style_data_table,
 )
+from app.gui.depuracion_dialog import _ARBOL_QSS
 
 _COLUMNS = 5
 _ROWS = 4
+
+
+def test_todas_las_tablas_usan_el_borde_gris_claro():
+    borde = f"border: 1px solid {PANE_BORDER}"
+    assert borde in DATA_TABLE_QSS
+    assert borde in _ARBOL_QSS
 
 
 def _table() -> QTableWidget:

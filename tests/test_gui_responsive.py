@@ -364,6 +364,9 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
                 == ventana.view_button.width()
             )
             assert ventana._input_group.height() == ventana._options_group.height()
+            assert abs(
+                ventana._input_group.width() - ventana._options_group.width()
+            ) <= 1
             automatico_texto = (
                 ventana.btn_automatico.fontMetrics().horizontalAdvance(
                     ventana.btn_automatico.text()
@@ -386,6 +389,9 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
             app.processEvents()
             assert {control.height() for control in controles} == {28}
             assert ventana.btn_automatico.width() == automatico_texto + 50
+            assert abs(
+                ventana._input_group.width() - ventana._options_group.width()
+            ) <= 1
         finally:
             ventana.close()
 
@@ -408,10 +414,15 @@ def test_el_buscador_no_desalinea_el_visor_y_la_tabla():
                 ventana.cadena._etiquetas[PREPROCESAR].mapTo(
                     ventana, QPoint()
                 ).x(),
-                ventana.search_caption.mapTo(ventana, QPoint()).x(),
+                buscador.x(),
                 ventana.preview_file_caption.mapTo(ventana, QPoint()).x(),
             }
             assert margenes == {ventana._density.window_margin}
+            assert ventana.search_edit.maximumWidth() == 420
+            assert ventana.search_edit.placeholderText().startswith("Buscar ")
+            assert ventana.search_next.x() + ventana.search_next.width() < (
+                ventana.width() // 2
+            )
             assert buscador.y() < visor.y()
             assert abs(visor.y() - tabla.y()) <= 1
             assert abs(

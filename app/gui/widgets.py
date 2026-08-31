@@ -88,7 +88,7 @@ DATA_TABLE_QSS = (
     f" gridline-color: {TABLE_GRID};"
     f" selection-background-color: {TABLE_SELECTION_BG};"
     f" selection-color: {TABLE_TEXT};"
-    f" border: 1px solid {TABLE_HEADER_BG};"
+    f" border: 1px solid {PANE_BORDER};"
     f" border-radius: {TABLE_RADIUS}px; }}"
     "QHeaderView { background-color: transparent; }"
     "QHeaderView::section {"

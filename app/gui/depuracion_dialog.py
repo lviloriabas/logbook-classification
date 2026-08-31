@@ -29,6 +29,7 @@ from app.gui.widgets import (
     TABLE_BASE_BG,
     TABLE_GRID,
     TABLE_HEADER_BG,
+    PANE_BORDER,
     TABLE_RADIUS,
     TABLE_SELECTION_BG,
     TABLE_TEXT,
@@ -69,7 +70,7 @@ _ARBOL_QSS = (
     f" color: {TABLE_TEXT};"
     f" selection-background-color: {TABLE_SELECTION_BG};"
     f" selection-color: {TABLE_TEXT};"
-    f" border: 1px solid {TABLE_HEADER_BG};"
+    f" border: 1px solid {PANE_BORDER};"
     f" border-radius: {TABLE_RADIUS}px; }}"
     "QTreeWidget::item { padding: 3px 2px; }"
     f"QTreeWidget::item:selected {{ background-color: {TABLE_SELECTION_BG}; }}"
