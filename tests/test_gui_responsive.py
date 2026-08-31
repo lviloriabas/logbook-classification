@@ -30,6 +30,7 @@ from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication, QLabel
 
 import app.gui.responsive as responsive
+from app.gui.automatizacion import PREPROCESAR
 from app.gui.csv_viewer import CsvViewerWindow
 from app.gui.editor_window import EditorWindow
 from app.gui.field_selector import ImportantFieldsDialog
@@ -368,8 +369,15 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
                     ventana.btn_automatico.text()
                 )
             )
-            assert ventana.btn_automatico.width() >= automatico_texto + 50
-            assert ventana.progress.x() < ventana.width() // 5
+            assert ventana.btn_automatico.width() == automatico_texto + 50
+            progreso = ventana.progress.mapTo(ventana, QPoint())
+            automatico = ventana.btn_automatico.mapTo(ventana, QPoint())
+            assert progreso.x() == ventana._density.window_margin
+            assert (
+                automatico.x() + ventana.btn_automatico.width()
+                == ventana.width() - ventana._density.window_margin
+            )
+            assert progreso.x() + ventana.progress.width() < automatico.x()
             assert all(
                 etiqueta.text() == "00:00:00"
                 for etiqueta in ventana.time_labels.values()
@@ -377,6 +385,7 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
             ventana.resize(1366, 680)
             app.processEvents()
             assert {control.height() for control in controles} == {28}
+            assert ventana.btn_automatico.width() == automatico_texto + 50
         finally:
             ventana.close()
 
@@ -395,6 +404,14 @@ def test_el_buscador_no_desalinea_el_visor_y_la_tabla():
             visor = ventana.preview_scroll.mapTo(ventana, QPoint())
             tabla = ventana.table.mapTo(ventana, QPoint())
             buscador = ventana.search_edit.mapTo(ventana, QPoint())
+            margenes = {
+                ventana.cadena._etiquetas[PREPROCESAR].mapTo(
+                    ventana, QPoint()
+                ).x(),
+                ventana.search_caption.mapTo(ventana, QPoint()).x(),
+                ventana.preview_file_caption.mapTo(ventana, QPoint()).x(),
+            }
+            assert margenes == {ventana._density.window_margin}
             assert buscador.y() < visor.y()
             assert abs(visor.y() - tabla.y()) <= 1
             assert abs(
@@ -450,8 +467,8 @@ def test_el_recuadro_de_zoom_se_esconde_antes_que_dibujarse_a_medias():
 
 # ── Etiquetas que no pueden mandar sobre el ancho de la ventana ──────────
 
-def test_un_mensaje_largo_no_ensancha_la_ventana():
-    """El estado del procesamiento crecía con cada mensaje más largo."""
+def test_el_estado_textual_no_ocupa_la_fila_de_progreso():
+    """Los mensajes quedan fuera de la fila y la barra usa ese espacio."""
     _app()
     area = _area_de_trabajo(1366, 768)
     with patch.object(responsive, "available_area", return_value=area):
@@ -463,7 +480,9 @@ def test_un_mensaje_largo_no_ensancha_la_ventana():
                 "Archivo 12/40: bitacora-YV1234-enero-2026-revisada.pdf - "
                 "reconociendo páginas 1234/5678 con la plantilla activa"
             )
+            assert not ventana.status_label.isVisibleTo(ventana)
             assert ventana.minimumSizeHint().width() <= antes
+            assert ventana.progress.x() == ventana._density.window_margin
         finally:
             ventana.close()
 

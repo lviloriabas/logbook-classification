@@ -235,12 +235,12 @@ QToolButton[menuRole="dropdown"]::menu-indicator {{
 QToolButton[menuRole="split"] {{
     min-height: 22px;
     max-height: 22px;
-    padding: 2px 38px 2px 10px;
+    padding: 2px 30px 2px 8px;
 }}
 QToolButton[menuRole="split"]::menu-button {{
     subcontrol-origin: border;
     subcontrol-position: top right;
-    width: 28px;
+    width: 24px;
     border: 0;
     border-left: 1px solid {PANE_BORDER};
     border-top-right-radius: {TABLE_RADIUS}px;
@@ -384,15 +384,17 @@ QGroupBox {{
     font-weight: 600;
     border: 1px solid {PANE_BORDER};
     border-radius: {TABLE_RADIUS}px;
-    margin-top: 8px;
-    padding: 8px 8px 6px 8px;
+    margin-top: 0;
+    padding: 22px 8px 6px 8px;
 }}
 QGroupBox::title {{
-    subcontrol-origin: margin;
+    subcontrol-origin: border;
+    subcontrol-position: top left;
     left: 8px;
-    padding: 0 4px;
+    top: 5px;
+    padding: 0;
     color: {PANE_TEXT};
-    background-color: {TABLE_BASE_BG};
+    background: transparent;
 }}
 QCheckBox, QRadioButton {{ spacing: 6px; }}
 QProgressBar {{
@@ -951,7 +953,7 @@ def configure_menu_button(
         if split
         else QToolButton.ToolButtonPopupMode.InstantPopup
     )
-    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
     button.setProperty("menuRole", "split" if split else "dropdown")
 
 def style_dark_pane(pane: QWidget) -> None:

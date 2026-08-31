@@ -60,9 +60,10 @@ QPushButton#iconButton { padding-left: 4px; padding-right: 6px; }
 QToolButton { padding: 1px 4px; }
 QToolButton#primaryButton { min-height: 20px; padding: 2px 8px; }
 QToolButton[menuRole="dropdown"] { min-height: 22px; max-height: 22px; padding: 2px 20px 2px 8px; }
-QToolButton[menuRole="split"] { min-height: 22px; max-height: 22px; padding: 2px 36px 2px 8px; }
+QToolButton[menuRole="split"] { min-height: 22px; max-height: 22px; padding: 2px 28px 2px 6px; }
 QToolButton#primaryButton[menuRole="split"] { min-height: 22px; max-height: 22px; }
-QGroupBox { margin-top: 6px; padding: 4px 6px 3px 6px; }
+QGroupBox { margin-top: 0; padding: 20px 6px 3px 6px; }
+QGroupBox::title { top: 4px; }
 QLineEdit { min-height: 21px; max-height: 21px; padding: 2px; }
 QSpinBox { min-height: 22px; max-height: 22px; padding: 0 2px; }
 QComboBox { min-height: 21px; max-height: 21px; padding: 2px 28px 2px 6px; }

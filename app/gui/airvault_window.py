@@ -996,6 +996,10 @@ class AirVaultWindow(QDialog):
 
     def _build_ui(self) -> None:
         cuerpo = QVBoxLayout(self)
+        margen = max(8, self._densidad.window_margin)
+        cuerpo.setContentsMargins(margen, margen, margen, margen)
+        cuerpo.setSpacing(max(5, self._densidad.root_spacing))
+        self._root_layout = cuerpo
 
         # Sin frase de bienvenida: la lista abre en «Seleccionar ejecución»
         # y eso ya dice lo que hay que hacer con ella, en el sitio donde se
@@ -2293,10 +2297,15 @@ class AirVaultWindow(QDialog):
         casilla.setChecked(marcado)
 
     def _fila_avance(self) -> QHBoxLayout:
-        """Estado, reloj y barra propios: la ventana no cuelga de la principal."""
+        """Barra y reloj propios; el detalle vive en la bitácora inferior."""
         fila = QHBoxLayout()
-        self.estado_label = ElidedLabel("Listo.")
-        fila.addWidget(self.estado_label, 1)
+        fila.setSpacing(10)
+        self.estado_label = ElidedLabel("", parent=self)
+        self.estado_label.hide()
+        self.progreso = QProgressBar()
+        self.progreso.setRange(0, 100)
+        self.progreso.setValue(0)
+        fila.addWidget(self.progreso, 1)
         # Cuánto lleva el paso actual. Sin esto, una espera de AirVault y un
         # programa colgado se ven exactamente igual.
         self.reloj_label = QLabel("")
@@ -2306,10 +2315,6 @@ class AirVaultWindow(QDialog):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         fila.addWidget(self.reloj_label)
-        self.progreso = QProgressBar()
-        self.progreso.setRange(0, 100)
-        self.progreso.setValue(0)
-        fila.addWidget(self.progreso, 1)
         return fila
 
     def _bitacora(self) -> CopyableListWidget:
@@ -2339,6 +2344,8 @@ class AirVaultWindow(QDialog):
 
     def _fila_botones(self) -> QHBoxLayout:
         fila = QHBoxLayout()
+        fila.setContentsMargins(0, 4, 0, 2)
+        fila.setSpacing(8)
 
         self.completar_check = QCheckBox("Completar batch")
         self.completar_check.setChecked(self._opciones.completar)
@@ -3818,6 +3825,7 @@ class AirVaultWindow(QDialog):
                 f"retoma sin repetir lo escrito."
             )
             self.estado_label.setText("El indexado se cortó a medio camino")
+            self._anotar("El indexado se cortó a medio camino")
             self._limpiar_progreso()
             return
         if datos.get("incompleto"):
@@ -3829,6 +3837,7 @@ class AirVaultWindow(QDialog):
                 "sin repetir las páginas verdes."
             )
             self.estado_label.setText("Indexado incompleto")
+            self._anotar("Indexado incompleto; quedan páginas pendientes")
             self._limpiar_progreso()
             if not acotado:
                 self._ajustar_vigilancia()
@@ -3836,6 +3845,7 @@ class AirVaultWindow(QDialog):
         self._indexado_incompleto = False
         self.resumen.setText(cuenta + self._cuenta_de_cierres(datos))
         self.estado_label.setText("Indexado terminado")
+        self._anotar("Indexado terminado")
         self._limpiar_progreso()
         # Vuelve a preguntar para que la lista quede diciendo cómo acabó
         # cada batch, en vez de con lo que se sabía antes de escribir.

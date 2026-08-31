@@ -40,7 +40,9 @@ def test_application_name_describes_the_bits_workflow():
     assert APPLICATION_DISPLAY_NAME == "BITS - Clasificación de Bitácoras"
 
 
-def test_group_titles_blend_with_the_group_surface():
+def test_group_titles_are_inside_the_frame_without_a_background_patch():
     title_rule = APP_CHROME_QSS.split("QGroupBox::title", 1)[1].split("}", 1)[0]
-    assert f"background-color: {TABLE_BASE_BG};" in title_rule
+    assert "subcontrol-origin: border;" in title_rule
+    assert "background: transparent;" in title_rule
+    assert f"background-color: {TABLE_BASE_BG};" not in title_rule
     assert f"background-color: {PANE_CONTROL_BG};" not in title_rule
