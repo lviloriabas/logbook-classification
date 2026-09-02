@@ -6,6 +6,7 @@ from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication, QDialog, QMainWindow
 
+from app.gui.tokens import FONT_BODY_PT, accent_color
 from app.gui.widgets import (
     _APPLICATION_THEME_PROPERTY,
     APP_CHROME_QSS,
@@ -15,7 +16,6 @@ from app.gui.widgets import (
     PANE_SURFACE_BG,
     PANE_TEXT,
     TABLE_ALTERNATE_BG,
-    TABLE_SELECTION_BG,
 )
 from app.utils.app_identity import set_windows_native_window_style
 
@@ -40,11 +40,16 @@ def _application_font() -> QFont:
         if "Segoe UI" in families
         else "Segoe UI Variable Text"
     )
-    return QFont(family, 10)
+    return QFont(family, FONT_BODY_PT)
 
 
 def _dark_palette() -> QPalette:
     palette = QPalette()
+    # El acento sale de Windows, no de un azul escrito aquí. Va también a
+    # ``Highlight`` porque es lo que leen las hojas de estilo cuando piden
+    # ``palette(highlight)``, que es como el acento llega a los controles sin
+    # tener que reconstruir la hoja cada vez.
+    acento = accent_color()
     colors = {
         QPalette.ColorRole.Window: PANE_SURFACE_BG,
         QPalette.ColorRole.WindowText: PANE_TEXT,
@@ -56,9 +61,10 @@ def _dark_palette() -> QPalette:
         QPalette.ColorRole.Button: PANE_CONTROL_BG,
         QPalette.ColorRole.ButtonText: PANE_TEXT,
         QPalette.ColorRole.BrightText: PANE_TEXT,
-        QPalette.ColorRole.Highlight: TABLE_SELECTION_BG,
+        QPalette.ColorRole.Highlight: acento,
+        QPalette.ColorRole.Accent: acento,
         QPalette.ColorRole.HighlightedText: PANE_TEXT,
-        QPalette.ColorRole.Link: TABLE_SELECTION_BG,
+        QPalette.ColorRole.Link: acento,
         QPalette.ColorRole.PlaceholderText: PANE_BORDER,
     }
     for role, color in colors.items():

@@ -18,11 +18,11 @@ from PySide6.QtCore import QSize
 from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication, QStyleFactory, QTableWidget, QTableWidgetItem
 
+from app.gui.tokens import accent_color
 from app.gui.widgets import (
     DATA_TABLE_QSS,
     FlatSelectionDelegate,
     PANE_BORDER,
-    TABLE_SELECTION_BG,
     style_data_table,
 )
 from app.gui.depuracion_dialog import _ARBOL_QSS
@@ -53,7 +53,7 @@ def _table() -> QTableWidget:
 
 def _selection_scanlines(image: QImage) -> dict[int, list[tuple[int, int]]]:
     """Tramos horizontales del color de selección, por línea de la imagen."""
-    target = QColor(TABLE_SELECTION_BG).rgb()
+    target = QColor(accent_color()).rgb()
     scanlines: dict[int, list[tuple[int, int]]] = {}
     for y in range(image.height()):
         runs: list[tuple[int, int]] = []
@@ -145,7 +145,7 @@ def test_a_cell_without_item_does_not_cut_the_band():
             delegado.initStyleOption(option, table.model().index(1, columna))
             fondos.append(option.backgroundBrush.color().name())
 
-        assert fondos == [QColor(TABLE_SELECTION_BG).name()] * _COLUMNS
+        assert fondos == [QColor(accent_color()).name()] * _COLUMNS
     finally:
         table.close()
         app.processEvents()
@@ -165,7 +165,7 @@ def test_an_unselected_row_keeps_its_own_colour():
         )
 
         assert option.backgroundBrush.color().name() != QColor(
-            TABLE_SELECTION_BG
+            accent_color()
         ).name()
     finally:
         table.close()

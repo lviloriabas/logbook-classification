@@ -56,6 +56,7 @@ from PySide6.QtWidgets import (
 
 from app.branding import APPLICATION_DISPLAY_NAME
 from app.gui.responsive import fit_to_screen
+from app.gui.tokens import FONT_CAPTION_PT
 from app.gui.widgets import (
     ZOOM_OVERLAY_QSS,
     ZoomOverlay,
@@ -152,7 +153,9 @@ class ResizableRectItem(QGraphicsRectItem):
         self._label = QGraphicsSimpleTextItem(field_id, self)
         self._label.setBrush(QBrush(QColor(20, 60, 100)))
         font = QFont()
-        font.setPointSize(9)
+        # Rótulo sobre la página, no cromo de ventana: va en el tamaño de
+        # subtítulo para no taparla, pero sale de la misma escala.
+        font.setPointSize(FONT_CAPTION_PT)
         font.setBold(True)
         self._label.setFont(font)
         self._label.setFlag(
