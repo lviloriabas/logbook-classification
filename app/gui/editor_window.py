@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from loguru import logger
-from PySide6.QtCore import QPointF, QRectF, QSize, QSizeF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, QSizeF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -33,7 +33,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QFileDialog,
-    QFrame,
     QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
@@ -57,7 +56,11 @@ from PySide6.QtWidgets import (
 
 from app.branding import APPLICATION_DISPLAY_NAME
 from app.gui.responsive import fit_to_screen
-from app.gui.widgets import ZOOM_OVERLAY_QSS, hide_overlay_when_tight, load_zoom_icon
+from app.gui.widgets import (
+    ZOOM_OVERLAY_QSS,
+    ZoomOverlay,
+    hide_overlay_when_tight,
+)
 from app.templates.manager import TEMPLATES_DIR, TemplateManager
 from app.templates.schema import FieldTemplate, FieldType, Template
 
@@ -426,53 +429,23 @@ class EditorWindow(QMainWindow):
 
         self.setStyleSheet(ZOOM_OVERLAY_QSS)
 
-        zoom_overlay = QFrame(view_container)
-        zoom_overlay.setObjectName("zoomOverlay")
-        zoom_overlay.setFixedWidth(42)
-        zoom_panel = QVBoxLayout(zoom_overlay)
-        zoom_panel.setContentsMargins(5, 6, 5, 6)
-        zoom_panel.setSpacing(2)
-        zoom_title = QLabel("Zoom")
-        zoom_title.setObjectName("zoomCaption")
-        zoom_title.setFixedWidth(28)
-        zoom_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zoom_panel.addWidget(zoom_title, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self.btn_zoom_in = QToolButton()
-        self.btn_zoom_in.setObjectName("zoomControl")
-        self.btn_zoom_in.setIcon(load_zoom_icon("in"))
-        self.btn_zoom_in.setToolTip("Acercar el lienzo")
-        self.btn_zoom_in.setAccessibleName("Acercar lienzo")
-        self.btn_zoom_in.setIconSize(QSize(14, 14))
-        self.btn_zoom_in.setFixedSize(28, 28)
-        self.btn_zoom_in.clicked.connect(lambda: self._zoom_editor(1.25))
-        zoom_panel.addWidget(self.btn_zoom_in, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self.btn_zoom_fit = QToolButton()
-        self.btn_zoom_fit.setObjectName("zoomControl")
-        self.btn_zoom_fit.setIcon(load_zoom_icon("fit"))
-        self.btn_zoom_fit.setToolTip("Ajustar la página a la ventana")
-        self.btn_zoom_fit.setAccessibleName("Ajustar página a la ventana")
-        self.btn_zoom_fit.setIconSize(QSize(14, 14))
-        self.btn_zoom_fit.setFixedSize(28, 28)
-        self.btn_zoom_fit.clicked.connect(self._fit_editor)
-        zoom_panel.addWidget(self.btn_zoom_fit, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self.btn_zoom_out = QToolButton()
-        self.btn_zoom_out.setObjectName("zoomControl")
-        self.btn_zoom_out.setIcon(load_zoom_icon("out"))
-        self.btn_zoom_out.setToolTip("Alejar el lienzo")
-        self.btn_zoom_out.setAccessibleName("Alejar lienzo")
-        self.btn_zoom_out.setIconSize(QSize(14, 14))
-        self.btn_zoom_out.setFixedSize(28, 28)
-        self.btn_zoom_out.clicked.connect(lambda: self._zoom_editor(0.8))
-        zoom_panel.addWidget(self.btn_zoom_out, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self.zoom_label = QLabel("100%")
-        self.zoom_label.setObjectName("zoomValue")
-        self.zoom_label.setFixedWidth(28)
-        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        zoom_panel.addWidget(self.zoom_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        # La misma píldora que la vista previa y el visor de PDF: el editor
+        # tenía una copia a mano que además la ponía en otra esquina, así que
+        # el mismo control estaba en tres sitios distintos según la ventana.
+        zoom_overlay = ZoomOverlay(
+            ("Acercar el lienzo", "Acercar lienzo", lambda: self._zoom_editor(1.25)),
+            (
+                "Ajustar la página a la ventana",
+                "Ajustar página a la ventana",
+                self._fit_editor,
+            ),
+            ("Alejar el lienzo", "Alejar lienzo", lambda: self._zoom_editor(0.8)),
+            view_container,
+        )
+        self.btn_zoom_in = zoom_overlay.btn_in
+        self.btn_zoom_fit = zoom_overlay.btn_fit
+        self.btn_zoom_out = zoom_overlay.btn_out
+        self.zoom_label = zoom_overlay.value_label
 
         zoom_holder = QWidget(view_container)
         zoom_holder_layout = QVBoxLayout(zoom_holder)
@@ -481,13 +454,13 @@ class EditorWindow(QMainWindow):
         # El recuadro de zoom flota sobre la página: ni decide el mínimo
         # del panel ni se dibuja a medias. Ver ``hide_overlay_when_tight``.
         zoom_holder.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
         )
         view_layout.addWidget(
             zoom_holder,
             0,
             0,
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
+            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
         )
         zoom_holder.raise_()
         hide_overlay_when_tight(zoom_holder)

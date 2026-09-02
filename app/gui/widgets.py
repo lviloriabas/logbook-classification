@@ -172,11 +172,9 @@ ZOOM_OVERLAY_QSS = """
 #zoomOverlay QToolButton#zoomControl:disabled {
     background-color: rgb(49, 49, 49);
 }
-#zoomOverlay QLabel#zoomCaption,
 #zoomOverlay QLabel#zoomValue {
-    min-width: 28px;
-    max-width: 28px;
-    padding: 0;
+    min-width: 38px;
+    padding: 0 2px;
     color: #ffffff;
     font-size: 10px;
     font-weight: 600;
@@ -1045,41 +1043,44 @@ def load_icon(name: str, color: QColor | str | None = None) -> QIcon:
 
 
 class ZoomOverlay(QFrame):
-    """Recuadro vertical de zoom que flota sobre la página.
+    """Píldora de zoom que flota sobre la página.
 
-    Lo comparten la vista previa de la ventana principal y el visor de PDF
-    del visor de CSV: es el mismo control, con los mismos tamaños y el mismo
-    orden (acercar, ajustar, alejar y el porcentaje debajo). Cada ventana
-    aporta únicamente los textos de sus acciones, que hablan de la vista
-    previa o de la página según dónde esté.
+    La comparten la vista previa de la ventana principal, el visor de PDF del
+    visor de CSV y el lienzo del editor de plantillas: es el mismo control,
+    con los mismos tamaños y el mismo orden. Cada ventana aporta únicamente
+    los textos de sus acciones, que hablan de la vista previa, de la página o
+    del lienzo según dónde esté.
+
+    Va tumbada y no de pie. De pie ocupaba una columna a media altura, que es
+    justo por donde se lee un escaneo vertical, y su alto marcaba el mínimo
+    del panel; tumbada se apoya en el borde de abajo, donde no tapa texto, y
+    pide ancho, que es lo que sobra. El «Zoom» que la encabezaba se cae con
+    el cambio: el porcentaje ya dice de qué va, y en horizontal era una
+    palabra más entre el borde y el primer botón.
     """
 
     def __init__(self, zoom_in, fit, zoom_out, parent: QWidget | None = None) -> None:
         """Cada acción es ``(tooltip, nombre accesible, función)``."""
         super().__init__(parent)
         self.setObjectName("zoomOverlay")
-        self.setFixedWidth(42)
-        panel = QVBoxLayout(self)
-        panel.setContentsMargins(5, 6, 5, 6)
+        panel = QHBoxLayout(self)
+        panel.setContentsMargins(6, 5, 6, 5)
         panel.setSpacing(2)
 
-        caption = QLabel("Zoom")
-        caption.setObjectName("zoomCaption")
-        caption.setFixedWidth(28)
-        caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        panel.addWidget(caption, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        self.btn_in = self._button("in", zoom_in, panel)
-        self.btn_fit = self._button("fit", fit, panel)
+        # De menor a mayor, como cualquier control tumbado: alejar a la
+        # izquierda, acercar a la derecha y el ajuste en medio. Los
+        # argumentos siguen llegando en el orden de siempre para no cambiar
+        # la llamada de las tres ventanas.
         self.btn_out = self._button("out", zoom_out, panel)
+        self.btn_fit = self._button("fit", fit, panel)
+        self.btn_in = self._button("in", zoom_in, panel)
 
         self.value_label = QLabel("100%")
         self.value_label.setObjectName("zoomValue")
-        self.value_label.setFixedWidth(28)
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        panel.addWidget(self.value_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        panel.addWidget(self.value_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
-    def _button(self, icon: str, action, panel: QVBoxLayout) -> QToolButton:
+    def _button(self, icon: str, action, panel: QHBoxLayout) -> QToolButton:
         tooltip, accessible, slot = action
         button = QToolButton()
         button.setObjectName("zoomControl")
@@ -1089,7 +1090,7 @@ class ZoomOverlay(QFrame):
         button.setToolTip(tooltip)
         button.setAccessibleName(accessible)
         button.clicked.connect(slot)
-        panel.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
+        panel.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
         return button
 
 
@@ -1102,11 +1103,17 @@ class _OverlayFitWatcher(QObject):
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
         if event.type() in (QEvent.Type.Resize, QEvent.Type.Show):
-            self.aplicar(watched.height())
+            self.aplicar(watched.size())
         return False
 
-    def aplicar(self, alto: int) -> None:
-        cabe = alto >= self._holder.sizeHint().height()
+    def aplicar(self, hueco: QSize) -> None:
+        # Las dos medidas, no solo el alto: tumbado, lo que se le queda
+        # corto a un flotante es el ancho.
+        pedido = self._holder.sizeHint()
+        cabe = (
+            hueco.width() >= pedido.width()
+            and hueco.height() >= pedido.height()
+        )
         if self._holder.isVisible() != cabe:
             self._holder.setVisible(cabe)
 
@@ -1116,16 +1123,16 @@ def hide_overlay_when_tight(holder: QWidget) -> None:
 
     Un flotante no manda sobre el mínimo del panel que lo lleva debajo (si
     lo hiciera, un control de zoom decidiría cuánto mide de mínimo la
-    ventana entera), así que puede tocarle un hueco más bajo que él. Metido
-    a la fuerza, sus botones de tamaño fijo se montan unos sobre otros. O
-    cabe entero o no se enseña.
+    ventana entera), así que puede tocarle un hueco más pequeño que él.
+    Metido a la fuerza, sus botones de tamaño fijo se montan unos sobre
+    otros. O cabe entero o no se enseña.
     """
     marco = holder.parentWidget()
     if marco is None:
         return
     vigilante = _OverlayFitWatcher(holder)
     marco.installEventFilter(vigilante)
-    vigilante.aplicar(marco.height())
+    vigilante.aplicar(marco.size())
 
 
 class ZoomableScrollArea(QScrollArea):
