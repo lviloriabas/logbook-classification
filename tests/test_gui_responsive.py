@@ -50,7 +50,14 @@ from app.gui.responsive import (
     density_for,
     fitted_geometry,
 )
-from app.gui.widgets import ElidedLabel, ZoomOverlay, hide_overlay_when_tight
+from app.gui.widgets import (
+    SPLIT_MENU_WIDTH,
+    SPLIT_PAD_LEFT,
+    SPLIT_PAD_RIGHT,
+    ElidedLabel,
+    ZoomOverlay,
+    hide_overlay_when_tight,
+)
 
 # Pantallas reales, con el escalado ya aplicado: lo que Qt ve como escritorio
 # es el tamaño físico dividido por el factor de Windows.
@@ -379,7 +386,15 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
                     ventana.btn_automatico.text()
                 )
             )
-            assert ventana.btn_automatico.width() == automatico_texto + 50
+            # La flecha del botón dividido va en su propia celda pegada al
+            # borde, fuera de lo que se pulsa, y Qt no la tiene en cuenta al
+            # centrar el rótulo. El relleno de la derecha la compensa: si vale
+            # el de la izquierda más la celda, el texto vuelve al centro de la
+            # parte pulsable en lugar de quedarse contra el separador.
+            assert SPLIT_PAD_RIGHT == SPLIT_PAD_LEFT + SPLIT_MENU_WIDTH
+            assert ventana.btn_automatico.width() >= (
+                automatico_texto + SPLIT_PAD_LEFT + SPLIT_PAD_RIGHT
+            )
             progreso = ventana.progress.mapTo(ventana, QPoint())
             automatico = ventana.btn_automatico.mapTo(ventana, QPoint())
             assert progreso.x() == ventana._density.window_margin
@@ -395,7 +410,11 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
             ventana.resize(1366, 680)
             app.processEvents()
             assert {control.height() for control in controles} == {28}
-            assert ventana.btn_automatico.width() == automatico_texto + 50
+            # La compacta aprieta el relleno, pero la celda de la flecha mide
+            # lo mismo: el botón sigue teniendo que reservarla.
+            assert ventana.btn_automatico.width() >= (
+                automatico_texto + SPLIT_MENU_WIDTH
+            )
             assert abs(
                 ventana._input_group.width() - ventana._options_group.width()
             ) <= 1

@@ -30,6 +30,15 @@ from dataclasses import dataclass
 from PySide6.QtCore import QRect, QSize
 from PySide6.QtGui import QGuiApplication
 
+from app.gui.widgets import SPLIT_MENU_WIDTH
+
+# La compacta apreta el relleno de los lados, pero la celda de la flecha del
+# botón dividido no encoge: sigue midiendo lo mismo y sigue habiendo que
+# descontarla del lado derecho para que el texto quede centrado en la parte
+# que se pulsa. Ver el bloque de SPLIT_* en ``widgets``.
+_SPLIT_PAD_LEFT = 6
+_SPLIT_PAD_RIGHT = _SPLIT_PAD_LEFT + SPLIT_MENU_WIDTH
+
 # Hueco que Windows se queda alrededor del área de cliente: los bordes a los
 # lados y la barra de título arriba. Se descuenta al calcular el tamaño para
 # que la ventana entre con su marco puesto y no quede la barra de título por
@@ -50,24 +59,27 @@ COMPACT_HEIGHT = 820
 # que la ventana no parpadee entre las dos mientras se redimensiona.
 DENSITY_HYSTERESIS = 40
 
-_COMPACT_QSS = """
-QPushButton { min-height: 22px; max-height: 22px; padding: 2px 8px; }
+_COMPACT_QSS = f"""
+QPushButton {{ min-height: 22px; max-height: 22px; padding: 2px 8px; }}
 /* El botón con dibujo cede el aire de los lados, que el icono ya llena: la
    fila de «Entrada» es la más ancha de la ventana y, si crece, los cuadros de
    arriba dejan de caber en dos columnas justo en el escritorio de 1280 px,
    que es donde ese reparto hace falta. */
-QPushButton#iconButton { padding-left: 4px; padding-right: 6px; }
-QToolButton { padding: 1px 4px; }
-QToolButton#primaryButton { min-height: 20px; padding: 2px 8px; }
-QToolButton[menuRole="dropdown"] { min-height: 22px; max-height: 22px; padding: 2px 20px 2px 8px; }
-QToolButton[menuRole="split"] { min-height: 22px; max-height: 22px; padding: 2px 28px 2px 6px; }
-QToolButton#primaryButton[menuRole="split"] { min-height: 22px; max-height: 22px; }
-QGroupBox { margin-top: 0; padding: 20px 6px 3px 6px; }
-QGroupBox::title { top: 4px; }
-QLineEdit { min-height: 21px; max-height: 21px; padding: 2px; }
-QSpinBox { min-height: 22px; max-height: 22px; padding: 0 2px; }
-QComboBox { min-height: 21px; max-height: 21px; padding: 2px 28px 2px 6px; }
-QProgressBar { min-height: 26px; max-height: 26px; }
+QPushButton#iconButton {{ padding-left: 4px; padding-right: 6px; }}
+QToolButton {{ padding: 1px 4px; }}
+QToolButton#primaryButton {{ min-height: 20px; padding: 2px 8px; }}
+QToolButton[menuRole="dropdown"] {{ min-height: 22px; max-height: 22px; padding: 2px 20px 2px 8px; }}
+QToolButton[menuRole="split"] {{ min-height: 22px; max-height: 22px; padding: 2px {_SPLIT_PAD_RIGHT}px 2px {_SPLIT_PAD_LEFT}px; }}
+/* Repetido con el selector de ID por lo mismo que en la hoja base: sin esto
+   gana «QToolButton#primaryButton» y el botón dividido se queda con el
+   relleno simétrico, que le tira el texto contra el separador. */
+QToolButton#primaryButton[menuRole="split"] {{ min-height: 22px; max-height: 22px; padding: 2px {_SPLIT_PAD_RIGHT}px 2px {_SPLIT_PAD_LEFT}px; }}
+QGroupBox {{ margin-top: 0; padding: 20px 6px 3px 6px; }}
+QGroupBox::title {{ top: 4px; }}
+QLineEdit {{ min-height: 21px; max-height: 21px; padding: 2px; }}
+QSpinBox {{ min-height: 22px; max-height: 22px; padding: 0 2px; }}
+QComboBox {{ min-height: 21px; max-height: 21px; padding: 2px 28px 2px 6px; }}
+QProgressBar {{ min-height: 26px; max-height: 26px; }}
 """
 
 

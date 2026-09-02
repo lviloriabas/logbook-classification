@@ -1259,10 +1259,12 @@ class MainWindow(QMainWindow):
         configure_menu_button(
             self.btn_automatico, self.menu_automatizacion, split=True
         )
-        self.btn_automatico.setFixedWidth(
-            self.btn_automatico.fontMetrics().horizontalAdvance("Automático")
-            + 50
-        )
+        # Sin ancho a mano. Los «+ 50 px» que llevaba aquí eran el parche de un
+        # relleno que nunca llegaba a aplicarse (lo pisaba la regla de
+        # «#primaryButton», que pesa más), así que ensanchaban el botón sin
+        # mover el texto: quedaba hueco a la izquierda y el rótulo contra el
+        # separador. Con el relleno ya puesto en la hoja, la medida que pide el
+        # propio botón reserva la celda de la flecha y centra el texto.
         self.btn_automatico.clicked.connect(self._start_automatico)
 
         # El orden de la fila, ya con los cuatro construidos. El grupo va
