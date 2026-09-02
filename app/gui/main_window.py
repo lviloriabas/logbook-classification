@@ -1217,13 +1217,11 @@ class MainWindow(QMainWindow):
             "Aplica corrección de inclinación y alineación sin ejecutar OCR."
         )
         self.btn_preprocess.triggered.connect(self._start_preprocessing)
-        row.addWidget(self.btn_process)
 
         self.btn_cancel = QPushButton("Cancelar")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.setToolTip(self._CANCELAR_AYUDA)
         self.btn_cancel.clicked.connect(self._request_cancel)
-        row.addWidget(self.btn_cancel)
 
         self.btn_export = actions_menu.addAction("Exportar")
         self.btn_export.setEnabled(False)
@@ -1244,7 +1242,6 @@ class MainWindow(QMainWindow):
         self.more_actions_button.setToolTip(
             "Preprocesar, exportar o depurar la ejecución."
         )
-        row.addWidget(self.more_actions_button)
 
         # El de siempre, pero sin volver a pulsar nada entre paso y paso.
         # Se lleva el azul porque es el que hace la entrega entera; los
@@ -1267,7 +1264,21 @@ class MainWindow(QMainWindow):
             + 50
         )
         self.btn_automatico.clicked.connect(self._start_automatico)
-        row.addWidget(self.btn_automatico)
+
+        # El orden de la fila, ya con los cuatro construidos. El grupo va
+        # pegado a la derecha, así que se lee de fuera hacia dentro: el
+        # cajón de lo que no cabe en el extremo, luego el que corta, y los
+        # dos que arrancan trabajo juntos al final, con el principal
+        # cerrando contra el margen. Antes «Más» quedaba entre «Cancelar» y
+        # «Automático», partiendo en dos el grupo que actúa para meter en
+        # medio un desplegable que no hace nada por sí mismo.
+        for boton in (
+            self.more_actions_button,
+            self.btn_cancel,
+            self.btn_process,
+            self.btn_automatico,
+        ):
+            row.addWidget(boton)
         return row
 
     def _set_time_summary(
@@ -1417,20 +1428,23 @@ class MainWindow(QMainWindow):
         zoom_holder_layout.setContentsMargins(8, 8, 8, 8)
         zoom_holder_layout.addWidget(zoom_overlay)
         # El recuadro de zoom flota sobre la página, así que no puede decidir
-        # cuánto mide de mínimo el panel: con sus 156 px mandaba sobre la
-        # página misma y era él quien fijaba el suelo de la ventana entera.
-        # Ignorado en vertical no cuenta para ese mínimo; a cambio hay que
-        # esconderlo cuando la página se queda más baja que él, que es lo que
-        # hace ``hide_overlay_when_tight``: recortado a medias dejaría los
-        # botones montados unos sobre otros.
+        # cuánto mide de mínimo el panel: era él quien acababa fijando el
+        # suelo de la ventana entera. Ignorado en las dos medidas no cuenta
+        # para ese mínimo; a cambio hay que esconderlo cuando la página se
+        # queda más pequeña que él, que es lo que hace
+        # ``hide_overlay_when_tight``: recortado a medias dejaría los botones
+        # montados unos sobre otros.
         zoom_holder.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
         )
+        # Abajo y centrado, el mismo sitio en las tres ventanas que llevan
+        # zoom. A media altura y pegado a la izquierda caía justo encima de
+        # la columna por la que se lee la bitácora.
         viewer_frame_layout.addWidget(
             zoom_holder,
             0,
             0,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
         )
         zoom_holder.raise_()
         self._zoom_holder = zoom_holder

@@ -949,13 +949,13 @@ class EmbeddedPdfViewer(QFrame):
         # El recuadro de zoom flota sobre la página: ni decide el mínimo
         # del panel ni se dibuja a medias. Ver ``hide_overlay_when_tight``.
         zoom_holder.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
         )
         viewer_frame_layout.addWidget(
             zoom_holder,
             0,
             0,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
         )
         zoom_holder.raise_()
         hide_overlay_when_tight(zoom_holder)

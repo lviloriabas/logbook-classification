@@ -27,7 +27,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QRect, QSize
 from PySide6.QtGui import QFont, QFontDatabase
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import (
+    QApplication,
+    QGridLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 import app.gui.responsive as responsive
 from app.gui.automatizacion import PREPROCESAR
@@ -43,7 +50,7 @@ from app.gui.responsive import (
     density_for,
     fitted_geometry,
 )
-from app.gui.widgets import ElidedLabel
+from app.gui.widgets import ElidedLabel, ZoomOverlay, hide_overlay_when_tight
 
 # Pantallas reales, con el escalado ya aplicado: lo que Qt ve como escritorio
 # es el tamaño físico dividido por el factor de Windows.
@@ -449,8 +456,14 @@ def test_el_limite_de_paginas_muestra_valor_y_sufijo_completos():
             ventana.close()
 
 
-def test_el_recuadro_de_zoom_se_esconde_antes_que_dibujarse_a_medias():
-    """Flota sobre la página: no manda sobre el mínimo, y o cabe o no está."""
+def test_el_recuadro_de_zoom_cabe_tumbado_hasta_en_la_ventana_mas_pequena():
+    """Tumbado entra donde de pie no entraba, que es para lo que se tumbó.
+
+    De pie medía más que el alto que la vista previa tiene garantizado en la
+    ventana mínima, así que en ese tamaño desaparecía justo cuando hace más
+    falta. Tumbado pide ancho, que es lo que sobra en un panel que enseña una
+    hoja vertical, y se queda.
+    """
     app = _app()
     with patch.object(
         responsive, "available_area", return_value=_area_de_trabajo(1920, 1080)
@@ -461,19 +474,69 @@ def test_el_recuadro_de_zoom_se_esconde_antes_que_dibujarse_a_medias():
             app.processEvents()
             assert ventana._zoom_holder.isVisible()
 
-            # La ventana en su suelo: la página se queda con lo justo y el
-            # recuadro ya no cabe entero.
             ventana.resize(ventana.minimumWidth(), ventana.minimumHeight())
             for _ in range(4):
                 app.processEvents()
 
-            assert not ventana._zoom_holder.isVisible()
-            assert (
-                ventana.preview_scroll.height()
-                < ventana._zoom_holder.sizeHint().height()
-            )
+            assert ventana._zoom_holder.isVisible()
+            pedido = ventana._zoom_holder.sizeHint()
+            marco = ventana._zoom_holder.parentWidget()
+            assert marco.width() >= pedido.width()
+            assert marco.height() >= pedido.height()
         finally:
             ventana.close()
+
+
+def test_el_recuadro_de_zoom_se_esconde_antes_que_dibujarse_a_medias():
+    """Flota sobre la página: no manda sobre el mínimo, y o cabe o no está.
+
+    Se comprueba sobre el marco a pelo porque en la ventana real ya no hay
+    ningún tamaño legal en el que la píldora no quepa; la regla sigue viva
+    para los paneles que puedan quedarse más estrechos que ella.
+    """
+    app = _app()
+    marco = QWidget()
+    marco.resize(600, 400)
+    disposicion = QGridLayout(marco)
+    disposicion.setContentsMargins(0, 0, 0, 0)
+
+    soporte = QWidget(marco)
+    soporte_layout = QVBoxLayout(soporte)
+    soporte_layout.setContentsMargins(8, 8, 8, 8)
+    soporte_layout.addWidget(
+        ZoomOverlay(
+            ("Acercar", "Acercar", lambda: None),
+            ("Ajustar", "Ajustar", lambda: None),
+            ("Alejar", "Alejar", lambda: None),
+            marco,
+        )
+    )
+    soporte.setSizePolicy(
+        QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
+    )
+    disposicion.addWidget(soporte, 0, 0)
+    hide_overlay_when_tight(soporte)
+    marco.show()
+    app.processEvents()
+    try:
+        assert soporte.isVisible()
+
+        pedido = soporte.sizeHint()
+        # Estrecho: es la medida que le queda corta a un control tumbado.
+        marco.resize(pedido.width() - 20, 400)
+        app.processEvents()
+        assert not soporte.isVisible()
+
+        # Bajo: y la otra tampoco puede recortarlo.
+        marco.resize(600, pedido.height() - 5)
+        app.processEvents()
+        assert not soporte.isVisible()
+
+        marco.resize(600, 400)
+        app.processEvents()
+        assert soporte.isVisible()
+    finally:
+        marco.close()
 
 
 # ── Etiquetas que no pueden mandar sobre el ancho de la ventana ──────────
