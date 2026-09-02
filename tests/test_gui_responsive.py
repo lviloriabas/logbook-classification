@@ -50,6 +50,7 @@ from app.gui.responsive import (
     density_for,
     fitted_geometry,
 )
+from app.gui.tokens import CONTROL_HEIGHT, CONTROL_HEIGHT_COMPACT
 from app.gui.widgets import (
     SPLIT_MENU_WIDTH,
     SPLIT_PAD_LEFT,
@@ -358,6 +359,8 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
                 salidas.separation_button,
                 ventana.view_button,
                 salidas.partes_control,
+                ventana.fleet_check,
+                salidas.partes_check,
                 ventana.progress,
                 ventana.btn_process,
                 ventana.btn_cancel,
@@ -368,7 +371,13 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
                 ventana.search_prev,
                 ventana.search_next,
             )
-            assert {control.height() for control in controles} == {30}
+            # Un solo alto para todo lo que se pulsa o se escribe, que es la
+            # medida de WinUI. Antes la hoja declaraba siete distintos y en
+            # pantalla salian cuatro, asi que las casillas no cuadraban con
+            # sus vecinos de fila.
+            assert {control.height() for control in controles} == {
+                CONTROL_HEIGHT
+            }
             assert (
                 ventana.input_actions_button.width()
                 == ventana.template_actions_button.width()
@@ -409,7 +418,9 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
             )
             ventana.resize(1366, 680)
             app.processEvents()
-            assert {control.height() for control in controles} == {28}
+            assert {control.height() for control in controles} == {
+                CONTROL_HEIGHT_COMPACT
+            }
             # La compacta aprieta el relleno, pero la celda de la flecha mide
             # lo mismo: el botón sigue teniendo que reservarla.
             assert ventana.btn_automatico.width() >= (

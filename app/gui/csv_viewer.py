@@ -154,7 +154,7 @@ _PDF_PANE_QSS = (
     # La lista desplegable es una ventana aparte y no hereda el fondo.
     "#embeddedPdfPane QComboBox QAbstractItemView {"
     f" background: {PANE_CONTROL_BG}; color: {PANE_TEXT};"
-    f" selection-background-color: {TABLE_SELECTION_BG}; }}"
+    f" selection-background-color: palette(highlight); }}"
     # El recuadro de zoom va al final: sus reglas y las del panel tienen la
     # misma especificidad y aquí gana la última.
 ) + scrollbars_qss("#embeddedPdfPane") + ZOOM_OVERLAY_QSS

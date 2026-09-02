@@ -101,6 +101,15 @@ from app.gui.automatizacion import (
     OpcionesAutomatizacion,
 )
 from app.gui.depuracion_dialog import DEPURAR_TOOLTIP, DepurarPaginasDialog
+from app.gui.tokens import (
+    CONTROL_BG,
+    FONT_CAPTION_PT,
+    RADIUS_CONTROL,
+    STROKE,
+    TEXT,
+    TEXT_SECONDARY,
+    WEIGHT_STRONG,
+)
 from app.gui.widgets import (
     DATA_TABLE_QSS,
     TABLE_RADIUS,
@@ -217,31 +226,36 @@ def _visible_preview_fields(
         return [field for field in template.fields if field.required]
     return [field for field in template.fields if field.id in important_ids]
 
-_WINDOW_QSS = """
-QWidget#previewContext, QLabel#previewContext {
-    color: #c9d1d9;
-    font-weight: 600;
+# Los rótulos secundarios de la ventana. Todo en puntos: los «10px» que había
+# aquí no seguían el escalado de Windows, así que en un monitor al 150 % el
+# panel de tiempos se encogía mientras el resto de la ventana crecía.
+_WINDOW_QSS = f"""
+QWidget#previewContext, QLabel#previewContext {{
+    color: {TEXT_SECONDARY};
+    font-weight: {WEIGHT_STRONG};
     padding: 4px 2px;
-}
-#timeBar {
-    background-color: #3d3d3d;
-    font-size: 9pt; font-weight: 600; color: #ffffff;
-}
-#filePages { color: #c9d1d9; }
-#timeSummary {
-    background-color: #3d3d3d;
-    border: 1px solid #4a4a4a;
-    border-radius: 6px;
-}
-#timeSummary QLabel[role="caption"] {
-    color: #ffffff;
-    font-size: 10px;
-}
-#timeSummary QLabel[role="value"] {
-    color: #ffffff;
-    font-size: 10px;
-    font-weight: 600;
-}
+}}
+#timeBar {{
+    background-color: {CONTROL_BG};
+    font-size: {FONT_CAPTION_PT}pt;
+    font-weight: {WEIGHT_STRONG};
+    color: {TEXT};
+}}
+#filePages {{ color: {TEXT_SECONDARY}; }}
+#timeSummary {{
+    background-color: {CONTROL_BG};
+    border: 1px solid {STROKE};
+    border-radius: {RADIUS_CONTROL}px;
+}}
+#timeSummary QLabel[role="caption"] {{
+    color: {TEXT_SECONDARY};
+    font-size: {FONT_CAPTION_PT}pt;
+}}
+#timeSummary QLabel[role="value"] {{
+    color: {TEXT};
+    font-size: {FONT_CAPTION_PT}pt;
+    font-weight: {WEIGHT_STRONG};
+}}
 """ + DATA_TABLE_QSS
 
 
@@ -4217,7 +4231,9 @@ class MainWindow(QMainWindow):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pen = QPen(QColor(0, 120, 215), 2)
         font = QFont()
-        font.setPointSize(9)
+        # Rótulo sobre la página, no cromo de ventana: va en el tamaño de
+        # subtítulo para no taparla, pero sale de la misma escala.
+        font.setPointSize(FONT_CAPTION_PT)
         font.setBold(True)
         painter.setFont(font)
         important_only = self.important_fields_check.isChecked()

@@ -34,50 +34,87 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.tokens import (
+    ACCENT_FALLBACK,
+    CARD_BG,
+    CONTROL_BG,
+    CONTROL_BOX_H,
+    CONTROL_DISABLED,
+    CONTROL_HEIGHT,
+    CONTROL_HOVER,
+    CONTROL_PAD_H,
+    CONTROL_PRESSED,
+    FONT_BODY_PT,
+    FONT_CAPTION_PT,
+    FONT_FAMILY,
+    RADIUS_CARD,
+    RADIUS_CONTROL,
+    SPACE_S,
+    STATUS_ERROR,
+    STATUS_OK,
+    STATUS_WARNING,
+    STROKE,
+    STROKE_STRONG,
+    TEXT,
+    TEXT_DISABLED,
+    TEXT_SECONDARY,
+    WEIGHT_STRONG,
+    WINDOW_BG,
+    accent_color,
+    checked_row_color,
+    hover_row_color,
+)
+
 _ASSETS = Path(__file__).resolve().parents[2] / "assets"
 _DROPDOWN_ARROW = (_ASSETS / "dropdown_arrow.svg").as_posix()
 
-# Grises oscuros de las tablas de datos: el mismo rgb(49, 49, 49) del botón
-# principal y del panel de tiempos, para que la tabla pertenezca a la
-# aplicación en lugar de ser un recuadro blanco pegado sobre ella. La cabecera
-# usa el tono pulsado del botón y las filas alternas suben un escalón para que
-# se distingan sin romper el bloque.
-TABLE_BASE_BG = "#313131"  # rgb(49, 49, 49)
-TABLE_ALTERNATE_BG = "#383838"
-TABLE_HEADER_BG = "#262626"  # rgb(38, 38, 38)
-TABLE_GRID = "#4a4a4a"
-TABLE_TEXT = "#ffffff"
-TABLE_SELECTION_BG = "#2f81f7"
-# La fila bajo el cursor y la fila marcada con su casilla. Las dos son azules
-# porque las dos hablan de lo mismo que la selección, y las dos quedan por
-# debajo de ella: el cursor solo pasa por encima y una marca no es lo que se
-# está mirando, así que ninguna puede competir con la banda de la selección.
-TABLE_HOVER_BG = "#3a4a5f"
-TABLE_CHECKED_BG = "#1f4a7a"
+# Los nombres de siempre, ya apuntando a los tonos de ``tokens``. Se conservan
+# porque los usan el visor de CSV, el diálogo de depuración y el tema, y porque
+# dicen dónde va cada color («la base de la tabla», «el borde del panel»), que
+# es lo que hace falta al leer una hoja de estilo. Lo que cambia es que ya no
+# los define nadie a mano: antes convivían dos paletas, la de GitHub y la de
+# Windows, y el mismo gris estaba escrito de dos formas —«#313131» y
+# «rgb(49, 49, 49)»— en archivos distintos.
+TABLE_BASE_BG = CARD_BG
+TABLE_ALTERNATE_BG = "#313131"
+TABLE_HEADER_BG = "#252525"
+TABLE_GRID = STROKE_STRONG
+TABLE_TEXT = TEXT
+
+# El azul de la selección ya no es un valor escrito aquí: es el acento que el
+# usuario eligió en Windows. Este queda como reserva, para el código que
+# necesita un literal antes de que exista la aplicación a la que preguntarle.
+TABLE_SELECTION_BG = ACCENT_FALLBACK
+
+# La fila bajo el cursor y la fila marcada con su casilla viven en
+# ``tokens.hover_row_color`` y ``tokens.checked_row_color``: se calculan del
+# acento en lugar de ser dos azules escritos a mano, que era lo que dejaba una
+# banda azul en una aplicación con el acento en rojo.
 
 # El visor de PDF acompaña a la tabla dentro de la misma ventana, así que va
 # en su mismo gris. La superficie que rodea la página baja al tono más oscuro:
 # el papel del escaneo es blanco y necesita flotar sobre algo, como en
 # cualquier lector de PDF.
 PANE_BG = TABLE_BASE_BG
-PANE_SURFACE_BG = "#262626"
-PANE_CONTROL_BG = "#3d3d3d"
-PANE_CONTROL_HOVER = "#4a4a4a"
-PANE_BORDER = "#4a4a4a"
-PANE_TEXT = TABLE_TEXT
+PANE_SURFACE_BG = WINDOW_BG
+PANE_CONTROL_BG = CONTROL_BG
+PANE_CONTROL_HOVER = CONTROL_HOVER
+PANE_BORDER = STROKE
+PANE_TEXT = TEXT
 # Los estados se leen como texto sobre el gris oscuro, no como relleno de
-# celda: los tonos de la tabla (#1a7f37, #9a6700, #cf222e) están pensados para
-# llevar texto blanco encima y sobre el panel quedarían casi invisibles.
+# celda: los tonos de la tabla están pensados para llevar texto blanco encima
+# y sobre el panel quedarían casi invisibles. Son los tres de Windows para
+# fondo oscuro; los de antes venían de la paleta de GitHub.
 PANE_STATUS_COLORS = {
-    "OK": "#3fb950",
-    "WARNING": "#d29922",
-    "ERROR": "#f85149",
+    "OK": STATUS_OK,
+    "WARNING": STATUS_WARNING,
+    "ERROR": STATUS_ERROR,
 }
 
-# Radio de esquina de la aplicación: el mismo de los QGroupBox, del panel de
-# tiempos y del visor de PDF incrustado. La tabla es un cuadro más y no puede
-# ser el único con las esquinas en pico.
-TABLE_RADIUS = 6
+# Radio de esquina. El de los controles; las superficies que los contienen
+# llevan el suyo, mayor, para que un botón dentro de un cuadro no tenga la
+# misma curva que el cuadro.
+TABLE_RADIUS = RADIUS_CONTROL
 
 # Botón dividido: la flecha vive en su propia celda pegada al borde derecho,
 # fuera del área que se pulsa. Qt centra la etiqueta en el botón entero y no
@@ -100,7 +137,7 @@ DATA_TABLE_QSS = (
     f" alternate-background-color: {TABLE_ALTERNATE_BG};"
     f" color: {TABLE_TEXT};"
     f" gridline-color: {TABLE_GRID};"
-    f" selection-background-color: {TABLE_SELECTION_BG};"
+    f" selection-background-color: palette(highlight);"
     f" selection-color: {TABLE_TEXT};"
     f" border: 1px solid {PANE_BORDER};"
     f" border-radius: {TABLE_RADIUS}px; }}"
@@ -152,47 +189,47 @@ DATA_TABLE_QSS += scrollbars_qss("QTableView") + scrollbars_qss("QTableWidget")
 # principal y en el visor de PDF del visor de CSV. Vive aquí para que los dos
 # no puedan separarse; cada ventana lo añade al final de su hoja, después de
 # sus reglas de panel, para ganar a las que tienen la misma especificidad.
-ZOOM_OVERLAY_QSS = """
-#zoomOverlay {
-    background-color: rgb(49, 49, 49);
-    border: 1px solid rgb(49, 49, 49);
-    border-radius: 8px;
-}
-#zoomOverlay QLabel {
+ZOOM_OVERLAY_QSS = f"""
+#zoomOverlay {{
+    background-color: {CARD_BG};
+    border: 1px solid {STROKE};
+    border-radius: {RADIUS_CARD}px;
+}}
+#zoomOverlay QLabel {{
     border: 0;
     background: transparent;
-    color: #ffffff;
-    font-size: 10px;
-    font-weight: 600;
-}
-#zoomOverlay QToolButton#zoomControl {
+    color: {TEXT};
+    font-size: {FONT_CAPTION_PT}pt;
+    font-weight: {WEIGHT_STRONG};
+}}
+#zoomOverlay QToolButton#zoomControl {{
     min-width: 28px;
     max-width: 28px;
     min-height: 28px;
     max-height: 28px;
     padding: 0;
     border: 1px solid transparent;
-    border-radius: 6px;
-    background-color: rgb(49, 49, 49);
-}
-#zoomOverlay QToolButton#zoomControl:hover {
-    background-color: rgb(64, 64, 64);
-    border-color: rgb(102, 102, 102);
-}
-#zoomOverlay QToolButton#zoomControl:pressed {
-    background-color: rgb(38, 38, 38);
-    border-color: rgb(102, 102, 102);
-}
-#zoomOverlay QToolButton#zoomControl:disabled {
-    background-color: rgb(49, 49, 49);
-}
-#zoomOverlay QLabel#zoomValue {
-    min-width: 38px;
+    border-radius: {RADIUS_CONTROL}px;
+    background-color: {CARD_BG};
+}}
+#zoomOverlay QToolButton#zoomControl:hover {{
+    background-color: {CONTROL_HOVER};
+    border-color: {STROKE_STRONG};
+}}
+#zoomOverlay QToolButton#zoomControl:pressed {{
+    background-color: {CONTROL_PRESSED};
+    border-color: {STROKE_STRONG};
+}}
+#zoomOverlay QToolButton#zoomControl:disabled {{
+    background-color: {CARD_BG};
+}}
+#zoomOverlay QLabel#zoomValue {{
+    min-width: 40px;
     padding: 0 2px;
-    color: #ffffff;
-    font-size: 10px;
-    font-weight: 600;
-}
+    color: {TEXT};
+    font-size: {FONT_CAPTION_PT}pt;
+    font-weight: {WEIGHT_STRONG};
+}}
 """
 
 # Tipografia y controles de la aplicacion. Los colores salen de las mismas
@@ -204,36 +241,39 @@ QMainWindow, QDialog {{
 }}
 QWidget {{
     color: {PANE_TEXT};
-    font-family: "Segoe UI", "Segoe UI Variable Text", sans-serif;
-    font-size: 10pt;
+    font-family: {FONT_FAMILY};
+    font-size: {FONT_BODY_PT}pt;
 }}
 QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled {{
-    color: #8c959f;
+    color: {TEXT_DISABLED};
 }}
 QPushButton {{
-    min-height: 22px;
-    max-height: 22px;
-    padding: 3px 10px;
+    min-height: {CONTROL_BOX_H}px;
+    max-height: {CONTROL_BOX_H}px;
+    padding: 0 {CONTROL_PAD_H}px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
     border: 1px solid {PANE_BORDER};
     border-radius: {TABLE_RADIUS}px;
 }}
 QToolButton {{
-    padding: 2px 6px;
+    min-height: {CONTROL_BOX_H}px;
+    max-height: {CONTROL_BOX_H}px;
+    padding: 0 {CONTROL_PAD_H}px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
     border: 1px solid {PANE_BORDER};
     border-radius: {TABLE_RADIUS}px;
 }}
 QToolButton#primaryButton {{
-    min-height: 20px;
-    padding: 3px 10px;
+    min-height: {CONTROL_BOX_H}px;
+    max-height: {CONTROL_BOX_H}px;
+    padding: 0 {CONTROL_PAD_H}px;
 }}
 QToolButton[menuRole="dropdown"] {{
-    min-height: 24px;
-    max-height: 24px;
-    padding: 2px 22px 2px 10px;
+    min-height: {CONTROL_BOX_H}px;
+    max-height: {CONTROL_BOX_H}px;
+    padding: 0 22px 0 {CONTROL_PAD_H}px;
 }}
 QToolButton[menuRole="dropdown"]::menu-indicator {{
     subcontrol-origin: border;
@@ -245,9 +285,9 @@ QToolButton[menuRole="dropdown"]::menu-indicator {{
     image: url("{_DROPDOWN_ARROW}");
 }}
 QToolButton[menuRole="split"] {{
-    min-height: 22px;
-    max-height: 22px;
-    padding: 2px {SPLIT_PAD_RIGHT}px 2px {SPLIT_PAD_LEFT}px;
+    min-height: {CONTROL_BOX_H}px;
+    max-height: {CONTROL_BOX_H}px;
+    padding: 0 {SPLIT_PAD_RIGHT}px 0 {SPLIT_PAD_LEFT}px;
 }}
 QToolButton[menuRole="split"]::menu-button {{
     subcontrol-origin: border;
@@ -272,9 +312,9 @@ QToolButton[menuRole="split"]::menu-arrow {{
    botón dividido de la ventana: el texto se centraba en el botón entero y
    acababa pegado al separador de la flecha. */
 QToolButton#primaryButton[menuRole="split"] {{
-    min-height: 22px;
-    max-height: 22px;
-    padding: 3px {SPLIT_PAD_RIGHT}px 3px {SPLIT_PAD_LEFT}px;
+    min-height: {CONTROL_BOX_H}px;
+    max-height: {CONTROL_BOX_H}px;
+    padding: 0 {SPLIT_PAD_RIGHT}px 0 {SPLIT_PAD_LEFT}px;
 }}
 QPushButton:hover, QToolButton:hover {{
     background-color: {PANE_CONTROL_HOVER};
@@ -284,10 +324,10 @@ QPushButton:checked, QToolButton:checked {{
     background-color: {PANE_SURFACE_BG};
 }}
 QPushButton:focus, QToolButton:focus {{
-    border-color: {TABLE_SELECTION_BG};
+    border-color: palette(highlight);
 }}
 QPushButton:default {{
-    border-color: {TABLE_SELECTION_BG};
+    border-color: palette(highlight);
 }}
 QPushButton:disabled, QToolButton:disabled {{
     color: #8c959f;
@@ -323,17 +363,23 @@ QToolButton#spinStepButton:disabled {{
     background-color: {TABLE_HEADER_BG};
     color: #8c959f;
 }}
-QLineEdit, QComboBox,
+/* El campo numérico va en la lista. Fuera de ella se quedaba con el marco
+   nativo, que mide 3 px por lado en vez de 1, y acababa 4 px más alto que sus
+   vecinos de fila sin que ninguna regla lo dijera. */
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox,
 QDateEdit, QTimeEdit, QDateTimeEdit {{
-    min-height: 21px;
-    max-height: 21px;
-    padding: 3px;
+    min-height: {CONTROL_BOX_H}px;
+    max-height: {CONTROL_BOX_H}px;
+    padding: 0 {CONTROL_PAD_H}px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
     border: 1px solid {PANE_BORDER};
-    border-bottom: 2px solid #8c959f;
+    /* Fluent marca el foco con una linea fina abajo, y solo al enfocar. Los
+       2 px permanentes que habia aqui son de Material, y ponian un subrayado
+       claro bajo cada campo de la ventana. */
+    border-bottom: 1px solid {STROKE_STRONG};
     border-radius: {TABLE_RADIUS}px;
-    selection-background-color: {TABLE_SELECTION_BG};
+    selection-background-color: palette(highlight);
     selection-color: {PANE_TEXT};
 }}
 QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover,
@@ -342,7 +388,7 @@ QDateEdit:hover, QTimeEdit:hover, QDateTimeEdit:hover {{
 }}
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus,
 QDateEdit:focus, QTimeEdit:focus, QDateTimeEdit:focus {{
-    border-bottom-color: {TABLE_SELECTION_BG};
+    border-bottom: 2px solid palette(highlight);
 }}
 QLineEdit:read-only {{
     background-color: {PANE_CONTROL_BG};
@@ -363,15 +409,15 @@ QComboBox::drop-down {{
     background: transparent;
 }}
 QSpinBox, QDoubleSpinBox {{
-    min-height: 24px;
-    max-height: 24px;
-    padding-left: 3px;
-    padding-right: 3px;
+    min-height: {CONTROL_BOX_H}px;
+    max-height: {CONTROL_BOX_H}px;
+    padding-left: {CONTROL_PAD_H}px;
+    padding-right: {CONTROL_PAD_H}px;
     padding-top: 0;
     padding-bottom: 0;
 }}
 QComboBox {{
-    padding: 3px 30px 3px 8px;
+    padding: 0 30px 0 {CONTROL_PAD_H}px;
 }}
 QComboBox::down-arrow {{
     width: 10px;
@@ -388,11 +434,11 @@ QComboBox QAbstractItemView {{
     border: 1px solid {PANE_BORDER};
     border-radius: {TABLE_RADIUS}px;
     padding: 4px;
-    selection-background-color: {TABLE_SELECTION_BG};
+    selection-background-color: palette(highlight);
     outline: 0;
 }}
 QComboBox QAbstractItemView::item {{
-    min-height: 26px;
+    min-height: {CONTROL_BOX_H}px;
     padding: 3px 8px;
     border-radius: 4px;
 }}
@@ -401,9 +447,9 @@ QGroupBox {{
     background-color: {TABLE_BASE_BG};
     font-weight: 600;
     border: 1px solid {PANE_BORDER};
-    border-radius: {TABLE_RADIUS}px;
+    border-radius: {RADIUS_CARD}px;
     margin-top: 0;
-    padding: 22px 8px 6px 8px;
+    padding: 24px 12px 12px 12px;
 }}
 QGroupBox::title {{
     subcontrol-origin: border;
@@ -414,10 +460,18 @@ QGroupBox::title {{
     color: {PANE_TEXT};
     background: transparent;
 }}
-QCheckBox, QRadioButton {{ spacing: 6px; }}
+/* La casilla comparte fila con campos y botones, asi que comparte alto: sin
+   esto medía 14 px contra los 32 de sus vecinos, se leia descolgada de su
+   propia fila y el sitio donde se puede pulsar era menos de la mitad. El
+   recuadro lo sigue dibujando Windows; aqui solo se le da la caja. */
+QCheckBox, QRadioButton {{
+    spacing: {SPACE_S}px;
+    min-height: {CONTROL_HEIGHT}px;
+    max-height: {CONTROL_HEIGHT}px;
+}}
 QProgressBar {{
-    min-height: 28px;
-    max-height: 28px;
+    min-height: {CONTROL_BOX_H}px;
+    max-height: {CONTROL_BOX_H}px;
     color: {PANE_TEXT};
     background-color: {PANE_CONTROL_BG};
     border: 1px solid {PANE_BORDER};
@@ -425,7 +479,7 @@ QProgressBar {{
     text-align: center;
 }}
 QProgressBar::chunk {{
-    background-color: {TABLE_SELECTION_BG};
+    background-color: palette(highlight);
     border-radius: 5px;
 }}
 QPlainTextEdit, QTextEdit, QListView, QListWidget, QTreeView, QTreeWidget {{
@@ -434,7 +488,7 @@ QPlainTextEdit, QTextEdit, QListView, QListWidget, QTreeView, QTreeWidget {{
     alternate-background-color: {TABLE_ALTERNATE_BG};
     border: 1px solid {PANE_BORDER};
     border-radius: {TABLE_RADIUS}px;
-    selection-background-color: {TABLE_SELECTION_BG};
+    selection-background-color: palette(highlight);
     selection-color: {PANE_TEXT};
     outline: 0;
 }}
@@ -489,7 +543,7 @@ QTabBar::tab {{
 QTabBar::tab:hover {{ background-color: {PANE_CONTROL_HOVER}; }}
 QTabBar::tab:selected {{
     background-color: {PANE_CONTROL_BG};
-    border-bottom: 2px solid {TABLE_SELECTION_BG};
+    border-bottom: 2px solid palette(highlight);
 }}
 QSplitter::handle {{ background-color: {PANE_SURFACE_BG}; }}
 QSplitter::handle:hover {{ background-color: {PANE_BORDER}; }}
@@ -779,16 +833,16 @@ class FlatSelectionDelegate(QStyledItemDelegate):
             if self._fila_marcada(index):
                 # Marcada es una decisión, como la selección: el color de
                 # estado de la celda cede y la fila queda de un solo tono.
-                option.backgroundBrush = QBrush(QColor(TABLE_CHECKED_BG))
+                option.backgroundBrush = QBrush(QColor(checked_row_color()))
                 self._texto_claro(option)
                 return
             if self._fila_bajo_el_cursor(index):
                 option.backgroundBrush = QBrush(
-                    _mezclado(option.backgroundBrush, TABLE_HOVER_BG)
+                    _mezclado(option.backgroundBrush, hover_row_color())
                 )
             return
         option.state &= ~QStyle.StateFlag.State_Selected
-        option.backgroundBrush = QBrush(QColor(TABLE_SELECTION_BG))
+        option.backgroundBrush = QBrush(QColor(accent_color()))
         self._texto_claro(option)
 
     @staticmethod
@@ -864,7 +918,7 @@ def style_data_table(table: QAbstractItemView) -> None:
     # Sin el rol de texto, Qt seguiría escribiendo en negro sobre el gris.
     palette.setColor(QPalette.ColorRole.Text, QColor(TABLE_TEXT))
     palette.setColor(QPalette.ColorRole.WindowText, QColor(TABLE_TEXT))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(TABLE_SELECTION_BG))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(accent_color()))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(TABLE_TEXT))
     table.setPalette(palette)
     # El viewport usa el rol ``Base``; sin autorrelleno conserva el blanco que
@@ -989,7 +1043,7 @@ def style_dark_pane(pane: QWidget) -> None:
     palette.setColor(QPalette.ColorRole.Text, QColor(PANE_TEXT))
     palette.setColor(QPalette.ColorRole.Button, QColor(PANE_CONTROL_BG))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(PANE_TEXT))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor(TABLE_SELECTION_BG))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(accent_color()))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor(PANE_TEXT))
     pane.setPalette(palette)
     pane.setAutoFillBackground(True)
