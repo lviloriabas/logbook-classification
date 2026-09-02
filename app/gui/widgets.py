@@ -79,6 +79,20 @@ PANE_STATUS_COLORS = {
 # ser el único con las esquinas en pico.
 TABLE_RADIUS = 6
 
+# Botón dividido: la flecha vive en su propia celda pegada al borde derecho,
+# fuera del área que se pulsa. Qt centra la etiqueta en el botón entero y no
+# sabe de esa celda, así que el texto se va hacia la derecha hasta chocar con
+# el separador. Se compensa con el relleno: si el de la derecha vale el de la
+# izquierda más la celda, el centro del hueco de texto vuelve a caer en el
+# centro de la parte pulsable.
+#
+# Van como constantes y no como números sueltos dentro de la hoja porque la
+# relación entre los tres es lo que hace que el texto quede centrado; escritos
+# a mano en sitios distintos se desincronizan sin que nada avise.
+SPLIT_MENU_WIDTH = 24
+SPLIT_PAD_LEFT = 10
+SPLIT_PAD_RIGHT = SPLIT_PAD_LEFT + SPLIT_MENU_WIDTH
+
 # Ambas ventanas comparten esta hoja para que la tabla se vea igual en las dos.
 DATA_TABLE_QSS = (
     "QTableView, QTableWidget {"
@@ -233,12 +247,12 @@ QToolButton[menuRole="dropdown"]::menu-indicator {{
 QToolButton[menuRole="split"] {{
     min-height: 22px;
     max-height: 22px;
-    padding: 2px 30px 2px 8px;
+    padding: 2px {SPLIT_PAD_RIGHT}px 2px {SPLIT_PAD_LEFT}px;
 }}
 QToolButton[menuRole="split"]::menu-button {{
     subcontrol-origin: border;
     subcontrol-position: top right;
-    width: 24px;
+    width: {SPLIT_MENU_WIDTH}px;
     border: 0;
     border-left: 1px solid {PANE_BORDER};
     border-top-right-radius: {TABLE_RADIUS}px;
@@ -252,9 +266,15 @@ QToolButton[menuRole="split"]::menu-arrow {{
     height: 6px;
     image: url("{_DROPDOWN_ARROW}");
 }}
+/* El relleno se repite aquí a propósito. En QSS un selector de ID pesa más
+   que uno de atributo, así que «QToolButton#primaryButton» le gana a
+   «QToolButton[menuRole="split"]» y le colaba su relleno simétrico al único
+   botón dividido de la ventana: el texto se centraba en el botón entero y
+   acababa pegado al separador de la flecha. */
 QToolButton#primaryButton[menuRole="split"] {{
     min-height: 22px;
     max-height: 22px;
+    padding: 3px {SPLIT_PAD_RIGHT}px 3px {SPLIT_PAD_LEFT}px;
 }}
 QPushButton:hover, QToolButton:hover {{
     background-color: {PANE_CONTROL_HOVER};
