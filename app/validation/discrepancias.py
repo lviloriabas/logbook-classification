@@ -6,21 +6,27 @@ La discrepancia es de cada bitácora por separado. El libro no interviene:
 dos páginas seguidas del mismo avión pueden ser una de vuelo y otra de
 mantenimiento, y cada una se juzga sola.
 
-- Una página es de **mantenimiento** cuando *cualquiera* de las dos casillas
-  del bloque del técnico (``technician_signature`` o ``technician_license``)
-  está escrita de forma confiable. Las dos son requisito, así que ninguna
-  puede decidir el tipo por sí sola: si lo decidiera la licencia, una entrada
-  de mantenimiento firmada por el técnico pero sin licencia se leería como de
-  vuelo, y como el capitán firma el bloque de aceptación de la misma hoja, la
-  página pasaría entera y la licencia que falta no se reclamaría nunca.
-- Si las dos casillas del técnico están vacías de forma confiable, la entrada
-  es de **vuelo**.
-- Si ninguna está escrita con seguridad y alguna es ilegible, el tipo de
-  página es **incierto** (INCIERTO): no se acusa a los campos que solo aplican
-  a una de las dos interpretaciones (capitán y licencia de capitán), se
-  reportan solo las anomalías robustas (firma de piloto, exigida en ambos
-  casos) y la casilla ilegible que impide decidir. Evita tanto las
-  discrepancias falsas de vuelo como las de mantenimiento.
+El tipo lo deciden solo las casillas **limpias**: la licencia de técnico y el
+bloque del capitán. ``technician_signature`` queda fuera de esa decisión
+porque cae justo debajo de los sellos «MXI Entry Performed By» y «DATE / STA»,
+que la llenan de tinta ajena. De 30 páginas revisadas a mano en las que el
+detector la daba por escrita, ninguna tenía firma. Un sello solo añade tinta y
+nunca la quita, así que su lectura «ausente» sigue siendo de fiar: el campo se
+conserva como requisito de mantenimiento, pero no puede decidir el tipo.
+
+- Una página es de **mantenimiento** cuando ``technician_license`` está
+  escrita de forma confiable.
+- Es de **vuelo** cuando esa licencia está vacía y hay algo escrito en el
+  bloque del capitán o en la firma del piloto.
+- Es una hoja **anulada** (VOID) cuando la licencia de técnico, las dos
+  casillas del capitán y la firma del piloto están vacías. Se llenó mal, se
+  apartó y lleva el log page y a veces la matrícula, nada más. No le falta
+  ninguna firma porque no llegó a usarse: se indexa como cualquier otra y no
+  abre discrepancia.
+- Si ninguna casilla limpia lo dice con seguridad, el tipo es **incierto**
+  (INCIERTO): se reportan solo las anomalías robustas (firma de piloto,
+  exigida en las dos interpretaciones) y las casillas ilegibles que impiden
+  decidir. El resto es ambiguo: acusarlo produciría discrepancias falsas.
 - **Vuelo**: deben estar presentes la firma de piloto, la firma de capitán y
   la licencia del capitán.
 - **Mantenimiento**: deben estar presentes la firma de piloto, la firma de
@@ -65,11 +71,11 @@ FIELD_TECH_LICENSE = "technician_license"
 
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(CMP|WWP)$")
 
-# Cómo se nombra cada casilla del bloque de mantenimiento cuando es ella la
-# que impide decidir el tipo de entrada.
-_NOMBRE_TECNICO = {
-    FIELD_TECH: "Firma de técnico",
+# Cómo se nombra cada casilla cuando es ella la que impide decidir el tipo.
+_NOMBRE_ILEGIBLE = {
     FIELD_TECH_LICENSE: "Licencia de técnico",
+    FIELD_CAPTAIN: "Firma de capitán",
+    FIELD_CAPTAIN_LICENSE: "Licencia del capitán",
 }
 
 
@@ -168,19 +174,29 @@ def _clasificar_pagina(page: PageResult, template: Template
         (tipo, categoria, campos afectados) si hay discrepancia,
         o None si la página cumple todas las firmas requeridas.
     """
-    # El bloque de mantenimiento son dos casillas, y cualquiera de las dos
-    # escrita significa que alguien del taller intervino esta bitácora. No
-    # puede decidir el tipo una sola de ellas: la licencia decidía antes, y
-    # una entrada de mantenimiento firmada por el técnico pero sin su
-    # licencia se leía como de vuelo. Como el capitán también firma el bloque
-    # de aceptación de la misma hoja, esa página pasaba entera y la licencia
-    # que faltaba no se reclamaba nunca.
-    bloque_tecnico = [
-        _campo_presente(page, template, field_id)
-        for field_id in (FIELD_TECH, FIELD_TECH_LICENSE)
-    ]
+    licencia_tecnico = _campo_presente(page, template, FIELD_TECH_LICENSE)
+    firma_capitan = _campo_presente(page, template, FIELD_CAPTAIN)
+    licencia_capitan = _campo_presente(page, template, FIELD_CAPTAIN_LICENSE)
+    firma_piloto = _campo_presente(page, template, FIELD_PILOT)
 
-    if any(presencia is True for presencia in bloque_tecnico):
+    # Una bitácora VOID se anuló al llenarla y se apartó: lleva el log page y
+    # a veces la matrícula, y nada más. No le falta ninguna firma porque no
+    # llegó a usarse, así que se indexa como cualquier otra y no abre
+    # discrepancia. Se reconoce porque ninguna de las casillas fiables tiene
+    # nada. La firma de técnico no entra en la comprobación a propósito: un
+    # sello sobre ella no convierte una hoja anulada en una discrepancia.
+    if (licencia_tecnico is False and firma_capitan is False
+            and licencia_capitan is False and firma_piloto is False):
+        return None
+
+    # El tipo lo deciden solo las casillas limpias. La de firma de técnico
+    # queda fuera de esta decisión: cae justo debajo de los sellos «MXI Entry
+    # Performed By» y «DATE / STA», que la llenan de tinta ajena, y sobre 30
+    # páginas revisadas a mano ninguna tenía firma. Un sello solo añade tinta,
+    # nunca la quita, así que su lectura «ausente» sigue siendo de fiar y por
+    # eso el campo se conserva como requisito de mantenimiento; lo que no
+    # soporta es decidir de qué tipo es la bitácora.
+    if licencia_tecnico is True:
         tipo = TipoEntrada.MANTENIMIENTO
         requisitos = [
             ("Falta firma de piloto (entrada de mantenimiento)",
@@ -193,7 +209,9 @@ def _clasificar_pagina(page: PageResult, template: Template
              "Licencia de técnico incierta (entrada de mantenimiento); revisar",
              FIELD_TECH_LICENSE),
         ]
-    elif all(presencia is False for presencia in bloque_tecnico):
+    elif licencia_tecnico is False and True in (
+        firma_capitan, licencia_capitan, firma_piloto
+    ):
         tipo = TipoEntrada.VUELO
         requisitos = [
             ("Falta firma de piloto",
@@ -205,24 +223,26 @@ def _clasificar_pagina(page: PageResult, template: Template
              FIELD_CAPTAIN_LICENSE),
         ]
     else:
-        # Ninguna casilla del bloque de mantenimiento se lee con seguridad y
-        # ninguna está escrita con seguridad: no se puede decidir entre vuelo
-        # y mantenimiento. Solo se reportan anomalías robustas (firma de
-        # piloto, exigida en ambas interpretaciones) y la casilla ilegible que
-        # impide decidir. El resto (capitán, técnico) es ambiguo: acusarlo
-        # produciría discrepancias falsas.
+        # Ninguna casilla limpia dice con seguridad de qué tipo es la
+        # bitácora: no se puede decidir entre vuelo, mantenimiento y hoja
+        # anulada. Solo se reportan anomalías robustas (firma de piloto,
+        # exigida en las dos interpretaciones) y las casillas ilegibles que
+        # impiden decidir. El resto es ambiguo: acusarlo produciría
+        # discrepancias falsas.
         tipo = TipoEntrada.INCIERTO
         afectados: List[CampoAfectado] = [
             CampoAfectado(
                 field_id=field_id,
                 categoria=Categoria.UNCERTAIN,
                 razon=(
-                    f"{_NOMBRE_TECNICO[field_id]} ilegible; no se pudo "
-                    "determinar si la entrada es de mantenimiento"
+                    f"{_NOMBRE_ILEGIBLE[field_id]} ilegible; no se pudo "
+                    "determinar de qué tipo es la bitácora"
                 ),
             )
-            for field_id, presencia in zip(
-                (FIELD_TECH, FIELD_TECH_LICENSE), bloque_tecnico
+            for field_id, presencia in (
+                (FIELD_TECH_LICENSE, licencia_tecnico),
+                (FIELD_CAPTAIN, firma_capitan),
+                (FIELD_CAPTAIN_LICENSE, licencia_capitan),
             )
             if presencia is None
         ]

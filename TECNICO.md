@@ -136,13 +136,16 @@ Archivos principales:
 
 La discrepancia se juzga en cada bitácora por separado. El libro no interviene: dos páginas seguidas del mismo avión pueden ser una de vuelo y otra de mantenimiento.
 
-El bloque del técnico decide el tipo de página. Cualquiera de sus dos casillas escrita significa que el taller intervino la bitácora:
+El tipo lo deciden solo las casillas limpias: la licencia de técnico y el bloque del capitán.
 
-- mantenimiento (alguna casilla del técnico escrita): requiere firma de piloto, firma de técnico y licencia de técnico;
-- vuelo (las dos casillas del técnico vacías): requiere firma de piloto, firma de capitán y licencia de capitán;
-- incierto (ninguna escrita con seguridad y alguna ilegible): queda para revisión.
+- mantenimiento (licencia de técnico escrita): requiere firma de piloto, firma de técnico y licencia de técnico;
+- vuelo (licencia de técnico vacía y algo escrito en el bloque del capitán o en la firma del piloto): requiere firma de piloto, firma de capitán y licencia de capitán;
+- anulada o VOID (licencia de técnico, las dos casillas del capitán y la firma del piloto vacías): se indexa como cualquier otra y no abre discrepancia;
+- incierto (ninguna casilla limpia lo dice con seguridad): queda para revisión.
 
-Ninguna de las dos casillas del técnico puede decidir el tipo por sí sola, porque las dos son requisito. Cuando lo decidía solo la licencia, una entrada de mantenimiento firmada por el técnico pero sin licencia se leía como de vuelo; el capitán firma el bloque de aceptación de esa misma hoja, así que la página pasaba completa y la licencia que faltaba no se reclamaba nunca.
+`technician_signature` no decide el tipo. Cae justo debajo de los sellos «MXI Entry Performed By» y «DATE / STA», que la llenan de tinta ajena: de 30 páginas revisadas a mano en las que el detector la daba por escrita, ninguna tenía firma. Un sello solo añade tinta y nunca la quita, así que su lectura «ausente» sigue siendo de fiar y el campo se conserva como requisito de mantenimiento; lo que no soporta es decidir de qué tipo es la bitácora.
+
+Una bitácora VOID se anuló al llenarla y se apartó. Lleva el log page y a veces la matrícula, nada más. No le falta ninguna firma porque no llegó a usarse. Lo que la distingue de un vuelo al que le falta el capitán es la firma del piloto: si el vuelo se realizó, esa firma está.
 
 El detector de firmas analiza tinta, no identidad. Su salida es presente, ausente o incierta. De las dos licencias solo se mira si la casilla está escrita o vacía: no se lee su número, que no forma parte del índice ni de la regla. Las discrepancias se guardan aparte y no cambian por sí solas el estado de los datos de índice.
 
