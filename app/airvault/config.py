@@ -111,7 +111,7 @@ class AirVaultConfig:
     # configurable porque el picklist del campo no se lee de la API: si el
     # valor no existiera en el repositorio, se corrige aqui sin tocar el
     # codigo. Vacio deja a todas con el Audit Status normal.
-    audit_status_discrepancia: str = "AUDIT REQUIRED"
+    audit_status_discrepancia: str = "AUDIT IN PROGRESS"
     # Preferencia portable de la interfaz. No hay un valor fijo en el
     # codigo: la instalacion conserva aqui la ultima cantidad elegida tanto
     # al repartir la entrega como al preparar los batches de Quick Upload.

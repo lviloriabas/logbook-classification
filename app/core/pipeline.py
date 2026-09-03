@@ -688,12 +688,24 @@ def process_page_image(
                     field, page_number, dpi=config.dpi,
                 )
                 if page.alignment_quality != "ok":
+                    # La duda queda anotada, pero no borra la lectura. Sin
+                    # ancla fiable la página no se transforma: el recorte cae
+                    # donde lo pone la plantilla, que es donde ya caía. Medido
+                    # sobre un libro que sí alinea, aplicar la transformación
+                    # o no cambia el veredicto en 4 de 155 recortes, y siempre
+                    # entre un veredicto firme y «unclear»: nunca convierte
+                    # una firma presente en ausente ni al revés. La corrección
+                    # es de unos pocos píxeles sobre una casilla de cientos.
+                    #
+                    # Bajar la confianza a 0.40 la dejaba por debajo de los
+                    # dos umbrales del campo, así que las cinco firmas de la
+                    # página se volvían ilegibles a la vez, el tipo de entrada
+                    # quedaba indeciso y la página salía marcada como
+                    # discrepancia hubiera lo que hubiera en ella.
                     result.status = Status.WARNING
-                    result.confidence = min(result.confidence, 0.40)
                     result.inference_method = "alignment_low"
                     result.comment = (
-                        f"{result.comment} | Alineación no confiable; "
-                        "firma requiere revisión"
+                        f"{result.comment} | Alineación no confiable"
                     )
             else:
                 result = detect_checkbox(

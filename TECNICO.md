@@ -142,6 +142,10 @@ La licencia del técnico decide el tipo de página:
 
 El detector de firmas analiza tinta, no identidad. Su salida es presente, ausente o incierta. Las discrepancias se guardan aparte y no cambian por sí solas el estado de los datos de índice.
 
+Una alineación que no se pudo verificar anota la firma, pero no borra su lectura: el campo queda en WARNING con la nota «Alineación no confiable» y conserva valor y confianza. Sin ancla fiable la página no se transforma, así que el recorte cae donde lo pone la plantilla, que es donde ya caía. Recortar la confianza dejaba las cinco firmas por debajo de los dos umbrales del campo a la vez, el tipo de página quedaba indeciso y la bitácora salía marcada como discrepancia tuviera lo que tuviera escrito.
+
+Una bitácora marcada como discrepancia se escribe con el Audit Status `AUDIT IN PROGRESS`, el valor del picklist para lo que queda pendiente de auditar. Es lo único que la distingue en AirVault del resto del batch.
+
 Archivos principales:
 
 - `app/vision/signature.py`

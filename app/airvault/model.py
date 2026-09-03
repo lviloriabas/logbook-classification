@@ -172,7 +172,7 @@ class Manifiesto(BaseModel):
     # Audit Status de las bitacoras marcadas como discrepancia. Viaja en el
     # manifiesto para que un trabajo guardado se reanude con el mismo valor
     # con el que se planifico.
-    audit_status_discrepancia: str = "AUDIT REQUIRED"
+    audit_status_discrepancia: str = "AUDIT IN PROGRESS"
 
     etapas: Dict[str, Etapa] = Field(default_factory=dict)
     registros: List[Registro] = Field(default_factory=list)

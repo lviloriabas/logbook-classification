@@ -188,15 +188,15 @@ def test_una_discrepancia_lleva_su_propio_audit_status():
     """Es lo unico que la distingue en AirVault del resto del batch."""
     registro = registros_desde_csv([_fila(disc="true")])[0]
     valores = valores_de_indice(
-        registro, "Log Page", "PUBLISHED", "DP | PRUEBA", "AUDIT REQUIRED"
+        registro, "Log Page", "PUBLISHED", "DP | PRUEBA", "AUDIT IN PROGRESS"
     )
-    assert valores[CAMPO_AUDIT_STATUS] == "AUDIT REQUIRED"
+    assert valores[CAMPO_AUDIT_STATUS] == "AUDIT IN PROGRESS"
 
 
 def test_sin_discrepancia_el_audit_status_es_el_del_trabajo():
     registro = registros_desde_csv([_fila()])[0]
     valores = valores_de_indice(
-        registro, "Log Page", "PUBLISHED", "DP | PRUEBA", "AUDIT REQUIRED"
+        registro, "Log Page", "PUBLISHED", "DP | PRUEBA", "AUDIT IN PROGRESS"
     )
     assert valores[CAMPO_AUDIT_STATUS] == "PUBLISHED"
 

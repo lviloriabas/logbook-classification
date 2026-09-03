@@ -125,7 +125,7 @@ def test_sin_vuelo_se_manda_solo_la_marca_automatica():
     assert valores_remotos[CAMPO_DESCRIPCION] == "AUTO INDEX"
 
 
-def test_una_discrepancia_se_escribe_con_audit_required():
+def test_una_discrepancia_se_escribe_con_su_audit_status():
     """La marca del batch REVISAR que dice cual hay que auditar."""
     cliente = ClienteFalso(page_count=2)
     m = manifiesto()
@@ -138,7 +138,7 @@ def test_una_discrepancia_se_escribe_con_audit_required():
         pagina: valores[CAMPO_AUDIT_STATUS]
         for pagina, valores, _estado in cliente.escrituras
     }
-    assert escritos == {1: "AUDIT REQUIRED", 2: "PUBLISHED"}
+    assert escritos == {1: "AUDIT IN PROGRESS", 2: "PUBLISHED"}
 
 
 def test_revisar_no_lleva_la_marca_automatica():

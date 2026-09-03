@@ -4,7 +4,7 @@
   "index_scheme_id": 137,
   "doc_type": "Log Page",
   "audit_status": "PUBLISHED",
-  "audit_status_discrepancia": "AUDIT REQUIRED",
+  "audit_status_discrepancia": "AUDIT IN PROGRESS",
   "paginas_por_batch": 400,
   "espera_descubrimiento_s": 20,
   "espera_maxima_s": 900,
