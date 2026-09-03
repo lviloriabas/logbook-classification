@@ -29,6 +29,7 @@ from app.gui.widgets import (
     TABLE_BASE_BG,
     TABLE_GRID,
     TABLE_HEADER_BG,
+    PANE_BORDER,
     TABLE_RADIUS,
     TABLE_SELECTION_BG,
     TABLE_TEXT,
@@ -67,12 +68,12 @@ _ARBOL_QSS = (
     "QTreeWidget {"
     f" background-color: {TABLE_BASE_BG};"
     f" color: {TABLE_TEXT};"
-    f" selection-background-color: {TABLE_SELECTION_BG};"
+    f" selection-background-color: palette(highlight);"
     f" selection-color: {TABLE_TEXT};"
-    f" border: 1px solid {TABLE_HEADER_BG};"
+    f" border: 1px solid {PANE_BORDER};"
     f" border-radius: {TABLE_RADIUS}px; }}"
     "QTreeWidget::item { padding: 3px 2px; }"
-    f"QTreeWidget::item:selected {{ background-color: {TABLE_SELECTION_BG}; }}"
+    f"QTreeWidget::item:selected {{ background-color: palette(highlight); }}"
     f"QTreeWidget::branch {{ background-color: {TABLE_BASE_BG}; }}"
     f"QTreeWidget QHeaderView::section {{ background-color: {TABLE_HEADER_BG};"
     f" color: {TABLE_TEXT}; border: 0;"
@@ -156,7 +157,7 @@ class DepurarPaginasDialog(QDialog):
         layout.addWidget(self.arbol_blancas, 1)
 
         self.total_label = QLabel()
-        self.total_label.setStyleSheet("color: #57606a;")
+        self.total_label.setStyleSheet("color: #c9d1d9;")
         self.total_label.setWordWrap(True)
         layout.addWidget(self.total_label)
 

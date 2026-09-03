@@ -21,6 +21,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QToolButton
 
 from app.gui.airvault_window import AirVaultWindow
@@ -186,20 +188,23 @@ def test_los_pasos_elegidos_sobreviven_al_cierre(tmp_path):
     assert guardado["auto_indexar"] is False
 
 
-def test_el_menu_enseña_los_tres_pasos_que_no_se_eligen(app, tmp_path):
-    """Preprocesar, procesar y exportar siempre se hacen, y la lista lo dice."""
+def test_el_menu_solo_ensena_las_opciones_que_se_pueden_cambiar(app, tmp_path):
+    """Un menú de Windows no mezcla ajustes con pasos fijos deshabilitados."""
     menu = MenuAutomatizacion(OpcionesAutomatizacion(tmp_path))
     try:
-        fijos = [
-            accion for accion in menu.actions()
-            if accion.isCheckable() and not accion.isEnabled()
+        opciones = [
+            accion for accion in menu.actions() if not accion.isSeparator()
         ]
-        assert [accion.text() for accion in fijos] == [
-            "Preprocesar (enderezar y alinear)",
-            "Procesar (OCR)",
-            "Exportar CSV, JSON y PDF",
+        assert [accion.text() for accion in opciones] == [
+            "Depurar antes de exportar",
+            "Subir a AirVault",
+            "Indexar páginas",
+            "Completar batch",
         ]
-        assert all(accion.isChecked() for accion in fijos)
+        assert all(
+            accion.isEnabled() and accion.isCheckable()
+            for accion in opciones
+        )
     finally:
         menu.deleteLater()
 
@@ -228,30 +233,43 @@ def test_el_menu_se_abre_encima_y_no_ocupa_sitio_en_la_ventana(app, tmp_path):
         app.processEvents()
 
 
-def test_marcar_un_paso_no_cierra_el_menu(app, tmp_path):
-    """Son varias casillas: cerrarlo en la primera obliga a reabrirlo."""
-    from PySide6.QtCore import QPoint, QPointF, Qt
-    from PySide6.QtGui import QMouseEvent
-
+def test_marcar_un_paso_actualiza_la_opcion(app, tmp_path):
+    """Las marcas usan el comportamiento normal de una acción de menú."""
     opciones = OpcionesAutomatizacion(tmp_path)
     menu = MenuAutomatizacion(opciones)
     try:
-        menu.popup(QPoint(0, 0))
+        menu.accion(DEPURAR).trigger()
+
+        assert opciones.depurar
+    finally:
+        menu.deleteLater()
         app.processEvents()
-        menu.setActiveAction(menu.accion(DEPURAR))
-        menu.mouseReleaseEvent(
-            QMouseEvent(
-                QMouseEvent.Type.MouseButtonRelease,
-                QPointF(5, 5),
-                QPointF(5, 5),
-                Qt.MouseButton.LeftButton,
-                Qt.MouseButton.LeftButton,
-                Qt.KeyboardModifier.NoModifier,
-            )
+
+
+def test_el_menu_no_se_cierra_entre_varias_marcas(app, tmp_path):
+    """Una lista multiseleccion se termina al salir, no en cada casilla."""
+    opciones = OpcionesAutomatizacion(tmp_path)
+    menu = MenuAutomatizacion(opciones)
+    try:
+        menu.popup(menu.pos())
+        app.processEvents()
+        accion = menu.accion(DEPURAR)
+        menu.setActiveAction(accion)
+
+        QTest.mouseClick(
+            menu,
+            Qt.MouseButton.LeftButton,
+            pos=menu.actionGeometry(accion).center(),
         )
         app.processEvents()
 
         assert opciones.depurar
+        assert menu.isVisible()
+
+        QTest.keyClick(menu, Qt.Key.Key_Space)
+        app.processEvents()
+
+        assert not opciones.depurar
         assert menu.isVisible()
     finally:
         menu.close()

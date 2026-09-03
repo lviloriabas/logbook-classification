@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from app.branding import APPLICATION_USER_MODEL_PREFIX
+
 
 WM_SETICON = 0x0080
 ICON_SMALL = 0
@@ -19,6 +21,12 @@ SM_CXSMICON = 49
 SM_CYSMICON = 50
 GCLP_HICON = -14
 GCLP_HICONSM = -34
+DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1 = 19
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWA_SYSTEMBACKDROP_TYPE = 38
+DWM_WINDOW_CORNER_PREFERENCE_ROUND = 2
+DWM_SYSTEMBACKDROP_TYPE_MAINWINDOW = 2
 
 
 def set_windows_process_taskbar_identity() -> str | None:
@@ -33,7 +41,7 @@ def set_windows_process_taskbar_identity() -> str | None:
     """
     if sys.platform != "win32":
         return None
-    app_id = f"BITS.LogbookClassification.Instance.{os.getpid()}"
+    app_id = f"{APPLICATION_USER_MODEL_PREFIX}.Instance.{os.getpid()}"
     try:
         import ctypes
         from ctypes import wintypes
@@ -46,6 +54,54 @@ def set_windows_process_taskbar_identity() -> str | None:
     except (AttributeError, OSError, TypeError, ValueError):
         return None
     return app_id
+
+
+def set_windows_native_window_style(window: Any) -> bool:
+    """Activa el marco oscuro, las esquinas y el fondo nativos de Windows.
+
+    Son atributos de DWM y no sustituyen ningun control Qt. En versiones de
+    Windows que no los conocen, cada atributo se omite sin impedir que la
+    ventana se abra.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        setter = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        setter.argtypes = (
+            wintypes.HWND,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        )
+        setter.restype = ctypes.c_long
+        hwnd = wintypes.HWND(int(window.winId()))
+
+        def set_int(attribute: int, value: int) -> bool:
+            native_value = ctypes.c_int(value)
+            return setter(
+                hwnd,
+                attribute,
+                ctypes.byref(native_value),
+                ctypes.sizeof(native_value),
+            ) == 0
+
+        dark = set_int(DWMWA_USE_IMMERSIVE_DARK_MODE, 1)
+        if not dark:
+            dark = set_int(DWMWA_USE_IMMERSIVE_DARK_MODE_BEFORE_20H1, 1)
+        rounded = set_int(
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            DWM_WINDOW_CORNER_PREFERENCE_ROUND,
+        )
+        backdrop = set_int(
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            DWM_SYSTEMBACKDROP_TYPE_MAINWINDOW,
+        )
+        return dark or rounded or backdrop
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
 
 
 def set_windows_taskbar_icon(

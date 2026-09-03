@@ -18,7 +18,7 @@
     No descarga nada: solo informa que componentes estan presentes.
 
 .PARAMETER Launcher
-    Regenera LogbookClassification.exe con PyInstaller al terminar.
+    Regenera BITSBitacoras.exe con PyInstaller al terminar.
 
 .PARAMETER Force
     Rehace los componentes aunque ya esten instalados.
@@ -60,7 +60,7 @@ $Cache = Join-Path $Portable '.cache'
 $PythonDir = Join-Path $Portable 'python312'
 $PythonExe = Join-Path $PythonDir 'tools\python.exe'
 $ModelsDir = Join-Path $Portable 'paddlex\official_models'
-$LauncherExe = Join-Path $Root 'LogbookClassification.exe'
+$LauncherExe = Join-Path $Root 'BITSBitacoras.exe'
 
 # --- Salida ----------------------------------------------------------------
 
@@ -297,7 +297,7 @@ function Install-Modelos {
 }
 
 function Build-Launcher {
-    Write-Paso 'Launcher LogbookClassification.exe'
+    Write-Paso 'Launcher BITSBitacoras.exe'
     Write-Detalle 'instalando pyinstaller'
     & $PythonExe -m pip install --quiet --disable-pip-version-check `
         --no-warn-script-location pyinstaller
@@ -332,7 +332,7 @@ function Show-Estado {
         [pscustomobject]@{
             Componente = 'Launcher'
             Estado     = if (Test-Path $LauncherExe) { 'ok' } else { 'FALTA' }
-            Ruta       = 'LogbookClassification.exe'
+            Ruta       = 'BITSBitacoras.exe'
             MB         = Get-TamanoMB $LauncherExe
         }
     )
@@ -351,7 +351,7 @@ if ($env:OS -ne 'Windows_NT') {
     throw 'El entorno portable es de Windows: ejecute este script en Windows.'
 }
 
-Write-Host "Entorno portable de Logbook Classification" -ForegroundColor White
+Write-Host "Entorno portable de BITS - Clasificacion de Bitacoras" -ForegroundColor White
 Write-Detalle "carpeta: $Root"
 
 if ($Check) {
@@ -370,5 +370,5 @@ if ($CleanCache -and (Test-Path $Cache)) {
 }
 
 Show-Estado
-Write-Host "Todo listo. Abra LogbookClassification.exe o ejecute:" -ForegroundColor Green
+Write-Host "Todo listo. Abra BITSBitacoras.exe o ejecute:" -ForegroundColor Green
 Write-Host "    portable\python312\tools\python.exe run_cli.py --pdf input\<archivo>.pdf"

@@ -49,18 +49,18 @@ from app.airvault.model import EstadoRegistro, Registro
 from app.gui.responsive import Density, fit_to_screen
 from app.gui.table_sort import ColumnSortController
 from app.gui.widgets import (
-    APP_CHROME_QSS,
     DATA_TABLE_QSS,
     PANE_STATUS_COLORS,
     ElidedLabel,
     align_vertical_scrollbar_to_header,
     size_columns_once,
     style_data_table,
+    window_stylesheet,
 )
 from app.utils.important_fields import default_important_columns
 
 # El mismo gris con el que las dos ventanas escriben sus líneas de ayuda.
-COLOR_AYUDA = "#57606a"
+COLOR_AYUDA = "#c9d1d9"
 COLOR_HECHO = PANE_STATUS_COLORS["OK"]
 
 # Reparto del ancho entre la página y la tabla, el mismo del visor de CSV.
@@ -199,7 +199,7 @@ class _ListaBuscable(QDialog):
         los cuadros salen de ahí y no del estilo nativo.
         """
         densidad = fit_to_screen(self, ancho, alto)
-        self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS + densidad.qss)
+        self.setStyleSheet(window_stylesheet(DATA_TABLE_QSS + densidad.qss))
         return densidad
 
     def mostrar(self) -> None:

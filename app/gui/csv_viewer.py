@@ -71,7 +71,6 @@ from app.gui.responsive import ROOMY, Density, density_for, fit_to_screen
 from app.gui.table_sort import ModelSortController
 from app.reports.csv_reporter import CsvReporter
 from app.gui.widgets import (
-    APP_CHROME_QSS,
     DATA_TABLE_QSS,
     PANE_BG,
     PANE_BORDER,
@@ -88,6 +87,7 @@ from app.gui.widgets import (
     hide_overlay_when_tight,
     scrollbars_qss,
     style_data_table,
+    window_stylesheet,
     style_dark_pane,
     style_pdf_surface,
 )
@@ -154,7 +154,7 @@ _PDF_PANE_QSS = (
     # La lista desplegable es una ventana aparte y no hereda el fondo.
     "#embeddedPdfPane QComboBox QAbstractItemView {"
     f" background: {PANE_CONTROL_BG}; color: {PANE_TEXT};"
-    f" selection-background-color: {TABLE_SELECTION_BG}; }}"
+    f" selection-background-color: palette(highlight); }}"
     # El recuadro de zoom va al final: sus reglas y las del panel tienen la
     # misma especificidad y aquí gana la última.
 ) + scrollbars_qss("#embeddedPdfPane") + ZOOM_OVERLAY_QSS
@@ -949,13 +949,13 @@ class EmbeddedPdfViewer(QFrame):
         # El recuadro de zoom flota sobre la página: ni decide el mínimo
         # del panel ni se dibuja a medias. Ver ``hide_overlay_when_tight``.
         zoom_holder.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
         )
         viewer_frame_layout.addWidget(
             zoom_holder,
             0,
             0,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
         )
         zoom_holder.raise_()
         hide_overlay_when_tight(zoom_holder)
@@ -1544,7 +1544,7 @@ class CsvViewerWindow(QMainWindow):
         self.search_next.clicked.connect(lambda: self._move_search(1))
         search_row.addWidget(self.search_next)
         self.search_context = QLabel(_SEARCH_HINT)
-        self.search_context.setStyleSheet("color: #57606a;")
+        self.search_context.setStyleSheet("color: #c9d1d9;")
         search_row.addWidget(self.search_context, 1)
         layout.addLayout(search_row)
 
@@ -1623,7 +1623,7 @@ class CsvViewerWindow(QMainWindow):
 
         status_row = QHBoxLayout()
         self.status_label = QLabel(self._summary)
-        self.status_label.setStyleSheet("color: #57606a;")
+        self.status_label.setStyleSheet("color: #c9d1d9;")
         status_row.addWidget(self.status_label, 1)
         self.btn_depurar = QPushButton("Depurar")
         self.btn_depurar.setEnabled(False)
@@ -1643,7 +1643,9 @@ class CsvViewerWindow(QMainWindow):
 
     def _apply_density_stylesheet(self) -> None:
         """Hoja de la ventana con el fragmento de medidas de la densidad."""
-        self.setStyleSheet(APP_CHROME_QSS + DATA_TABLE_QSS + self._density.qss)
+        self.setStyleSheet(
+            window_stylesheet(DATA_TABLE_QSS + self._density.qss)
+        )
 
     def _update_responsive_layout(self) -> None:
         """Aprieta o suelta las medidas según el alto que tenga la ventana."""

@@ -25,11 +25,19 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QRect, QSize
+from PySide6.QtCore import QPoint, QRect, QSize
 from PySide6.QtGui import QFont, QFontDatabase
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import (
+    QApplication,
+    QGridLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 import app.gui.responsive as responsive
+from app.gui.automatizacion import PREPROCESAR
 from app.gui.csv_viewer import CsvViewerWindow
 from app.gui.editor_window import EditorWindow
 from app.gui.field_selector import ImportantFieldsDialog
@@ -42,7 +50,15 @@ from app.gui.responsive import (
     density_for,
     fitted_geometry,
 )
-from app.gui.widgets import ElidedLabel
+from app.gui.tokens import CONTROL_HEIGHT, CONTROL_HEIGHT_COMPACT
+from app.gui.widgets import (
+    SPLIT_MENU_WIDTH,
+    SPLIT_PAD_LEFT,
+    SPLIT_PAD_RIGHT,
+    ElidedLabel,
+    ZoomOverlay,
+    hide_overlay_when_tight,
+)
 
 # Pantallas reales, con el escalado ya aplicado: lo que Qt ve como escritorio
 # es el tamaño físico dividido por el factor de Windows.
@@ -223,8 +239,8 @@ def test_en_pantalla_baja_los_cuadros_se_reparten_en_dos_columnas():
             ventana.close()
 
 
-def test_en_pantalla_grande_la_ventana_es_la_de_siempre():
-    """Nada de esto puede cambiar el aspecto donde ya cabía: una columna."""
+def test_en_pantalla_grande_aprovecha_el_ancho_en_dos_columnas():
+    """Entrada y Salidas no gastan dos filas completas en un monitor ancho."""
     _app()
     area = _area_de_trabajo(1920, 1080)
     with patch.object(responsive, "available_area", return_value=area):
@@ -232,7 +248,7 @@ def test_en_pantalla_grande_la_ventana_es_la_de_siempre():
         try:
             ventana.show()
             assert ventana._density is ROOMY
-            assert ventana._controls_columns == 1
+            assert ventana._controls_columns == 2
         finally:
             ventana.close()
 
@@ -254,7 +270,7 @@ def test_la_ventana_se_readapta_al_cambiar_de_tamano():
             holgado = ventana._roomy_minimum.height()
             ventana.resize(1400, holgado + responsive.DENSITY_HYSTERESIS)
             assert ventana._density is ROOMY
-            assert ventana._controls_columns == 1
+            assert ventana._controls_columns == 2
         finally:
             ventana.close()
 
@@ -322,8 +338,162 @@ def test_el_panel_de_avance_no_recorta_sus_rotulos_en_la_ventana_mas_pequena():
             ventana.close()
 
 
-def test_el_recuadro_de_zoom_se_esconde_antes_que_dibujarse_a_medias():
-    """Flota sobre la página: no manda sobre el mínimo, y o cabe o no está."""
+def test_los_controles_vecinos_comparten_alto_y_ancho():
+    """La métrica visual es una sola, incluso entre tipos de control."""
+    app = _app()
+    area = _area_de_trabajo(1920, 1080)
+    with patch.object(responsive, "available_area", return_value=area):
+        ventana = MainWindow()
+        try:
+            ventana.resize(1920, 1000)
+            ventana.show()
+            app.processEvents()
+            salidas = ventana.export_options
+            controles = (
+                ventana.input_edit,
+                ventana.template_combo,
+                ventana.input_actions_button,
+                ventana.template_actions_button,
+                salidas.output_mode_combo,
+                salidas.csv_date_mode_combo,
+                salidas.separation_button,
+                ventana.view_button,
+                salidas.partes_control,
+                ventana.fleet_check,
+                salidas.partes_check,
+                ventana.progress,
+                ventana.btn_process,
+                ventana.btn_cancel,
+                ventana.more_actions_button,
+                ventana.btn_automatico,
+                ventana.search_edit,
+                ventana.search_button,
+                ventana.search_prev,
+                ventana.search_next,
+            )
+            # Un solo alto para todo lo que se pulsa o se escribe, que es la
+            # medida de WinUI. Antes la hoja declaraba siete distintos y en
+            # pantalla salian cuatro, asi que las casillas no cuadraban con
+            # sus vecinos de fila.
+            assert {control.height() for control in controles} == {
+                CONTROL_HEIGHT
+            }
+            assert (
+                ventana.input_actions_button.width()
+                == ventana.template_actions_button.width()
+            )
+            assert (
+                salidas.separation_button.width()
+                == ventana.view_button.width()
+            )
+            assert ventana._input_group.height() == ventana._options_group.height()
+            assert abs(
+                ventana._input_group.width() - ventana._options_group.width()
+            ) <= 1
+            automatico_texto = (
+                ventana.btn_automatico.fontMetrics().horizontalAdvance(
+                    ventana.btn_automatico.text()
+                )
+            )
+            # La flecha del botón dividido va en su propia celda pegada al
+            # borde, fuera de lo que se pulsa, y Qt no la tiene en cuenta al
+            # centrar el rótulo. El relleno de la derecha la compensa: si vale
+            # el de la izquierda más la celda, el texto vuelve al centro de la
+            # parte pulsable en lugar de quedarse contra el separador.
+            assert SPLIT_PAD_RIGHT == SPLIT_PAD_LEFT + SPLIT_MENU_WIDTH
+            assert ventana.btn_automatico.width() >= (
+                automatico_texto + SPLIT_PAD_LEFT + SPLIT_PAD_RIGHT
+            )
+            progreso = ventana.progress.mapTo(ventana, QPoint())
+            automatico = ventana.btn_automatico.mapTo(ventana, QPoint())
+            assert progreso.x() == ventana._density.window_margin
+            assert (
+                automatico.x() + ventana.btn_automatico.width()
+                == ventana.width() - ventana._density.window_margin
+            )
+            assert progreso.x() + ventana.progress.width() < automatico.x()
+            assert all(
+                etiqueta.text() == "00:00:00"
+                for etiqueta in ventana.time_labels.values()
+            )
+            ventana.resize(1366, 680)
+            app.processEvents()
+            assert {control.height() for control in controles} == {
+                CONTROL_HEIGHT_COMPACT
+            }
+            # La compacta aprieta el relleno, pero la celda de la flecha mide
+            # lo mismo: el botón sigue teniendo que reservarla.
+            assert ventana.btn_automatico.width() >= (
+                automatico_texto + SPLIT_MENU_WIDTH
+            )
+            assert abs(
+                ventana._input_group.width() - ventana._options_group.width()
+            ) <= 1
+        finally:
+            ventana.close()
+
+
+def test_el_buscador_no_desalinea_el_visor_y_la_tabla():
+    """La busqueda es una barra comun y los dos cuadros comparten limites."""
+    app = _app()
+    area = _area_de_trabajo(1920, 1080)
+    with patch.object(responsive, "available_area", return_value=area):
+        ventana = MainWindow()
+        try:
+            ventana.show()
+            for _ in range(4):
+                app.processEvents()
+
+            visor = ventana.preview_scroll.mapTo(ventana, QPoint())
+            tabla = ventana.table.mapTo(ventana, QPoint())
+            buscador = ventana.search_edit.mapTo(ventana, QPoint())
+            margenes = {
+                ventana.cadena._etiquetas[PREPROCESAR].mapTo(
+                    ventana, QPoint()
+                ).x(),
+                buscador.x(),
+                ventana.preview_file_caption.mapTo(ventana, QPoint()).x(),
+            }
+            assert margenes == {ventana._density.window_margin}
+            assert ventana.search_edit.maximumWidth() == 420
+            assert ventana.search_edit.placeholderText().startswith("Buscar ")
+            assert ventana.search_next.x() + ventana.search_next.width() < (
+                ventana.width() // 2
+            )
+            assert buscador.y() < visor.y()
+            assert abs(visor.y() - tabla.y()) <= 1
+            assert abs(
+                visor.y() + ventana.preview_scroll.height()
+                - tabla.y()
+                - ventana.table.height()
+            ) <= 1
+        finally:
+            ventana.close()
+            app.processEvents()
+
+
+def test_el_limite_de_paginas_muestra_valor_y_sufijo_completos():
+    app = _app()
+    area = _area_de_trabajo(1366, 768)
+    with patch.object(responsive, "available_area", return_value=area):
+        ventana = MainWindow()
+        try:
+            ventana.show()
+            app.processEvents()
+            campo = ventana.export_options.partes_spin
+            assert campo.height() >= campo.fontMetrics().lineSpacing() + 8
+        finally:
+            ventana.close()
+
+
+def test_el_recuadro_de_zoom_cabe_tumbado_hasta_en_la_ventana_mas_pequena():
+    """Tumbado entra donde de pie no entraba, que es para lo que se tumbó.
+
+    De pie medía más que el alto que la vista previa tiene garantizado en la
+    ventana mínima, así que en ese tamaño desaparecía justo cuando hace más
+    falta. Tumbado pide ancho, que es lo que sobra en un panel que enseña una
+    hoja vertical, y se queda.
+    """
     app = _app()
     with patch.object(
         responsive, "available_area", return_value=_area_de_trabajo(1920, 1080)
@@ -334,25 +504,75 @@ def test_el_recuadro_de_zoom_se_esconde_antes_que_dibujarse_a_medias():
             app.processEvents()
             assert ventana._zoom_holder.isVisible()
 
-            # La ventana en su suelo: la página se queda con lo justo y el
-            # recuadro ya no cabe entero.
             ventana.resize(ventana.minimumWidth(), ventana.minimumHeight())
             for _ in range(4):
                 app.processEvents()
 
-            assert not ventana._zoom_holder.isVisible()
-            assert (
-                ventana.preview_scroll.height()
-                < ventana._zoom_holder.sizeHint().height()
-            )
+            assert ventana._zoom_holder.isVisible()
+            pedido = ventana._zoom_holder.sizeHint()
+            marco = ventana._zoom_holder.parentWidget()
+            assert marco.width() >= pedido.width()
+            assert marco.height() >= pedido.height()
         finally:
             ventana.close()
 
 
+def test_el_recuadro_de_zoom_se_esconde_antes_que_dibujarse_a_medias():
+    """Flota sobre la página: no manda sobre el mínimo, y o cabe o no está.
+
+    Se comprueba sobre el marco a pelo porque en la ventana real ya no hay
+    ningún tamaño legal en el que la píldora no quepa; la regla sigue viva
+    para los paneles que puedan quedarse más estrechos que ella.
+    """
+    app = _app()
+    marco = QWidget()
+    marco.resize(600, 400)
+    disposicion = QGridLayout(marco)
+    disposicion.setContentsMargins(0, 0, 0, 0)
+
+    soporte = QWidget(marco)
+    soporte_layout = QVBoxLayout(soporte)
+    soporte_layout.setContentsMargins(8, 8, 8, 8)
+    soporte_layout.addWidget(
+        ZoomOverlay(
+            ("Acercar", "Acercar", lambda: None),
+            ("Ajustar", "Ajustar", lambda: None),
+            ("Alejar", "Alejar", lambda: None),
+            marco,
+        )
+    )
+    soporte.setSizePolicy(
+        QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
+    )
+    disposicion.addWidget(soporte, 0, 0)
+    hide_overlay_when_tight(soporte)
+    marco.show()
+    app.processEvents()
+    try:
+        assert soporte.isVisible()
+
+        pedido = soporte.sizeHint()
+        # Estrecho: es la medida que le queda corta a un control tumbado.
+        marco.resize(pedido.width() - 20, 400)
+        app.processEvents()
+        assert not soporte.isVisible()
+
+        # Bajo: y la otra tampoco puede recortarlo.
+        marco.resize(600, pedido.height() - 5)
+        app.processEvents()
+        assert not soporte.isVisible()
+
+        marco.resize(600, 400)
+        app.processEvents()
+        assert soporte.isVisible()
+    finally:
+        marco.close()
+
+
 # ── Etiquetas que no pueden mandar sobre el ancho de la ventana ──────────
 
-def test_un_mensaje_largo_no_ensancha_la_ventana():
-    """El estado del procesamiento crecía con cada mensaje más largo."""
+def test_el_estado_textual_no_ocupa_la_fila_de_progreso():
+    """Los mensajes quedan fuera de la fila y la barra usa ese espacio."""
     _app()
     area = _area_de_trabajo(1366, 768)
     with patch.object(responsive, "available_area", return_value=area):
@@ -364,7 +584,9 @@ def test_un_mensaje_largo_no_ensancha_la_ventana():
                 "Archivo 12/40: bitacora-YV1234-enero-2026-revisada.pdf - "
                 "reconociendo páginas 1234/5678 con la plantilla activa"
             )
+            assert not ventana.status_label.isVisibleTo(ventana)
             assert ventana.minimumSizeHint().width() <= antes
+            assert ventana.progress.x() == ventana._density.window_margin
         finally:
             ventana.close()
 

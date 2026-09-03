@@ -111,8 +111,13 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
 
     assert isinstance(options.output_mode_combo, QComboBox)
     assert options.un_solo_pdf()
+    assert options.csv_date_mode_combo.itemText(0) == "Día exacto"
+    assert options.csv_date_mode_combo.itemText(1) == "Fin de mes"
+    assert options.csv_date_mode_combo.maxVisibleItems() == 12
+    assert options.csv_date_mode_combo.minimumContentsLength() == 14
     assert isinstance(options.separation_button, QToolButton)
     assert options.separation_button.menu() is options.separation_menu
+    assert options.separation_button.property("menuRole") == "dropdown"
     assert options.matricula_check.isChecked()
     assert not options.mes_check.isChecked()
     assert options.separar_por() == ["avion"]

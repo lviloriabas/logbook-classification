@@ -72,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="airvault",
         description="Indexa en AirVault los batches de bitacoras ya "
-        "procesados por Logbook Classification.",
+        "procesados por BITS - Clasificación de Bitácoras.",
     )
     parser.add_argument("--verbose", action="store_true", help="Logs detallados")
     sub = parser.add_subparsers(dest="etapa", required=True)
