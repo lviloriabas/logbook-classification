@@ -155,10 +155,47 @@ class TestClasificacion(unittest.TestCase):
         pagina = _mant_ok(captain_signature=("false", DUDOSA))
         self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
 
-    def test_licencia_de_tecnico_dudosa_hace_tipo_incierto(self):
-        # Una licencia de técnico con confianza baja no identifica
-        # mantenimiento ni permite descartarlo: el tipo de página queda
-        # INCIERTO y no se acusan los campos ambiguos (capitán/licencia).
+    def test_firma_de_tecnico_sin_licencia_es_mantenimiento_incompleto(self):
+        # El caso que antes se escapaba entero. El técnico firmó pero no dejó
+        # su licencia: es una entrada de mantenimiento a la que le falta un
+        # requisito, no una de vuelo. Como el capitán firma el bloque de
+        # aceptación de la misma hoja, leerla como vuelo la daba por completa.
+        pagina = _page(1, "2147337", "HP-1534CMP",
+                       pilot_signature=("true", PRESENTE),
+                       captain_signature=("true", PRESENTE),
+                       captain_license=("true", PRESENTE),
+                       technician_signature=("true", PRESENTE),
+                       technician_license=("false", AUSENTE))
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        self.assertEqual(len(entradas), 1)
+        self.assertIs(entradas[0].tipo, TipoEntrada.MANTENIMIENTO)
+        self.assertIs(entradas[0].categoria, Categoria.MISSING)
+        self.assertIn(
+            "Falta licencia de técnico (entrada de mantenimiento)",
+            entradas[0].razones(),
+        )
+
+    def test_licencia_sin_firma_de_tecnico_tambien_es_mantenimiento(self):
+        # El caso simétrico: la licencia escrita basta para que la bitácora
+        # sea de mantenimiento aunque falte la firma.
+        pagina = _page(1, "2147337", "HP-1534CMP",
+                       pilot_signature=("true", PRESENTE),
+                       captain_signature=("true", PRESENTE),
+                       captain_license=("true", PRESENTE),
+                       technician_signature=("false", AUSENTE),
+                       technician_license=("true", PRESENTE))
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        self.assertEqual(len(entradas), 1)
+        self.assertIs(entradas[0].tipo, TipoEntrada.MANTENIMIENTO)
+        self.assertIs(entradas[0].categoria, Categoria.MISSING)
+        self.assertIn(
+            "Falta firma de técnico (entrada de mantenimiento)",
+            entradas[0].razones(),
+        )
+
+    def test_una_casilla_escrita_decide_mantenimiento_aunque_la_otra_dude(self):
+        # Con la firma de técnico presente el tipo ya no está en duda: es de
+        # mantenimiento, y lo que queda incierto es solo la licencia.
         pagina = _page(1, "2147337", "HP-1534CMP",
                        pilot_signature=("true", PRESENTE),
                        captain_signature=("true", PRESENTE),
@@ -167,11 +204,30 @@ class TestClasificacion(unittest.TestCase):
                        technician_license=("true", DUDOSA))
         entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
         self.assertEqual(len(entradas), 1)
-        self.assertIs(entradas[0].tipo, TipoEntrada.INCIERTO)
+        self.assertIs(entradas[0].tipo, TipoEntrada.MANTENIMIENTO)
         self.assertIs(entradas[0].categoria, Categoria.UNCERTAIN)
         self.assertEqual(
             [c.field_id for c in entradas[0].campos],
             ["technician_license"],
+        )
+
+    def test_bloque_de_tecnico_ilegible_hace_tipo_incierto(self):
+        # Ninguna de las dos casillas se lee con seguridad y ninguna está
+        # escrita con seguridad: no se puede decidir entre vuelo y
+        # mantenimiento, y no se acusan los campos ambiguos del capitán.
+        pagina = _page(1, "2147337", "HP-1534CMP",
+                       pilot_signature=("true", PRESENTE),
+                       captain_signature=("true", PRESENTE),
+                       captain_license=("false", AUSENTE),
+                       technician_signature=("true", DUDOSA),
+                       technician_license=("true", DUDOSA))
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        self.assertEqual(len(entradas), 1)
+        self.assertIs(entradas[0].tipo, TipoEntrada.INCIERTO)
+        self.assertIs(entradas[0].categoria, Categoria.UNCERTAIN)
+        self.assertEqual(
+            [c.field_id for c in entradas[0].campos],
+            ["technician_signature", "technician_license"],
         )
 
     def test_tipo_incierto_sin_firma_de_piloto_es_falta(self):
@@ -181,13 +237,13 @@ class TestClasificacion(unittest.TestCase):
                        pilot_signature=("false", AUSENTE),
                        captain_signature=("true", PRESENTE),
                        captain_license=("false", AUSENTE),
-                       technician_signature=("true", PRESENTE),
+                       technician_signature=("true", DUDOSA),
                        technician_license=("true", DUDOSA))
         entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
         self.assertEqual(len(entradas), 1)
         self.assertIs(entradas[0].tipo, TipoEntrada.INCIERTO)
         self.assertIs(entradas[0].categoria, Categoria.MISSING)
-        self.assertIn("Falta firma de piloto", entradas[0].razones()[1])
+        self.assertIn("Falta firma de piloto", entradas[0].razones()[2])
 
     def test_firma_de_tecnico_dudosa_en_mantenimiento_es_incierta(self):
         pagina = _mant_ok(technician_signature=("false", DUDOSA))
