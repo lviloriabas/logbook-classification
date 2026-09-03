@@ -46,7 +46,10 @@ def _page(pn: int, log, mat, firmas: bool = True) -> PageResult:
     if firmas:
         # Una entrada de vuelo con las tres firmas exigidas leidas. Sin
         # ellas la pagina seria una discrepancia y se iria al batch de
-        # revisar, que no es lo que estas pruebas miden.
+        # revisar, que no es lo que estas pruebas miden. Las dos casillas
+        # del tecnico van vacias: cualquiera de las dos escrita haria de
+        # esta una entrada de mantenimiento.
+        _firma(page, "technician_signature", "false", 0.99)
         _firma(page, "technician_license", "false", 0.99)
         _firma(page, "pilot_signature", "true", 0.99)
         _firma(page, "captain_signature", "true", 0.99)
@@ -252,6 +255,7 @@ class TestReexport(unittest.TestCase):
         """En varios PDF van a discrepancias.pdf, y solo ahi."""
         with tempfile.TemporaryDirectory() as tmp:
             discrepante = _page(1, "2147337", "HP-1534CMP", firmas=False)
+            _firma(discrepante, "technician_signature", "false", 0.99)
             _firma(discrepante, "technician_license", "false", 0.99)
             _firma(discrepante, "pilot_signature", "false", 0.99)
             _firma(discrepante, "captain_signature", "true", 0.99)
@@ -272,6 +276,7 @@ class TestReexport(unittest.TestCase):
     def test_una_discrepancia_confirmada_va_al_batch_revisar(self):
         with tempfile.TemporaryDirectory() as tmp:
             page = _page(1, "2147337", "HP-1534CMP", firmas=False)
+            _firma(page, "technician_signature", "false", 0.99)
             _firma(page, "technician_license", "false", 0.99)
             _firma(page, "pilot_signature", "true", 0.99)
             _firma(page, "captain_signature", "false", 0.99)

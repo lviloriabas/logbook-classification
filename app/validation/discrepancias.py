@@ -2,24 +2,37 @@
 
 Reglas:
 
-- Una página es de **mantenimiento** cuando el campo ``technician_license``
-  está presente de forma confiable.
-- Si la licencia del técnico está ausente de forma confiable se trata como
-  **vuelo**.
-- Si la licencia del técnico es ilegible/incierta, el tipo de página es
-  **incierto** (INCIERTO): no se acusa a los campos que solo aplican a una
-  de las dos interpretaciones (capitán/licencia de capitán y técnico), se
+La discrepancia es de cada bitácora por separado. El libro no interviene:
+dos páginas seguidas del mismo avión pueden ser una de vuelo y otra de
+mantenimiento, y cada una se juzga sola.
+
+- Una página es de **mantenimiento** cuando *cualquiera* de las dos casillas
+  del bloque del técnico (``technician_signature`` o ``technician_license``)
+  está escrita de forma confiable. Las dos son requisito, así que ninguna
+  puede decidir el tipo por sí sola: si lo decidiera la licencia, una entrada
+  de mantenimiento firmada por el técnico pero sin licencia se leería como de
+  vuelo, y como el capitán firma el bloque de aceptación de la misma hoja, la
+  página pasaría entera y la licencia que falta no se reclamaría nunca.
+- Si las dos casillas del técnico están vacías de forma confiable, la entrada
+  es de **vuelo**.
+- Si ninguna está escrita con seguridad y alguna es ilegible, el tipo de
+  página es **incierto** (INCIERTO): no se acusa a los campos que solo aplican
+  a una de las dos interpretaciones (capitán y licencia de capitán), se
   reportan solo las anomalías robustas (firma de piloto, exigida en ambos
-  casos) y la propia licencia ilegible. Evita tanto las discrepancias
-  falsas de vuelo como las de mantenimiento cuando no se puede decidir.
-- **Vuelo**: deben estar presentes las firmas de piloto, de capitán y la
-  licencia del capitán.
-- **Mantenimiento**: deben estar presentes las firmas de piloto y de técnico.
-  La firma y la licencia de capitán no se miran: el formulario F-MNT-001 es
-  uno solo y lleva el bloque de mantenimiento («MAINTENANCE RETURN TO
-  SERVICE» + «MECH. LICENSE No.») y el de aceptación de la aeronave
-  («MAINTENANCE CHECK AIRWORTHINESS RELEASE», que firma el capitán) en la
-  misma hoja. Que estén los dos es lo normal, no una anomalía.
+  casos) y la casilla ilegible que impide decidir. Evita tanto las
+  discrepancias falsas de vuelo como las de mantenimiento.
+- **Vuelo**: deben estar presentes la firma de piloto, la firma de capitán y
+  la licencia del capitán.
+- **Mantenimiento**: deben estar presentes la firma de piloto, la firma de
+  técnico y la licencia del técnico. La firma y la licencia de capitán no se
+  miran: el formulario F-MNT-001 es uno solo y lleva el bloque de
+  mantenimiento («MAINTENANCE RETURN TO SERVICE» + «MECH. LICENSE No.») y el
+  de aceptación de la aeronave («MAINTENANCE CHECK AIRWORTHINESS RELEASE»,
+  que firma el capitán) en la misma hoja. Que estén los dos es lo normal, no
+  una anomalía.
+
+De las dos licencias solo se mira si la casilla está escrita o vacía. No se
+lee lo que dice: el número no forma parte del índice ni de la regla.
 
 La "presencia" de una firma se decide con el resultado del detector
 (``true`` / ``false`` / ``unclear``) combinado con la confianza y los
@@ -51,6 +64,13 @@ FIELD_TECH = "technician_signature"
 FIELD_TECH_LICENSE = "technician_license"
 
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(CMP|WWP)$")
+
+# Cómo se nombra cada casilla del bloque de mantenimiento cuando es ella la
+# que impide decidir el tipo de entrada.
+_NOMBRE_TECNICO = {
+    FIELD_TECH: "Firma de técnico",
+    FIELD_TECH_LICENSE: "Licencia de técnico",
+}
 
 
 class TipoEntrada(str, Enum):
@@ -116,6 +136,20 @@ def _presencia(campo: Optional[FieldResult], field_template) -> Optional[bool]:
     return None
 
 
+def _campo_presente(
+    page: PageResult, template: Template, field_id: str
+) -> Optional[bool]:
+    """Presencia de un campo de firma, o ``False`` si no está en la plantilla.
+
+    Un campo que el esquema no define no puede estar escrito, así que no
+    aporta evidencia de que la entrada sea de mantenimiento.
+    """
+    plantilla = template.field(field_id)
+    if plantilla is None:
+        return False
+    return _presencia(_campo(page, field_id), plantilla)
+
+
 def _matricula(page: PageResult) -> Optional[str]:
     """Matrícula corregida de la página (canónica HP-XXXXCMP/WWP), o None."""
     campo = _campo(page, "matricula")
@@ -134,16 +168,19 @@ def _clasificar_pagina(page: PageResult, template: Template
         (tipo, categoria, campos afectados) si hay discrepancia,
         o None si la página cumple todas las firmas requeridas.
     """
-    tech_license = _campo(page, FIELD_TECH_LICENSE)
-    tech_license_tmpl = template.field(FIELD_TECH_LICENSE)
-    if tech_license_tmpl is None:
-        # Plantilla sin campo de licencia de técnico: no puede haber
-        # mantenimiento en este esquema.
-        tech_pres: Optional[bool] = False
-    else:
-        tech_pres = _presencia(tech_license, tech_license_tmpl)
+    # El bloque de mantenimiento son dos casillas, y cualquiera de las dos
+    # escrita significa que alguien del taller intervino esta bitácora. No
+    # puede decidir el tipo una sola de ellas: la licencia decidía antes, y
+    # una entrada de mantenimiento firmada por el técnico pero sin su
+    # licencia se leía como de vuelo. Como el capitán también firma el bloque
+    # de aceptación de la misma hoja, esa página pasaba entera y la licencia
+    # que faltaba no se reclamaba nunca.
+    bloque_tecnico = [
+        _campo_presente(page, template, field_id)
+        for field_id in (FIELD_TECH, FIELD_TECH_LICENSE)
+    ]
 
-    if tech_pres is True:
+    if any(presencia is True for presencia in bloque_tecnico):
         tipo = TipoEntrada.MANTENIMIENTO
         requisitos = [
             ("Falta firma de piloto (entrada de mantenimiento)",
@@ -152,8 +189,11 @@ def _clasificar_pagina(page: PageResult, template: Template
             ("Falta firma de técnico (entrada de mantenimiento)",
              "Firma de técnico incierta (entrada de mantenimiento); revisar",
              FIELD_TECH),
+            ("Falta licencia de técnico (entrada de mantenimiento)",
+             "Licencia de técnico incierta (entrada de mantenimiento); revisar",
+             FIELD_TECH_LICENSE),
         ]
-    elif tech_pres is False:
+    elif all(presencia is False for presencia in bloque_tecnico):
         tipo = TipoEntrada.VUELO
         requisitos = [
             ("Falta firma de piloto",
@@ -165,21 +205,26 @@ def _clasificar_pagina(page: PageResult, template: Template
              FIELD_CAPTAIN_LICENSE),
         ]
     else:
-        # Licencia de técnico ilegible: no se puede decidir entre vuelo y
-        # mantenimiento. Solo se reportan anomalías robustas (firma de
-        # piloto, exigida en ambas interpretaciones) y la propia licencia
-        # ilegible para su revisión manual. El resto (capitán, técnico) es
-        # ambiguo: acusarlo produciría discrepancias falsas.
+        # Ninguna casilla del bloque de mantenimiento se lee con seguridad y
+        # ninguna está escrita con seguridad: no se puede decidir entre vuelo
+        # y mantenimiento. Solo se reportan anomalías robustas (firma de
+        # piloto, exigida en ambas interpretaciones) y la casilla ilegible que
+        # impide decidir. El resto (capitán, técnico) es ambiguo: acusarlo
+        # produciría discrepancias falsas.
         tipo = TipoEntrada.INCIERTO
         afectados: List[CampoAfectado] = [
             CampoAfectado(
-                field_id=FIELD_TECH_LICENSE,
+                field_id=field_id,
                 categoria=Categoria.UNCERTAIN,
                 razon=(
-                    "Licencia de técnico ilegible; no se pudo determinar "
-                    "si la entrada es de mantenimiento"
+                    f"{_NOMBRE_TECNICO[field_id]} ilegible; no se pudo "
+                    "determinar si la entrada es de mantenimiento"
                 ),
             )
+            for field_id, presencia in zip(
+                (FIELD_TECH, FIELD_TECH_LICENSE), bloque_tecnico
+            )
+            if presencia is None
         ]
         tmpl_piloto = template.field(FIELD_PILOT)
         if tmpl_piloto is not None:

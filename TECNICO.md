@@ -134,13 +134,17 @@ Archivos principales:
 
 `flight_number` es opcional. El normalizador acepta vuelos numéricos y los códigos operativos definidos en la plantilla y en el postproceso. Un valor ambiguo queda vacío.
 
-La licencia del técnico decide el tipo de página:
+La discrepancia se juzga en cada bitácora por separado. El libro no interviene: dos páginas seguidas del mismo avión pueden ser una de vuelo y otra de mantenimiento.
 
-- mantenimiento: requiere firma de piloto y técnico;
-- vuelo: requiere firma de piloto, capitán y licencia de capitán;
-- incierto: queda para revisión.
+El bloque del técnico decide el tipo de página. Cualquiera de sus dos casillas escrita significa que el taller intervino la bitácora:
 
-El detector de firmas analiza tinta, no identidad. Su salida es presente, ausente o incierta. Las discrepancias se guardan aparte y no cambian por sí solas el estado de los datos de índice.
+- mantenimiento (alguna casilla del técnico escrita): requiere firma de piloto, firma de técnico y licencia de técnico;
+- vuelo (las dos casillas del técnico vacías): requiere firma de piloto, firma de capitán y licencia de capitán;
+- incierto (ninguna escrita con seguridad y alguna ilegible): queda para revisión.
+
+Ninguna de las dos casillas del técnico puede decidir el tipo por sí sola, porque las dos son requisito. Cuando lo decidía solo la licencia, una entrada de mantenimiento firmada por el técnico pero sin licencia se leía como de vuelo; el capitán firma el bloque de aceptación de esa misma hoja, así que la página pasaba completa y la licencia que faltaba no se reclamaba nunca.
+
+El detector de firmas analiza tinta, no identidad. Su salida es presente, ausente o incierta. De las dos licencias solo se mira si la casilla está escrita o vacía: no se lee su número, que no forma parte del índice ni de la regla. Las discrepancias se guardan aparte y no cambian por sí solas el estado de los datos de índice.
 
 Una alineación que no se pudo verificar anota la firma, pero no borra su lectura: el campo queda en WARNING con la nota «Alineación no confiable» y conserva valor y confianza. Sin ancla fiable la página no se transforma, así que el recorte cae donde lo pone la plantilla, que es donde ya caía. Recortar la confianza dejaba las cinco firmas por debajo de los dos umbrales del campo a la vez, el tipo de página quedaba indeciso y la bitácora salía marcada como discrepancia tuviera lo que tuviera escrito.
 

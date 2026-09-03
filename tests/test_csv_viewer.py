@@ -971,8 +971,10 @@ def _run_with_companion_json(tmp_path: Path, pdf_path: Path) -> tuple[Path, Path
                 )
             )
         # Entrada de vuelo con sus tres firmas leidas: sin ellas la pagina
-        # seria una discrepancia y saldria del PDF de su matricula.
+        # seria una discrepancia y saldria del PDF de su matricula. Las dos
+        # casillas del tecnico van vacias, que es lo que la hace de vuelo.
         for field_id, value in (
+            ("technician_signature", "false"),
             ("technician_license", "false"), ("pilot_signature", "true"),
             ("captain_signature", "true"), ("captain_license", "true"),
         ):
