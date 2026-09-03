@@ -298,9 +298,15 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
                     ) -> List[Discrepancia]:
     """Clasifica todas las páginas del batch y devuelve las discrepancias.
 
-    Marca ``page.discrepancy`` en las páginas afectadas y ordena el resultado
-    globalmente por ``log_number`` ascendente (libro + logpage), y dentro del
-    mismo número por archivo/página.
+    Marca ``page.discrepancy`` solo en las páginas con una ausencia
+    confirmada. Las lecturas inciertas se devuelven igual, y con ellas se
+    escribe el reporte de discrepancias, pero no llevan marca: ninguna firma
+    es un index field, así que una firma ilegible no puede estropear lo que
+    se escribe en AirVault, y apartar esa página costaría teclear a mano seis
+    campos que ya están resueltos.
+
+    El resultado va ordenado globalmente por ``log_number`` ascendente
+    (libro + logpage), y dentro del mismo número por archivo/página.
     """
     entradas: List[Discrepancia] = []
     for report in reports:
@@ -312,7 +318,7 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
             if resultado is None:
                 continue
             tipo, categoria, campos = resultado
-            page.discrepancy = True
+            page.discrepancy = categoria is Categoria.MISSING
             entradas.append(Discrepancia(
                 pdf_path=str(report.pdf_path),
                 page_number=page.page_number,
@@ -337,9 +343,10 @@ def confirmadas_para_revision(
 ) -> List[Discrepancia]:
     """Devuelve solo ausencias confirmadas para la revisión manual.
 
-    Las lecturas ``UNCERTAIN`` conservan ``page.discrepancy`` y su detalle de
-    auditoría, pero no salen del flujo automático. Solo ``MISSING`` confirma
-    que falta una firma exigida y justifica separar la página.
+    Las lecturas ``UNCERTAIN`` conservan su detalle en el reporte de
+    discrepancias, pero no salen del flujo automático ni llevan
+    ``page.discrepancy``. Solo ``MISSING`` confirma que falta una firma
+    exigida y justifica separar la página.
     """
     return [
         entrada

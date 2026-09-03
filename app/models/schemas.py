@@ -82,8 +82,8 @@ class PageResult(BaseModel):
     # recibirá AirVault, sin convertirla en una columna ni persistirla.
     airvault_review: bool = Field(default=False, exclude=True, repr=False)
     # Discrepancia confirmada antes de clasificar las firmas. Se mantiene
-    # separada de ``discrepancy`` porque esa columna también incluye lecturas
-    # inciertas para auditoría y no todas justifican apartar la página.
+    # separada de ``discrepancy`` porque la fija el corrector del libro y no
+    # la clasificación de firmas, que reescribe esa otra en cada exportación.
     airvault_discrepancy: bool = Field(
         default=False, exclude=True, repr=False
     )

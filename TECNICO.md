@@ -147,11 +147,13 @@ El tipo lo deciden solo las casillas limpias: la licencia de técnico y el bloqu
 
 Una bitácora VOID se anuló al llenarla y se apartó. Lleva el log page y a veces la matrícula, nada más. No le falta ninguna firma porque no llegó a usarse. Lo que la distingue de un vuelo al que le falta el capitán es la firma del piloto: si el vuelo se realizó, esa firma está.
 
-El detector de firmas analiza tinta, no identidad. Su salida es presente, ausente o incierta. De las dos licencias solo se mira si la casilla está escrita o vacía: no se lee su número, que no forma parte del índice ni de la regla. Las discrepancias se guardan aparte y no cambian por sí solas el estado de los datos de índice.
+El detector de firmas analiza tinta, no identidad. Su salida es presente, ausente o incierta. De las dos licencias solo se mira si la casilla está escrita o vacía: no se lee su número, que no es un index field ni entra en la regla. Las discrepancias se guardan aparte y no cambian por sí solas los datos que se escriben en AirVault.
+
+Solo la ausencia confirmada aparta la página. Una lectura incierta se anota en el reporte de discrepancias pero no lleva `page.discrepancy`, no llega al batch REVISAR y se indexa como cualquier otra: ninguna firma es un index field, así que una firma ilegible no puede estropear lo que se escribe en AirVault, y apartarla obligaría a teclear a mano los seis campos que el sistema ya resolvió. Sobre las ejecuciones guardadas eran entre la mitad y dos tercios del batch manual: 191 de las 328 páginas de la ejecución de 2409.
 
 Una alineación que no se pudo verificar anota la firma, pero no borra su lectura: el campo queda en WARNING con la nota «Alineación no confiable» y conserva valor y confianza. Sin ancla fiable la página no se transforma, así que el recorte cae donde lo pone la plantilla, que es donde ya caía. Recortar la confianza dejaba las cinco firmas por debajo de los dos umbrales del campo a la vez, el tipo de página quedaba indeciso y la bitácora salía marcada como discrepancia tuviera lo que tuviera escrito.
 
-Una bitácora marcada como discrepancia se escribe con el Audit Status `AUDIT IN PROGRESS`, el valor del picklist para lo que queda pendiente de auditar. Es lo único que la distingue en AirVault del resto del batch.
+Una bitácora con una ausencia confirmada se escribe con el Audit Status `AUDIT IN PROGRESS`, el valor del picklist para lo que queda pendiente de auditar. Es lo único que la distingue en AirVault del resto del batch. Sale de la columna `disc` del CSV, que por eso marca solo las confirmadas.
 
 Archivos principales:
 

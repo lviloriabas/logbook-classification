@@ -213,8 +213,9 @@ def write_outputs(
         )
 
     # Las que van a «Posibles discrepancias»: las confirmadas y las
-    # inciertas por igual. Una firma que no se pudo leer es justo lo que
-    # alguien tiene que mirar, asi que se aparta como la que falta.
+    # inciertas por igual. Las confirmadas ya estan en REVISAR; a las
+    # inciertas esto solo las agrupa al final de la entrega, sin apartarlas
+    # del indexado, y solo cuando se pide la opcion.
     excluidas: set[tuple[str, int]] = set()
     if options.discrepancias:
         excluidas = {
