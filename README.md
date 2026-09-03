@@ -20,7 +20,7 @@ Para usar AirVault también necesita conexión, Microsoft Edge y una cuenta auto
 ## 2. Preparar los PDF
 
 1. Copie los PDF en `input/` o selecciónelos desde otra carpeta.
-2. Abra `BITSBitacoras.exe`.
+2. Abra `BITS.exe`.
 3. Pulse **Detectar** para usar `input/` o **Seleccionar archivos...** para elegirlos manualmente.
 4. Revise el orden. El rango de páginas se cuenta de forma continua sobre todos los PDF.
 5. Si solo necesita una parte, indique la primera y la última página.
