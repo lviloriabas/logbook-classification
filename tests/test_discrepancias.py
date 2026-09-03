@@ -17,6 +17,7 @@ from pathlib import Path
 
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.reports.csv_reporter import CsvReporter
+from app.reports.organize import por_revisar
 from app.templates.manager import TemplateManager
 from app.validation.discrepancias import (
     Categoria,
@@ -328,8 +329,28 @@ class TestClasificacion(unittest.TestCase):
         confirmadas = confirmadas_para_revision(entradas)
 
         self.assertEqual([entrada.page_number for entrada in confirmadas], [2])
-        self.assertTrue(incierta.discrepancy)
+        # La incierta sigue en el reporte de discrepancias, pero sin la marca
+        # que la mandaria al batch manual y le pondria AUDIT IN PROGRESS.
+        # Sus seis index fields estan resueltos y ninguna firma es uno de
+        # ellos: apartarla obligaria a teclearlos a mano sin necesidad.
+        self.assertEqual([entrada.page_number for entrada in entradas], [1, 2])
+        self.assertFalse(incierta.discrepancy)
         self.assertTrue(faltante.discrepancy)
+
+    def test_una_lectura_incierta_no_manda_la_pagina_al_batch_manual(self):
+        # El batch REVISAR se sube sin indexar: cada pagina que cae ahi es
+        # alguien tecleando a mano los seis index fields. Ninguna firma es
+        # uno de ellos, asi que una firma ilegible no justifica ese trabajo
+        # en una pagina cuya matricula, log page y fecha estan resueltas.
+        incierta = _vuelo_ok(pilot_signature=("false", DUDOSA))
+        faltante = _vuelo_ok(
+            2, "2147338", "HP-1534CMP",
+            captain_signature=("false", AUSENTE),
+        )
+        clasificar_lote([_reporte(incierta, faltante)], TEMPLATE)
+
+        self.assertFalse(por_revisar(incierta))
+        self.assertTrue(por_revisar(faltante))
 
     def test_pagina_en_blanco_se_ignora(self):
         pagina = _vuelo_ok()

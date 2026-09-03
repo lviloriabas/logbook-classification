@@ -39,10 +39,12 @@ class CsvReporter:
 
     - ``file``: nombre del PDF del que proviene la página.
     - ``dup``: ``true`` cuando el ``log_number`` ya apareció antes en el batch.
-    - ``disc``: ``true`` cuando la bitácora quedó marcada como discrepancia
-      de firmas. Sale de ``page.discrepancy``, que fija ``clasificar_lote``
-      (``app/validation/discrepancias.py``) antes de escribir el reporte; si
-      esa clasificación no se ejecutó, la columna queda en ``false``.
+    - ``disc``: ``true`` cuando a la bitácora le falta una firma exigida y
+      esa ausencia se leyó con seguridad. Sale de ``page.discrepancy``, que
+      fija ``clasificar_lote`` (``app/validation/discrepancias.py``) antes de
+      escribir el reporte; si esa clasificación no se ejecutó, la columna
+      queda en ``false``. Es la columna que le pone AUDIT IN PROGRESS a la
+      página al indexarla, así que las lecturas inciertas no entran.
     - ``date``: fecha normalizada (YYYY/MM/dd) combinando day/month/year.
     - ``time_ms``: tiempo de procesamiento de la página, repartido sobre el
       reloj real de la ejecución (ver ``page_time_ms``), de modo que la suma

@@ -149,9 +149,12 @@ def por_revisar(page: PageResult) -> bool:
     apartarla cuando matrícula y número ya tienen valores utilizables; el
     indexador puede escribir esos valores y dejar la página en verde.
 
-    ``discrepancy`` aparta también las discrepancias inciertas: la firma no
-    se pudo leer con seguridad, y eso es justo lo que alguien tiene que
-    mirar. Todas ellas van a la sección «Posibles discrepancias».
+    ``discrepancy`` aparta las ausencias de firma confirmadas, que van a la
+    sección «Posibles discrepancias» dentro del mismo batch. Las lecturas
+    inciertas ya no llevan esa marca y no pasan por aquí: sus seis index
+    fields están resueltos y ninguna firma es uno de ellos, así que apartarlas
+    solo obligaría a teclear a mano lo que el sistema ya resolvió. Quedan en
+    el reporte de discrepancias para quien quiera mirarlas.
 
     Las comprobaciones directas conservan segura esta función cuando se usa
     antes de escribir el CSV o con reportes antiguos que no traen la marca.
