@@ -1,13 +1,13 @@
 #! /usr/bin/env python3
 """Launcher de doble clic de BITS - Clasificación de Bitácoras.
 
-Convierte a ``BITSBitacoras.exe`` (via PyInstaller) un pequeño
+Convierte a ``BITS.exe`` (via PyInstaller) un pequeño
 lanzador que arranca la GUI con el Python portable incluido en la carpeta,
 sin mostrar consola y sin instalar nada. Toda la aplicación vive dentro de
 la misma carpeta; solo hay que copiar la carpeta completa a otra máquina.
 
 Métodos de uso:
-    - Doble clic en ``BITSBitacoras.exe`` → abre la GUI.
+    - Doble clic en ``BITS.exe`` → abre la GUI.
     - ``python launcher_gui.py`` → equivalente durante el desarrollo.
 """
 

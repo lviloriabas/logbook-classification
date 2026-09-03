@@ -11,7 +11,7 @@ def test_build_paths_are_derived_from_the_current_portable_root(tmp_path):
     resolved = moved_root.resolve()
 
     assert command[0] == "python-portable.exe"
-    assert command[command.index("--name") + 1] == "BITSBitacoras"
+    assert command[command.index("--name") + 1] == "BITS"
     assert str(resolved / "assets" / "icon.ico") in command
     assert str(resolved / "launcher_gui.py") in command
     assert str(resolved / "build") in command

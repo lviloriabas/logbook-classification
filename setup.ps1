@@ -18,7 +18,7 @@
     No descarga nada: solo informa que componentes estan presentes.
 
 .PARAMETER Launcher
-    Regenera BITSBitacoras.exe con PyInstaller al terminar.
+    Regenera BITS.exe con PyInstaller al terminar.
 
 .PARAMETER Force
     Rehace los componentes aunque ya esten instalados.
@@ -60,7 +60,7 @@ $Cache = Join-Path $Portable '.cache'
 $PythonDir = Join-Path $Portable 'python312'
 $PythonExe = Join-Path $PythonDir 'tools\python.exe'
 $ModelsDir = Join-Path $Portable 'paddlex\official_models'
-$LauncherExe = Join-Path $Root 'BITSBitacoras.exe'
+$LauncherExe = Join-Path $Root 'BITS.exe'
 
 # --- Salida ----------------------------------------------------------------
 
@@ -297,7 +297,7 @@ function Install-Modelos {
 }
 
 function Build-Launcher {
-    Write-Paso 'Launcher BITSBitacoras.exe'
+    Write-Paso 'Launcher BITS.exe'
     Write-Detalle 'instalando pyinstaller'
     & $PythonExe -m pip install --quiet --disable-pip-version-check `
         --no-warn-script-location pyinstaller
@@ -332,7 +332,7 @@ function Show-Estado {
         [pscustomobject]@{
             Componente = 'Launcher'
             Estado     = if (Test-Path $LauncherExe) { 'ok' } else { 'FALTA' }
-            Ruta       = 'BITSBitacoras.exe'
+            Ruta       = 'BITS.exe'
             MB         = Get-TamanoMB $LauncherExe
         }
     )
@@ -370,5 +370,5 @@ if ($CleanCache -and (Test-Path $Cache)) {
 }
 
 Show-Estado
-Write-Host "Todo listo. Abra BITSBitacoras.exe o ejecute:" -ForegroundColor Green
+Write-Host "Todo listo. Abra BITS.exe o ejecute:" -ForegroundColor Green
 Write-Host "    portable\python312\tools\python.exe run_cli.py --pdf input\<archivo>.pdf"
