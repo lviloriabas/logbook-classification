@@ -315,6 +315,8 @@ def test_el_historial_lista_las_corridas_de_la_mas_reciente(app, tmp_path):
     # La primera opción es con la que abre la lista, no una ejecución.
     assert ventana.historial.itemText(0) == "Seleccionar ejecución"
     assert ventana.historial.itemData(0) is None
+    assert ventana.historial.minimumContentsLength() == 22
+    assert ventana.historial.maxVisibleItems() == 12
     nombres = [
         ventana.historial.itemText(indice)
         for indice in range(1, ventana.historial.count())
@@ -330,6 +332,7 @@ def test_la_lista_ensena_el_nombre_y_el_resto_al_posarse_encima(app, tmp_path):
 
     assert ventana.historial.itemText(1) == "BITS 18 AUG 2026 05 42"
     aviso = ventana.historial.itemData(1, Qt.ItemDataRole.ToolTipRole)
+    assert aviso.startswith("BITS 18 AUG 2026 05 42\n")
     assert "19 pág." in aviso
     assert "1 archivo" in aviso
 

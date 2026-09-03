@@ -7,8 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from app.branding import APPLICATION_EXECUTABLE_NAME  # noqa: E402
 
 
 def build_command(root: Path, python_executable: str) -> list[str]:
@@ -22,7 +24,7 @@ def build_command(root: Path, python_executable: str) -> list[str]:
         "--onefile",
         "--noconsole",
         "--name",
-        "LogbookClassification",
+        APPLICATION_EXECUTABLE_NAME,
         "--icon",
         str(root / "assets" / "icon.ico"),
         "--distpath",
@@ -48,7 +50,8 @@ def main() -> int:
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"No se pudo construir el lanzador: {exc}", file=sys.stderr)
         return 1
-    print(f"Lanzador generado: {root / 'LogbookClassification.exe'}")
+    output = root / f"{APPLICATION_EXECUTABLE_NAME}.exe"
+    print(f"Lanzador generado: {output}")
     return 0
 
 

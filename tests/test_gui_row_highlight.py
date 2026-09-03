@@ -24,10 +24,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
 )
 
+from app.gui.tokens import accent_color, checked_row_color, hover_row_color
 from app.gui.widgets import (
-    TABLE_CHECKED_BG,
-    TABLE_HOVER_BG,
-    TABLE_SELECTION_BG,
     style_data_table,
 )
 
@@ -70,9 +68,9 @@ def test_el_cursor_sombrea_la_fila_entera(app):
         tabla.setProperty("hoverRow", 2)
 
         # Ninguna celda se queda fuera: la banda cruza la fila completa.
-        assert _fondos(tabla, 2) == [QColor(TABLE_HOVER_BG).name()] * _COLUMNAS
+        assert _fondos(tabla, 2) == [QColor(hover_row_color()).name()] * _COLUMNAS
         # Y no se derrama sobre las vecinas.
-        assert QColor(TABLE_HOVER_BG).name() not in _fondos(tabla, 1)
+        assert QColor(hover_row_color()).name() not in _fondos(tabla, 1)
     finally:
         tabla.close()
         app.processEvents()
@@ -117,8 +115,8 @@ def test_la_fila_marcada_queda_sombreada_de_extremo_a_extremo(app):
         marca.setFlags(marca.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         marca.setCheckState(Qt.CheckState.Checked)
 
-        assert _fondos(tabla, 1) == [QColor(TABLE_CHECKED_BG).name()] * _COLUMNAS
-        assert QColor(TABLE_CHECKED_BG).name() not in _fondos(tabla, 0)
+        assert _fondos(tabla, 1) == [QColor(checked_row_color()).name()] * _COLUMNAS
+        assert QColor(checked_row_color()).name() not in _fondos(tabla, 0)
     finally:
         tabla.close()
         app.processEvents()
@@ -136,7 +134,7 @@ def test_la_seleccion_manda_sobre_la_marca_y_sobre_el_cursor(app):
         tabla.selectRow(1)
 
         assert _fondos(tabla, 1) == [
-            QColor(TABLE_SELECTION_BG).name()
+            QColor(accent_color()).name()
         ] * _COLUMNAS
     finally:
         tabla.close()
@@ -152,7 +150,7 @@ def test_una_celda_con_color_de_estado_lo_conserva_bajo_el_cursor(app):
 
         fondos = _fondos(tabla, 0)
         # La celda con estado no queda del gris azulado del resto…
-        assert fondos[2] != QColor(TABLE_HOVER_BG).name()
+        assert fondos[2] != QColor(hover_row_color()).name()
         # …ni del verde que tenía: se ve que el cursor está encima.
         assert fondos[2] != QColor("#1a7f37").name()
     finally:
@@ -164,7 +162,7 @@ def test_la_posicion_del_cursor_no_se_inventa_cuando_no_hay_ninguna(app):
     """Sin fila bajo el ratón ninguna celda se pinta de más."""
     tabla = _tabla()
     try:
-        assert QColor(TABLE_HOVER_BG).name() not in _fondos(tabla, 0)
+        assert QColor(hover_row_color()).name() not in _fondos(tabla, 0)
         assert tabla.property("hoverRow") is not None
     finally:
         tabla.close()

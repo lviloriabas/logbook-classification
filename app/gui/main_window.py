@@ -1,4 +1,4 @@
-"""Ventana principal de Logbook Classification.
+"""Ventana principal de BITS.
 
 Permite seleccionar los archivos (PDFs) y la plantilla, procesar el batch
 completo con la configuración recomendada y definir las salidas
@@ -69,6 +69,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.branding import APPLICATION_DISPLAY_NAME
 from app.core.config import AppConfig
 from app.core.page_range import FileSlice, PageRange, slice_batch, total_pages
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
@@ -100,16 +101,28 @@ from app.gui.automatizacion import (
     OpcionesAutomatizacion,
 )
 from app.gui.depuracion_dialog import DEPURAR_TOOLTIP, DepurarPaginasDialog
+from app.gui.tokens import (
+    CONTROL_BG,
+    FONT_CAPTION_PT,
+    RADIUS_CONTROL,
+    STROKE,
+    TEXT,
+    TEXT_SECONDARY,
+    WEIGHT_STRONG,
+)
 from app.gui.widgets import (
-    APP_CHROME_QSS,
     DATA_TABLE_QSS,
     TABLE_RADIUS,
     ElidedLabel,
+    MultiSelectMenu,
     ZoomableScrollArea,
     ZoomOverlay,
+    configure_combo_box,
+    configure_menu_button,
     hide_overlay_when_tight,
     load_icon,
     style_data_table,
+    window_stylesheet,
 )
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
 from app.models.schemas import PageResult, Status, ValidationReport
@@ -213,31 +226,36 @@ def _visible_preview_fields(
         return [field for field in template.fields if field.required]
     return [field for field in template.fields if field.id in important_ids]
 
-_QSS = APP_CHROME_QSS + """
-QWidget#previewContext, QLabel#previewContext {
-    color: #57606a;
-    font-weight: 600;
+# Los rótulos secundarios de la ventana. Todo en puntos: los «10px» que había
+# aquí no seguían el escalado de Windows, así que en un monitor al 150 % el
+# panel de tiempos se encogía mientras el resto de la ventana crecía.
+_WINDOW_QSS = f"""
+QWidget#previewContext, QLabel#previewContext {{
+    color: {TEXT_SECONDARY};
+    font-weight: {WEIGHT_STRONG};
     padding: 4px 2px;
-}
-#timeBar {
-    background-color: #e1e7ee;
-    font-size: 9pt; font-weight: 600; color: #24292f;
-}
-#filePages { color: #57606a; }
-#timeSummary {
-    background-color: rgb(49, 49, 49);
-    border: 1px solid rgb(49, 49, 49);
-    border-radius: 6px;
-}
-#timeSummary QLabel[role="caption"] {
-    color: #ffffff;
-    font-size: 10px;
-}
-#timeSummary QLabel[role="value"] {
-    color: #ffffff;
-    font-size: 10px;
-    font-weight: 600;
-}
+}}
+#timeBar {{
+    background-color: {CONTROL_BG};
+    font-size: {FONT_CAPTION_PT}pt;
+    font-weight: {WEIGHT_STRONG};
+    color: {TEXT};
+}}
+#filePages {{ color: {TEXT_SECONDARY}; }}
+#timeSummary {{
+    background-color: {CONTROL_BG};
+    border: 1px solid {STROKE};
+    border-radius: {RADIUS_CONTROL}px;
+}}
+#timeSummary QLabel[role="caption"] {{
+    color: {TEXT_SECONDARY};
+    font-size: {FONT_CAPTION_PT}pt;
+}}
+#timeSummary QLabel[role="value"] {{
+    color: {TEXT};
+    font-size: {FONT_CAPTION_PT}pt;
+    font-weight: {WEIGHT_STRONG};
+}}
 """ + DATA_TABLE_QSS
 
 
@@ -386,7 +404,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Logbook Classification")
+        self.setWindowTitle(APPLICATION_DISPLAY_NAME)
         # La ventana se abre con lo que dé la pantalla, no con una medida
         # fija: en un portátil de 1366x768 el alto que pedía no existe y la
         # franja de abajo se quedaba fuera del escritorio. La densidad que
@@ -563,6 +581,10 @@ class MainWindow(QMainWindow):
         self._file_page_counts: list[int] = []
 
         self._build_ui()
+        # El estilo ya esta instalado antes de construir la ventana. Pulir
+        # aqui deja definitivas las metricas de los controles y evita medir
+        # y reaplicar las dos densidades una segunda vez al mostrarla.
+        self.ensurePolished()
         self._refresh_minimum_size()
         self._grow_to_fit_content()
         # Si la aplicación termina sin pasar por el cierre de la ventana
@@ -590,7 +612,9 @@ class MainWindow(QMainWindow):
         colores, las tipografías y el radio de 6 px salen de la base y son los
         mismos en las dos densidades.
         """
-        self.setStyleSheet(_QSS + self._density.qss)
+        qss = window_stylesheet(_WINDOW_QSS + self._density.qss)
+        if self.styleSheet() != qss:
+            self.setStyleSheet(qss)
 
     def _register_density_layout(self, layout: QLayout, stacked: bool) -> None:
         """Anota un layout de cuadro para re-medirlo al cambiar la densidad.
@@ -811,6 +835,7 @@ class MainWindow(QMainWindow):
         # AirVault y llegan aquí por su señal de avance.
         self.cadena = CadenaAutomatica(self._automatizacion)
         root.addWidget(self.cadena)
+        root.addLayout(self._build_search_row())
         root.addWidget(self._build_splitter(), stretch=1)
 
         bottom = self._build_bottom_splitter()
@@ -826,9 +851,10 @@ class MainWindow(QMainWindow):
         grid = QGridLayout(panel)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(self._density.group_spacing)
-        # El ancho de sobra se lo queda «Entrada», que es quien tiene el campo
-        # de archivos; «Salidas» son casillas y no gana nada estirándose.
+        # Los dos cuadros forman la cabecera de trabajo y se reparten el ancho
+        # por mitades para que ninguno pese visualmente más que el otro.
         grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
         self._controls_grid = grid
         self._input_group = self._build_input_group()
         self._options_group = self._build_options_group()
@@ -863,18 +889,8 @@ class MainWindow(QMainWindow):
             grid.addWidget(self._input_group, 0, 0, 1, 2)
             grid.addWidget(self._options_group, 1, 0, 1, 2)
         else:
-            grid.addWidget(
-                self._input_group,
-                0,
-                0,
-                alignment=Qt.AlignmentFlag.AlignTop,
-            )
-            grid.addWidget(
-                self._options_group,
-                0,
-                1,
-                alignment=Qt.AlignmentFlag.AlignTop,
-            )
+            grid.addWidget(self._input_group, 0, 0)
+            grid.addWidget(self._options_group, 0, 1)
         grid.invalidate()
         grid.parentWidget().updateGeometry()
         central = self.centralWidget()
@@ -884,13 +900,10 @@ class MainWindow(QMainWindow):
     def _controls_columns_for(self, width: int) -> int:
         """Columnas que le tocan a los cuadros de arriba con este ancho.
 
-        Dos solo cuando el alto aprieta y el ancho llega al que se midió para
-        ese reparto: en una ventana alta no hay nada que ganar moviéndolos de
-        sitio, y en una estrecha el reparto en dos columnas pediría más ancho
-        del que hay y volvería a sacar contenido fuera.
+        Dos cuando el ancho llega al que se midió para ese reparto. Usar una
+        sola columna en un monitor ancho dejaba casi toda cada fila vacía y
+        le quitaba ese alto al visor, aunque ambos cuadros cabían en paralelo.
         """
-        if not self._density.compact:
-            return 1
         return 2 if width >= self._two_column_width else 1
 
     def _button_text_color(self) -> QColor:
@@ -953,17 +966,12 @@ class MainWindow(QMainWindow):
         self.btn_clear_output.triggered.connect(self._clear_output_folder)
         self.input_actions_button = QToolButton()
         self.input_actions_button.setText("Carpetas")
-        self.input_actions_button.setMenu(input_menu)
-        self.input_actions_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.input_actions_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.input_actions_button, input_menu)
         grid.addWidget(self.input_actions_button, 0, 3)
 
         grid.addWidget(QLabel("Plantilla:"), 1, 0)
         self.template_combo = QComboBox()
+        configure_combo_box(self.template_combo, 18)
         self.template_combo.setMinimumWidth(
             _COMPACT_TEMPLATE_MIN_WIDTH
             if self._density.compact
@@ -993,17 +1001,19 @@ class MainWindow(QMainWindow):
         self.btn_csv_viewer.triggered.connect(self._open_csv_viewer)
         self.template_actions_button = QToolButton()
         self.template_actions_button.setText("Herramientas")
-        self.template_actions_button.setMenu(template_menu)
-        self.template_actions_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.template_actions_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.template_actions_button, template_menu)
+        for menu_button in (
+            self.input_actions_button,
+            self.template_actions_button,
+        ):
+            menu_button.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Preferred,
+            )
         grid.addWidget(self.template_actions_button, 1, 3)
 
         self.estimate_label = ElidedLabel("")
-        self.estimate_label.setStyleSheet("color: #667085;")
+        self.estimate_label.setStyleSheet("color: #c9d1d9;")
         self.estimate_label.setToolTip(
             "Estimación del tiempo total para procesar la entrada actual"
         )
@@ -1026,7 +1036,8 @@ class MainWindow(QMainWindow):
 
         tools_row = QHBoxLayout()
         tools_row.setSpacing(8)
-        view_menu = QMenu(group)
+        tools_row.addSpacing(group.controls_indent)
+        view_menu = MultiSelectMenu(group)
         view_menu.setToolTipsVisible(True)
         self.fields_check = view_menu.addAction("Visualizar campos")
         self.fields_check.setCheckable(True)
@@ -1058,13 +1069,13 @@ class MainWindow(QMainWindow):
         important_fields_action.triggered.connect(self._open_important_fields)
         self.view_button = QToolButton()
         self.view_button.setText("Vista")
-        self.view_button.setMenu(view_menu)
-        self.view_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.view_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.view_button, view_menu)
+        menu_width = max(
+            button.fontMetrics().horizontalAdvance(button.text())
+            for button in (group.separation_button, self.view_button)
+        ) + 44
+        group.separation_button.setFixedWidth(menu_width)
+        self.view_button.setFixedWidth(menu_width)
         self.view_button.setToolTip(
             "Elegir qué campos se muestran en la vista previa."
         )
@@ -1157,19 +1168,20 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(10)
 
-        self.status_label = ElidedLabel("Listo.")
-        row.addWidget(self.status_label, 1)
+        # El detalle del proceso vive en la bitácora inferior. Se conserva
+        # el último texto solo como estado interno para no mezclar mensajes
+        # variables con la barra de progreso ni quitarle ancho.
+        self.status_label = ElidedLabel("", parent=self)
+        self.status_label.hide()
 
-        self.busy_label = QLabel("")
-        self.busy_label.setMinimumWidth(24)
-        self.busy_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.busy_label = QLabel("", self)
+        self.busy_label.hide()
         self.busy_label.setToolTip("Procesamiento en curso")
-        row.addWidget(self.busy_label)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        row.addWidget(self.progress, 2)
+        row.addWidget(self.progress, 1)
 
         time_summary = QFrame()
         time_summary.setObjectName("timeSummary")
@@ -1192,15 +1204,15 @@ class MainWindow(QMainWindow):
         time_layout.setSpacing(12)
         self.time_labels: dict[str, QLabel] = {}
         for key, caption in (
-            ("elapsed", "TRANSCURRIDO"),
-            ("remaining", "RESTANTE"),
-            ("total", "ESTIMADO"),
+            ("elapsed", "Transcurrido"),
+            ("remaining", "Restante"),
+            ("total", "Estimado"),
         ):
             metric = QVBoxLayout()
             metric.setSpacing(0)
             caption_label = QLabel(caption)
             caption_label.setProperty("role", "caption")
-            value_label = QLabel("--:--:--")
+            value_label = QLabel("00:00:00")
             value_label.setProperty("role", "value")
             value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             metric.addWidget(caption_label, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -1208,7 +1220,6 @@ class MainWindow(QMainWindow):
             time_layout.addLayout(metric, 1)
             self.time_labels[key] = value_label
         row.addWidget(time_summary)
-
         self.btn_process = QPushButton("Procesar")
         self.btn_process.setDefault(True)
         self.btn_process.clicked.connect(self._start_processing)
@@ -1220,13 +1231,11 @@ class MainWindow(QMainWindow):
             "Aplica corrección de inclinación y alineación sin ejecutar OCR."
         )
         self.btn_preprocess.triggered.connect(self._start_preprocessing)
-        row.addWidget(self.btn_process)
 
         self.btn_cancel = QPushButton("Cancelar")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.setToolTip(self._CANCELAR_AYUDA)
         self.btn_cancel.clicked.connect(self._request_cancel)
-        row.addWidget(self.btn_cancel)
 
         self.btn_export = actions_menu.addAction("Exportar")
         self.btn_export.setEnabled(False)
@@ -1243,17 +1252,10 @@ class MainWindow(QMainWindow):
 
         self.more_actions_button = QToolButton()
         self.more_actions_button.setText("Más")
-        self.more_actions_button.setMenu(actions_menu)
-        self.more_actions_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.more_actions_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.more_actions_button, actions_menu)
         self.more_actions_button.setToolTip(
             "Preprocesar, exportar o depurar la ejecución."
         )
-        row.addWidget(self.more_actions_button)
 
         # El de siempre, pero sin volver a pulsar nada entre paso y paso.
         # Se lleva el azul porque es el que hace la entrega entera; los
@@ -1268,15 +1270,31 @@ class MainWindow(QMainWindow):
         self.menu_automatizacion = MenuAutomatizacion(
             self._automatizacion, self
         )
-        self.btn_automatico.setMenu(self.menu_automatizacion)
-        self.btn_automatico.setPopupMode(
-            QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        configure_menu_button(
+            self.btn_automatico, self.menu_automatizacion, split=True
         )
-        self.btn_automatico.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        # Sin ancho a mano. Los «+ 50 px» que llevaba aquí eran el parche de un
+        # relleno que nunca llegaba a aplicarse (lo pisaba la regla de
+        # «#primaryButton», que pesa más), así que ensanchaban el botón sin
+        # mover el texto: quedaba hueco a la izquierda y el rótulo contra el
+        # separador. Con el relleno ya puesto en la hoja, la medida que pide el
+        # propio botón reserva la celda de la flecha y centra el texto.
         self.btn_automatico.clicked.connect(self._start_automatico)
-        row.addWidget(self.btn_automatico)
+
+        # El orden de la fila, ya con los cuatro construidos. El grupo va
+        # pegado a la derecha, así que se lee de fuera hacia dentro: el
+        # cajón de lo que no cabe en el extremo, luego el que corta, y los
+        # dos que arrancan trabajo juntos al final, con el principal
+        # cerrando contra el margen. Antes «Más» quedaba entre «Cancelar» y
+        # «Automático», partiendo en dos el grupo que actúa para meter en
+        # medio un desplegable que no hace nada por sí mismo.
+        for boton in (
+            self.more_actions_button,
+            self.btn_cancel,
+            self.btn_process,
+            self.btn_automatico,
+        ):
+            row.addWidget(boton)
         return row
 
     def _set_time_summary(
@@ -1293,7 +1311,7 @@ class MainWindow(QMainWindow):
         }
         for key, value in values.items():
             self.time_labels[key].setText(
-                _format_clock(value) if value is not None else "--:--:--"
+                _format_clock(value) if value is not None else "00:00:00"
             )
 
     def _build_splitter(self) -> QSplitter:
@@ -1310,7 +1328,7 @@ class MainWindow(QMainWindow):
             self._density.preview_min_width, self._density.preview_min_height
         )
         self.preview_label.setStyleSheet(
-            f"border: 1px solid #bbb; border-radius: {TABLE_RADIUS}px;"
+            f"border: 1px solid #4a4a4a; border-radius: {TABLE_RADIUS}px;"
             " background: transparent;"
         )
         self.preview_label.setAccessibleName("Vista previa de la página")
@@ -1370,7 +1388,8 @@ class MainWindow(QMainWindow):
         file_row = QHBoxLayout(self.preview_file_indicator)
         file_row.setContentsMargins(0, 0, 10, 0)
         file_row.setSpacing(4)
-        file_row.addWidget(QLabel("Archivo:"))
+        self.preview_file_caption = QLabel("Archivo:")
+        file_row.addWidget(self.preview_file_caption)
         file_row.addWidget(self.preview_file_label)
 
         # Una sola barra: el archivo queda anclado a la izquierda y el
@@ -1425,20 +1444,23 @@ class MainWindow(QMainWindow):
         zoom_holder_layout.setContentsMargins(8, 8, 8, 8)
         zoom_holder_layout.addWidget(zoom_overlay)
         # El recuadro de zoom flota sobre la página, así que no puede decidir
-        # cuánto mide de mínimo el panel: con sus 156 px mandaba sobre la
-        # página misma y era él quien fijaba el suelo de la ventana entera.
-        # Ignorado en vertical no cuenta para ese mínimo; a cambio hay que
-        # esconderlo cuando la página se queda más baja que él, que es lo que
-        # hace ``hide_overlay_when_tight``: recortado a medias dejaría los
-        # botones montados unos sobre otros.
+        # cuánto mide de mínimo el panel: era él quien acababa fijando el
+        # suelo de la ventana entera. Ignorado en las dos medidas no cuenta
+        # para ese mínimo; a cambio hay que esconderlo cuando la página se
+        # queda más pequeña que él, que es lo que hace
+        # ``hide_overlay_when_tight``: recortado a medias dejaría los botones
+        # montados unos sobre otros.
         zoom_holder.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
         )
+        # Abajo y centrado, el mismo sitio en las tres ventanas que llevan
+        # zoom. A media altura y pegado a la izquierda caía justo encima de
+        # la columna por la que se lee la bitácora.
         viewer_frame_layout.addWidget(
             zoom_holder,
             0,
             0,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
         )
         zoom_holder.raise_()
         self._zoom_holder = zoom_holder
@@ -1468,17 +1490,16 @@ class MainWindow(QMainWindow):
         table_panel = QWidget()
         table_layout = QVBoxLayout(table_panel)
         table_layout.setContentsMargins(0, 0, 0, 0)
-        table_layout.addLayout(self._build_search_row())
         table_layout.addWidget(self.table, 1)
         table_controls = QHBoxLayout()
+        table_controls.addWidget(self.search_context, 1)
         self.duplicates_label = QLabel("Duplicados: 0")
         self.duplicates_label.setAccessibleName("Resumen de duplicados")
         self.duplicates_label.setToolTip(
             "No hay log_number repetidos en el batch procesado."
         )
-        self.duplicates_label.setStyleSheet("color: #57606a;")
+        self.duplicates_label.setStyleSheet("color: #c9d1d9;")
         table_controls.addWidget(self.duplicates_label)
-        table_controls.addStretch()
         self.csv_columns_toggle = CsvColumnModeButton()
         self.csv_columns_toggle.setEnabled(False)
         self.csv_columns_toggle.setVisible(False)
@@ -1740,7 +1761,7 @@ class MainWindow(QMainWindow):
         self._log_handler_id = lg.add(
             self._log_sink,
             level="INFO",
-            format="{time:HH:mm:ss} | {level: <8} | {message}",
+            format="{time:HH:mm:ss} | {level} | {message}",
             enqueue=True,
         )
         self._log_sink.message.connect(self._on_log_message)
@@ -3812,7 +3833,7 @@ class MainWindow(QMainWindow):
         count = len(repeated)
         self.duplicates_label.setText(f"Duplicados: {count}")
         if not count:
-            self.duplicates_label.setStyleSheet("color: #57606a;")
+            self.duplicates_label.setStyleSheet("color: #c9d1d9;")
             self.duplicates_label.setToolTip(
                 "No hay log_number repetidos en el batch procesado."
             )
@@ -3989,11 +4010,12 @@ class MainWindow(QMainWindow):
         manera de encontrar una bitácora tiene que ser la misma en las dos.
         """
         row = QHBoxLayout()
-        row.addWidget(QLabel("Buscar:"))
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText(
-            "Bitácora, matrícula, archivo, página… cualquier texto de la tabla"
+            "Buscar bitácora, matrícula, archivo o página"
         )
+        self.search_edit.setMinimumWidth(280)
+        self.search_edit.setMaximumWidth(420)
         self.search_edit.setAccessibleName("Texto que se busca en la tabla")
         self.search_edit.setToolTip(
             "Busca en las columnas visibles; con el CSV completo, también en "
@@ -4002,12 +4024,12 @@ class MainWindow(QMainWindow):
         )
         self.search_edit.returnPressed.connect(self._buscar_en_la_tabla)
         row.addWidget(self.search_edit, 1)
-        buscar = QPushButton("Buscar")
-        buscar.setToolTip(
+        self.search_button = QPushButton("Buscar")
+        self.search_button.setToolTip(
             "Buscar el texto; repetido, pasa a la coincidencia siguiente"
         )
-        buscar.clicked.connect(self._buscar_en_la_tabla)
-        row.addWidget(buscar)
+        self.search_button.clicked.connect(self._buscar_en_la_tabla)
+        row.addWidget(self.search_button)
         self.search_prev = QPushButton("‹")
         self.search_prev.setToolTip("Coincidencia anterior")
         self.search_prev.setEnabled(False)
@@ -4018,6 +4040,7 @@ class MainWindow(QMainWindow):
         self.search_next.setEnabled(False)
         self.search_next.clicked.connect(lambda: self._mover_busqueda(1))
         row.addWidget(self.search_next)
+        row.addStretch(1)
         # La pista es una frase larga, y un QLabel pide de ancho mínimo la
         # frase entera: metida en el panel de la tabla, ese mínimo era el que
         # empujaba el separador y dejaba la bitácora en su franja más
@@ -4027,12 +4050,11 @@ class MainWindow(QMainWindow):
         # la entera en el tooltip; un QLabel a secas la cortaba a media
         # palabra contra el borde de la ventana, en cualquier tamaño.
         self.search_context = ElidedLabel(_PISTA_BUSQUEDA)
-        self.search_context.setStyleSheet("color: #57606a;")
+        self.search_context.setStyleSheet("color: #c9d1d9;")
         self.search_context.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
         self.search_context.setMinimumWidth(0)
-        row.addWidget(self.search_context, 1)
         return row
 
     def _columnas_buscables(self) -> list[int]:
@@ -4209,7 +4231,9 @@ class MainWindow(QMainWindow):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         pen = QPen(QColor(0, 120, 215), 2)
         font = QFont()
-        font.setPointSize(9)
+        # Rótulo sobre la página, no cromo de ventana: va en el tamaño de
+        # subtítulo para no taparla, pero sale de la misma escala.
+        font.setPointSize(FONT_CAPTION_PT)
         font.setBold(True)
         painter.setFont(font)
         important_only = self.important_fields_check.isChecked()
@@ -4405,12 +4429,6 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if not self._shown_once:
             self._shown_once = True
-            # Parte de lo que pide el contenido solo es cierto con la ventana
-            # ya pulida por el estilo: unos veinte píxeles de alto que antes
-            # de mostrarla nadie declara. Se vuelve a medir aquí, que es la
-            # primera vez que el número es el definitivo.
-            self._refresh_minimum_size()
-            self._grow_to_fit_content()
         self._update_responsive_layout()
         QTimer.singleShot(0, self._balance_bottom_splitter)
         QTimer.singleShot(0, self._balance_content_splitter)

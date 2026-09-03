@@ -91,18 +91,20 @@ from app.gui.csv_utils import (
 from app.gui.responsive import available_area, fit_to_screen
 from app.gui.text_copy import CopyableListWidget
 from app.gui.widgets import (
-    APP_CHROME_QSS,
     DATA_TABLE_QSS,
     PANE_STATUS_COLORS,
     SpinBoxWithButtons,
     ElidedLabel,
     align_vertical_scrollbar_to_header,
+    configure_combo_box,
+    configure_menu_button,
     style_data_table,
+    window_stylesheet,
 )
 from app.utils.io import send_to_trash
 
 # Gris con el que la ventana principal escribe las líneas de ayuda.
-COLOR_AYUDA = "#57606a"
+COLOR_AYUDA = "#c9d1d9"
 COLOR_INDEXADO = PANE_STATUS_COLORS["OK"]
 
 # Lo que se lee debajo de la tabla de batches mientras no se ha buscado
@@ -986,7 +988,7 @@ class AirVaultWindow(QDialog):
         # resumen es lo que decide si la ventana entra en un escritorio bajo.
         self._densidad = fit_to_screen(self, 780, 800)
         self.setStyleSheet(
-            APP_CHROME_QSS + DATA_TABLE_QSS + self._densidad.qss
+            window_stylesheet(DATA_TABLE_QSS + self._densidad.qss)
         )
         self._build_ui()
 
@@ -994,6 +996,10 @@ class AirVaultWindow(QDialog):
 
     def _build_ui(self) -> None:
         cuerpo = QVBoxLayout(self)
+        margen = max(8, self._densidad.window_margin)
+        cuerpo.setContentsMargins(margen, margen, margen, margen)
+        cuerpo.setSpacing(max(5, self._densidad.root_spacing))
+        self._root_layout = cuerpo
 
         # Sin frase de bienvenida: la lista abre en «Seleccionar ejecución»
         # y eso ya dice lo que hay que hacer con ella, en el sitio donde se
@@ -1042,6 +1048,7 @@ class AirVaultWindow(QDialog):
         la más reciente no parezca elegida antes de que nadie la elija.
         """
         combo = QComboBox()
+        configure_combo_box(combo, 22)
         combo.setToolTip(
             "Ejecuciones procesadas, de la más reciente a la más antigua. "
             "Solo se suben las exportadas; más atrás de las últimas "
@@ -1121,22 +1128,14 @@ class AirVaultWindow(QDialog):
             "CSV de la ejecución cuyos datos se escriben en AirVault. Lo "
             "pone la ejecución elegida arriba."
         )
-        grid.addWidget(self.corrida_edit, 0, 1)
+        grid.addWidget(self.corrida_edit, 0, 1, 1, 2)
 
         self.boton_buscar = QPushButton("Otra ejecución…")
         self.boton_buscar.setToolTip(
             "Elegir el CSV de una ejecución que no está en la lista"
         )
         self.boton_buscar.clicked.connect(self._elegir_corrida)
-        grid.addWidget(self.boton_buscar, 0, 2)
-
-        self.boton_eliminar_registro = QPushButton("Eliminar registros")
-        self.boton_eliminar_registro.setEnabled(False)
-        self.boton_eliminar_registro.setToolTip(TOOLTIP_ELIMINAR_REGISTROS)
-        self.boton_eliminar_registro.clicked.connect(
-            lambda: self._eliminar_registro()
-        )
-        grid.addWidget(self.boton_eliminar_registro, 0, 3)
+        grid.addWidget(self.boton_buscar, 0, 3)
 
         self.lote_edit = QLineEdit()
         self.lote_edit.setPlaceholderText("Nombre del batch en AirVault")
@@ -1144,7 +1143,7 @@ class AirVaultWindow(QDialog):
             "Nombre con el que el batch queda en AirVault. Lleva fecha y hora "
             "para no confundirlo con otro de la cola."
         )
-        grid.addWidget(self.lote_edit, 1, 1, 1, 2)
+        grid.addWidget(self.lote_edit, 1, 1, 1, 3)
 
         self.limite_batch_spin = QSpinBox()
         self.limite_batch_spin.setRange(10, 5000)
@@ -1163,6 +1162,7 @@ class AirVaultWindow(QDialog):
             self._guardar_limite_batch
         )
         self.limite_batch_control = SpinBoxWithButtons(self.limite_batch_spin)
+        self.limite_batch_control.setMaximumWidth(180)
         grid.addWidget(self.limite_batch_control, 2, 1)
 
         self.compresion_check = QCheckBox("Compresión")
@@ -1184,7 +1184,7 @@ class AirVaultWindow(QDialog):
             "Edge. Si eso falla, pegue aquí la cookie de AirVault. No se "
             "guarda en el disco."
         )
-        grid.addWidget(self.cookie_edit, 3, 1, 1, 2)
+        grid.addWidget(self.cookie_edit, 3, 1, 1, 3)
         return grid
 
     def _cabecera_de_lotes(self) -> QHBoxLayout:
@@ -1258,15 +1258,18 @@ class AirVaultWindow(QDialog):
         self.boton_eliminar_batches.triggered.connect(
             self._eliminar_seleccionados
         )
+        batch_menu.addSeparator()
+        self.boton_eliminar_registro = batch_menu.addAction(
+            "Eliminar registros locales…"
+        )
+        self.boton_eliminar_registro.setEnabled(False)
+        self.boton_eliminar_registro.setToolTip(TOOLTIP_ELIMINAR_REGISTROS)
+        self.boton_eliminar_registro.triggered.connect(
+            lambda: self._eliminar_registro()
+        )
         self.batch_actions_button = QToolButton()
         self.batch_actions_button.setText("Acciones")
-        self.batch_actions_button.setMenu(batch_menu)
-        self.batch_actions_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.batch_actions_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
-        )
+        configure_menu_button(self.batch_actions_button, batch_menu)
         fila.addWidget(self.batch_actions_button)
         return fila
 
@@ -2252,12 +2255,8 @@ class AirVaultWindow(QDialog):
             "La misma elección que en la ventana principal."
         )
         self.menu_automatizacion = MenuAutomatizacion(self._opciones, self)
-        self.boton_automatizacion.setMenu(self.menu_automatizacion)
-        self.boton_automatizacion.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.boton_automatizacion.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        configure_menu_button(
+            self.boton_automatizacion, self.menu_automatizacion
         )
         fila.addWidget(self.boton_automatizacion)
 
@@ -2298,10 +2297,15 @@ class AirVaultWindow(QDialog):
         casilla.setChecked(marcado)
 
     def _fila_avance(self) -> QHBoxLayout:
-        """Estado, reloj y barra propios: la ventana no cuelga de la principal."""
+        """Barra y reloj propios; el detalle vive en la bitácora inferior."""
         fila = QHBoxLayout()
-        self.estado_label = ElidedLabel("Listo.")
-        fila.addWidget(self.estado_label, 1)
+        fila.setSpacing(10)
+        self.estado_label = ElidedLabel("", parent=self)
+        self.estado_label.hide()
+        self.progreso = QProgressBar()
+        self.progreso.setRange(0, 100)
+        self.progreso.setValue(0)
+        fila.addWidget(self.progreso, 1)
         # Cuánto lleva el paso actual. Sin esto, una espera de AirVault y un
         # programa colgado se ven exactamente igual.
         self.reloj_label = QLabel("")
@@ -2311,10 +2315,6 @@ class AirVaultWindow(QDialog):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         fila.addWidget(self.reloj_label)
-        self.progreso = QProgressBar()
-        self.progreso.setRange(0, 100)
-        self.progreso.setValue(0)
-        fila.addWidget(self.progreso, 1)
         return fila
 
     def _bitacora(self) -> CopyableListWidget:
@@ -2344,6 +2344,8 @@ class AirVaultWindow(QDialog):
 
     def _fila_botones(self) -> QHBoxLayout:
         fila = QHBoxLayout()
+        fila.setContentsMargins(0, 4, 0, 2)
+        fila.setSpacing(8)
 
         self.completar_check = QCheckBox("Completar batch")
         self.completar_check.setChecked(self._opciones.completar)
@@ -2521,7 +2523,9 @@ class AirVaultWindow(QDialog):
         indice = self.historial.count()
         self.historial.addItem(carpeta.name, str(csv))
         self.historial.setItemData(
-            indice, f"{cuenta} · {entrega}", Qt.ItemDataRole.ToolTipRole
+            indice,
+            f"{carpeta.name}\n{cuenta} - {entrega}",
+            Qt.ItemDataRole.ToolTipRole,
         )
         self.historial.setItemData(indice, listo, ROL_SE_PUEDE_SUBIR)
         if not listo:
@@ -3821,6 +3825,7 @@ class AirVaultWindow(QDialog):
                 f"retoma sin repetir lo escrito."
             )
             self.estado_label.setText("El indexado se cortó a medio camino")
+            self._anotar("El indexado se cortó a medio camino")
             self._limpiar_progreso()
             return
         if datos.get("incompleto"):
@@ -3832,6 +3837,7 @@ class AirVaultWindow(QDialog):
                 "sin repetir las páginas verdes."
             )
             self.estado_label.setText("Indexado incompleto")
+            self._anotar("Indexado incompleto; quedan páginas pendientes")
             self._limpiar_progreso()
             if not acotado:
                 self._ajustar_vigilancia()
@@ -3839,6 +3845,7 @@ class AirVaultWindow(QDialog):
         self._indexado_incompleto = False
         self.resumen.setText(cuenta + self._cuenta_de_cierres(datos))
         self.estado_label.setText("Indexado terminado")
+        self._anotar("Indexado terminado")
         self._limpiar_progreso()
         # Vuelve a preguntar para que la lista quede diciendo cómo acabó
         # cada batch, en vez de con lo que se sabía antes de escribir.

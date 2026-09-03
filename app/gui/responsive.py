@@ -30,6 +30,20 @@ from dataclasses import dataclass
 from PySide6.QtCore import QRect, QSize
 from PySide6.QtGui import QGuiApplication
 
+from app.gui.tokens import (
+    CONTROL_BOX_H_COMPACT,
+    CONTROL_HEIGHT_COMPACT,
+    CONTROL_PAD_H_COMPACT,
+)
+from app.gui.widgets import SPLIT_MENU_WIDTH
+
+# La compacta apreta el relleno de los lados, pero la celda de la flecha del
+# botón dividido no encoge: sigue midiendo lo mismo y sigue habiendo que
+# descontarla del lado derecho para que el texto quede centrado en la parte
+# que se pulsa. Ver el bloque de SPLIT_* en ``widgets``.
+_SPLIT_PAD_LEFT = CONTROL_PAD_H_COMPACT
+_SPLIT_PAD_RIGHT = _SPLIT_PAD_LEFT + SPLIT_MENU_WIDTH
+
 # Hueco que Windows se queda alrededor del área de cliente: los bordes a los
 # lados y la barra de título arriba. Se descuenta al calcular el tamaño para
 # que la ventana entre con su marco puesto y no quede la barra de título por
@@ -50,17 +64,28 @@ COMPACT_HEIGHT = 820
 # que la ventana no parpadee entre las dos mientras se redimensiona.
 DENSITY_HYSTERESIS = 40
 
-_COMPACT_QSS = """
-QPushButton { min-height: 20px; padding: 2px 8px; }
+_COMPACT_QSS = f"""
+QPushButton {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 {CONTROL_PAD_H_COMPACT}px; }}
 /* El botón con dibujo cede el aire de los lados, que el icono ya llena: la
    fila de «Entrada» es la más ancha de la ventana y, si crece, los cuadros de
    arriba dejan de caber en dos columnas justo en el escritorio de 1280 px,
    que es donde ese reparto hace falta. */
-QPushButton#iconButton { padding-left: 4px; padding-right: 6px; }
-QToolButton { padding: 1px 4px; }
-QToolButton#primaryButton { min-height: 20px; padding: 2px 8px; }
-QGroupBox { margin-top: 6px; padding: 4px 6px 3px 6px; }
-QSpinBox, QComboBox, QLineEdit { padding: 1px; }
+QPushButton#iconButton {{ padding-left: 4px; padding-right: 6px; }}
+QToolButton {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 {CONTROL_PAD_H_COMPACT}px; }}
+QToolButton#primaryButton {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 {CONTROL_PAD_H_COMPACT}px; }}
+QToolButton[menuRole="dropdown"] {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 20px 0 {CONTROL_PAD_H_COMPACT}px; }}
+QToolButton[menuRole="split"] {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 {_SPLIT_PAD_RIGHT}px 0 {_SPLIT_PAD_LEFT}px; }}
+/* Repetido con el selector de ID por lo mismo que en la hoja base: sin esto
+   gana «QToolButton#primaryButton» y el botón dividido se queda con el
+   relleno simétrico, que le tira el texto contra el separador. */
+QToolButton#primaryButton[menuRole="split"] {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 {_SPLIT_PAD_RIGHT}px 0 {_SPLIT_PAD_LEFT}px; }}
+QGroupBox {{ margin-top: 0; padding: 22px 8px 8px 8px; }}
+QGroupBox::title {{ top: 4px; }}
+QLineEdit {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 {CONTROL_PAD_H_COMPACT}px; }}
+QSpinBox {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 {CONTROL_PAD_H_COMPACT}px; }}
+QComboBox {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 28px 0 {CONTROL_PAD_H_COMPACT}px; }}
+QProgressBar {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; }}
+QCheckBox, QRadioButton {{ min-height: {CONTROL_HEIGHT_COMPACT}px; max-height: {CONTROL_HEIGHT_COMPACT}px; }}
 """
 
 
@@ -114,14 +139,14 @@ class Density:
 
 ROOMY = Density(
     name="holgada",
-    window_margin=8,
+    window_margin=16,
     root_spacing=5,
     group_spacing=4,
     group_margin_v=5,
     group_row_spacing=6,
     group_column_spacing=8,
-    bottom_pane_height=190,
-    bottom_min_height=150,
+    bottom_pane_height=150,
+    bottom_min_height=120,
     log_min_width=340,
     name_column_width=220,
     preview_min_width=340,
@@ -137,8 +162,8 @@ ROOMY = Density(
 
 COMPACT = Density(
     name="compacta",
-    window_margin=5,
-    root_spacing=3,
+    window_margin=8,
+    root_spacing=2,
     group_spacing=3,
     group_margin_v=3,
     group_row_spacing=3,

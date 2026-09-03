@@ -13,7 +13,7 @@ Este documento resume cómo funciona cada proceso y qué tecnología utiliza. La
 - Datos persistentes: rutas relativas a la carpeta de BITS.
 - CSV: su formato no se cambia sin autorización.
 
-La unidad de distribución es la carpeta completa. `LogbookClassification.exe` solo inicia el Python portable y abre `run_gui.py`.
+La unidad de distribución es la carpeta completa. `BITSBitacoras.exe` solo inicia el Python portable y abre `run_gui.py`.
 
 ## 2. Componentes y tecnología
 
