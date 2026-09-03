@@ -41,11 +41,14 @@ La decisión tiene tres estados:
   ninguna evidencia ni siquiera con el umbral de tinta relajado.
 - ``unclear`` (WARNING): todo lo demás, escritura que se sale del campo,
   sellos, calcas. No se acusa una falta: la clasificación de discrepancias
-  lo marca como REVISAR y la revisión queda a la vista.
+  lo anota como lectura incierta en el reporte y deja la página en el
+  indexado automático, porque ninguna firma es un index field.
 
 Los umbrales están elegidos con margen hacia el lado seguro: un falso
-positivo esconde una firma que falta de verdad, mientras que un ``unclear``
-solo cuesta una revisión manual.
+positivo esconde una firma que falta de verdad. Un ``unclear`` es más barato,
+pero ya no es gratis: desde que las inciertas no van al batch manual, una
+firma que de verdad falta y se lee ``unclear`` tampoco se reclama, y queda
+solo anotada en el reporte de discrepancias.
 
 Lo que queda en ``unclear`` tiene una segunda oportunidad: el pipeline lo
 contrasta con el resto de la bitácora (``review_with_background``, apoyado
