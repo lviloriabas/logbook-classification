@@ -48,6 +48,7 @@ from app.airvault.mapping import fecha_airvault
 from app.airvault.model import EstadoRegistro, Registro
 from app.gui.responsive import Density, fit_to_screen
 from app.gui.table_sort import ColumnSortController
+from app.gui.tokens import SPACE_S, TEXT_SECONDARY
 from app.gui.widgets import (
     DATA_TABLE_QSS,
     PANE_STATUS_COLORS,
@@ -60,8 +61,10 @@ from app.gui.widgets import (
 from app.utils.important_fields import default_important_columns
 
 # El mismo gris con el que las dos ventanas escriben sus líneas de ayuda.
-COLOR_AYUDA = "#c9d1d9"
+COLOR_AYUDA = TEXT_SECONDARY
 COLOR_HECHO = PANE_STATUS_COLORS["OK"]
+
+_AYUDA_BUSQUEDA = "La búsqueda selecciona cada coincidencia."
 
 # Reparto del ancho entre la página y la tabla, el mismo del visor de CSV.
 _PANEL_PDF = 2
@@ -199,6 +202,7 @@ class _ListaBuscable(QDialog):
         los cuadros salen de ahí y no del estilo nativo.
         """
         densidad = fit_to_screen(self, ancho, alto)
+        self._densidad = densidad
         self.setStyleSheet(window_stylesheet(DATA_TABLE_QSS + densidad.qss))
         return densidad
 
@@ -212,10 +216,10 @@ class _ListaBuscable(QDialog):
         self._coincidencias: list[int] = []
         self._posicion = -1
         self._texto_buscado = ""
-        self._pista_busqueda = pista
+        self._pista_busqueda = _AYUDA_BUSQUEDA
 
         fila = QHBoxLayout()
-        fila.addWidget(QLabel("Buscar:"))
+        fila.setSpacing(SPACE_S)
         self.buscar_edit = QLineEdit()
         self.buscar_edit.setPlaceholderText(pista)
         self.buscar_edit.setToolTip(ayuda)
@@ -242,7 +246,7 @@ class _ListaBuscable(QDialog):
         # antes que empujar el separador y estrechar la página. Recortar es
         # de ``ElidedLabel``, que la termina en puntos suspensivos y deja la
         # entera en el tooltip; un QLabel a secas la cortaba a media palabra.
-        self.busqueda_ayuda = ElidedLabel(pista)
+        self.busqueda_ayuda = ElidedLabel(_AYUDA_BUSQUEDA)
         self.busqueda_ayuda.setStyleSheet(f"color: {COLOR_AYUDA};")
         self.busqueda_ayuda.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
@@ -375,6 +379,9 @@ class BitacorasDelBatch(_ListaBuscable):
         from app.gui.csv_viewer import EmbeddedPdfViewer
 
         cuerpo = QVBoxLayout(self)
+        margen = max(SPACE_S, densidad.window_margin)
+        cuerpo.setContentsMargins(margen, margen, margen, margen)
+        cuerpo.setSpacing(densidad.root_spacing)
 
         bitacoras = [r for r in self._registros if not r.es_separador]
         separadores = len(self._registros) - len(bitacoras)
@@ -413,6 +420,7 @@ class BitacorasDelBatch(_ListaBuscable):
         panel = QWidget()
         columna = QVBoxLayout(panel)
         columna.setContentsMargins(0, 0, 0, 0)
+        columna.setSpacing(SPACE_S)
         columna.addLayout(
             self._fila_de_busqueda(
                 self._PISTA,
@@ -435,6 +443,7 @@ class BitacorasDelBatch(_ListaBuscable):
         self._cargar_paginas(self._registros)
 
         fila = QHBoxLayout()
+        fila.setSpacing(SPACE_S)
         fila.addStretch()
         self.boton_cerrar = QPushButton("Cerrar")
         self.boton_cerrar.clicked.connect(self.accept)
@@ -610,6 +619,9 @@ class VistaPreviaBatches(_ListaBuscable):
 
     def _build_ui(self) -> None:
         cuerpo = QVBoxLayout(self)
+        margen = max(SPACE_S, self._densidad.window_margin)
+        cuerpo.setContentsMargins(margen, margen, margen, margen)
+        cuerpo.setSpacing(self._densidad.root_spacing)
 
         por_subir = [p for p in self._previstos if not p.subido]
         bitacoras = sum(len(p.bitacoras) for p in self._previstos)
@@ -649,6 +661,7 @@ class VistaPreviaBatches(_ListaBuscable):
         cuerpo.addWidget(self.ayuda)
 
         fila = QHBoxLayout()
+        fila.setSpacing(SPACE_S)
         self.boton_bitacoras = QPushButton("Ver las bitácoras…")
         self.boton_bitacoras.setEnabled(False)
         self.boton_bitacoras.setToolTip(
