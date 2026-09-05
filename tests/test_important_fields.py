@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -10,7 +11,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from app.gui import csv_viewer
-from app.gui.csv_utils import template_field_ids_for_columns
+from app.gui.csv_utils import (
+    template_field_ids_for_columns,
+    template_name_for_csv,
+)
 from app.gui.csv_viewer import CsvViewerWindow
 from app.gui.main_window import MainWindow, _visible_preview_fields
 from app.templates.schema import FieldTemplate, Template
@@ -183,3 +187,31 @@ def test_csv_viewer_reuses_the_stored_list_on_the_next_run(
     finally:
         reopened.close()
         app.processEvents()
+
+
+def test_el_csv_completo_hereda_la_plantilla_del_minimo(tmp_path: Path):
+    """No tiene JSON propio: la ejecución escribe uno solo, el del mínimo.
+
+    Sin este respaldo, abrir el completo se quedaba sin plantilla y con
+    ella se perdía la selección de campos importantes que esa plantilla
+    tiene guardada: el visor abría el completo con el conjunto de fábrica
+    aunque alguien hubiera elegido otro.
+    """
+    (tmp_path / "corrida.json").write_text(
+        json.dumps({"reportes": [{"template_name": "Aircraft Log"}]}),
+        encoding="utf-8",
+    )
+    minimo = tmp_path / "corrida.CSV"
+    minimo.write_text("file,page\n", encoding="utf-8")
+    completo = tmp_path / "corrida_completo.CSV"
+    completo.write_text("file,page\n", encoding="utf-8")
+
+    assert template_name_for_csv(minimo) == "Aircraft Log"
+    assert template_name_for_csv(completo) == "Aircraft Log"
+
+
+def test_un_csv_suelto_sin_json_no_inventa_plantilla(tmp_path: Path):
+    suelto = tmp_path / "otro_completo.CSV"
+    suelto.write_text("file,page\n", encoding="utf-8")
+
+    assert template_name_for_csv(suelto) is None
