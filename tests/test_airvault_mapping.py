@@ -13,6 +13,7 @@ from app.airvault.config import (
 )
 from app.airvault.mapping import (
     ResolutorFlota,
+    fecha_a_fin_de_mes,
     fecha_airvault,
     normalizar_log_number,
     normalizar_matricula,
@@ -293,3 +294,42 @@ def test_una_pagina_que_no_esta_en_el_csv_se_anota():
 
     assert registro.matricula == ""
     assert any("sin_fila" in aviso for aviso in registro.avisos)
+
+
+# ── fecha de fin de mes al indexar ─────────────────────────────────
+#
+# Una ejecucion exportada con el dia exacto todavia puede indexarse a fin de
+# mes: la conversion va sobre lo que trae el CSV, asi que no hace falta
+# volver a procesarla. Al reves no, y de eso se ocupa la ventana.
+
+
+def test_la_fecha_pasa_al_ultimo_dia_de_su_mes():
+    assert fecha_a_fin_de_mes("2026/07/14") == "2026/07/31"
+    assert fecha_a_fin_de_mes("2026/02/03") == "2026/02/28"
+
+
+def test_un_ano_bisiesto_cierra_en_29():
+    assert fecha_a_fin_de_mes("2024/02/10") == "2024/02/29"
+
+
+def test_una_fecha_que_ya_es_fin_de_mes_no_cambia():
+    assert fecha_a_fin_de_mes("2026/07/31") == "2026/07/31"
+
+
+def test_lo_que_no_es_una_fecha_se_devuelve_igual():
+    # Aqui no se inventa una fecha que no estaba.
+    assert fecha_a_fin_de_mes("") == ""
+    assert fecha_a_fin_de_mes("no es una fecha") == "no es una fecha"
+
+
+def test_los_registros_se_pueden_construir_a_fin_de_mes():
+    filas = [{
+        "file": "a.pdf", "page": "1", "log_number": "2287325",
+        "matricula": "HP-1848CMP", "date": "2026/07/14",
+    }]
+
+    normal = registros_desde_csv(filas)
+    fin = registros_desde_csv(filas, fin_de_mes=True)
+
+    assert normal[0].fecha == "2026/07/14"
+    assert fin[0].fecha == "2026/07/31"

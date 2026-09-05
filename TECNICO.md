@@ -125,6 +125,8 @@ Si la verificación de flota está activa, el resultado se compara con `fleet.js
 
 La fecha final usa `YYYY/MM/DD`. Las anclas confiables del mismo libro permiten completar o corregir partes faltantes. La fecha puede repetirse, pero no retroceder al aumentar `log_number`. Toda inferencia queda trazada y marcada para revisión.
 
+Con la fecha del CSV en **fin de mes**, el día no se lee (`read_day=False`): sus tres casillas se saltan en el OCR y el corrector las completa con el último día que cabe en la secuencia del libro, marcadas con `day_source=csv_date_policy`. La casilla sigue en la plantilla porque la retícula de la banda de fecha se detecta con ella. La ejecución queda con `dia_leido: false` en su JSON, y con eso la ventana de AirVault apaga la opción de indexar con el día exacto. El precio es que los retrocesos de fecha solo se detectan a resolución de mes: sobre una ejecución de 2409 páginas, 129 de los 155 avisos eran solo del día.
+
 ### Memoria entre ejecuciones
 
 De cada libro se guardan su matrícula (`book_matriculas.json`) y los extremos de fecha confirmados (`book_fechas.json`). Un libro puede llegar repartido entre entregas, y sin esa memoria las páginas de la segunda vuelven a empezar sin anclas.

@@ -88,6 +88,7 @@ from app.gui.csv_utils import (
     TEXTO_ELEGIR_EJECUCION,
     find_csv_files,
     find_run_dirs,
+    run_read_day,
 )
 from app.gui.responsive import available_area, fit_to_screen
 from app.gui.text_copy import CopyableListWidget
@@ -162,6 +163,18 @@ ALTO_MINIMO_VENTANA = 480
 
 ANCHO_MINIMO_NOMBRE_BATCH = 220
 ANCHO_MAXIMO_NOMBRE_BATCH = 420
+
+# Lo que explica el desplegable de fecha del indexado y lo que se dice
+# cuando la ejecución no deja elegir.
+TOOLTIP_FECHA_INDEXADO = (
+    "Fecha con la que se escribe cada bitácora en AirVault. No cambia el "
+    "CSV de la ejecución."
+)
+TOOLTIP_FECHA_SIN_DIA = (
+    "Esta ejecución se procesó a fin de mes y no leyó el día, así que no "
+    "se puede indexar con el día exacto. Vuelva a procesarla con «Día "
+    "exacto» si lo necesita."
+)
 
 TEXTO_SIN_SUBIR = (
     "Sin subir. El proceso comienza con «Subir a AirVault»."
@@ -523,6 +536,7 @@ class TrabajoAirVaultWorker(QThread):
             paginas_por_batch=estado["paginas_por_batch"],
             avisar=self._avisar,
             compresion=estado.get("compresion", False),
+            fin_de_mes=estado.get("fin_de_mes", False),
         )
         estado["trabajos"] = trabajos
         for trabajo in trabajos:
@@ -1180,7 +1194,29 @@ class AirVaultWindow(QDialog):
             "Envía los PDF a AirVault a 200 DPI. No cambia los PDF "
             "exportados."
         )
-        grid.addWidget(self.compresion_check, 2, 2, 1, 2)
+        grid.addWidget(self.compresion_check, 2, 2)
+
+        # La misma elección que en la ventana principal, vista desde aquí:
+        # con qué fecha se escribe cada bitácora. Una ejecución exportada
+        # con el día exacto todavía puede indexarse a fin de mes; al revés
+        # no, porque esa ejecución no leyó el día, y por eso la opción se
+        # apaga en vez de ofrecer algo que no se puede dar.
+        self.fecha_combo = QComboBox()
+        self.fecha_combo.addItem("Fin de mes", True)
+        self.fecha_combo.addItem("Día exacto", False)
+        self.fecha_combo.setItemData(
+            0,
+            "Escribe el último día del mes en todas las bitácoras.",
+            Qt.ItemDataRole.ToolTipRole,
+        )
+        self.fecha_combo.setItemData(
+            1,
+            "Escribe el día que leyó la ejecución.",
+            Qt.ItemDataRole.ToolTipRole,
+        )
+        self.fecha_combo.setToolTip(TOOLTIP_FECHA_INDEXADO)
+        configure_combo_box(self.fecha_combo, 12)
+        grid.addWidget(self.fecha_combo, 2, 3)
 
         # El campo de la sesión queda por si el navegador no puede: el
         # camino normal es que se resuelva sola.
@@ -1317,6 +1353,7 @@ class AirVaultWindow(QDialog):
                 ),
                 paginas_por_batch=self.limite_batch_spin.value(),
                 compresion=self.compresion_check.isChecked(),
+                fin_de_mes=self.fin_de_mes(),
             )
         except (ErrorDeCorrida, OSError, ValueError) as error:
             QMessageBox.warning(self, "Vista previa", str(error))
@@ -2588,6 +2625,27 @@ class AirVaultWindow(QDialog):
 
     # ── estado de la ejecución ─────────────────────────────────────
 
+    def _sincronizar_fecha(self, csv: Path) -> None:
+        """Deja el desplegable de fecha en lo que esa ejecución permite.
+
+        Se abre en lo que la ejecución trae escrito, no en lo que se
+        prefiere en general: lo que se ve en la lista es lo que se va a
+        escribir, y pasar a fin de mes es una decisión que se toma aquí.
+        """
+        leyo_el_dia = run_read_day(csv)
+        entrada = self.fecha_combo.model().item(1)
+        if entrada is not None:
+            entrada.setEnabled(leyo_el_dia)
+        with QSignalBlocker(self.fecha_combo):
+            self.fecha_combo.setCurrentIndex(0 if not leyo_el_dia else 1)
+        self.fecha_combo.setToolTip(
+            TOOLTIP_FECHA_INDEXADO if leyo_el_dia else TOOLTIP_FECHA_SIN_DIA
+        )
+
+    def fin_de_mes(self) -> bool:
+        """Si las bitácoras se escriben con el último día del mes."""
+        return bool(self.fecha_combo.currentData())
+
     def fijar_corrida(self, csv: Path | str) -> None:
         """Apunta la ventana a una ejecución y propone el nombre del batch."""
         from app.airvault.flujo import carpeta_de_corrida, carpeta_de_trabajo
@@ -2605,6 +2663,7 @@ class AirVaultWindow(QDialog):
         self.boton_indexar.setEnabled(False)
         self._marcar_en_historial(ruta)
         self._sincronizar_entrega(ruta)
+        self._sincronizar_fecha(ruta)
         # Una ejecución que ya se subió en otro momento se retoma sin
         # volver a subir nada: sus manifiestos dicen en qué quedó.
         carpeta = self._raiz / carpeta_de_trabajo(carpeta_de_corrida(csv).name)
@@ -2695,10 +2754,17 @@ class AirVaultWindow(QDialog):
         compresiones = {t.manifiesto.compresion for t in trabajos_de_corrida}
         if len(compresiones) == 1:
             self.compresion_check.setChecked(compresiones.pop())
+        fechas = {t.manifiesto.fin_de_mes for t in trabajos_de_corrida}
+        if len(fechas) == 1:
+            indice = self.fecha_combo.findData(fechas.pop())
+            if indice >= 0:
+                with QSignalBlocker(self.fecha_combo):
+                    self.fecha_combo.setCurrentIndex(indice)
         # Se pueden cambiar aunque la ejecucion ya tenga batches: lo que ya
         # esta en AirVault se conserva y solo se reparte lo que falta.
         self.limite_batch_spin.setEnabled(self.hilo() is None)
         self.compresion_check.setEnabled(self.hilo() is None)
+        self.fecha_combo.setEnabled(self.hilo() is None)
         # La conexion sobrevive al cambio de ejecucion: es el mismo
         # servidor, y volver a abrirla es volver a arrancar el navegador.
         self._estado = {
@@ -3344,6 +3410,7 @@ class AirVaultWindow(QDialog):
             "cookie": self.cookie_edit.text(),
             "paginas_por_batch": self.limite_batch_spin.value(),
             "compresion": self.compresion_check.isChecked(),
+            "fin_de_mes": self.fin_de_mes(),
             "indexar_al_encontrar": self._opciones.indexar,
             "completar": self.completar_check.isChecked(),
             # Solo lo pone «Subir a AirVault», y para una sola acción. Todo
@@ -3532,6 +3599,7 @@ class AirVaultWindow(QDialog):
         self.cookie_edit.setEnabled(activo)
         self.limite_batch_spin.setEnabled(activo)
         self.compresion_check.setEnabled(activo)
+        self.fecha_combo.setEnabled(activo)
         self.boton_comprobar.setEnabled(activo and bool(self._trabajos))
         # La vista previa solo lee el disco, pero mientras el hilo reparte
         # los manifiestos están a medio escribir y enseñarlos engaña.

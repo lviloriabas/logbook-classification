@@ -2601,6 +2601,7 @@ class MainWindow(QMainWindow):
             run_dir=self._corrida_dir if reuse_dir else None,
             skip_pdfs=skip_pdfs,
             csv_date_mode=self._csv_date_mode(),
+            read_day=self._csv_date_mode() != CSV_DATE_MONTH_END,
             important_csv_columns=tuple(
                 self._important_columns_for_export(template)
             ),
@@ -2665,6 +2666,9 @@ class MainWindow(QMainWindow):
             crop_preprocess=_DEFAULT_CROP_PREPROCESS,
             date_slot_ocr=False,
             date_dynamic_geometry=True,
+            # A fin de mes el día no llega a ninguna salida, así que no se
+            # lee: son tres recortes de OCR por página que nadie mira.
+            read_day=self._csv_date_mode() != CSV_DATE_MONTH_END,
             verify_fleet=self.fleet_check.isChecked(),
             fleet_file=SCRIPT_DIR / FLEET_FILENAME,
             book_matriculas_file=SCRIPT_DIR / "book_matriculas.json",

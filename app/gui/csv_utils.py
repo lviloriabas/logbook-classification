@@ -206,6 +206,34 @@ def template_name_for_csv(path: Path) -> str | None:
         return None
 
 
+def run_read_day(path: Path) -> bool:
+    """Si la ejecución de ese CSV leyó el día de la fecha.
+
+    Lo dice el JSON compañero. Una ejecución configurada a fin de mes no lo
+    lee (son tres recortes de OCR por página que no llegan a ninguna
+    salida), y por eso ya no puede volver a representarse con el día
+    exacto: no hay día que representar.
+
+    Las ejecuciones anteriores a esta decisión no traen la clave y siempre
+    leyeron el día, así que la ausencia se responde que sí. Un CSV suelto,
+    sin JSON al lado, se responde igual: no hay motivo para apagar una
+    opción por no encontrar el archivo.
+    """
+    companion = path.with_suffix(".json")
+    if not companion.is_file() and path.stem.casefold().endswith("_completo"):
+        companion = path.with_name(
+            f"{path.stem[: -len('_completo')]}.json"
+        )
+    if not companion.is_file():
+        return True
+    try:
+        payload = json.loads(companion.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return True
+    leido = payload.get("dia_leido") if isinstance(payload, dict) else None
+    return True if leido is None else bool(leido)
+
+
 def template_for_csv(path: Path):
     """Plantilla con la que se procesó el CSV, si sigue estando disponible.
 
