@@ -125,6 +125,12 @@ Si la verificación de flota está activa, el resultado se compara con `fleet.js
 
 La fecha final usa `YYYY/MM/DD`. Las anclas confiables del mismo libro permiten completar o corregir partes faltantes. La fecha puede repetirse, pero no retroceder al aumentar `log_number`. Toda inferencia queda trazada y marcada para revisión.
 
+Esa regla no solo completa: también desmiente. Una lectura que contradice a las dos páginas que la rodean es una lectura equivocada, no una fecha discutible, así que el mes se corrige cuando es la más floja de las tres, y los días de todo el libro se rehacen a la vez eligiendo la asignación que no retrocede y que menos evidencia contradice (conservar lo leído no cuesta nada; cambiarlo cuesta la fuerza de esa lectura, más si el día nuevo no lo propuso ninguna lectura y más cuanto más se aleje de lo leído). El error más común que arregla es la casilla de las decenas sin leer, que convierte un 18 en un 8.
+
+Además, nada de lo que se indexa puede estar fechado después de la ejecución: la página no se firma después de escanearse. Un año posterior al de la corrida (un `26` leído `96` o `28`) y un mes posterior al que corre (un `AGO` leído `OCT`) se apartan como lectura inválida, con su motivo en el comentario, y los completa el libro; si el libro no puede, la página se queda sin fecha y va a revisión, que es preferible a indexarla décadas fuera de sitio. Lo antiguo no se descarta: se indexan pocas bitácoras de meses atrás, pero llegan, así que la ventana de `app/utils/date_window.py` solo ordena candidatos y nunca acerca una fecha a hoy.
+
+Medido sobre 3607 páginas ya procesadas, los retrocesos de fecha dentro del libro (una violación de la regla, así que siempre un error) bajan de 221 a 15, y seis páginas más se quedan sin fecha porque su lectura era imposible y el libro no pudo completarla.
+
 Con la fecha del CSV en **fin de mes**, el día no se lee (`read_day=False`): sus tres casillas se saltan en el OCR y el corrector las completa con el último día que cabe en la secuencia del libro, marcadas con `day_source=csv_date_policy`. La casilla sigue en la plantilla porque la retícula de la banda de fecha se detecta con ella. La ejecución queda con `dia_leido: false` en su JSON, y con eso la ventana de AirVault apaga la opción de indexar con el día exacto. El precio es que los retrocesos de fecha solo se detectan a resolución de mes: sobre una ejecución de 2409 páginas, 129 de los 155 avisos eran solo del día.
 
 ### Memoria entre ejecuciones

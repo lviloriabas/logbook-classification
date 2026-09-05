@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import unittest
 
+from datetime import date
+
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
-from app.validation.date_corrector import correct_dates_by_book
+from app.validation.date_corrector import _format_month, correct_dates_by_book
 
 
 def _field(
@@ -265,7 +267,7 @@ class TestDayPolicy(unittest.TestCase):
 class TestSequenceCandidates(unittest.TestCase):
     def test_chooses_ocr_alternatives_only_to_remove_regression(self):
         first = _page(1, "2147301", "28", "JUL", "26")
-        ambiguous = _page(2, "2147302", "27", "JUL", "28")
+        ambiguous = _page(2, "2147302", "27", "JUL", "24")
         last = _page(3, "2147303", "30", "JUL", "26")
         _field_of(ambiguous, "day").alternatives = ["29"]
         _field_of(ambiguous, "year").alternatives = ["26"]
@@ -347,7 +349,7 @@ class TestYearConsensus(unittest.TestCase):
 
     def test_corrects_adjacent_year_when_it_is_inside_majority_block(self):
         first = _page(1, "2147301", "20", "JUL", "26")
-        outlier = _page(2, "2147302", "21", "JUL", "27")
+        outlier = _page(2, "2147302", "21", "JUL", "25")
         last = _page(3, "2147303", "22", "JUL", "26")
 
         stats = correct_dates_by_book([_report(first, outlier, last)])
@@ -420,6 +422,228 @@ class TestSafetyBoundaries(unittest.TestCase):
 
         self.assertIsNone(page.date)
         self.assertIn("unresolved", _field_of(page, "year").comment)
+
+
+class TestRunWindow(unittest.TestCase):
+    """Un año posterior a la ejecución es una lectura, no una bitácora."""
+
+    def test_year_after_the_run_is_not_a_reading(self):
+        first = _page(1, "2147301", "20", "JUL", "26")
+        ahead = _page(2, "2147302", "21", "JUL", "96")
+        last = _page(3, "2147303", "22", "JUL", "26")
+
+        stats = correct_dates_by_book([_report(first, ahead, last)])
+
+        year = _field_of(ahead, "year")
+        self.assertEqual(year.value, "26")
+        self.assertEqual(year.source, "inferred")
+        self.assertEqual(ahead.date, "2026/07/21")
+        self.assertEqual(stats["after_the_run"], 1)
+
+    def test_year_after_the_run_never_anchors_the_book(self):
+        # Sin nada que leer alrededor, la página se queda sin fecha y va a
+        # revisión: es preferible a indexarla setenta años fuera de sitio.
+        ahead = _page(1, "2147301", "21", "JUL", "96")
+        alone = _page(2, "2147302", "22", None, None)
+
+        correct_dates_by_book([_report(ahead, alone)])
+
+        self.assertIsNone(ahead.date)
+        self.assertIsNone(alone.date)
+        self.assertIn("later than the run", _field_of(ahead, "year").comment)
+
+    def test_an_old_book_is_kept_as_it_was_read(self):
+        # Se indexan pocas, pero llegan: la ventana ordena, no descarta.
+        first = _page(1, "2147301", "20", "JUL", "20")
+        middle = _page(2, "2147302", "21", None, None)
+        last = _page(3, "2147303", "22", "JUL", "20")
+
+        correct_dates_by_book([_report(first, middle, last)])
+
+        self.assertEqual(first.date, "2020/07/20")
+        self.assertEqual(middle.date, "2020/07/21")
+        self.assertEqual(last.date, "2020/07/22")
+
+    def test_an_alternative_years_away_does_not_hide_a_regression(self):
+        # La regresión la causa el mes de la última página, no el año de
+        # la primera: retroceder dos años deja una fecha peor que la que
+        # se quería arreglar.
+        first = _page(1, "2147301", "20", "AGO", "26")
+        _field_of(first, "year").alternatives = ["24"]
+        second = _page(2, "2147302", "20", "JUL", "26")
+
+        correct_dates_by_book([_report(first, second)])
+
+        self.assertEqual(_field_of(first, "year").value, "26")
+        self.assertEqual(first.date, "2026/08/20")
+
+
+    def test_month_after_the_run_is_not_a_reading(self):
+        # Un AGO leído OCT en una ejecución de agosto no es una bitácora
+        # adelantada: es el mes mal leído.
+        run_month = date.today().month
+        ahead_month = _format_month(run_month % 12 + 1)
+        year = f"{date.today().year % 100:02d}"
+        first = _page(1, "2147301", "19", _format_month(run_month), year)
+        ahead = _page(2, "2147302", "20", ahead_month, year)
+        last = _page(3, "2147303", "21", _format_month(run_month), year)
+
+        stats = correct_dates_by_book([_report(first, ahead, last)])
+
+        month = _field_of(ahead, "month")
+        self.assertEqual(month.value, _format_month(run_month))
+        self.assertEqual(month.source, "inferred")
+        self.assertIn(ahead_month, month.alternatives)
+        self.assertEqual(stats["after_the_run"], 1)
+
+
+class TestBracketedMonth(unittest.TestCase):
+    """El mes que contradice a sus dos vecinas es una lectura equivocada."""
+
+    def test_weak_month_between_two_equal_readings_is_corrected(self):
+        first = _page(1, "2147301", "19", "AGO", "26")
+        wrong = _page(2, "2147302", "20", "JUL", "26",
+                      month_status=Status.WARNING)
+        _field_of(wrong, "month").confidence = 0.47
+        _field_of(wrong, "month").source = "date_cells"
+        last = _page(3, "2147303", "20", "AGO", "26")
+
+        stats = correct_dates_by_book([_report(first, wrong, last)])
+
+        month = _field_of(wrong, "month")
+        self.assertEqual(month.value, "AGO")
+        self.assertEqual(month.source, "book_correction")
+        self.assertEqual(month.inference_method, "log_number_bracket")
+        self.assertIn("JUL", month.alternatives)
+        self.assertEqual(wrong.date, "2026/08/20")
+        self.assertEqual(stats["bracket_corrected"], 1)
+
+    def test_the_corrected_month_stops_blocking_the_pages_around_it(self):
+        # Es el daño que más cuesta: la lectura equivocada rompía además
+        # el intervalo que habría completado a la página sin leer.
+        first = _page(1, "2147301", "19", "AGO", "26")
+        blank_month = _page(2, "2147302", "20", None, "26")
+        wrong = _page(3, "2147303", "20", "JUL", "26",
+                      month_status=Status.WARNING)
+        _field_of(wrong, "month").confidence = 0.47
+        _field_of(wrong, "month").source = "date_cells"
+        last = _page(4, "2147304", "20", "AGO", "26")
+
+        correct_dates_by_book([_report(first, blank_month, wrong, last)])
+
+        self.assertEqual(_field_of(blank_month, "month").value, "AGO")
+        self.assertEqual(blank_month.date, "2026/08/20")
+
+    def test_a_month_as_firm_as_its_neighbours_is_only_flagged(self):
+        first = _page(1, "2147301", "19", "AGO", "26")
+        firm = _page(2, "2147302", "20", "JUL", "26")
+        last = _page(3, "2147303", "20", "AGO", "26")
+
+        stats = correct_dates_by_book([_report(first, firm, last)])
+
+        self.assertEqual(_field_of(firm, "month").value, "JUL")
+        self.assertEqual(stats["bracket_corrected"], 0)
+        self.assertGreater(stats["flagged"], 0)
+
+    def test_two_equal_months_of_different_years_do_not_fix_the_middle(self):
+        # Entre JUL de un año y JUL del siguiente cabe cualquier mes.
+        first = _page(1, "2147301", "20", "JUL", "25")
+        middle = _page(2, "2147302", "20", "AGO", "25",
+                       month_status=Status.WARNING)
+        _field_of(middle, "month").confidence = 0.47
+        _field_of(middle, "month").source = "date_cells"
+        last = _page(3, "2147303", "20", "JUL", "26")
+
+        stats = correct_dates_by_book([_report(first, middle, last)])
+
+        self.assertEqual(_field_of(middle, "month").value, "AGO")
+        self.assertEqual(stats["bracket_corrected"], 0)
+
+
+class TestDaySequence(unittest.TestCase):
+    """El día que retrocede dentro del libro está mal leído."""
+
+    def test_a_day_that_goes_back_is_pulled_into_the_book(self):
+        first = _page(1, "2147301", "19", "AGO", "26")
+        lost = _page(2, "2147302", "4", "AGO", "26")
+        last = _page(3, "2147303", "19", "AGO", "26")
+
+        stats = correct_dates_by_book([_report(first, lost, last)])
+
+        day = _field_of(lost, "day")
+        self.assertEqual(day.value, "19")
+        self.assertEqual(day.source, "book_correction")
+        self.assertEqual(day.inference_method, "log_number_day_sequence")
+        self.assertIn("4", day.alternatives)
+        self.assertEqual(lost.date, "2026/08/19")
+        self.assertEqual(stats["days_repaired"], 1)
+
+    def test_the_tens_digit_the_ocr_proposed_wins_over_any_other_day(self):
+        first = _page(1, "2147301", "17", "AGO", "26")
+        lost = _page(2, "2147302", "7", "AGO", "26")
+        last = _page(3, "2147303", "18", "AGO", "26")
+
+        correct_dates_by_book([_report(first, lost, last)])
+
+        self.assertEqual(_field_of(lost, "day").value, "17")
+
+    def test_a_firm_day_is_not_moved_by_two_doubtful_ones(self):
+        firm = _page(1, "2147301", "17", "AGO", "26")
+        doubtful = _page(2, "2147302", "7", "AGO", "26")
+        _field_of(doubtful, "day").confidence = 0.4
+        second_doubtful = _page(3, "2147303", "7", "AGO", "26")
+        _field_of(second_doubtful, "day").confidence = 0.4
+        after = _page(4, "2147304", "18", "AGO", "26")
+
+        correct_dates_by_book([
+            _report(firm, doubtful, second_doubtful, after)
+        ])
+
+        self.assertEqual(_field_of(firm, "day").value, "17")
+        self.assertEqual(_field_of(after, "day").value, "18")
+        self.assertEqual(_field_of(doubtful, "day").value, "17")
+
+    def test_a_book_that_does_not_go_back_is_left_alone(self):
+        pages = [
+            _page(1, "2147301", "30", "JUL", "26"),
+            _page(2, "2147302", "31", "JUL", "26"),
+            _page(3, "2147303", "01", "AGO", "26"),
+            _page(4, "2147304", "02", "AGO", "26"),
+        ]
+
+        stats = correct_dates_by_book([_report(*pages)])
+
+        self.assertEqual(
+            [_field_of(page, "day").value for page in pages],
+            ["30", "31", "01", "02"],
+        )
+        self.assertEqual(stats["days_repaired"], 0)
+
+    def test_a_lone_single_digit_day_recovers_its_tens(self):
+        # Abre el tramo, así que no retrocede y nada lo delata salvo la
+        # distancia: un libro se llena en días seguidos.
+        lost = _page(1, "2147301", "8", "AGO", "26")
+        after = _page(2, "2147302", "19", "AGO", "26")
+        last = _page(3, "2147303", "19", "AGO", "26")
+
+        stats = correct_dates_by_book([_report(lost, after, last)])
+
+        day = _field_of(lost, "day")
+        self.assertEqual(day.value, "18")
+        self.assertEqual(day.inference_method, "lost_tens_digit")
+        self.assertIn("8", day.alternatives)
+        self.assertEqual(stats["days_repaired"], 1)
+
+    def test_a_book_written_at_the_start_of_the_month_keeps_its_days(self):
+        first = _page(1, "2147301", "3", "AGO", "26")
+        second = _page(2, "2147302", "4", "AGO", "26")
+        last = _page(3, "2147303", "5", "AGO", "26")
+
+        stats = correct_dates_by_book([_report(first, second, last)])
+
+        self.assertEqual(first.date, "2026/08/03")
+        self.assertEqual(last.date, "2026/08/05")
+        self.assertEqual(stats["days_repaired"], 0)
 
 
 if __name__ == "__main__":

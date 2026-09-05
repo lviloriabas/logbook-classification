@@ -14,6 +14,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from app.utils.date_window import year_is_possible
+
 MESES = {
     "ENE": 1, "FEB": 2, "MAR": 3, "ABR": 4, "MAY": 5, "JUN": 6,
     "JUL": 7, "AGO": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DIC": 12,
@@ -190,14 +192,17 @@ def _parse_month(value: str) -> Optional[int]:
 
 
 def _normalize_year(anio: int) -> Optional[int]:
-    """Año 4 dígitos en el rango plausible de bitácoras (2000-2100).
+    """Año 4 dígitos dentro de la ventana en que existen bitácoras.
 
     Acepta 2 dígitos (26 → 2026) y rechaza lecturas absurdas
-    ("216" → 2216, "1751" → fuera de rango).
+    ("216" → 2216, "1751" → fuera de rango) y las adelantadas: una página
+    no se firma después del día en que se escanea, así que un '96' o un
+    '28' leídos en 2026 son un año mal leído (ver
+    ``app.utils.date_window``).
     """
     if anio < 100:
         anio += 2000
-    return anio if 2000 <= anio <= 2100 else None
+    return anio if year_is_possible(anio) else None
 
 
 def _day(value: str) -> Tuple[str, str]:
@@ -278,7 +283,8 @@ def _year(value: str) -> Tuple[str, str]:
     """Año: 2 o 4 dígitos extraídos de una lectura que puede incluir
     etiquetas impresas ('Year YR 26' -> '26').
 
-    Prefiere un run de 4 dígitos en el rango plausible (2000-2100), luego
+    Prefiere un run de 4 dígitos en la ventana plausible (de 2000 al año
+    de la ejecución, ver ``app.utils.date_window``), luego
     el último run de 2; un run de 3 dígitos ('216') se conserva como ERROR
     para que el corrector por libro lo normalice contra el ganador del
     libro. Los runs de 4 dígitos absurdos (p. ej. '8313', '5102', restos
@@ -310,7 +316,7 @@ def _year(value: str) -> Tuple[str, str]:
     four = next((r for r in runs if len(r) == 4), None)
     if four:
         anio = int(four)
-        if 2000 <= anio <= 2100:
+        if year_is_possible(anio):
             return four, ""
         return "", f"invalid year: {value}"
     twos = [r for r in runs if len(r) == 2]

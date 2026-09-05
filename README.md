@@ -93,6 +93,8 @@ Revise como mínimo:
 
 Cada libro físico tiene 50 páginas y una sola aeronave. Los finales `00` a `49` pertenecen a un libro y `50` a `99` al siguiente. La fecha puede repetirse, pero no retroceder al aumentar `log_number` dentro del mismo libro.
 
+Esa regla también se usa para corregir: la lectura que contradice a las dos páginas que la rodean se rehace con el valor más parecido al leído que el libro admite, y queda marcada con la lectura anterior entre sus alternativas. Una fecha posterior a la ejecución no existe (la página no se firma después de escanearse), así que se aparta y la completa el libro; si no puede, la página se queda sin fecha y va a revisión. Las bitácoras antiguas siguen aceptándose tal como se leen.
+
 ## 7. Depurar
 
 1. Pulse **Depurar**.
