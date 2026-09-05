@@ -5,7 +5,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLabel
 
 from app.gui.fleet_editor import FleetEditorDialog, FleetStore
 
@@ -58,5 +58,26 @@ def test_agregar_restablece_la_lista_sin_duplicar(tmp_path: Path):
         assert dialog.entry.text() == ""
         assert _visible_values(dialog) == ["HP-1234CMP", "HP-5678CMP"]
         assert dialog.values.count() == 2
+    finally:
+        dialog.close()
+
+
+def test_los_textos_no_exponen_la_ruta_y_las_acciones_estan_en_espanol(
+    tmp_path: Path,
+):
+    _app()
+    store = FleetStore(tmp_path / "fleet.json")
+    dialog = FleetEditorDialog(store)
+    try:
+        textos = " ".join(
+            label.text() for label in dialog.findChildren(QLabel)
+        )
+        assert str(store.path) not in textos
+        assert dialog.buttons.button(
+            QDialogButtonBox.StandardButton.Save
+        ).text() == "Guardar"
+        assert dialog.buttons.button(
+            QDialogButtonBox.StandardButton.Cancel
+        ).text() == "Cancelar"
     finally:
         dialog.close()

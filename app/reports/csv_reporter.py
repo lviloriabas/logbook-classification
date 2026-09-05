@@ -66,7 +66,7 @@ class CsvReporter:
         report_or_reports: Union[ValidationReport, List[ValidationReport]],
         path: Path,
         template: Optional[Template] = None,
-        date_mode: str = CSV_DATE_SPECIFIC,
+        date_mode: str = CSV_DATE_MONTH_END,
     ) -> Path:
         """Guarda el reporte como CSV (UTF-8 con BOM para Excel).
 
@@ -177,7 +177,7 @@ class CsvReporter:
         report: ValidationReport,
         page: PageResult,
         fields: List[str],
-        date_mode: str = CSV_DATE_SPECIFIC,
+        date_mode: str = CSV_DATE_MONTH_END,
         duplicate: bool = False,
         time_factor: Optional[float] = None,
     ) -> dict[str, object]:

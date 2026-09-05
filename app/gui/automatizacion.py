@@ -23,6 +23,12 @@ alinear las páginas el OCR no lee, sin OCR no hay datos y sin salidas no hay
 nada que subir, así que aparecen marcados y apagados, para que la lista diga
 todo lo que va a pasar y no solo la parte opcional.
 
+Depurar tampoco se elige, y por el motivo contrario: no está. Borrar páginas
+sin que nadie las mire es lo único de la cadena que quita datos, y de una
+bitácora repetida no se sabe cuál de las dos apariciones sobra sin leerlas
+las dos. Se quita a mano, desde «Depurar», que ahora enseña la matrícula, la
+fecha y el vuelo de cada aparición para poder decidir.
+
 Los tres de AirVault van uno detrás de otro y se marcan juntos: marcar
 «Indexar páginas» enciende subir, porque no se puede indexar lo que no está
 arriba; apagar «Subir a AirVault» apaga los dos de abajo, que sin la carga
@@ -56,11 +62,11 @@ from app.airvault.config import (
     AirVaultConfig,
     guardar_preferencias,
 )
+from app.gui.tokens import STATUS_ERROR, STATUS_OK, TEXT_DISABLED, TEXT_TERTIARY
 from app.gui.widgets import MultiSelectMenu
 
-# Pasos que la persona elige, en el orden en que ocurren. El primero va
-# suelto; los tres de AirVault forman la cadena.
-DEPURAR = "depurar"
+# Pasos que la persona elige, en el orden en que ocurren. Los tres son la
+# cadena de AirVault y se arrastran entre ellos.
 SUBIR = "subir"
 INDEXAR = "indexar"
 COMPLETAR = "completar"
@@ -70,7 +76,7 @@ COMPLETAR = "completar"
 ESPERAR = "esperar"
 
 CADENA = (SUBIR, INDEXAR, COMPLETAR)
-PASOS = (DEPURAR, *CADENA)
+PASOS = CADENA
 
 # Los tres que siempre se hacen. No son opciones (no se pueden desmarcar),
 # pero sí son pasos, y la cadena que se enseña mientras corre tiene que
@@ -86,21 +92,17 @@ PREPROCESAR = "preprocesar"
 PROCESAR = "procesar"
 EXPORTAR = "exportar"
 
-# La cadena entera, en el orden en que ocurre. Es el orden del recorrido,
-# no el del menú: depurar va entre procesar y exportar porque quita páginas
-# de la ejecución antes de que se escriba la entrega.
+# La cadena entera, en el orden en que ocurre.
 RECORRIDO = (
-    PREPROCESAR, PROCESAR, DEPURAR, EXPORTAR, SUBIR, ESPERAR, INDEXAR,
-    COMPLETAR,
+    PREPROCESAR, PROCESAR, EXPORTAR, SUBIR, ESPERAR, INDEXAR, COMPLETAR,
 )
 
-# Cómo se llama cada paso cuando hay ocho en una sola línea. En el menú
+# Cómo se llama cada paso cuando hay siete en una sola línea. En el menú
 # cada uno tiene sitio para explicarse; aquí no, y lo que importa es
 # reconocerlo de un vistazo.
 NOMBRES_CORTOS = {
     PREPROCESAR: "Preprocesar",
     PROCESAR: "Procesar",
-    DEPURAR: "Depurar",
     EXPORTAR: "Exportar",
     SUBIR: "Subir",
     ESPERAR: "Esperar",
@@ -111,7 +113,6 @@ NOMBRES_CORTOS = {
 # Cómo se llama cada preferencia dentro de ``airvault.json``. «Completar
 # batch» conserva el nombre que ya tenía escrito en las instalaciones.
 _CLAVES = {
-    DEPURAR: "auto_depurar",
     SUBIR: "auto_subir",
     INDEXAR: "auto_indexar",
     COMPLETAR: "completar_batch",
@@ -119,17 +120,12 @@ _CLAVES = {
 
 # Lo que dice cada casilla y qué se explica al pasar por encima.
 ETIQUETAS = {
-    DEPURAR: "Depurar antes de exportar",
     SUBIR: "Subir a AirVault",
     INDEXAR: "Indexar páginas",
     COMPLETAR: "Completar batch",
 }
 
 AYUDAS = {
-    DEPURAR: (
-        "Quita las bitácoras repetidas y las páginas en blanco antes de "
-        "exportar. Sin marcar, se puede depurar a mano después."
-    ),
     SUBIR: (
         "Sube los batches a Quick Upload al terminar la exportación y espera "
         "a que AirVault los deje listos."
@@ -159,7 +155,6 @@ class OpcionesAutomatizacion(QObject):
         self._ruta = Path(raiz) / AIRVAULT_FILENAME
         config = AirVaultConfig.load(self._ruta)
         self._valores = {
-            DEPURAR: bool(config.auto_depurar),
             SUBIR: bool(config.auto_subir),
             INDEXAR: bool(config.auto_indexar),
             # Sin preferencia guardada no se inventa ninguna ni se escribe
@@ -172,10 +167,6 @@ class OpcionesAutomatizacion(QObject):
     def valor(self, paso: str) -> bool:
         """Si ese paso se va a hacer. La espera va dentro de subir."""
         return self._valores[SUBIR if paso == ESPERAR else paso]
-
-    @property
-    def depurar(self) -> bool:
-        return self._valores[DEPURAR]
 
     @property
     def subir(self) -> bool:
@@ -236,9 +227,6 @@ class MenuAutomatizacion(MultiSelectMenu):
 
         self._acciones: dict[str, object] = {}
         for paso in PASOS:
-            if paso == SUBIR:
-                # La preparación local y la cadena de AirVault van separadas.
-                self.addSeparator()
             accion = self.addAction(ETIQUETAS[paso])
             accion.setCheckable(True)
             accion.setChecked(opciones.valor(paso))
@@ -304,16 +292,16 @@ class CadenaAutomatica(QWidget):
     # Gris del texto de ayuda, el verde y el rojo de los estados de panel, y
     # el azul de la selección. No se estrena ningún color.
     _COLORES = {
-        PENDIENTE: "#8b949e",
-        OMITIDO: "#5a5f66",
-        EN_CURSO: "#2f81f7",
-        HECHO: "#3fb950",
-        CORTADO: "#f85149",
+        PENDIENTE: TEXT_TERTIARY,
+        OMITIDO: TEXT_DISABLED,
+        EN_CURSO: "palette(highlight)",
+        HECHO: STATUS_OK,
+        CORTADO: STATUS_ERROR,
     }
 
     _AYUDAS = {
         PENDIENTE: "todavía no empezó",
-        OMITIDO: "no está marcado en «Automatización…»; no se hace",
+        OMITIDO: "no está marcado en el menú de «Procesar todo»; no se hace",
         EN_CURSO: "en curso",
         HECHO: "terminado",
         CORTADO: "se cortó aquí",
@@ -331,7 +319,7 @@ class CadenaAutomatica(QWidget):
 
         fila = QHBoxLayout(self)
         fila.setContentsMargins(0, 0, 0, 0)
-        fila.setSpacing(6)
+        fila.setSpacing(8)
         # Ocho nombres seguidos suman más ancho que muchos de los cuadros
         # de arriba, y el ancho mínimo de la ventana es el del contenido más
         # ancho que tenga: sin esto, esta línea decidía sola que la ventana
@@ -385,21 +373,21 @@ class CadenaAutomatica(QWidget):
         )
         if cortado:
             return (
-                f"Automático: se cortó en «{NOMBRES_CORTOS[cortado]}» "
+                f"Procesar todo: se cortó en «{NOMBRES_CORTOS[cortado]}» "
                 f"({hechos} de {len(elegidos)} pasos)"
             )
         if hechos == len(elegidos):
-            return "Automático: completo"
+            return "Procesar todo: completo"
         en_curso = next(
             (paso for paso in RECORRIDO if self._estados[paso] == EN_CURSO),
             "",
         )
         if en_curso:
             return (
-                f"Automático: {NOMBRES_CORTOS[en_curso].lower()} "
+                f"Procesar todo: {NOMBRES_CORTOS[en_curso].lower()} "
                 f"({hechos} de {len(elegidos)} pasos)"
             )
-        return f"Automático: {hechos} de {len(elegidos)} pasos"
+        return f"Procesar todo: {hechos} de {len(elegidos)} pasos"
 
     # ── cambio ─────────────────────────────────────────────────────
 

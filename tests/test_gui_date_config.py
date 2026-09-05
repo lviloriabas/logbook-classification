@@ -23,11 +23,12 @@ def test_gui_uses_fixed_ocr_without_chained_fallbacks():
         window.fields_check.setChecked(True)
         assert window.important_fields_check.isEnabled() is True
         assert window._export_options().debug is False
-        assert window._csv_date_mode() == CSV_DATE_SPECIFIC
-        assert window._export_options().csv_date_mode == CSV_DATE_SPECIFIC
-        window.csv_date_mode_combo.setCurrentIndex(1)
+        # Fin de mes es lo que se elige: es la fecha con la que se indexa.
         assert window._csv_date_mode() == CSV_DATE_MONTH_END
         assert window._export_options().csv_date_mode == CSV_DATE_MONTH_END
+        window.csv_date_mode_combo.setCurrentIndex(1)
+        assert window._csv_date_mode() == CSV_DATE_SPECIFIC
+        assert window._export_options().csv_date_mode == CSV_DATE_SPECIFIC
     finally:
         window.close()
         app.processEvents()

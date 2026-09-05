@@ -25,13 +25,15 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint, QRect, QSize
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
+    QDialogButtonBox,
     QGridLayout,
     QLabel,
     QSizePolicy,
+    QTableWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -57,7 +59,10 @@ from app.gui.widgets import (
     SPLIT_PAD_RIGHT,
     ElidedLabel,
     ZoomOverlay,
+    ZoomableScrollArea,
     hide_overlay_when_tight,
+    keep_overlay_clear_of_scrollbars,
+    size_columns_once,
 )
 
 # Pantallas reales, con el escalado ya aplicado: lo que Qt ve como escritorio
@@ -216,6 +221,35 @@ def test_las_demas_ventanas_caben_enteras(nombre, ancho, alto):
                 ventana.close()
 
 
+def test_el_selector_de_campos_muestra_sus_acciones_en_espanol():
+    _app()
+    dialogo = ImportantFieldsDialog(["log_number", "fecha"], ["fecha"])
+    try:
+        assert dialogo.buttons.button(
+            QDialogButtonBox.StandardButton.Apply
+        ).text() == "Aplicar"
+        assert dialogo.buttons.button(
+            QDialogButtonBox.StandardButton.Close
+        ).text() == "Cerrar"
+    finally:
+        dialogo.close()
+
+
+def test_las_cabeceras_cortas_conservan_el_texto_completo():
+    _app()
+    tabla = QTableWidget(0, 3)
+    tabla.setHorizontalHeaderLabels(["Batch", "Páginas", "Bitácoras"])
+    size_columns_once(tabla)
+    try:
+        for columna, texto in enumerate(("Batch", "Páginas", "Bitácoras")):
+            ancho_texto = tabla.horizontalHeader().fontMetrics().horizontalAdvance(
+                texto
+            )
+            assert tabla.columnWidth(columna) >= ancho_texto + 18
+    finally:
+        tabla.close()
+
+
 def test_en_pantalla_baja_los_cuadros_se_reparten_en_dos_columnas():
     """El alto que se ahorra es el que necesita la vista previa."""
     _app()
@@ -328,7 +362,7 @@ def test_el_panel_de_avance_no_recorta_sus_rotulos_en_la_ventana_mas_pequena():
                 if etiqueta.text() and etiqueta.isVisibleTo(ventana)
             ]
             assert any(
-                etiqueta.text() == "Avance por archivo" for etiqueta in rotulos
+                etiqueta.text() == "Progreso por archivo" for etiqueta in rotulos
             )
             for etiqueta in rotulos:
                 assert etiqueta.height() >= etiqueta.fontMetrics().height(), (
@@ -455,7 +489,7 @@ def test_el_buscador_no_desalinea_el_visor_y_la_tabla():
                 ventana.preview_file_caption.mapTo(ventana, QPoint()).x(),
             }
             assert margenes == {ventana._density.window_margin}
-            assert ventana.search_edit.maximumWidth() == 420
+            assert ventana.search_edit.width() > 420
             assert ventana.search_edit.placeholderText().startswith("Buscar ")
             assert ventana.search_next.x() + ventana.search_next.width() < (
                 ventana.width() // 2
@@ -565,6 +599,75 @@ def test_el_recuadro_de_zoom_se_esconde_antes_que_dibujarse_a_medias():
         marco.resize(600, 400)
         app.processEvents()
         assert soporte.isVisible()
+    finally:
+        marco.close()
+
+
+def test_el_recuadro_de_zoom_no_se_sienta_sobre_la_barra():
+    """Va abajo y centrado, y abajo es donde aparece la barra horizontal.
+
+    En cuanto la pagina se acerca lo suficiente para que haya que
+    desplazarla, la barra sale justo debajo del recuadro y queda tapada:
+    no se puede arrastrar. El recuadro se aparta lo que mide la barra.
+    """
+    app = _app()
+    marco = QWidget()
+    marco.resize(400, 300)
+    disposicion = QGridLayout(marco)
+    disposicion.setContentsMargins(0, 0, 0, 0)
+
+    panel = ZoomableScrollArea()
+    panel.setWidgetResizable(False)
+    pagina = QLabel()
+    pagina.setFixedSize(200, 200)
+    panel.setWidget(pagina)
+    disposicion.addWidget(panel, 0, 0)
+
+    soporte = QWidget(marco)
+    soporte_layout = QVBoxLayout(soporte)
+    soporte_layout.setContentsMargins(8, 8, 8, 8)
+    soporte_layout.addWidget(
+        ZoomOverlay(
+            ("Acercar", "Acercar", lambda: None),
+            ("Ajustar", "Ajustar", lambda: None),
+            ("Alejar", "Alejar", lambda: None),
+            marco,
+        )
+    )
+    soporte.setSizePolicy(
+        QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored
+    )
+    disposicion.addWidget(
+        soporte, 0, 0,
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+    )
+    keep_overlay_clear_of_scrollbars(soporte, panel)
+    marco.show()
+    app.processEvents()
+    try:
+        # Con la pagina entera a la vista no hay barras que esquivar.
+        assert not panel.horizontalScrollBar().isVisible()
+        assert soporte_layout.contentsMargins().bottom() == 8
+
+        # La pagina ya no cabe: salen las dos barras.
+        pagina.setFixedSize(2000, 2000)
+        for _ in range(4):
+            app.processEvents()
+
+        horizontal = panel.horizontalScrollBar()
+        vertical = panel.verticalScrollBar()
+        assert horizontal.isVisible() and vertical.isVisible()
+        assert soporte_layout.contentsMargins().bottom() == (
+            8 + horizontal.height()
+        )
+        assert soporte_layout.contentsMargins().right() == (
+            8 + vertical.width()
+        )
+        # Y el recuadro queda por encima de la barra, no sobre ella.
+        recuadro = soporte_layout.itemAt(0).widget()
+        abajo = recuadro.mapTo(marco, QPoint(0, recuadro.height()))
+        barra = horizontal.mapTo(marco, QPoint())
+        assert abajo.y() <= barra.y()
     finally:
         marco.close()
 

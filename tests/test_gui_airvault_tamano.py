@@ -9,8 +9,6 @@ baja la ventana crecía sola y dejaba los botones fuera del alcance.
 from __future__ import annotations
 
 import os
-from pathlib import Path
-
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -20,8 +18,6 @@ from PySide6.QtWidgets import QApplication
 
 from app.gui import airvault_window as modulo
 from app.gui.airvault_window import AirVaultWindow
-
-RAIZ = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="module")
@@ -44,9 +40,11 @@ def pantalla(monkeypatch):
 @pytest.mark.parametrize(
     "ancho, alto", [(1920, 1080), (1366, 768), (1280, 720), (1024, 768)]
 )
-def test_la_ventana_cabe_en_la_pantalla(app, pantalla, ancho, alto):
+def test_la_ventana_cabe_en_la_pantalla(
+    app, pantalla, tmp_path, ancho, alto
+):
     pantalla(ancho, alto)
-    ventana = AirVaultWindow(RAIZ)
+    ventana = AirVaultWindow(tmp_path)
     try:
         ventana.show()
         app.processEvents()
@@ -63,10 +61,10 @@ def test_la_ventana_cabe_en_la_pantalla(app, pantalla, ancho, alto):
 
 
 def test_margen_avance_y_botones_coinciden_con_la_ventana_principal(
-    app, pantalla
+    app, pantalla, tmp_path
 ):
     pantalla(1920, 1080)
-    ventana = AirVaultWindow(RAIZ)
+    ventana = AirVaultWindow(tmp_path)
     try:
         ventana.resize(1280, 800)
         ventana.show()
@@ -82,6 +80,11 @@ def test_margen_avance_y_botones_coinciden_con_la_ventana_principal(
         assert not ventana.estado_label.isVisibleTo(ventana)
         progreso = ventana.progreso.mapTo(ventana, QPoint())
         assert progreso.x() == margenes.left()
+        assert (
+            progreso.x() + ventana.progreso.width()
+            == ventana.width() - margenes.right()
+        )
+        assert ventana.reloj_label.parentWidget() is ventana.progreso
         cerrar = ventana.boton_cerrar.mapTo(ventana, QPoint())
         espacio_inferior = (
             ventana.height() - cerrar.y() - ventana.boton_cerrar.height()
@@ -93,11 +96,16 @@ def test_margen_avance_y_botones_coinciden_con_la_ventana_principal(
 
 
 def test_el_contenido_no_puede_estirar_la_ventana_fuera_del_escritorio(
-    app, pantalla
+    app, pantalla, tmp_path
 ):
-    """Aunque el layout pida más, el mínimo se queda en lo que hay."""
+    """Aunque el layout pida más, el mínimo se queda en lo que hay.
+
+    Las dos filas de acciones siguen pidiendo más de 1024 px por la suma de
+    los rótulos, así que el tope de la pantalla es lo único que impide que
+    la ventana nazca más ancha que el escritorio.
+    """
     pantalla(1024, 768)
-    ventana = AirVaultWindow(RAIZ)
+    ventana = AirVaultWindow(tmp_path)
     try:
         ventana.show()
         app.processEvents()
@@ -113,10 +121,10 @@ def test_el_contenido_no_puede_estirar_la_ventana_fuera_del_escritorio(
 
 
 def test_una_pantalla_diminuta_no_encoge_la_ventana_hasta_lo_inservible(
-    app, pantalla
+    app, pantalla, tmp_path
 ):
     pantalla(320, 240)
-    ventana = AirVaultWindow(RAIZ)
+    ventana = AirVaultWindow(tmp_path)
     try:
         ventana.show()
         app.processEvents()

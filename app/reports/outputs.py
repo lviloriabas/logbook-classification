@@ -15,7 +15,7 @@ from typing import Callable, Optional, Sequence
 from loguru import logger
 
 from app.models.schemas import ValidationReport
-from app.reports.csv_reporter import CSV_DATE_SPECIFIC, CsvReporter
+from app.reports.csv_reporter import CSV_DATE_MONTH_END, CsvReporter
 from app.reports.dual_csv import write_minimal_csv
 from app.reports.debug_pdf import write_debug_pdf
 from app.reports.json_reporter import JsonReporter
@@ -44,7 +44,7 @@ class OutputOptions:
     debug: bool = False
     run_dir: Path | None = None
     skip_pdfs: bool = False
-    csv_date_mode: str = CSV_DATE_SPECIFIC
+    csv_date_mode: str = CSV_DATE_MONTH_END
     important_csv_columns: tuple[str, ...] = ()
     # Páginas por parte del PDF único. Cero deja la entrega en un solo
     # archivo; con un tope se reparte, para que ningún batch de AirVault

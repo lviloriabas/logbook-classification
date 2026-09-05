@@ -77,7 +77,7 @@ def test_main_table_adds_colored_important_dup_from_csv_columns():
         assert "no es la primera" in duplicate_item.toolTip()
         assert not window.table.isColumnHidden(duplicate_column)
         assert window.duplicates_label.text() == "Duplicados: 2"
-        assert "log page 00" in window.duplicates_label.toolTip()
+        assert "página 00 del libro" in window.duplicates_label.toolTip()
         # El detalle dice cuál de las dos sobrevive a depurar.
         assert (
             "first.pdf PDF p. 1 (se conserva)"

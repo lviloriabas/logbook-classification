@@ -117,17 +117,28 @@ Archivos principales:
 
 La salida normal es `HP-XXXXCMP` o `HP-XXXXWWP`. El sistema limpia separadores y corrige confusiones comunes entre letras y cifras. Después calcula un consenso por libro. Una inferencia necesita respaldo de páginas independientes y conserva fuente, confianza y alternativas.
 
+El sufijo no se lee de la página: se deduce del número. El `HP-1990` es `WWP`. El `HP-1522` aparece escrito de las dos maneras en las bitácoras, pero AirVault solo lo tiene en su picklist como `HP-1522CMP`, así que el CSV, `fleet.json` y la carga lo escriben siempre así.
+
 Si la verificación de flota está activa, el resultado se compara con `fleet.json`. Un candidato parecido queda para revisión y no se aprueba solo por similitud.
 
 ### Fecha
 
 La fecha final usa `YYYY/MM/DD`. Las anclas confiables del mismo libro permiten completar o corregir partes faltantes. La fecha puede repetirse, pero no retroceder al aumentar `log_number`. Toda inferencia queda trazada y marcada para revisión.
 
+### Memoria entre ejecuciones
+
+De cada libro se guardan su matrícula (`book_matriculas.json`) y los extremos de fecha confirmados (`book_fechas.json`). Un libro puede llegar repartido entre entregas, y sin esa memoria las páginas de la segunda vuelven a empezar sin anclas.
+
+Las dos memorias se aprenden del OCR, así que se comprueban contra AirVault, que es el índice que la empresa da por bueno. La comprobación va sola dentro del plan del indexado: las páginas que AirVault ya tenía en verde salen de una lectura que el plan hace igual, así que no cuesta ninguna petición extra ni la pide nadie. Una matrícula que no es de ningún avión de `fleet.json` se descarta sin consultar nada.
+
+Confirmar no cambia nada. Reemplazar una entrada exige dos bitácoras distintas del mismo libro, el mismo respaldo que se exige para indexar sin revisión. Si AirVault no dice lo mismo en todo el libro, no se toca nada.
+
 Archivos principales:
 
 - `app/validation/grouping.py`
 - `app/validation/book_corrector.py`
 - `app/validation/date_corrector.py`
+- `app/validation/book_memory.py`
 - `app/validation/fleet.py`
 
 ## 8. Vuelo y firmas
@@ -214,7 +225,7 @@ Archivos principales:
 
 ## 12. AirVault
 
-El módulo de AirVault trabaja por etapas: preparar, subir, descubrir, planear, indexar y verificar.
+El módulo de AirVault trabaja por etapas: preparar, subir, descubrir, planear, indexar y verificar. Aparte de esas queda `memoria`, que no toca ningún batch: contrasta con AirVault lo que el sistema recuerda de cada libro.
 
 ### Sesión y red
 
@@ -232,11 +243,16 @@ Una carga ya aceptada no se reenvía automáticamente si no aparece. Esta regla 
 
 El plan relaciona cada página remota con el CSV mediante `_paginas.json`. Valida cantidad, campos obligatorios, duplicados, matrícula y valores existentes. Las páginas válidas no se sobrescriben de forma predeterminada.
 
+Un libro tiene una sola aeronave, así que las páginas del batch que AirVault ya tiene en verde dicen cuál es la de todo el libro. Una página cuya matrícula contradiga esa queda bloqueada (`matricula_del_libro`): no se escribe hasta que alguien mire. Un libro del que AirVault tiene dos matrículas distintas no manda sobre nadie, porque ahí no hay una autoridad sino un desacuerdo.
+
 El manifiesto se actualiza después de cada página. Una ejecución interrumpida puede reanudarse sin repetir lo confirmado. El batch `REVISAR` se conserva para intervención manual.
+
+De la misma lectura sale la comprobación de la memoria de libros (sección 7). El subcomando `memoria` de `run_airvault.py` alcanza además los libros que no vienen en ningún batch, consultando Web Search; informa siempre y solo escribe con `--aplicar`.
 
 Archivos principales:
 
 - `app/airvault/flujo.py`
+- `app/airvault/memoria.py`
 - `app/airvault/uploader.py`
 - `app/airvault/discovery.py`
 - `app/airvault/mapping.py`

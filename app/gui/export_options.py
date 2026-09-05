@@ -39,7 +39,7 @@ class ExportOptionsGroup(QGroupBox):
         parent: QWidget | None = None,
         raiz: Path | str | None = None,
     ) -> None:
-        super().__init__("Salidas", parent)
+        super().__init__("Salida", parent)
         self._ruta_preferencias = (
             Path(raiz) if raiz is not None else Path.cwd()
         ) / AIRVAULT_FILENAME
@@ -49,32 +49,39 @@ class ExportOptionsGroup(QGroupBox):
 
         main_row = QHBoxLayout()
         main_row.setSpacing(8)
-        pdf_label = QLabel("PDF:")
+        # La etiqueta describe la propiedad y el desplegable contiene el
+        # valor. «PDF: Un solo PDF» repetía el sustantivo sin aclarar qué se
+        # estaba eligiendo.
+        pdf_label = QLabel("Formato:")
         main_row.addWidget(pdf_label)
         self.controls_indent = pdf_label.sizeHint().width() + main_row.spacing()
         self.output_mode_combo = QComboBox()
         self.output_mode_combo.addItem("Un solo PDF", True)
         self.output_mode_combo.addItem("Varios PDF", False)
         self.output_mode_combo.setToolTip(
-            "El PDF unico conserva las secciones en una entrega; varios PDF "
-            "crea un archivo por cada separacion marcada."
+            "El PDF único conserva todas las secciones; varios PDF crea un "
+            "archivo por cada separación marcada."
         )
         configure_combo_box(self.output_mode_combo, 12)
-        main_row.addWidget(self.output_mode_combo)
+        main_row.addWidget(self.output_mode_combo, 1)
 
         main_row.addSpacing(8)
         main_row.addWidget(QLabel("Fecha del CSV:"))
         self.csv_date_mode_combo = QComboBox()
-        self.csv_date_mode_combo.addItem("Día exacto", CSV_DATE_SPECIFIC)
+        # «Fin de mes» va primero porque es lo que se elige: es la fecha con
+        # la que se indexa, y el día exacto solo hace falta cuando alguien
+        # quiere ver lo que leyó el OCR. Puesto primero, es además el valor
+        # con el que abre el desplegable.
         self.csv_date_mode_combo.addItem("Fin de mes", CSV_DATE_MONTH_END)
+        self.csv_date_mode_combo.addItem("Día exacto", CSV_DATE_SPECIFIC)
         self.csv_date_mode_combo.setItemData(
             0,
-            "Usa el día reconocido; si falta, usa el último día del mes.",
+            "Usa siempre el último día del mes reconocido.",
             Qt.ItemDataRole.ToolTipRole,
         )
         self.csv_date_mode_combo.setItemData(
             1,
-            "Usa siempre el último día del mes reconocido.",
+            "Usa el día reconocido; si falta, usa el último día del mes.",
             Qt.ItemDataRole.ToolTipRole,
         )
         self.csv_date_mode_combo.setToolTip(
@@ -82,8 +89,7 @@ class ExportOptionsGroup(QGroupBox):
             "El resultado OCR original se conserva."
         )
         configure_combo_box(self.csv_date_mode_combo, 14)
-        main_row.addWidget(self.csv_date_mode_combo)
-        main_row.addStretch()
+        main_row.addWidget(self.csv_date_mode_combo, 1)
         layout.addLayout(main_row)
 
         detail_row = QHBoxLayout()
@@ -115,7 +121,7 @@ class ExportOptionsGroup(QGroupBox):
         configure_menu_button(self.separation_button, self.separation_menu)
         detail_row.addWidget(self.separation_button)
 
-        self.partes_check = QCheckBox("Repartir en")
+        self.partes_check = QCheckBox("Dividir cada")
         self.partes_check.setToolTip(
             "Reparte el PDF único en varias partes sin cortar secciones."
         )
@@ -177,4 +183,4 @@ class ExportOptionsGroup(QGroupBox):
         return separator or None
 
     def csv_date_mode(self) -> str:
-        return self.csv_date_mode_combo.currentData() or CSV_DATE_SPECIFIC
+        return self.csv_date_mode_combo.currentData() or CSV_DATE_MONTH_END

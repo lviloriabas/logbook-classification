@@ -27,9 +27,11 @@ from app.airvault.config import (
 from app.airvault.guards import (
     Aviso,
     ErrorDeGuarda,
+    matriculas_por_libro,
     verificar_alineacion,
     verificar_cantidad,
     verificar_duplicados,
+    verificar_matricula_del_libro,
     verificar_matriculas,
     verificar_no_pisar,
     verificar_obligatorios,
@@ -165,6 +167,13 @@ class Indexador:
         # resuelta por su lookup en las paginas preindexadas, y eso vale
         # mucho mas que la regla de prefijos que usamos de respaldo.
         self.resolutor = resolutor or ResolutorFlota()
+        # Las paginas tal como AirVault las tenia antes de escribir. Se
+        # conservan porque el plan no es lo unico que sale de leerlas: las
+        # que ya estaban en verde son el indice que la empresa da por bueno
+        # y con ellas se comprueba la memoria de libros (ver
+        # :mod:`app.airvault.memoria`). Quien planifica decide si la usa;
+        # aqui solo se guarda lo leido para no volver a pedirlo.
+        self.remotas: Dict[int, object] = {}
 
     # ── planificacion ──────────────────────────────────────────────
 
@@ -219,8 +228,16 @@ class Indexador:
                     "No se pudo leer la pagina {} del batch {}: {}",
                     pagina, batch_id, exc,
                 )
+        self.remotas = remotas
         self._aprender_flota(remotas.values())
         self._corregir_flota_inferida()
+        # Con el batch ya leido se sabe que avion tiene AirVault en cada
+        # libro, y un libro es un solo avion. Va aqui y no antes porque
+        # necesita las paginas remotas; va antes de repartir los avisos por
+        # pagina porque es un aviso mas de los globales.
+        globales.extend(verificar_matricula_del_libro(
+            registros, matriculas_por_libro(remotas.values())
+        ))
 
         plan = Plan(batch_id=batch_id)
         por_seq: Dict[int, List[Aviso]] = {}

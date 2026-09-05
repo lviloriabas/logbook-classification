@@ -50,11 +50,10 @@ CONTROL_BOX_H_COMPACT = CONTROL_HEIGHT_COMPACT - 2 * BORDER
 CONTROL_PAD_H = 12
 CONTROL_PAD_H_COMPACT = 8
 
-# Radio de esquina. Fluent usa uno pequeño en los controles y uno mayor en las
-# superficies que los contienen, para que un botón dentro de una tarjeta no
-# tenga la misma curva que la tarjeta.
-RADIUS_CONTROL = 4
-RADIUS_CARD = 8
+# Radio de esquina. Una sola medida mantiene coherentes controles, tablas y
+# superficies sin introducir curvas distintas dentro de la misma ventana.
+RADIUS_CONTROL = 6
+RADIUS_CARD = 6
 
 # --------------------------------------------------------------------------
 # Tipografía. Cuatro papeles y ni uno más, todos en puntos.

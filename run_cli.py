@@ -179,11 +179,11 @@ def parse_args() -> argparse.Namespace:
              "la carpeta del programa).",
     )
     parser.add_argument(
-        "--fecha-csv", choices=["especifica", "fin-de-mes"],
-        default="especifica",
-        help="Fecha representada en el CSV: 'especifica' usa el día leído y "
-             "cae al fin de mes cuando falta; 'fin-de-mes' usa siempre el "
-             "último día del mes (default: especifica).",
+        "--fecha-csv", choices=["fin-de-mes", "especifica"],
+        default="fin-de-mes",
+        help="Fecha representada en el CSV: 'fin-de-mes' usa siempre el "
+             "último día del mes; 'especifica' usa el día leído y cae al "
+             "fin de mes cuando falta (default: fin-de-mes).",
     )
     parser.add_argument(
         "--campos-importantes", default=None, metavar="COLUMNAS",

@@ -8,6 +8,12 @@ Cada criterio trae además la lista de lo que se llevaría. En los duplicados
 se enseña el grupo entero de cada bitácora repetida, no solo las apariciones
 sobrantes: para decidir cuál se va hay que ver también la que se queda, y a
 veces la buena es la segunda.
+
+Y de cada aparición se enseña lo que trae escrito: matrícula, fecha y vuelo.
+Sin eso las dos apariciones de una bitácora repetida se distinguen solo por
+el archivo y el número de página, que no dicen cuál es la buena. Este cuadro
+es el único sitio donde se borran páginas de una ejecución, así que es aquí
+donde tiene que estar todo lo que hace falta para elegir.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.responsive import fit_to_screen
+from app.gui.tokens import SPACE_S, TEXT_SECONDARY
 from app.gui.widgets import (
     TABLE_BASE_BG,
     TABLE_GRID,
@@ -33,6 +40,7 @@ from app.gui.widgets import (
     TABLE_RADIUS,
     TABLE_SELECTION_BG,
     TABLE_TEXT,
+    window_stylesheet,
 )
 from app.validation.depuracion import (
     PaginaDepurable,
@@ -87,9 +95,20 @@ def _texto_conteo(cantidad: int) -> str:
     return f"{cantidad} páginas"
 
 
-def _etiqueta(pagina: PaginaDepurable) -> str:
-    """Cómo se nombra una página en las listas del cuadro."""
-    return f"{pagina.archivo}, página {pagina.pagina}"
+def _etiqueta(pagina: PaginaDepurable, sufijo: str = "") -> str:
+    """Cómo se nombra una página en las listas del cuadro.
+
+    Detrás del archivo y la página va lo que la bitácora dice de sí misma.
+    Lo que no se leyó no se escribe: un hueco vacío entre dos guiones se
+    lee como un dato y no lo es. Una página sin nada legible se queda con
+    su nombre, que ya es toda la respuesta que hay.
+    """
+    escritos = [
+        dato for dato in (pagina.matricula, pagina.fecha, pagina.vuelo)
+        if dato
+    ]
+    cabeza = f"{pagina.archivo}, página {pagina.pagina}{sufijo}"
+    return f"{cabeza} - {', '.join(escritos)}" if escritos else cabeza
 
 
 class DepurarPaginasDialog(QDialog):
@@ -107,15 +126,19 @@ class DepurarPaginasDialog(QDialog):
         self.setWindowTitle("Depurar páginas")
         # Como el resto de los cuadros: la pantalla decide el tamaño, que en
         # un portátil bajo el alto pedido deja los botones fuera del borde.
-        fit_to_screen(self, 560, 560)
+        self._density = fit_to_screen(self, 560, 560)
+        self.setStyleSheet(window_stylesheet(self._density.qss))
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        margin = max(SPACE_S, self._density.window_margin)
+        layout.setContentsMargins(margin, margin, margin, margin)
+        layout.setSpacing(SPACE_S)
         intro = QLabel(
-            "Se quitan de la ejecución las páginas que marque. Se reescriben "
-            "el CSV, el JSON y las estadísticas sin ellas; los PDF ya "
-            "exportados las conservan hasta que vuelva a exportar."
+            "Marque las páginas que quiere quitar. Se actualizarán el CSV, "
+            "el JSON y las estadísticas; los PDF cambiarán cuando vuelva a "
+            "exportar."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -132,8 +155,9 @@ class DepurarPaginasDialog(QDialog):
         layout.addWidget(self.check_duplicados)
 
         self.arbol_duplicados = self._nuevo_arbol(
-            "Cada bitácora repetida con sus apariciones. Marque la que sobra; "
-            "una de cada grupo se queda siempre."
+            "Cada bitácora repetida con sus apariciones y lo que trae escrita "
+            "cada una (matrícula, fecha y vuelo). Marque la que sobra; una de "
+            "cada grupo se queda siempre."
         )
         self._llenar_duplicados()
         layout.addWidget(self.arbol_duplicados, 1)
@@ -157,7 +181,7 @@ class DepurarPaginasDialog(QDialog):
         layout.addWidget(self.arbol_blancas, 1)
 
         self.total_label = QLabel()
-        self.total_label.setStyleSheet("color: #c9d1d9;")
+        self.total_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         self.total_label.setWordWrap(True)
         layout.addWidget(self.total_label)
 
@@ -223,7 +247,7 @@ class DepurarPaginasDialog(QDialog):
             cabeza.setExpanded(True)
             for orden, pagina in enumerate(paginas):
                 sufijo = " (primera)" if orden == 0 else ""
-                self._nueva_hoja(pagina, _etiqueta(pagina) + sufijo, cabeza)
+                self._nueva_hoja(pagina, _etiqueta(pagina, sufijo), cabeza)
 
     def _llenar_blancas(self) -> None:
         self.arbol_blancas.blockSignals(True)
