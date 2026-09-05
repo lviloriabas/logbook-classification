@@ -47,6 +47,7 @@ from app.airvault.discovery import (  # noqa: E402
 from app.airvault.flujo import ErrorDeCorrida, Trabajo, paginas_de_lote  # noqa: E402
 from app.airvault.indexer import Indexador, verificar_lote  # noqa: E402
 from app.airvault.mapping import FLOTA_CACHE_FILENAME, ResolutorFlota  # noqa: E402
+from app.airvault.memoria import BITACORAS_POR_LIBRO  # noqa: E402
 from app.airvault.model import EstadoEtapa, Manifiesto  # noqa: E402
 from app.airvault.naming import PREFIJO_POR_DEFECTO  # noqa: E402
 from app.airvault.report import escribir_csv, escribir_html, resumen_texto  # noqa: E402
@@ -159,7 +160,34 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--auto", action="store_true", help="Escribir sin pedir aprobacion")
     p.add_argument("--sobrescribir", action="store_true")
 
-    for nombre in ("subir", "descubrir", "plan", "indexar", "verificar", "todo"):
+    p = sub.add_parser(
+        "memoria",
+        help="Contrasta con AirVault la memoria de libros y de fechas",
+    )
+    p.add_argument(
+        "--aplicar",
+        action="store_true",
+        help="Corregir la memoria con lo que diga AirVault. Sin esta "
+        "opcion solo se informa de las diferencias.",
+    )
+    p.add_argument(
+        "--libro",
+        action="append",
+        default=None,
+        metavar="CLAVE",
+        help="Comprobar solo ese libro (por ejemplo 23159B). Se puede "
+        "repetir; sin la opcion se comprueban todos los guardados.",
+    )
+    p.add_argument(
+        "--bitacoras",
+        type=int,
+        default=BITACORAS_POR_LIBRO,
+        help=f"Cuantas bitacoras de cada libro se consultan "
+        f"(default: {BITACORAS_POR_LIBRO})",
+    )
+
+    for nombre in ("subir", "descubrir", "plan", "indexar", "verificar",
+                   "todo", "memoria"):
         sp = _subparser(sub, nombre)
         sp.add_argument(
             "--cookie",
@@ -355,6 +383,7 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
     # Lo aprendido del batch sirve para los siguientes: se guarda siempre,
     # tambien en dry run, porque no toca nada de AirVault.
     resolutor.guardar(_ROOT / FLOTA_CACHE_FILENAME)
+    _comprobar_memoria(indexador)
     manifiestos.guardar(manifiesto, carpeta)
     escribir_csv(plan, carpeta / "revision.csv")
     escribir_html(
@@ -363,6 +392,33 @@ def _planificar(args, config: AirVaultConfig, sobrescribir: bool = False):
         f"{manifiesto.nombre_batch} ({manifiesto.batch_id})",
     )
     return manifiesto, indexador, plan, carpeta, cliente
+
+
+def _comprobar_memoria(indexador) -> None:
+    """Contrasta la memoria de libros con las paginas que ya se leyeron.
+
+    Va aqui por lo mismo que el cache de flota: sale de la misma lectura
+    del batch, no toca nada de AirVault y sirve para las ejecuciones
+    siguientes, asi que se hace igual en el dry run que en el indexado. Un
+    fallo no puede tumbar un plan: la memoria es una ayuda, no el trabajo.
+    """
+    from app.airvault.flujo import comprobar_memoria_de_libros
+
+    informe = comprobar_memoria_de_libros(indexador, _ROOT)
+    if informe is not None and (informe.hay_cambios or informe.conflictos):
+        print(_detalle_memoria(informe))
+
+
+def _detalle_memoria(informe) -> str:
+    """El informe de la memoria en texto, sin repetir lo que ya coincidia."""
+    from app.validation.book_memory import CONFIRMADO
+
+    lineas = [informe.resumen()]
+    lineas.extend(
+        f"  {cambio}" for cambio in informe.cambios
+        if cambio.accion != CONFIRMADO
+    )
+    return "\n".join(lineas)
 
 
 def _soltar(cliente, batch_id: str) -> None:
@@ -519,6 +575,57 @@ def etapa_todo(args, config: AirVaultConfig) -> int:
     return etapa_verificar(args, config)
 
 
+def etapa_memoria(args, config: AirVaultConfig) -> int:
+    """Contrasta con Web Search la memoria de libros y de fechas.
+
+    Alcanza a los libros que no vienen en ningun batch de hoy, que son casi
+    todos, y a los que se publicaron sin este programa, que son los unicos
+    en que AirVault es de verdad una fuente externa. Nadie tiene que estar
+    delante: informa por consola y solo escribe con ``--aplicar``.
+    """
+    from app.airvault import duplicados as libro_de_envios
+    from app.airvault.memoria import (
+        libros_de_la_memoria,
+        verificar_con_websearch,
+    )
+    from app.airvault.websearch import Buscador
+
+    claves = list(args.libro) if args.libro else libros_de_la_memoria(_ROOT)
+    if not claves:
+        print("La memoria de libros esta vacia: no hay nada que comprobar.")
+        return 0
+    sesion = abrir_sesion(config, args)
+    buscador = Buscador(
+        sesion=sesion,
+        config=config,
+        ruta_config=_ROOT / AIRVAULT_FILENAME,
+        controles=libro_de_envios.leer(CARPETA_TRABAJOS).controles(),
+    )
+    print(f"Comprobando {len(claves)} libro(s) en Web Search...")
+
+    def avanzar(hechos: int, total: int) -> None:
+        print(f"  {hechos}/{total}", end="\r", flush=True)
+
+    informe = verificar_con_websearch(
+        buscador, _ROOT, claves,
+        cuantas=max(1, int(args.bitacoras)),
+        escribir=bool(args.aplicar),
+        al_avanzar=avanzar,
+    )
+    print(" " * 20, end="\r")
+    print(_detalle_memoria(informe))
+    if not informe.observaciones:
+        print(
+            "Web Search no devolvio ninguna de las bitacoras consultadas. "
+            "Puede que esos libros no esten publicados o que la consulta no "
+            "sea la que se probo: no se cambia nada."
+        )
+        return 1
+    if informe.hay_cambios and not args.aplicar:
+        print("Nada fue escrito. Para corregir la memoria: memoria --aplicar")
+    return 0
+
+
 ETAPAS = {
     "preparar": etapa_preparar,
     "subir": etapa_subir,
@@ -527,6 +634,7 @@ ETAPAS = {
     "indexar": etapa_indexar,
     "verificar": etapa_verificar,
     "todo": etapa_todo,
+    "memoria": etapa_memoria,
 }
 
 

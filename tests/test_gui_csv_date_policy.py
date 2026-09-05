@@ -65,20 +65,21 @@ def test_combo_rewrites_only_csv_between_specific_day_and_month_end():
             window._processed_template = template
             window._corrida_dir = run
 
+            # La lista abre en «Fin de mes»; se toca la otra y se vuelve.
             window.csv_date_mode_combo.setCurrentIndex(1)
+            specific_minimal = _read_row(csv_path)
+            specific = _read_row(complete_csv_path(csv_path))
+            assert specific_minimal["date"] == "2026/07/14"
+            assert specific["day"] == "14"
+            assert specific["date"] == "2026/07/14"
+
+            window.csv_date_mode_combo.setCurrentIndex(0)
             month_end_minimal = _read_row(csv_path)
             month_end = _read_row(complete_csv_path(csv_path))
             assert month_end_minimal["date"] == "2026/07/31"
             assert month_end["day"] == "31"
             assert month_end["date"] == "2026/07/31"
             assert month_end["day_source"] == "csv_date_policy"
-
-            window.csv_date_mode_combo.setCurrentIndex(0)
-            specific_minimal = _read_row(csv_path)
-            specific = _read_row(complete_csv_path(csv_path))
-            assert specific_minimal["date"] == "2026/07/14"
-            assert specific["day"] == "14"
-            assert specific["date"] == "2026/07/14"
 
             # La política de salida es reversible: no muta el OCR en memoria.
             assert page.date == "2026/07/14"

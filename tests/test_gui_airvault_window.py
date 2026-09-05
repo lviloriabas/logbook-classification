@@ -27,6 +27,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QToolButton,
@@ -61,7 +62,7 @@ def ventana(app, tmp_path):
     prueba que toca «Comprobar cada» o «Completar batch» le cambia la
     configuración a quien ejecuta el programa, y a la prueba siguiente.
     """
-    return AirVaultWindow(RAIZ, OpcionesAutomatizacion(tmp_path))
+    return AirVaultWindow(tmp_path, OpcionesAutomatizacion(tmp_path))
 
 
 def corrida(
@@ -182,14 +183,20 @@ def test_completar_batch_recuerda_exactamente_el_ultimo_estado(
     segunda.close()
 
 
-def test_el_limite_de_quick_upload_toma_las_400_paginas_guardadas(ventana):
+def test_el_limite_de_quick_upload_toma_las_400_paginas_guardadas(app, tmp_path):
     from app.gui.widgets import SpinBoxWithButtons
+
+    (tmp_path / "airvault.json").write_text(
+        json.dumps({"paginas_por_batch": 400}), encoding="utf-8"
+    )
+    ventana = AirVaultWindow(tmp_path, OpcionesAutomatizacion(tmp_path))
 
     assert ventana.limite_batch_spin.value() == 400
     assert isinstance(ventana.limite_batch_control, SpinBoxWithButtons)
     assert ventana.limite_batch_spin.parentWidget() is (
         ventana.limite_batch_control
     )
+    ventana.close()
 
 
 def test_la_compresion_es_opcional_y_explica_los_200_dpi(ventana):
@@ -249,7 +256,13 @@ def test_la_ventana_usa_batch_en_sus_campos_y_tabla(ventana):
         ventana.lotes.horizontalHeaderItem(columna).text()
         for columna in range(ventana.lotes.columnCount())
     ] == ["ID", "Batch", "Páginas", "Estado"]
-    assert "batch" in ventana.lote_edit.placeholderText().lower()
+    etiquetas = {
+        etiqueta.text() for etiqueta in ventana.findChildren(QLabel)
+    }
+    assert "Nombre del batch:" in etiquetas
+    assert ventana.lote_edit.placeholderText() == (
+        "Se completa al elegir la ejecución"
+    )
 
 
 def test_la_cola_tiene_su_espacio_y_la_barra_bajo_el_header(app, ventana):

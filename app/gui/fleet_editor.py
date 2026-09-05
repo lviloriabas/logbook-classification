@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.responsive import fit_to_screen
+from app.gui.tokens import SPACE_S
+from app.gui.widgets import window_stylesheet
 from app.utils.fleet import FLEET_FILENAME, load_fleet, normalise_matricula
 
 
@@ -52,27 +54,28 @@ class FleetEditorDialog(QDialog):
         super().__init__(parent)
         self.store = store
         self.setWindowTitle("Lista de flota")
-        fit_to_screen(self, 430, 440)
+        self._density = fit_to_screen(self, 430, 440)
+        self.setStyleSheet(window_stylesheet(self._density.qss))
         self._build_ui()
         self._load_values()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        margin = max(SPACE_S, self._density.window_margin)
+        layout.setContentsMargins(margin, margin, margin, margin)
+        layout.setSpacing(SPACE_S)
         intro = QLabel(
-            "Esta lista debe tener todos los aviones de la flota, sin "
-            "faltar ninguno. Al verificar matrículas, la lectura que no "
-            "aparezca aquí se reclasifica como la matrícula más parecida "
-            "de la lista: el avión que falte termina clasificado como "
-            "otro.\n"
-            f"Archivo: {self.store.path}"
+            "Mantenga aquí todas las matrículas de la flota. Si falta una, "
+            "la lectura puede asignarse al avión equivocado."
         )
         intro.setWordWrap(True)
         intro.setObjectName("fleetReminder")
         layout.addWidget(intro)
 
         add_row = QHBoxLayout()
+        add_row.setSpacing(SPACE_S)
         self.entry = QLineEdit()
-        self.entry.setPlaceholderText("Agregar o buscar: HP-1234CMP")
+        self.entry.setPlaceholderText("Matrícula, por ejemplo HP-1234CMP")
         self.entry.textChanged.connect(self._filter_values)
         self.entry.returnPressed.connect(self._add_value)
         add_row.addWidget(self.entry, 1)
@@ -85,17 +88,28 @@ class FleetEditorDialog(QDialog):
         self.values.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         layout.addWidget(self.values, 1)
 
-        remove = QPushButton("Quitar seleccionadas")
-        remove.clicked.connect(self._remove_selected)
-        layout.addWidget(remove)
+        self.remove_button = QPushButton("Quitar seleccionadas")
+        self.remove_button.clicked.connect(self._remove_selected)
 
-        buttons = QDialogButtonBox(
+        self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self._save_and_accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.buttons.button(QDialogButtonBox.StandardButton.Save).setText(
+            "Guardar"
+        )
+        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(
+            "Cancelar"
+        )
+        self.buttons.accepted.connect(self._save_and_accept)
+        self.buttons.rejected.connect(self.reject)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(SPACE_S)
+        action_row.addWidget(self.remove_button)
+        action_row.addStretch()
+        action_row.addWidget(self.buttons)
+        layout.addLayout(action_row)
 
     def _load_values(self) -> None:
         self.values.clear()

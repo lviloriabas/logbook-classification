@@ -20,6 +20,7 @@ from app.airvault.config import CAMPO_LOG_NUMBER, AirVaultConfig
 from app.airvault.websearch import (
     Buscador,
     candidatas,
+    indice_en,
     muestra_de,
     revisar_batch,
 )
@@ -28,11 +29,15 @@ from app.airvault.websearch import (
 class SesionFalsa:
     """Contesta como AirVault a una ruta concreta y a ninguna mas."""
 
-    def __init__(self, ruta="", publicadas=(), portada="", scripts=None):
+    def __init__(self, ruta="", publicadas=(), portada="", scripts=None,
+                 indices=None):
         self.ruta = ruta
         self.publicadas = {str(n) for n in publicadas}
         self.portada = portada
         self.scripts = scripts or {}
+        # Columnas de mas que la fila trae de esa bitacora, como las
+        # devolveria una vista con los indices puestos.
+        self.indices = indices or {}
         self.pedidos = []
 
     def get(self, ruta, params=None, json_esperado=True):
@@ -54,7 +59,9 @@ class SesionFalsa:
         numero = texto.split("=", 1)[1]
         if numero not in self.publicadas:
             return {"rows": []}
-        return {"rows": [{"cell": {"C_LogNo": numero, "batchid": "003SRO"}}]}
+        celda = {"C_LogNo": numero, "batchid": "003SRO"}
+        celda.update(self.indices.get(numero, {}))
+        return {"rows": [{"cell": celda}]}
 
 
 def _buscador(sesion, controles=("2312238",), **extra):
@@ -265,3 +272,99 @@ def test_la_consulta_va_por_el_campo_log_page_number():
     assert consultas
     texto = base64.b64decode(consultas[0]["encodedValues"]).decode("utf-8")
     assert texto == f"{CAMPO_LOG_NUMBER}=2312238"
+
+
+# -- los indices de una bitacora publicada -------------------------
+
+def test_de_la_fila_salen_la_matricula_y_la_fecha_de_la_bitacora():
+    sesion = SesionFalsa(
+        ruta="/zfp/Search/GetSearchResults",
+        publicadas=["2312238"],
+        indices={"2312238": {
+            "C_Aircraft": "HP-1376CMP",
+            "C_StartDate": "05/01/2025",
+            "C_EndDate": "05/14/2025",
+        }},
+    )
+
+    indice = _buscador(sesion).indice("2312238")
+
+    assert indice.matricula == "HP-1376CMP"
+    # Entre las dos fechas de la fila manda la columna de fin, que es la
+    # que este programa escribe con la fecha de la bitacora.
+    assert indice.fecha == "2025-05-14"
+
+
+def test_dos_matriculas_en_la_misma_fila_no_son_un_dato():
+    sesion = SesionFalsa(
+        ruta="/zfp/Search/GetSearchResults",
+        publicadas=["2312238"],
+        indices={"2312238": {
+            "C_Aircraft": "HP-1376CMP",
+            "C_Comentario": "antes indexada como HP-1835CMP",
+        }},
+    )
+
+    indice = _buscador(sesion).indice("2312238")
+
+    assert indice.matricula == ""
+
+
+def test_dos_fechas_sin_columna_que_las_distinga_no_dan_ninguna():
+    datos = {"rows": [{"cell": [
+        "2312238", "HP-1376CMP", "05/01/2025", "05/14/2025",
+    ]}]}
+
+    indice = indice_en(datos, "2312238")
+
+    assert indice.matricula == "HP-1376CMP"
+    assert indice.fecha == ""
+
+
+def test_no_se_lee_la_fila_de_la_bitacora_de_al_lado():
+    datos = {"rows": [
+        {"cell": {"C_LogNo": "2312237", "C_Aircraft": "HP-1835CMP"}},
+        {"cell": {"C_LogNo": "2312238", "C_Aircraft": "HP-1376CMP"}},
+    ]}
+
+    assert indice_en(datos, "2312238").matricula == "HP-1376CMP"
+
+
+def test_una_bitacora_que_no_esta_no_devuelve_indice():
+    assert indice_en({"rows": []}, "2312238") is None
+
+
+def test_sin_control_conocido_la_propia_bitacora_descubre_la_ruta():
+    """Leer indices no necesita un control sabido de antemano.
+
+    Encontrar la bitacora que se busca ya prueba que la ruta mira donde hay
+    que mirar: una ruta equivocada tendria que devolver una fila con ese
+    numero de siete digitos dentro. Lo que sigue exigiendo un control es
+    afirmar que una bitacora no esta publicada.
+    """
+    sesion = SesionFalsa(
+        ruta="/zfp/Search/GetSearchResults",
+        publicadas=["2312238"],
+        indices={"2312238": {"C_Aircraft": "HP-1376CMP"}},
+    )
+    buscador = Buscador(sesion=sesion, config=AirVaultConfig(), controles=())
+
+    assert buscador.indice("2312238").matricula == "HP-1376CMP"
+    # Y sigue sin poder decir que una bitacora no esta publicada.
+    assert buscador.publicada("2312240").publicada is None
+
+
+def test_la_ruta_descubierta_asi_no_se_vuelve_a_buscar():
+    sesion = SesionFalsa(
+        ruta="/zfp/Search/GetSearchResults",
+        publicadas=["2312238", "2312239"],
+        indices={"2312238": {"C_Aircraft": "HP-1376CMP"},
+                 "2312239": {"C_Aircraft": "HP-1376CMP"}},
+    )
+    buscador = Buscador(sesion=sesion, config=AirVaultConfig(), controles=())
+
+    buscador.indice("2312238")
+    pedidos = len(sesion.pedidos)
+    buscador.indice("2312239")
+
+    assert len(sesion.pedidos) == pedidos + 1

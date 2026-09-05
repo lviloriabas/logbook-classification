@@ -176,8 +176,18 @@ class TestMatricula(unittest.TestCase):
     def test_wwp_exceptions(self):
         self.assertEqual(apply_postprocess("x", "matricula", "HP-1990WWP"),
                          ("HP-1990WWP", ""))
-        self.assertEqual(apply_postprocess("x", "matricula", "1522"),
-                         ("HP-1522WWP", ""))
+        self.assertEqual(apply_postprocess("x", "matricula", "1990"),
+                         ("HP-1990WWP", ""))
+
+    def test_el_1522_sale_siempre_como_cmp(self):
+        """En la bitacora se escribe de las dos maneras; el avion es CMP.
+
+        AirVault solo lo tiene en su picklist como HP-1522CMP, asi que un
+        WWP en el CSV obligaba a corregirlo a mano antes de indexar.
+        """
+        for value in ("1522", "HP-1522", "HP-1522WWP", "1522 wwp"):
+            self.assertEqual(apply_postprocess("x", "matricula", value),
+                             ("HP-1522CMP", ""))
 
     def test_handwritten_characters_read_as_digits(self):
         # El '1' de estas bitácoras es un palo sin base y el '7' lleva

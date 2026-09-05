@@ -55,12 +55,15 @@ from PySide6.QtWidgets import (
 )
 
 from app.branding import APPLICATION_DISPLAY_NAME
-from app.gui.responsive import fit_to_screen
-from app.gui.tokens import FONT_CAPTION_PT
+from app.gui.responsive import density_for, fit_to_screen
+from app.gui.tokens import FONT_CAPTION_PT, SPACE_S, TEXT_SECONDARY
 from app.gui.widgets import (
+    DATA_TABLE_QSS,
     ZOOM_OVERLAY_QSS,
     ZoomOverlay,
     hide_overlay_when_tight,
+    keep_overlay_clear_of_scrollbars,
+    window_stylesheet,
 )
 from app.templates.manager import TEMPLATES_DIR, TemplateManager
 from app.templates.schema import FieldTemplate, FieldType, Template
@@ -319,6 +322,7 @@ class EditorWindow(QMainWindow):
         # 1366x768 y la fila de botones de abajo se quedaba fuera.
         self._density = fit_to_screen(self, 1200, 800)
         self.setWindowIcon(_load_icon())
+        self._apply_density_stylesheet()
 
         self._pdf_path: Optional[Path] = None
         self._current_page = 0
@@ -377,9 +381,6 @@ class EditorWindow(QMainWindow):
     def _build_ui(self) -> None:
         toolbar = QToolBar("Principal")
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        toolbar.setStyleSheet(
-            "QToolButton { padding: 4px 8px; margin: 1px 2px; }"
-        )
         self.addToolBar(toolbar)
 
         act_open = toolbar.addAction("Abrir PDF")
@@ -413,7 +414,7 @@ class EditorWindow(QMainWindow):
         act_del.setToolTip("Quitar el campo seleccionado (Supr)")
         act_del.triggered.connect(self._delete_selected)
 
-        self.page_label = QLabel("Página 0/0")
+        self.page_label = QLabel("Página 0 de 0")
         toolbar.addWidget(self.page_label)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -429,8 +430,6 @@ class EditorWindow(QMainWindow):
         view_layout = QGridLayout(view_container)
         view_layout.setContentsMargins(0, 0, 0, 0)
         view_layout.addWidget(self.view, 0, 0)
-
-        self.setStyleSheet(ZOOM_OVERLAY_QSS)
 
         # La misma píldora que la vista previa y el visor de PDF: el editor
         # tenía una copia a mano que además la ponía en otra esquina, así que
@@ -466,6 +465,7 @@ class EditorWindow(QMainWindow):
             Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
         )
         zoom_holder.raise_()
+        keep_overlay_clear_of_scrollbars(zoom_holder, self.view)
         hide_overlay_when_tight(zoom_holder)
         self._update_zoom_editor_controls()
 
@@ -473,25 +473,26 @@ class EditorWindow(QMainWindow):
 
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        margin = max(SPACE_S, self._density.window_margin)
+        layout.setContentsMargins(margin, margin, margin, margin)
+        layout.setSpacing(SPACE_S)
 
         hint = QLabel(
-            "Cómo asignar campos:\n"
-            "1) Selecciona un campo de la lista.\n"
-            "2) Dibuja el rectángulo sobre el dato (✓ = colocado).\n"
-            "3) Dibuja de nuevo para reposicionarlo, Supr lo quita.\n"
-            "Los nombres y reglas son fijos (los usa el código)."
+            "Seleccione un campo y dibuje un rectángulo sobre el dato.\n"
+            "Dibújelo de nuevo para moverlo; Supr lo quita. "
+            "✓ indica que ya está colocado."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #c9d1d9; padding: 4px;")
+        hint.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(hint)
 
-        layout.addWidget(QLabel("Campos (fijos):"))
+        layout.addWidget(QLabel("Campos de la plantilla"))
         self.field_list = QListWidget()
         self.field_list.currentItemChanged.connect(self._on_list_select)
         layout.addWidget(self.field_list, stretch=2)
 
         layout.addWidget(QLabel("Campo seleccionado:"))
-        self.info_label = QLabel("(ninguno)")
+        self.info_label = QLabel("Ninguno")
         self.info_label.setWordWrap(True)
         self.info_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
@@ -500,6 +501,7 @@ class EditorWindow(QMainWindow):
 
         layout.addStretch()
         splitter.addWidget(panel)
+        self._side_panel = panel
         panel.setMaximumWidth(self._density.editor_panel_max_width)
         splitter.setStretchFactor(0, 4)
         splitter.setStretchFactor(1, 0)
@@ -508,6 +510,30 @@ class EditorWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.scene.field_created.connect(self._add_field_rect)
         self.scene.selectionChanged.connect(self._on_scene_selection)
+
+    def _apply_density_stylesheet(self) -> None:
+        self.setStyleSheet(
+            window_stylesheet(
+                DATA_TABLE_QSS + ZOOM_OVERLAY_QSS + self._density.qss
+            )
+        )
+
+    def _update_responsive_layout(self) -> None:
+        density = density_for(self.height(), self._density)
+        if density is self._density:
+            return
+        self._density = density
+        self._apply_density_stylesheet()
+        self.view.setMinimumWidth(density.editor_view_min_width)
+        self._side_panel.setMaximumWidth(density.editor_panel_max_width)
+        layout = self._side_panel.layout()
+        margin = max(SPACE_S, density.window_margin)
+        layout.setContentsMargins(margin, margin, margin, margin)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().resizeEvent(event)
+        if hasattr(self, "_side_panel"):
+            self._update_responsive_layout()
 
     # ── Lista de campos ────────────────────────────────────────────────
 
@@ -588,7 +614,7 @@ class EditorWindow(QMainWindow):
             self._editor_zoom = 1.0
             self._update_zoom_editor_controls()
             self.page_label.setText(
-                f"Página {self._current_page}/{self._total_pages}"
+                f"Página {self._current_page} de {self._total_pages}"
             )
             self._rebuild_field_list()
             self._update_nav_state()
@@ -754,7 +780,7 @@ class EditorWindow(QMainWindow):
 
     def _show_field_info(self, field_id: Optional[str]) -> None:
         if field_id is None:
-            self.info_label.setText("(ninguno)")
+            self.info_label.setText("Ninguno")
             return
         props = self._presets.get(field_id, {})
         lines = [

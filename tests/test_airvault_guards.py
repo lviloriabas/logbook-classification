@@ -4,18 +4,35 @@ from __future__ import annotations
 
 import pytest
 
-from app.airvault.config import CAMPO_LOG_NUMBER, CAMPO_MATRICULA
+from app.airvault.client import PaginaIndexada
+from app.airvault.config import (
+    CAMPO_LOG_NUMBER,
+    CAMPO_MATRICULA,
+    ESTADO_VALIDO,
+)
 from app.airvault.guards import (
     ErrorDeGuarda,
+    matriculas_por_libro,
     verificar_alineacion,
     verificar_cantidad,
     verificar_duplicados,
+    verificar_matricula_del_libro,
     verificar_matriculas,
     verificar_no_pisar,
     verificar_obligatorios,
 )
 from app.airvault.mapping import valores_de_indice
 from app.airvault.model import Registro
+
+
+def remota(log="2287325", matricula="HP-1848CMP", estado=ESTADO_VALIDO):
+    """Una pagina tal como AirVault la devuelve al leer el batch."""
+    return PaginaIndexada(
+        pagina=1,
+        estado=estado,
+        valores={CAMPO_LOG_NUMBER: log, CAMPO_MATRICULA: matricula},
+        columnas={},
+    )
 
 
 def registro(seq=1, matricula="HP-1848CMP", log="2287325",
@@ -138,3 +155,75 @@ def test_logs_repetidos_se_acusan():
 def test_logs_vacios_no_cuentan_como_duplicados():
     assert verificar_duplicados([registro(1, log=""),
                                  registro(2, log="")]) == []
+
+
+# ── el avion del libro ─────────────────────────────────────────────
+#
+# Un libro fisico tiene cincuenta paginas y una sola aeronave, asi que
+# cualquier pagina suya que AirVault ya da por buena responde por las
+# demas. Es la unica evidencia externa que hay al planificar, y sale de la
+# misma lectura del batch: no cuesta ni una peticion de mas.
+
+
+def test_una_pagina_verde_dice_el_avion_de_su_libro():
+    por_libro = matriculas_por_libro([remota("2287325", "HP-1848CMP")])
+
+    assert por_libro == {"22873A": "HP-1848CMP"}
+
+
+def test_una_pagina_que_no_esta_verde_no_dice_nada():
+    """En cualquier otro estado se ve la clasificacion de Quick Upload."""
+    for estado in (1, 2, 3):
+        assert matriculas_por_libro(
+            [remota(estado=estado)]
+        ) == {}, f"estado {estado}"
+
+
+def test_un_libro_con_dos_aviones_en_airvault_no_manda():
+    por_libro = matriculas_por_libro([
+        remota("2287325", "HP-1848CMP"),
+        remota("2287330", "HP-1852CMP"),
+    ])
+
+    assert por_libro == {}
+
+
+def test_otro_avion_en_el_mismo_libro_bloquea_la_pagina():
+    avisos = verificar_matricula_del_libro(
+        [registro(seq=4, matricula="HP-1852CMP", log="2287340")],
+        {"22873A": "HP-1848CMP"},
+    )
+
+    assert [aviso.codigo for aviso in avisos] == ["matricula_del_libro"]
+    assert avisos[0].seq == 4
+    assert "HP-1848CMP" in avisos[0].detalle
+
+
+def test_el_mismo_avion_del_libro_pasa():
+    assert verificar_matricula_del_libro(
+        [registro(matricula="HP-1848CMP", log="2287340")],
+        {"22873A": "HP-1848CMP"},
+    ) == []
+
+
+def test_un_libro_del_que_airvault_no_sabe_nada_no_bloquea():
+    assert verificar_matricula_del_libro(
+        [registro(matricula="HP-1852CMP", log="2299901")],
+        {"22873A": "HP-1848CMP"},
+    ) == []
+
+
+def test_el_sufijo_del_1522_no_cuenta_como_otro_avion():
+    """AirVault solo lo tiene como CMP; una carga vieja pudo decir WWP."""
+    assert verificar_matricula_del_libro(
+        [registro(matricula="HP-1522WWP", log="2287340")],
+        {"22873A": "HP-1522CMP"},
+    ) == []
+
+
+def test_un_separador_no_lleva_avion_que_comparar():
+    divisoria = Registro(seq=1, es_separador=True)
+
+    assert verificar_matricula_del_libro(
+        [divisoria], {"22873A": "HP-1848CMP"}
+    ) == []

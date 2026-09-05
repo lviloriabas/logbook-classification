@@ -14,7 +14,8 @@ sola.
 
 El trabajo va en tres tiempos, separados porque duran cosas muy distintas:
 
-1. **Subir a AirVault** manda primero todos los PDF de la ejecución.
+1. **Subir a AirVault** manda los PDF de uno en uno: cada carga se
+   identifica y se renombra antes de empezar la siguiente.
 2. **Comprobar** asigna el ID apenas aparece y confirma si ya está entero.
 3. **Indexar** puede trabajar un batch listo mientras se siguen buscando los
    demás, pero siempre después de terminar todas las subidas. Se puede
@@ -90,6 +91,7 @@ from app.gui.csv_utils import (
 )
 from app.gui.responsive import available_area, fit_to_screen
 from app.gui.text_copy import CopyableListWidget
+from app.gui.tokens import SPACE_S, TEXT_SECONDARY
 from app.gui.widgets import (
     DATA_TABLE_QSS,
     PANE_STATUS_COLORS,
@@ -104,14 +106,14 @@ from app.gui.widgets import (
 from app.utils.io import send_to_trash
 
 # Gris con el que la ventana principal escribe las líneas de ayuda.
-COLOR_AYUDA = "#c9d1d9"
+COLOR_AYUDA = TEXT_SECONDARY
 COLOR_INDEXADO = PANE_STATUS_COLORS["OK"]
 
 # Lo que se lee debajo de la tabla de batches mientras no se ha buscado
 # ninguna bitácora, y a lo que se vuelve al vaciar el campo.
 AYUDA_BUSCAR_BITACORA = (
-    "Escriba una bitácora (Log Page, matrícula, vuelo, fecha o archivo) para "
-    "ver en qué batches de la cola está."
+    "Busque una bitácora, matrícula, vuelo, fecha o archivo para localizarla "
+    "en la cola."
 )
 
 # Ejecuciones que lista el historial, las mismas que el visor de CSV: es la
@@ -162,8 +164,7 @@ ANCHO_MINIMO_NOMBRE_BATCH = 220
 ANCHO_MAXIMO_NOMBRE_BATCH = 420
 
 TEXTO_SIN_SUBIR = (
-    "Sin subir. «Subir a AirVault» manda primero todos los PDF; después, "
-    "cuando AirVault asigna un ID, el indexado automático puede empezar."
+    "Sin subir. El proceso comienza con «Subir a AirVault»."
 )
 
 AIRVAULT_TOOLTIP = (
@@ -635,6 +636,7 @@ class TrabajoAirVaultWorker(QThread):
 
     def _indexar_batch_encontrado(self, trabajo, cliente, raiz: Path) -> dict:
         """Planifica e indexa un batch mientras se buscan los siguientes."""
+        from app.airvault.flujo import comprobar_memoria_de_libros
         from app.airvault.mapping import FLOTA_CACHE_FILENAME, ResolutorFlota
 
         self._avisar(
@@ -656,6 +658,7 @@ class TrabajoAirVaultWorker(QThread):
         )
         self.estado.setdefault("planes", {})[str(trabajo.carpeta)] = plan
         resolutor.guardar(raiz / FLOTA_CACHE_FILENAME)
+        comprobar_memoria_de_libros(plan[1], raiz)
         datos = self._ejecutar_indexado(
             [trabajo], [plan], cliente,
             completar=bool(self.estado.get("completar")),
@@ -691,6 +694,7 @@ class TrabajoAirVaultWorker(QThread):
         from app.airvault.flujo import (
             INCOMPLETO,
             LISTO,
+            comprobar_memoria_de_libros,
             comprobar_partes,
             detectar_indexados,
         )
@@ -747,6 +751,7 @@ class TrabajoAirVaultWorker(QThread):
             planes[clave] = parte.trabajo.planificar(
                 cliente, resolutor, avisar=avisar_batch
             )
+            comprobar_memoria_de_libros(planes[clave][1], raiz)
             nuevos += 1
         if nuevos:
             resolutor.guardar(raiz / FLOTA_CACHE_FILENAME)
@@ -998,7 +1003,7 @@ class AirVaultWindow(QDialog):
         cuerpo = QVBoxLayout(self)
         margen = max(8, self._densidad.window_margin)
         cuerpo.setContentsMargins(margen, margen, margen, margen)
-        cuerpo.setSpacing(max(5, self._densidad.root_spacing))
+        cuerpo.setSpacing(self._densidad.root_spacing)
         self._root_layout = cuerpo
 
         # Sin frase de bienvenida: la lista abre en «Seleccionar ejecución»
@@ -1112,9 +1117,12 @@ class AirVaultWindow(QDialog):
         empezaban en sitios distintos.
         """
         grid = QGridLayout()
+        grid.setHorizontalSpacing(SPACE_S)
+        grid.setVerticalSpacing(self._densidad.group_spacing)
         grid.setColumnStretch(1, 1)
         etiquetas = (
-            "Ejecución:", "Batch:", "Máximo por batch:", "Sesión:"
+            "Ejecución:", "Nombre del batch:", "Máximo por batch:",
+            "Sesión:"
         )
         for fila, etiqueta in enumerate(etiquetas):
             grid.addWidget(QLabel(etiqueta), fila, 0)
@@ -1122,7 +1130,7 @@ class AirVaultWindow(QDialog):
         self.corrida_edit = QLineEdit()
         self.corrida_edit.setReadOnly(True)
         self.corrida_edit.setPlaceholderText(
-            "CSV de la ejecución que se va a indexar"
+            "Seleccione una ejecución en el historial"
         )
         self.corrida_edit.setToolTip(
             "CSV de la ejecución cuyos datos se escriben en AirVault. Lo "
@@ -1138,7 +1146,9 @@ class AirVaultWindow(QDialog):
         grid.addWidget(self.boton_buscar, 0, 3)
 
         self.lote_edit = QLineEdit()
-        self.lote_edit.setPlaceholderText("Nombre del batch en AirVault")
+        self.lote_edit.setPlaceholderText(
+            "Se completa al elegir la ejecución"
+        )
         self.lote_edit.setToolTip(
             "Nombre con el que el batch queda en AirVault. Lleva fecha y hora "
             "para no confundirlo con otro de la cola."
@@ -1196,11 +1206,11 @@ class AirVaultWindow(QDialog):
         resaltadas y la línea de debajo dice cuáles son.
         """
         fila = QHBoxLayout()
-        fila.addWidget(self._titulo("Batches en AirVault"))
-        fila.addWidget(QLabel("Buscar:"))
+        fila.setSpacing(SPACE_S)
+        fila.addWidget(self._titulo("Cola de AirVault"))
         self.buscar_bitacora_edit = QLineEdit()
         self.buscar_bitacora_edit.setPlaceholderText(
-            "Log Page, matrícula, fecha…"
+            "Bitácora, matrícula, fecha o archivo"
         )
         self.buscar_bitacora_edit.setToolTip(AYUDA_BUSCAR_BITACORA)
         self.buscar_bitacora_edit.setAccessibleName(
@@ -2218,6 +2228,7 @@ class AirVaultWindow(QDialog):
     def _fila_vigilancia(self) -> QHBoxLayout:
         """Cada cuánto se pregunta automáticamente a AirVault."""
         fila = QHBoxLayout()
+        fila.setSpacing(SPACE_S)
         self.auto_check = QCheckBox("Comprobar cada")
         # Esperar a que AirVault los deje listos va dentro de «Subir a
         # AirVault» y no se elige aparte; esta casilla no decide si se
@@ -2299,22 +2310,25 @@ class AirVaultWindow(QDialog):
     def _fila_avance(self) -> QHBoxLayout:
         """Barra y reloj propios; el detalle vive en la bitácora inferior."""
         fila = QHBoxLayout()
-        fila.setSpacing(10)
         self.estado_label = ElidedLabel("", parent=self)
         self.estado_label.hide()
         self.progreso = QProgressBar()
         self.progreso.setRange(0, 100)
         self.progreso.setValue(0)
-        fila.addWidget(self.progreso, 1)
         # Cuánto lleva el paso actual. Sin esto, una espera de AirVault y un
-        # programa colgado se ven exactamente igual.
-        self.reloj_label = QLabel("")
+        # programa colgado se ven exactamente igual. Vive dentro de la barra
+        # para no reservarle una columna y dejar el progreso corto.
+        self.reloj_label = QLabel("", self.progreso)
         self.reloj_label.setStyleSheet(f"color: {COLOR_AYUDA};")
         self.reloj_label.setMinimumWidth(56)
         self.reloj_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        fila.addWidget(self.reloj_label)
+        reloj = QHBoxLayout(self.progreso)
+        reloj.setContentsMargins(SPACE_S, 0, SPACE_S, 0)
+        reloj.addStretch()
+        reloj.addWidget(self.reloj_label)
+        fila.addWidget(self.progreso, 1)
         return fila
 
     def _bitacora(self) -> CopyableListWidget:
@@ -2344,8 +2358,8 @@ class AirVaultWindow(QDialog):
 
     def _fila_botones(self) -> QHBoxLayout:
         fila = QHBoxLayout()
-        fila.setContentsMargins(0, 4, 0, 2)
-        fila.setSpacing(8)
+        fila.setContentsMargins(0, 0, 0, 0)
+        fila.setSpacing(SPACE_S)
 
         self.completar_check = QCheckBox("Completar batch")
         self.completar_check.setChecked(self._opciones.completar)
@@ -2482,8 +2496,8 @@ class AirVaultWindow(QDialog):
         self._actualizar_boton_eliminar_registros()
         if combo.count() <= 1:
             self.resumen.setText(
-                "No hay ejecuciones procesadas todavía. Procese y exporte una, "
-                "o elíjala con «Otra ejecución…»."
+                "No hay ejecuciones procesadas. Use «Otra ejecución…» para "
+                "elegir una."
             )
             return
         if not self.corrida_edit.text().strip():
