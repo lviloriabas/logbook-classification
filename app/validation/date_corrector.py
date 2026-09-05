@@ -1060,6 +1060,7 @@ def _merge_registry_anchors(
     key: str,
     previous: Sequence[RegistryAnchor],
     observed: Sequence[RegistryAnchor],
+    origen: str = "lecturas directas de esta ejecución",
 ) -> Tuple[Optional[List[RegistryAnchor]], str]:
     """Concilia lo guardado con lo que se acaba de leer del libro.
 
@@ -1081,6 +1082,11 @@ def _merge_registry_anchors(
 
     Con una sola lectura en contra no se toca nada: un OCR suelto no basta
     para borrar lo que ya estaba, y el conflicto queda para revisión.
+
+    ``origen`` solo nombra en el log de dónde salieron las anclas nuevas.
+    La misma conciliación la usa :mod:`app.validation.book_memory` con las
+    fechas que AirVault ya tiene indexadas, y un aviso que las llamara
+    lecturas de esta ejecución mandaría a buscar el error donde no está.
     """
     merged: Dict[int, date] = dict(previous)
     conflicts: List[str] = []
@@ -1112,7 +1118,7 @@ def _merge_registry_anchors(
     corrected = _extremes(observed)
     logger.warning(
         f"Registro del libro {key}: {'; '.join(conflicts)}. Mandan las "
-        f"{len(observed)} lecturas directas de esta ejecución: "
+        f"{len(observed)} {origen}: "
         f"{_describe_anchors(previous)} pasa a "
         f"{_describe_anchors(corrected)}"
     )

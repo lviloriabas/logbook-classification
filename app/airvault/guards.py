@@ -10,7 +10,7 @@ el indexado se detiene; nunca escribe "lo que pueda".
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Mapping, Sequence
+from typing import Dict, Iterable, List, Mapping, Sequence, Set
 
 from app.airvault.config import (
     CAMPO_LOG_NUMBER,
@@ -19,7 +19,9 @@ from app.airvault.config import (
     ESTADO_VALIDO,
     nombre_campo,
 )
+from app.airvault.mapping import normalizar_log_number, normalizar_matricula
 from app.airvault.model import Registro
+from app.validation.book_memory import clave_de_libro
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,82 @@ def verificar_matriculas(
                     f"{registro.matricula} no esta en el picklist de AirVault",
                 )
             )
+    return avisos
+
+
+def matriculas_por_libro(paginas_remotas: Iterable[object]) -> Dict[str, str]:
+    """El avion que AirVault ya tiene escrito en cada libro del batch.
+
+    Un libro fisico tiene cincuenta paginas y una sola aeronave, asi que
+    cualquier pagina suya que AirVault de por buena responde por todas las
+    demas. Sale de las paginas que el plan acaba de leer, asi que no cuesta
+    ni una peticion de mas.
+
+    Solo cuentan las verdes: en cualquier otro estado lo que se ve en
+    Aircraft es la clasificacion inicial de Quick Upload, que pone en todo
+    el archivo el avion de la primera bitacora (el mismo motivo por el que
+    :func:`verificar_alineacion` tampoco la mira). Un libro del que AirVault
+    dice dos aviones distintos se queda fuera: ahi no hay una autoridad,
+    hay un desacuerdo, y elegir uno seria elegir al azar.
+    """
+    vistas: Dict[str, Set[str]] = {}
+    for pagina in paginas_remotas:
+        if getattr(pagina, "estado", None) != ESTADO_VALIDO:
+            continue
+        valores = getattr(pagina, "valores", None)
+        if not isinstance(valores, Mapping):
+            continue
+        clave = clave_de_libro(
+            normalizar_log_number(valores.get(CAMPO_LOG_NUMBER, ""))
+        )
+        matricula = normalizar_matricula(valores.get(CAMPO_MATRICULA, ""))
+        if not clave or not matricula:
+            continue
+        vistas.setdefault(clave, set()).add(matricula)
+    return {
+        clave: next(iter(matriculas))
+        for clave, matriculas in vistas.items()
+        if len(matriculas) == 1
+    }
+
+
+def verificar_matricula_del_libro(
+    registros: Iterable[Registro], por_libro: Mapping[str, str]
+) -> List[Aviso]:
+    """Ninguna pagina lleva un avion distinto al de su libro.
+
+    Es la comprobacion que contrasta lo leido con AirVault mas alla de la
+    propia pagina. :func:`verificar_alineacion` compara cada pagina con la
+    suya, y por eso no ve nada cuando la pagina esta vacia en AirVault, que
+    es el caso normal: es la primera vez que se indexa. Esta compara con las
+    hermanas del mismo libro que si estan escritas, que es de donde sale la
+    evidencia de que un digito se leyo mal.
+
+    Bloquea en vez de avisar. Una matricula equivocada es el unico error de
+    este modulo que no se deshace con comodidad: queda una bitacora
+    publicada a nombre de otro avion, y corregirla despues pide encontrarla
+    primero. Dejar la pagina sin indexar cuesta escribirla a mano.
+    """
+    if not por_libro:
+        return []
+    avisos: List[Aviso] = []
+    for registro in registros:
+        if registro.es_separador or not registro.matricula:
+            continue
+        clave = clave_de_libro(normalizar_log_number(registro.log_number))
+        esperada = por_libro.get(clave)
+        if not esperada:
+            continue
+        if normalizar_matricula(registro.matricula) == esperada:
+            continue
+        avisos.append(
+            Aviso(
+                registro.seq,
+                "matricula_del_libro",
+                f"AirVault tiene el libro {clave} en {esperada} y esta "
+                f"pagina trae {registro.matricula}",
+            )
+        )
     return avisos
 
 

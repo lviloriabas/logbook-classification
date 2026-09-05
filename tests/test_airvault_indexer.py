@@ -63,6 +63,44 @@ def test_log_distinto_bloquea_esa_pagina():
     assert plan.bloqueadas[0].avisos[0].codigo == "desalineado"
 
 
+def test_otro_avion_en_el_libro_bloquea_las_paginas_que_lo_contradicen():
+    """Un libro es un avion, y AirVault ya dijo cual en una pagina verde.
+
+    La pagina 1 esta publicada como HP-1852CMP; la 2 es del mismo libro y
+    el manifiesto la trae como HP-1848CMP. Una de las dos lecturas esta
+    mal y no se sabe cual, asi que no se escribe ninguna: publicar la
+    bitacora a nombre de otro avion no se deshace con comodidad.
+    """
+    cliente = ClienteFalso(
+        paginas={1: pagina(1, estado=ESTADO_VALIDO, valores={
+            CAMPO_LOG_NUMBER: "2287321",
+            CAMPO_MATRICULA: "HP-1852CMP",
+        })},
+        page_count=2,
+    )
+
+    plan = Indexador(cliente, manifiesto(), PICKLIST).planificar(2)
+
+    assert plan.escribibles == []
+    bloqueada = [p for p in plan.bloqueadas if p.seq == 2][0]
+    assert [a.codigo for a in bloqueada.avisos] == ["matricula_del_libro"]
+
+
+def test_el_avion_que_airvault_confirma_no_bloquea_nada():
+    cliente = ClienteFalso(
+        paginas={1: pagina(1, estado=ESTADO_VALIDO, valores={
+            CAMPO_LOG_NUMBER: "2287321",
+            CAMPO_MATRICULA: "HP-1848CMP",
+        })},
+        page_count=2,
+    )
+
+    plan = Indexador(cliente, manifiesto(), PICKLIST).planificar(2)
+
+    # La 1 se salta por estar ya en verde, no por su avion.
+    assert [p.seq for p in plan.escribibles] == [2]
+
+
 def test_pagina_bloqueada_no_se_escribe():
     cliente = ClienteFalso(
         paginas={2: pagina(2, estado=3, valores={CAMPO_LOG_NUMBER: "9999999"})},
