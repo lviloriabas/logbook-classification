@@ -709,12 +709,21 @@ def _fill_days_to_month_end(book: Sequence[PageResult]) -> int:
         previous = field.value
         if previous and previous not in field.alternatives:
             field.alternatives.append(previous)
+        # Un día que nadie leyó porque la ejecución va a fin de mes no es un
+        # día que no se pudo leer, y el CSV no debe decir lo mismo de los
+        # dos: quien revisa buscaría un problema donde no lo hay.
+        por_politica = field.inference_method == "month_end_policy"
         field.value = f"{day:02d}"
         field.status = Status.WARNING
         field.confidence = _inferred_confidence(1)
-        field.source = "inferred"
-        field.inference_method = "month_end_fallback"
+        field.source = "csv_date_policy" if por_politica else "inferred"
+        field.inference_method = (
+            "month_end_policy" if por_politica else "month_end_fallback"
+        )
         field.comment = (
+            f"Día no leído (ejecución a fin de mes); "
+            f"último día del libro que cabe: {day:02d}"
+            if por_politica else
             f"Day not read; last day that fits the book sequence: {day:02d}"
         )
         dates[index] = (full_year, month, day)

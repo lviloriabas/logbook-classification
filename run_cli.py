@@ -299,6 +299,8 @@ def _run(args: argparse.Namespace) -> int:
         ocr_det_model="PP-OCRv6_medium_det",
         date_engine_name="",
         date_slot_ocr=False,
+        # A fin de mes el día no llega a ninguna salida: no se lee.
+        read_day=args.fecha_csv != "fin-de-mes",
         verify_fleet=args.verificar_flota,
         fleet_file=(
             Path(args.lista_flota) if args.lista_flota
@@ -492,6 +494,7 @@ def _run(args: argparse.Namespace) -> int:
                 CSV_DATE_MONTH_END if args.fecha_csv == "fin-de-mes"
                 else CSV_DATE_SPECIFIC
             ),
+            read_day=args.fecha_csv != "fin-de-mes",
             important_csv_columns=_important_columns(
                 template, args.campos_importantes
             ),

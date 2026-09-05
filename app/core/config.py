@@ -68,6 +68,21 @@ class AppConfig(BaseModel):
                     "(dígitos, abreviatura de mes). Verifica siempre la "
                     "lectura global cuando la retícula está disponible.",
     )
+    read_day: bool = Field(
+        default=True,
+        description="Leer el día de la fecha. Se apaga cuando la ejecución "
+                    "se configura a fin de mes: ahí el día no llega a "
+                    "ninguna salida, así que leerlo son tres recortes de "
+                    "OCR por página que nadie mira (medido: 10% del tiempo "
+                    "de proceso). La casilla sigue en la plantilla, porque "
+                    "la retícula de la banda de fecha se detecta con ella; "
+                    "lo que se salta es su lectura. El día lo completa "
+                    "después el corrector con el último que cabe en la "
+                    "secuencia del libro, como ya hacía con un día "
+                    "ilegible. A cambio, la ejecución deja de poder "
+                    "representarse con el día exacto y los retrocesos de "
+                    "fecha solo se detectan a resolución de mes.",
+    )
     date_dynamic_geometry: bool = Field(
         default=True,
         description="Ajuste dinámico por página de las casillas de fecha: "

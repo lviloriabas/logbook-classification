@@ -44,7 +44,9 @@ Si el escaneo tiene una geometría dudosa, active **Visualizar campos** y pulse 
 - **Repartir en** limita las páginas de cada parte de una entrega única.
 - **Posibles discrepancias** reúne páginas con firmas faltantes o inciertas.
 - **Errores** crea un PDF auxiliar con páginas cuyos datos principales no se resolvieron.
-- **Fecha del CSV** viene en **Fin de mes**, que es la fecha con la que se indexa; **Día exacto** conserva el día leído y solo cae al fin de mes cuando falta. Cambiar la opción reescribe el CSV sin volver a leer las páginas.
+- **Fecha del CSV** viene en **Fin de mes**, que es la fecha con la que se indexa; **Día exacto** conserva el día leído y solo cae al fin de mes cuando falta.
+  - En **Fin de mes** la ejecución no lee el día: no llega a ninguna salida, y saltárselo la acelera un 13 % (medido sobre 21 páginas). A cambio, esa ejecución ya no puede volver a representarse con el día exacto sin procesarla otra vez.
+  - En **Día exacto** se lee todo, y al indexar todavía se puede elegir escribir el fin de mes. Cambiar la opción reescribe el CSV sin volver a leer las páginas.
 - **Campos importantes** define las columnas del CSV principal.
 
 Los recuadros de **Visualizar campos** solo aparecen en pantalla. No se imprimen en la entrega.
@@ -130,7 +132,7 @@ El archivo `_paginas.json` se crea con **Un solo PDF** y es necesario para relac
 2. Confirme que el CSV incluya matrícula, `log_number` y fecha.
 3. Abra **Indexar en AirVault...**.
 4. Seleccione la ejecución.
-5. Revise el nombre y el máximo de páginas por batch.
+5. Revise el nombre, el máximo de páginas por batch y la **fecha**: **Fin de mes** escribe el último día del mes en todas las bitácoras. **Día exacto** solo está disponible si la ejecución leyó el día.
 6. Deje **Sesión** vacía. Si se abre Edge, complete el inicio de sesión y el segundo factor.
 7. Use **Vista previa...** para comprobar el reparto antes de subir.
 8. Pulse **Subir a AirVault**.

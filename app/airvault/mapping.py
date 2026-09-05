@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+from calendar import monthrange
 from datetime import date
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence
@@ -100,6 +101,29 @@ def fecha_desde_airvault(valor: object) -> str:
         return date(int(anio), int(mes), int(dia)).isoformat()
     except ValueError:
         return ""
+
+
+def fecha_a_fin_de_mes(fecha_csv: str) -> str:
+    """La misma fecha con el dia puesto en el ultimo del mes.
+
+    Es la unica forma de representar la fecha que AirVault recibe cuando se
+    indexa a fin de mes. Se aplica sobre lo que trae el CSV, asi que una
+    ejecucion exportada con el dia exacto puede indexarse a fin de mes sin
+    volver a procesarla; una que ya venia a fin de mes no cambia, porque su
+    dia ya es el ultimo.
+
+    Lo que no sea una fecha del CSV se devuelve tal cual: aqui no se
+    inventa una fecha que no estaba.
+    """
+    encontrada = _FECHA_CSV_RE.match(str(fecha_csv or "").strip())
+    if encontrada is None:
+        return str(fecha_csv or "").strip()
+    anio, mes, _dia = (int(parte) for parte in encontrada.groups())
+    try:
+        ultimo = monthrange(anio, mes)[1]
+    except (ValueError, IndexError):
+        return str(fecha_csv or "").strip()
+    return f"{anio:04d}/{mes:02d}/{ultimo:02d}"
 
 
 def normalizar_matricula(valor: str) -> str:
@@ -242,6 +266,7 @@ def registros_desde_csv(
     filas: Iterable[Mapping[str, str]],
     resolutor: ResolutorFlota | None = None,
     orden: Sequence[tuple[str, int]] | None = None,
+    fin_de_mes: bool = False,
 ) -> List[Registro]:
     """Construye los registros del manifiesto a partir del CSV.
 
@@ -282,7 +307,9 @@ def registros_desde_csv(
         if _en_blanco(fila):
             continue
         seq += 1
-        registros.append(_registro_de_fila(seq, fila, resolutor, inferidas))
+        registros.append(
+            _registro_de_fila(seq, fila, resolutor, inferidas, fin_de_mes)
+        )
     return registros
 
 
@@ -300,6 +327,7 @@ def _registro_de_fila(
     fila: Mapping[str, str],
     resolutor: ResolutorFlota,
     inferidas: Mapping[tuple[str, int], tuple[str, str]] | None = None,
+    fin_de_mes: bool = False,
 ) -> Registro:
     """Traduce una fila del CSV al registro que viaja en el manifiesto.
 
@@ -317,6 +345,10 @@ def _registro_de_fila(
         fecha, fecha_inferida = (inferidas or {}).get(
             (archivo, pagina), (fecha, "")
         )
+    if fin_de_mes:
+        # Va detras de la deduccion a proposito: una fecha deducida se
+        # indexa con la misma politica que una leida.
+        fecha = fecha_a_fin_de_mes(fecha)
     return Registro(
         seq=seq,
         archivo_origen=archivo,
@@ -394,6 +426,7 @@ def registros_desde_entrega(
     filas: Iterable[Mapping[str, str]],
     indice: Sequence[Mapping[str, object]],
     resolutor: ResolutorFlota | None = None,
+    fin_de_mes: bool = False,
 ) -> List[Registro]:
     """Construye los registros siguiendo el PDF que se sube, no el CSV.
 
@@ -454,7 +487,9 @@ def registros_desde_entrega(
                 ],
             ))
             continue
-        registros.append(_registro_de_fila(seq, fila, resolutor, inferidas))
+        registros.append(
+            _registro_de_fila(seq, fila, resolutor, inferidas, fin_de_mes)
+        )
     return registros
 
 
