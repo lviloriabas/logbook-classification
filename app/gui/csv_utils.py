@@ -182,7 +182,18 @@ def read_csv_file(path: Path) -> tuple[list[str], list[dict[str, str]]]:
 
 
 def template_name_for_csv(path: Path) -> str | None:
+    """Plantilla con la que se escribio ese CSV, segun su JSON companero.
+
+    El CSV completo no tiene JSON propio: la ejecucion escribe uno solo,
+    con el nombre del CSV minimo. Sin este respaldo, abrir el completo
+    dejaba la ejecucion sin plantilla, y con ella se perdian los campos
+    importantes que esa plantilla tiene guardados.
+    """
     companion = path.with_suffix(".json")
+    if not companion.is_file() and path.stem.casefold().endswith("_completo"):
+        companion = path.with_name(
+            f"{path.stem[: -len('_completo')]}.json"
+        )
     if not companion.is_file():
         return None
     try:
