@@ -309,7 +309,9 @@ def test_vaciar_la_busqueda_suelta_el_resaltado(ventana):
     ventana._buscar_bitacora()
 
     assert _resaltadas(ventana) == []
-    assert ventana.busqueda_bitacora.text().startswith("Escriba una bitácora")
+    from app.gui.airvault_window import AYUDA_BUSCAR_BITACORA
+
+    assert ventana.busqueda_bitacora.text() == AYUDA_BUSCAR_BITACORA
 
 
 def test_una_bitacora_que_no_esta_lo_dice(ventana):

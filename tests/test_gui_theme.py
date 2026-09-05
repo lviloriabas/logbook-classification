@@ -5,7 +5,12 @@ from PySide6.QtWidgets import QApplication
 
 from app.branding import APPLICATION_DISPLAY_NAME
 from app.gui.theme import install_application_theme
-from app.gui.tokens import FONT_BODY_PT, accent_color
+from app.gui.tokens import (
+    FONT_BODY_PT,
+    RADIUS_CARD,
+    RADIUS_CONTROL,
+    accent_color,
+)
 from app.gui.widgets import (
     APP_CHROME_QSS,
     PANE_CONTROL_BG,
@@ -47,3 +52,10 @@ def test_group_titles_are_inside_the_frame_without_a_background_patch():
     assert "background: transparent;" in title_rule
     assert f"background-color: {TABLE_BASE_BG};" not in title_rule
     assert f"background-color: {PANE_CONTROL_BG};" not in title_rule
+
+
+def test_controls_and_surfaces_share_the_six_pixel_radius():
+    assert RADIUS_CONTROL == 6
+    assert RADIUS_CARD == 6
+    group_rule = APP_CHROME_QSS.split("QGroupBox {", 1)[1].split("}", 1)[0]
+    assert "border-radius: 6px;" in group_rule

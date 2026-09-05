@@ -152,6 +152,18 @@ def test_main_preview_uses_one_editable_global_page_and_tracks_file(
         )
         assert file_center.x() < pagination_global_center.x()
         assert abs(file_center.y() - pagination_global_center.y()) <= 1
+        window.preview_file_label.setText(
+            "bitacora-con-un-nombre-muy-largo-que-no-debe-tapar-el-paginador.pdf"
+        )
+        app.processEvents()
+        file_rect = window.preview_file_indicator.rect()
+        file_right = window.preview_file_indicator.mapToGlobal(
+            file_rect.topRight()
+        ).x()
+        pagination_left = window.preview_pagination.mapToGlobal(
+            window.preview_pagination.rect().topLeft()
+        ).x()
+        assert file_right < pagination_left
         assert "Ir" not in {
             button.text() for button in window.findChildren(QPushButton)
         }
@@ -161,7 +173,7 @@ def test_main_preview_uses_one_editable_global_page_and_tracks_file(
         assert window._preview_page == 1
         assert window.page_edit.text() == "3"
         assert window.preview_file_label.text() == "book-b.pdf"
-        assert "Página 1 de 3 en el archivo" in window.preview_context_label.text()
+        assert "Página 1 de 3" in window.preview_context_label.text()
 
         window.page_edit.setText("5")
         window.page_edit.editingFinished.emit()

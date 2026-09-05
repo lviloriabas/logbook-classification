@@ -13,11 +13,12 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QComboBox, QToolButton
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QToolButton
 
 from app.gui.csv_utils import find_run_dirs
 from app.gui.csv_viewer import CsvViewerWindow
 from app.gui.export_options import ExportOptionsGroup
+from app.reports.csv_reporter import CSV_DATE_MONTH_END
 from app.gui.widgets import SpinBoxWithButtons
 
 
@@ -110,9 +111,16 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
     options = ExportOptionsGroup()
 
     assert isinstance(options.output_mode_combo, QComboBox)
+    etiquetas = {
+        etiqueta.text() for etiqueta in options.findChildren(QLabel)
+    }
+    assert "Formato:" in etiquetas
+    assert "Fecha del CSV:" in etiquetas
+    assert "PDF:" not in etiquetas
     assert options.un_solo_pdf()
-    assert options.csv_date_mode_combo.itemText(0) == "Día exacto"
-    assert options.csv_date_mode_combo.itemText(1) == "Fin de mes"
+    assert options.csv_date_mode_combo.itemText(0) == "Fin de mes"
+    assert options.csv_date_mode_combo.itemText(1) == "Día exacto"
+    assert options.csv_date_mode() == CSV_DATE_MONTH_END
     assert options.csv_date_mode_combo.maxVisibleItems() == 12
     assert options.csv_date_mode_combo.minimumContentsLength() == 14
     assert isinstance(options.separation_button, QToolButton)
