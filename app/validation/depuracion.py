@@ -9,9 +9,13 @@ Duplicada es toda aparición posterior de un ``log_number`` ya visto (la
 primera se conserva, que es la que se entrega), y en blanco la que el
 pipeline marcó como tal al procesarla.
 
-De una bitácora repetida se va una sola aparición, la más nueva, lo pida el
-cuadro o lo haga el proceso automático: marcar el grupo entero no la borra
-de la ejecución, se queda la primera.
+De una bitácora repetida se va una sola aparición, la más nueva: marcar el
+grupo entero no la borra de la ejecución, se queda la primera.
+
+Cada página lleva además lo que la identifica como bitácora (matrícula,
+fecha y vuelo). No hace falta para borrar, hace falta para decidir: de dos
+apariciones del mismo ``log_number`` la que sobra no es siempre la segunda,
+y sin ver lo que trae escrita cada una la elección es a ciegas.
 """
 
 from __future__ import annotations
@@ -71,10 +75,23 @@ class PaginaDepurable:
     #: es lo mismo que estar repetida, que lo están todas las del grupo.
     duplicada: bool
     en_blanco: bool
+    #: Lo que la página trae escrito, para poder compararla con su repetida.
+    #: Vacío cuando el campo no se leyó o la plantilla no lo declara.
+    matricula: str = ""
+    fecha: str = ""
+    vuelo: str = ""
 
     @property
     def clave(self) -> tuple[int, int]:
         return (self.reporte, self.pagina)
+
+
+def _leido(page, field_id: str) -> str:
+    """Valor que la página dejó en ese campo, o cadena vacía."""
+    for field in page.fields:
+        if field.field_id == field_id:
+            return str(field.value or "").strip()
+    return ""
 
 
 def paginas_depurables(
@@ -96,6 +113,12 @@ def paginas_depurables(
                     log_number=numeros[posicion],
                     duplicada=marcas[posicion],
                     en_blanco=bool(page.blank),
+                    matricula=_leido(page, "matricula"),
+                    # La fecha de la página es la que ya resolvió el
+                    # pipeline: la del campo puede seguir sin corregir.
+                    fecha=str(page.date or "").strip()
+                    or _leido(page, "date"),
+                    vuelo=_leido(page, "flight_number"),
                 )
             )
             posicion += 1
@@ -109,8 +132,8 @@ def grupos_duplicados(
 
     Se devuelve el grupo entero, no solo las apariciones sobrantes: para
     decidir cuál se va hay que ver también la que se conservaría. El orden
-    es el de la ejecución, así que la primera de cada lista es la que el
-    borrado automático deja en pie.
+    es el de la ejecución, así que la primera de cada lista es la que se
+    conserva mientras nadie elija otra cosa.
     """
     grupos: dict[int, List[PaginaDepurable]] = {}
     for pagina in paginas_depurables(reports):
@@ -137,9 +160,8 @@ def claves_depurables(
     antigua, que es la que la ejecución conserva: sin ella esa bitácora no
     quedaría en ninguna parte de la entrega.
 
-    Pasa por aquí todo lo que se borra, venga del cuadro o del proceso
-    automático, así que la ejecución no puede perder una bitácora repetida
-    por ninguno de los dos caminos.
+    Pasa por aquí todo lo que se borra, así que la ejecución no puede
+    perder una bitácora repetida por marcarla entera.
     """
     elegidas = set(claves)
     for _numero, paginas in grupos_duplicados(reports):
@@ -178,7 +200,7 @@ def depurar_claves(
 ) -> tuple[List[ValidationReport], int]:
     """Quita las páginas indicadas y dice cuántas se fueron.
 
-    Es la puerta que usa el cuadro cuando la elección se hizo página por
+    Es la puerta que usa el cuadro, donde la elección se hace página por
     página. ``depurar`` sigue existiendo para quien solo quiere aplicar los
     dos criterios enteros, y se apoya en esta.
 

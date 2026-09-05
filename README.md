@@ -44,7 +44,7 @@ Si el escaneo tiene una geometría dudosa, active **Visualizar campos** y pulse 
 - **Repartir en** limita las páginas de cada parte de una entrega única.
 - **Posibles discrepancias** reúne páginas con firmas faltantes o inciertas.
 - **Errores** crea un PDF auxiliar con páginas cuyos datos principales no se resolvieron.
-- **Fecha del CSV** permite conservar el día leído o usar el último día del mes.
+- **Fecha del CSV** viene en **Fin de mes**, que es la fecha con la que se indexa; **Día exacto** conserva el día leído y solo cae al fin de mes cuando falta. Cambiar la opción reescribe el CSV sin volver a leer las páginas.
 - **Campos importantes** define las columnas del CSV principal.
 
 Los recuadros de **Visualizar campos** solo aparecen en pantalla. No se imprimen en la entrega.
@@ -64,7 +64,7 @@ El proceso guarda CSV, JSON y estadísticas. Los PDF de entrega se crean al expo
 ### Proceso automático
 
 1. Abra **Automatización...**.
-2. Elija si también desea depurar, subir, indexar y completar los batches.
+2. Elija si también desea subir, indexar y completar los batches.
 3. Pulse **Automático**.
 4. Siga la línea de pasos hasta que todo termine.
 
@@ -98,7 +98,7 @@ Cada libro físico tiene 50 páginas y una sola aeronave. Los finales `00` a `49
 3. Revise la selección y confirme.
 4. Exporte otra vez si ya había creado los PDF.
 
-La depuración conserva la primera aparición de cada `log_number` y elimina las posteriores. También puede retirar las páginas en blanco de CSV, JSON y estadísticas. Nunca deja la ejecución sin páginas.
+Depurar es siempre manual: no se ofrece dentro del proceso automático. De cada `log_number` repetido hay que ver las dos apariciones para saber cuál sobra, así que el cuadro las lista con su matrícula, su fecha y su vuelo, y marca la primera. Se conserva una aparición de cada bitácora aunque se marquen todas. También puede retirar las páginas en blanco de CSV, JSON y estadísticas. Nunca deja la ejecución sin páginas.
 
 ## 8. Exportar
 
@@ -143,9 +143,11 @@ Las páginas dudosas forman un batch terminado en `REVISAR`. Ese batch se conser
 
 Una diferencia en la cantidad de páginas detiene el batch. Un dato obligatorio vacío, un duplicado o una diferencia con un valor remoto bloquea la página afectada.
 
+Un libro tiene una sola aeronave. Si AirVault ya tiene una página del mismo libro en verde con otra matrícula, la página no se escribe: publicar una bitácora a nombre de otro avión no se corrige con comodidad. Esa comprobación sale de la misma lectura del batch y no cuesta ninguna consulta adicional.
+
 ## 10. Editar una plantilla
 
-1. Ejecute `run_editor.py` con el Python portable.
+1. Abra **Herramientas → Editor de plantillas…**, o ejecute `run_editor.py` con el Python portable.
 2. Abra un PDF representativo y la plantilla que desea modificar.
 3. Ajuste las regiones sin cambiar los identificadores de los campos.
 4. Guarde una copia.
@@ -174,6 +176,15 @@ portable\python312\tools\python.exe run_cli.py `
 ```
 
 En AirVault, ejecute primero `plan`. Use `indexar --revisar` para pedir confirmación o `--auto` solo cuando el plan ya fue comprobado. No use `--sobrescribir` salvo que deba reemplazar datos remotos válidos de forma intencional.
+
+Para contrastar con AirVault lo que el sistema recuerda de cada libro:
+
+```powershell
+portable\python312\tools\python.exe run_airvault.py memoria
+portable\python312\tools\python.exe run_airvault.py memoria --aplicar
+```
+
+Sin `--aplicar` solo informa de las diferencias. Esta comprobación consulta Web Search; la que va sola en cada `plan` e `indexar` no consulta nada de más y no hay que pedirla.
 
 ## 12. Contingencias
 

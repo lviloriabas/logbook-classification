@@ -104,7 +104,10 @@ from app.gui.depuracion_dialog import DEPURAR_TOOLTIP, DepurarPaginasDialog
 from app.gui.tokens import (
     CONTROL_BG,
     FONT_CAPTION_PT,
-    RADIUS_CONTROL,
+    RADIUS_CARD,
+    STATUS_ERROR,
+    STATUS_OK,
+    STATUS_WARNING,
     STROKE,
     TEXT,
     TEXT_SECONDARY,
@@ -120,13 +123,14 @@ from app.gui.widgets import (
     configure_combo_box,
     configure_menu_button,
     hide_overlay_when_tight,
+    keep_overlay_clear_of_scrollbars,
     load_icon,
     style_data_table,
     window_stylesheet,
 )
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
 from app.models.schemas import PageResult, Status, ValidationReport
-from app.reports.csv_reporter import CSV_DATE_SPECIFIC, CsvReporter
+from app.reports.csv_reporter import CSV_DATE_MONTH_END, CsvReporter
 from app.reports.json_reporter import JsonReporter
 from app.templates.manager import TemplateManager
 from app.templates.schema import Template
@@ -161,7 +165,7 @@ _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 _TABLE_CELL_CHUNK = 2000
 # Espera entre comprobaciones mientras se detiene el trabajo para cerrar.
 _SHUTDOWN_POLL_MS = 150
-_PISTA_BUSQUEDA = "Escriba lo que busca del batch: bitácora, matrícula, archivo…"
+_PISTA_BUSQUEDA = "La búsqueda abre cada coincidencia en la vista previa."
 # Lo que se espera a un hilo despues de romperle el pool por debajo. Con el
 # pool roto la espera real es de milisegundos; el margen es para el hilo que
 # estuviera escribiendo en disco justo en ese instante.
@@ -201,9 +205,9 @@ _COMPACT_TEMPLATE_MIN_WIDTH = 180
 
 
 _COLORS = {
-    Status.OK: "#1a7f37",
-    Status.WARNING: "#9a6700",
-    Status.ERROR: "#cf222e",
+    Status.OK: STATUS_OK,
+    Status.WARNING: STATUS_WARNING,
+    Status.ERROR: STATUS_ERROR,
 }
 
 
@@ -245,7 +249,7 @@ QWidget#previewContext, QLabel#previewContext {{
 #timeSummary {{
     background-color: {CONTROL_BG};
     border: 1px solid {STROKE};
-    border-radius: {RADIUS_CONTROL}px;
+    border-radius: {RADIUS_CARD}px;
 }}
 #timeSummary QLabel[role="caption"] {{
     color: {TEXT_SECONDARY};
@@ -517,7 +521,7 @@ class MainWindow(QMainWindow):
         self._table_reporter = CsvReporter()
         self._table_fields: list[str] = []
         self._table_time_factor: float = 1.0
-        self._table_date_mode: str = CSV_DATE_SPECIFIC
+        self._table_date_mode: str = CSV_DATE_MONTH_END
         self._table_important_field_ids: set[str] = set()
         self._selected_important_columns: set[str] = set()
         self._important_fields_user_selected = False
@@ -989,7 +993,7 @@ class MainWindow(QMainWindow):
 
         template_menu = QMenu(group)
         template_menu.setToolTipsVisible(True)
-        self.btn_editor = template_menu.addAction("Abrir editor")
+        self.btn_editor = template_menu.addAction("Editor de plantillas…")
         self.btn_editor.setToolTip("Abrir el editor visual de plantillas")
         self.btn_editor.triggered.connect(self._open_template_editor)
 
@@ -1012,10 +1016,12 @@ class MainWindow(QMainWindow):
             )
         grid.addWidget(self.template_actions_button, 1, 3)
 
-        self.estimate_label = ElidedLabel("")
-        self.estimate_label.setStyleSheet("color: #c9d1d9;")
+        self.estimate_label = ElidedLabel(
+            "Seleccione los archivos PDF que desea procesar."
+        )
+        self.estimate_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         self.estimate_label.setToolTip(
-            "Estimación del tiempo total para procesar la entrada actual"
+            "Muestra la cantidad de archivos, páginas y el tiempo estimado."
         )
         grid.addWidget(self.estimate_label, 2, 0, 1, 4)
         return group
@@ -1068,7 +1074,7 @@ class MainWindow(QMainWindow):
         )
         important_fields_action.triggered.connect(self._open_important_fields)
         self.view_button = QToolButton()
-        self.view_button.setText("Vista")
+        self.view_button.setText("Campos")
         configure_menu_button(self.view_button, view_menu)
         menu_width = max(
             button.fontMetrics().horizontalAdvance(button.text())
@@ -1166,7 +1172,7 @@ class MainWindow(QMainWindow):
 
     def _build_progress_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        row.setSpacing(10)
+        row.setSpacing(8)
 
         # El detalle del proceso vive en la bitácora inferior. Se conserva
         # el último texto solo como estado interno para no mezclar mensajes
@@ -1251,21 +1257,21 @@ class MainWindow(QMainWindow):
         self.btn_depurar.triggered.connect(self._depurar_paginas)
 
         self.more_actions_button = QToolButton()
-        self.more_actions_button.setText("Más")
+        self.more_actions_button.setText("Acciones")
         configure_menu_button(self.more_actions_button, actions_menu)
         self.more_actions_button.setToolTip(
-            "Preprocesar, exportar o depurar la ejecución."
+            "Preprocesar, exportar o depurar."
         )
 
         # El de siempre, pero sin volver a pulsar nada entre paso y paso.
         # Se lleva el azul porque es el que hace la entrega entera; los
         # demás siguen ahí para hacer un solo tramo cuando hace falta.
         self.btn_automatico = QToolButton()
-        self.btn_automatico.setText("Automático")
+        self.btn_automatico.setText("Procesar todo")
         self.btn_automatico.setObjectName("primaryButton")
         self.btn_automatico.setToolTip(
-            "El botón ejecuta la cadena completa. La flecha permite elegir "
-            "hasta qué paso continúa; «Cancelar» corta la cadena."
+            "Ejecuta el flujo completo. La flecha permite elegir hasta qué "
+            "paso continúa; «Cancelar» detiene el flujo."
         )
         self.menu_automatizacion = MenuAutomatizacion(
             self._automatizacion, self
@@ -1321,14 +1327,16 @@ class MainWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview_widget)
         preview_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.preview_label = QLabel("Vista previa")
+        self.preview_label = QLabel(
+            "Seleccione un archivo PDF para ver la vista previa"
+        )
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setWordWrap(True)
         self.preview_label.setMinimumSize(
             self._density.preview_min_width, self._density.preview_min_height
         )
         self.preview_label.setStyleSheet(
-            f"border: 1px solid #4a4a4a; border-radius: {TABLE_RADIUS}px;"
+            f"border: 1px solid {STROKE}; border-radius: {TABLE_RADIUS}px;"
             " background: transparent;"
         )
         self.preview_label.setAccessibleName("Vista previa de la página")
@@ -1360,8 +1368,13 @@ class MainWindow(QMainWindow):
         self.btn_next.setShortcut(QKeySequence(Qt.Key.Key_Right))
         self.btn_next.setEnabled(False)
         self.btn_next.clicked.connect(self._next_page)
-        self.preview_file_label = QLabel("Ninguno")
+        self.preview_file_label = ElidedLabel("Ninguno")
         self.preview_file_label.setMaximumWidth(320)
+        self.preview_file_label.setMinimumWidth(0)
+        self.preview_file_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
         self.preview_file_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
@@ -1372,7 +1385,8 @@ class MainWindow(QMainWindow):
         self.page_edit = QLineEdit()
         self.page_edit.setValidator(QIntValidator(1, 1, self.page_edit))
         self.page_edit.setToolTip(
-            "Escriba el número de página del batch; el salto se aplica al terminar"
+            "Escriba el número de página del conjunto; el salto se aplica "
+            "al terminar."
         )
         self.page_edit.setAccessibleName("Página actual")
         self.page_edit.setFixedWidth(48)
@@ -1390,24 +1404,30 @@ class MainWindow(QMainWindow):
         file_row.setSpacing(4)
         self.preview_file_caption = QLabel("Archivo:")
         file_row.addWidget(self.preview_file_caption)
-        file_row.addWidget(self.preview_file_label)
+        file_row.addWidget(self.preview_file_label, 1)
 
         # Una sola barra: el archivo queda anclado a la izquierda y el
-        # paginador se centra sobre todo el ancho disponible del PDF.
+        # paginador se centra sin superponerse a nombres largos.
         self.preview_nav_bar = QWidget()
         self.preview_nav_bar.setObjectName("previewNavigationBar")
         nav_bar = QGridLayout(self.preview_nav_bar)
         nav_bar.setContentsMargins(0, 0, 0, 0)
+        nav_bar.setHorizontalSpacing(0)
+        nav_bar.setColumnStretch(0, 1)
+        nav_bar.setColumnStretch(2, 1)
+        nav_bar.setColumnMinimumWidth(
+            2, self.preview_file_indicator.minimumSizeHint().width()
+        )
         nav_bar.addWidget(
             self.preview_file_indicator,
             0,
             0,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignVCenter,
         )
         nav_bar.addWidget(
             self.preview_pagination,
             0,
-            0,
+            1,
             Qt.AlignmentFlag.AlignCenter,
         )
 
@@ -1463,12 +1483,14 @@ class MainWindow(QMainWindow):
             Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
         )
         zoom_holder.raise_()
+        keep_overlay_clear_of_scrollbars(zoom_holder, self.preview_scroll)
         self._zoom_holder = zoom_holder
         hide_overlay_when_tight(zoom_holder)
 
         page_area = QWidget()
         page_layout = QVBoxLayout(page_area)
         page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(8)
         page_layout.addWidget(viewer_frame, stretch=1)
         page_layout.addWidget(self.preview_nav_bar)
         preview_layout.addWidget(page_area, stretch=1)
@@ -1490,15 +1512,17 @@ class MainWindow(QMainWindow):
         table_panel = QWidget()
         table_layout = QVBoxLayout(table_panel)
         table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(8)
         table_layout.addWidget(self.table, 1)
         table_controls = QHBoxLayout()
+        table_controls.setSpacing(8)
         table_controls.addWidget(self.search_context, 1)
         self.duplicates_label = QLabel("Duplicados: 0")
         self.duplicates_label.setAccessibleName("Resumen de duplicados")
         self.duplicates_label.setToolTip(
-            "No hay log_number repetidos en el batch procesado."
+            "No hay números de bitácora repetidos en los archivos procesados."
         )
-        self.duplicates_label.setStyleSheet("color: #c9d1d9;")
+        self.duplicates_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         table_controls.addWidget(self.duplicates_label)
         self.csv_columns_toggle = CsvColumnModeButton()
         self.csv_columns_toggle.setEnabled(False)
@@ -1570,12 +1594,12 @@ class MainWindow(QMainWindow):
         # el panel cede sus márgenes y su separación, que es lo que se puede
         # ceder sin cortar ninguna letra.
         self._register_density_layout(times_layout, stacked=True)
-        title = QLabel("Avance por archivo")
+        title = QLabel("Progreso por archivo")
         title.setStyleSheet("font-weight: bold;")
         times_layout.addWidget(title)
 
         self.preview_context_label = QLabel(
-            "Archivo 0 de 0 · Página 0 de 0 en el archivo"
+            "Sin archivo activo"
         )
         self.preview_context_label.setObjectName("previewContext")
         self.preview_context_label.setWordWrap(True)
@@ -1597,7 +1621,9 @@ class MainWindow(QMainWindow):
         self.times_scroll.setMinimumHeight(_TIMES_SCROLL_MIN_HEIGHT)
         times_layout.addWidget(self.times_scroll, 1)
 
-        self.empty_times_label = QLabel("Sin archivos procesados aún.")
+        self.empty_times_label = QLabel(
+            "El progreso de cada archivo aparecerá aquí."
+        )
         times_layout.addWidget(self.empty_times_label)
 
         # Mitad y mitad, como la tabla y el visor del Visor de CSV: el panel
@@ -1860,7 +1886,9 @@ class MainWindow(QMainWindow):
             self._preview_base_image = None
             self._set_preview_documents([])
             self._preview_zoom = 1.0
-            self._show_preview_placeholder("Vista previa")
+            self._show_preview_placeholder(
+                "Seleccione un archivo PDF para ver la vista previa"
+            )
             self._update_preview_zoom_controls()
             self._update_preview_nav()
             return
@@ -2251,24 +2279,31 @@ class MainWindow(QMainWindow):
             # Todavía no se sabe cuántas páginas trae cada archivo, así que
             # no hay tiempo que estimar. Se dice, en vez de dejar el hueco
             # vacío o (peor) anunciar cero páginas.
+            count = len(self._pdf_paths)
+            unit = "archivo" if count == 1 else "archivos"
             self.estimate_label.setText(
-                f"Leyendo {len(self._pdf_paths)} archivo(s) de la entrada…"
+                f"Leyendo {count} {unit} de la entrada…"
             )
             return
         slices = self._batch_slices()
         pages = total_pages(slices)
         if pages and self._ms_per_page:
             seconds = pages * self._ms_per_page / 1000.0
+            page_unit = "página" if pages == 1 else "páginas"
+            file_count = len(slices)
+            file_unit = "archivo" if file_count == 1 else "archivos"
             self.estimate_label.setText(
-                f"Tiempo estimado: {_format_clock(seconds)}  "
-                f"{pages} páginas  {len(slices)} archivos"
+                f"Tiempo estimado: {_format_clock(seconds)} · "
+                f"{pages} {page_unit} · {file_count} {file_unit}"
             )
         elif slices:
             self.estimate_label.setText("Estimación no disponible")
         elif self._pdf_paths:
             self.estimate_label.setText("La entrada no contiene páginas")
         else:
-            self.estimate_label.setText("")
+            self.estimate_label.setText(
+                "Seleccione los archivos PDF que desea procesar."
+            )
 
     # ── Acciones ────────────────────────────────────────────────────────
 
@@ -2812,20 +2847,6 @@ class MainWindow(QMainWindow):
             self.cadena.marcar(
                 pasos_automaticos.PROCESAR, pasos_automaticos.HECHO
             )
-            if self._automatizacion.depurar and self._depurar_automatico():
-                self.cadena.marcar(
-                    pasos_automaticos.DEPURAR, pasos_automaticos.EN_CURSO
-                )
-                return
-            self.cadena.marcar(
-                pasos_automaticos.EXPORTAR, pasos_automaticos.EN_CURSO
-            )
-            self._exportar()
-            return
-        if contexto == "depurar":
-            self.cadena.marcar(
-                pasos_automaticos.DEPURAR, pasos_automaticos.HECHO
-            )
             self.cadena.marcar(
                 pasos_automaticos.EXPORTAR, pasos_automaticos.EN_CURSO
             )
@@ -2842,49 +2863,6 @@ class MainWindow(QMainWindow):
             self._auto_en_marcha = False
             if self._automatizacion.subir:
                 self._subir_automatico()
-
-    def _depurar_automatico(self) -> bool:
-        """Quita repetidas y en blanco sin abrir el cuadro.
-
-        Es el mismo criterio que el cuadro propone al abrirlo: de cada
-        bitácora repetida se van las apariciones sobrantes, nunca la
-        primera, y se van todas las páginas en blanco. Que de un grupo se
-        vaya una sola aparición, la más nueva, no depende de cómo se arme
-        aquí la lista: lo garantiza ``depurar_claves``, por donde pasan
-        igual el borrado automático y el del cuadro. Devuelve si dejó una
-        escritura en marcha; si no había nada que quitar, la cadena sigue
-        derecho a exportar.
-        """
-        from app.validation.depuracion import grupos_duplicados, paginas_en_blanco
-
-        if self._corrida_dir is None:
-            return False
-        claves = {
-            pagina.clave
-            for _numero, paginas in grupos_duplicados(self._reports)
-            for pagina in paginas
-            if pagina.duplicada
-        }
-        claves |= {pagina.clave for pagina in paginas_en_blanco(self._reports)}
-        if not claves:
-            return False
-        remaining, quitadas = depurar_claves(self._reports, claves)
-        # Una ejecución entera de repetidas y en blanco no se puede depurar
-        # sola: quedaría sin ninguna página y sin nada que entregar.
-        if not quitadas or not remaining:
-            return False
-        self._reports = remaining
-        self._refresh_after_depuracion()
-        logger.info(
-            f"Depuradas {quitadas} página(s) de la ejecución "
-            f"{Path(self._corrida_dir).name}"
-        )
-        self.status_label.setText(
-            f"Eliminando {quitadas} página(s) de la ejecución…"
-        )
-        self._timer.start()
-        self._start_outputs(remaining, context="depurar", skip_pdfs=True)
-        return True
 
     def _subir_automatico(self) -> None:
         """Manda la entrega recién exportada a la ventana de AirVault."""
@@ -3833,18 +3811,26 @@ class MainWindow(QMainWindow):
         count = len(repeated)
         self.duplicates_label.setText(f"Duplicados: {count}")
         if not count:
-            self.duplicates_label.setStyleSheet("color: #c9d1d9;")
+            self.duplicates_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
             self.duplicates_label.setToolTip(
-                "No hay log_number repetidos en el batch procesado."
+                "No hay números de bitácora repetidos en los archivos "
+                "procesados."
             )
             return
 
         self.duplicates_label.setStyleSheet(
             f"color: {_COLORS[Status.WARNING]}; font-weight: 600;"
         )
-        lines = [
-            f"{count} página(s) duplicada(s) en {len(groups)} log_number:",
-        ]
+        page_label = (
+            "página duplicada" if count == 1 else "páginas duplicadas"
+        )
+        group_count = len(groups)
+        group_label = (
+            "número de bitácora"
+            if group_count == 1
+            else "números de bitácora"
+        )
+        lines = [f"{count} {page_label} en {group_count} {group_label}:"]
         for number, items in sorted(groups.items()):
             # Ahora que se marcan todas las apariciones, la lista sola no
             # dice cuál se queda al depurar. Se señala la primera, que es la
@@ -3855,20 +3841,23 @@ class MainWindow(QMainWindow):
                 for item in items
             )
             lines.append(
-                f"{number:07d} (log page {number % 100:02d}): {locations}"
+                f"{number:07d} (página {number % 100:02d} del libro): "
+                f"{locations}"
             )
         self.duplicates_label.setToolTip("\n".join(lines))
 
     @staticmethod
     def _discrepancy_tooltip(value: str) -> str:
         if value.strip().lower() == "true":
-            return "disc=true: la bitácora quedó marcada como discrepancia de firmas."
-        return "disc=false: la bitácora cumple las firmas exigidas."
+            return (
+                "La bitácora quedó marcada por una discrepancia de firmas."
+            )
+        return "La bitácora cumple las firmas exigidas."
 
     @staticmethod
     def _duplicate_tooltip(duplicate: DuplicateLogPage) -> str:
         if duplicate.log_number is None:
-            return "dup=false: log_number ausente o inválido."
+            return "El número de bitácora está ausente o no es válido."
         if duplicate.duplicate:
             cual = (
                 "es la primera de ellas"
@@ -3876,11 +3865,11 @@ class MainWindow(QMainWindow):
                 else "no es la primera"
             )
             return (
-                "dup=true: este log_number aparece más de una vez en el "
-                f"batch procesado, y esta página {cual}. Al depurar se "
+                "Este número de bitácora aparece más de una vez, y esta "
+                f"página {cual}. Al depurar se "
                 "conserva la primera."
             )
-        return "dup=false: este log_number no se repite en el batch."
+        return "Este número de bitácora no se repite."
 
     def _apply_csv_table_view(self, _checked: bool | None = None) -> None:
         """Alterna la tabla entre valores principales y todas las columnas."""
@@ -4015,7 +4004,6 @@ class MainWindow(QMainWindow):
             "Buscar bitácora, matrícula, archivo o página"
         )
         self.search_edit.setMinimumWidth(280)
-        self.search_edit.setMaximumWidth(420)
         self.search_edit.setAccessibleName("Texto que se busca en la tabla")
         self.search_edit.setToolTip(
             "Busca en las columnas visibles; con el CSV completo, también en "
@@ -4023,23 +4011,28 @@ class MainWindow(QMainWindow):
             "previa."
         )
         self.search_edit.returnPressed.connect(self._buscar_en_la_tabla)
-        row.addWidget(self.search_edit, 1)
+        search_controls = QHBoxLayout()
+        search_controls.setContentsMargins(0, 0, 0, 0)
+        search_controls.setSpacing(8)
+        search_controls.addWidget(self.search_edit, 1)
         self.search_button = QPushButton("Buscar")
         self.search_button.setToolTip(
             "Buscar el texto; repetido, pasa a la coincidencia siguiente"
         )
         self.search_button.clicked.connect(self._buscar_en_la_tabla)
-        row.addWidget(self.search_button)
+        search_controls.addWidget(self.search_button)
         self.search_prev = QPushButton("‹")
         self.search_prev.setToolTip("Coincidencia anterior")
         self.search_prev.setEnabled(False)
         self.search_prev.clicked.connect(lambda: self._mover_busqueda(-1))
-        row.addWidget(self.search_prev)
+        search_controls.addWidget(self.search_prev)
         self.search_next = QPushButton("›")
         self.search_next.setToolTip("Coincidencia siguiente")
         self.search_next.setEnabled(False)
         self.search_next.clicked.connect(lambda: self._mover_busqueda(1))
-        row.addWidget(self.search_next)
+        search_controls.addWidget(self.search_next)
+        row.addLayout(search_controls, 1)
+        row.addSpacing(8)
         row.addStretch(1)
         # La pista es una frase larga, y un QLabel pide de ancho mínimo la
         # frase entera: metida en el panel de la tabla, ese mínimo era el que
@@ -4050,7 +4043,7 @@ class MainWindow(QMainWindow):
         # la entera en el tooltip; un QLabel a secas la cortaba a media
         # palabra contra el borde de la ventana, en cualquier tamaño.
         self.search_context = ElidedLabel(_PISTA_BUSQUEDA)
-        self.search_context.setStyleSheet("color: #c9d1d9;")
+        self.search_context.setStyleSheet(f"color: {TEXT_SECONDARY};")
         self.search_context.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
@@ -4105,7 +4098,7 @@ class MainWindow(QMainWindow):
             return
         if self._table_pending or not self.table.rowCount():
             self.search_context.setText(
-                "Procese un batch para buscar en sus bitácoras."
+                "Procese los archivos para buscar en sus bitácoras."
             )
             self._sincronizar_busqueda()
             return
@@ -4191,17 +4184,19 @@ class MainWindow(QMainWindow):
         self.page_edit.setEnabled(has_pdf and global_total > 0)
         self.page_total_label.setText(f"de {global_total}")
         index = self._preview_document_index()
-        pdf_text = self._preview_pdf.name if has_pdf else "Sin PDF"
+        pdf_text = self._preview_pdf.name if has_pdf else "Ninguno"
         self.preview_file_label.setText(pdf_text)
         self.preview_file_label.setToolTip(
             str(self._preview_pdf) if self._preview_pdf is not None else ""
         )
-        pdf_position = f"Archivo {index + 1} de {len(self._preview_documents)}"
-        context = (
-            f"{pdf_position} · {pdf_text} · Página "
-            f"{self._preview_page if has_pdf else 0} de "
-            f"{self._preview_total if has_pdf else 0} en el archivo"
-        )
+        if has_pdf:
+            context = (
+                f"Archivo {index + 1} de {len(self._preview_documents)}: "
+                f"{pdf_text} · Página {self._preview_page} de "
+                f"{self._preview_total}"
+            )
+        else:
+            context = "Sin archivo activo"
         self.preview_context_label.setText(context)
 
     def _prev_page(self) -> None:

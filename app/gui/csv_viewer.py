@@ -69,6 +69,7 @@ from app.gui.export_options import ExportOptionsGroup
 from app.gui.field_selector import ImportantFieldsDialog
 from app.gui.responsive import ROOMY, Density, density_for, fit_to_screen
 from app.gui.table_sort import ModelSortController
+from app.gui.tokens import SPACE_S, TEXT_DISABLED, TEXT_SECONDARY
 from app.reports.csv_reporter import CsvReporter
 from app.gui.widgets import (
     DATA_TABLE_QSS,
@@ -82,9 +83,11 @@ from app.gui.widgets import (
     TABLE_RADIUS,
     TABLE_SELECTION_BG,
     ZOOM_OVERLAY_QSS,
+    ElidedLabel,
     ZoomableScrollArea,
     ZoomOverlay,
     hide_overlay_when_tight,
+    keep_overlay_clear_of_scrollbars,
     scrollbars_qss,
     style_data_table,
     window_stylesheet,
@@ -120,7 +123,7 @@ _HISTORY_LIMIT = 25
 # El mismo texto que en la ventana principal; el botón lo recupera cuando
 # deja de explicar por qué no se puede exportar.
 # Lo que dice el indicador de búsqueda mientras no hay nada que buscar.
-_SEARCH_HINT = "Escriba lo que busca del CSV: bitácora, matrícula, archivo…"
+_SEARCH_HINT = "La búsqueda abre cada coincidencia en el visor."
 _EXPORT_TOOLTIP = (
     "Volver a generar CSV, JSON y PDF con las opciones actuales, sin "
     "reprocesar. Los PDF repetidos se numeran (-2, -3…)"
@@ -150,7 +153,7 @@ _PDF_PANE_QSS = (
     f" background: {PANE_CONTROL_HOVER}; }}"
     "#embeddedPdfPane QComboBox:disabled, #embeddedPdfPane QPushButton:disabled,"
     "#embeddedPdfPane QToolButton:disabled {"
-    f" background: {PANE_BG}; color: #8c959f; }}"
+    f" background: {PANE_BG}; color: {TEXT_DISABLED}; }}"
     # La lista desplegable es una ventana aparte y no hereda el fondo.
     "#embeddedPdfPane QComboBox QAbstractItemView {"
     f" background: {PANE_CONTROL_BG}; color: {PANE_TEXT};"
@@ -885,9 +888,10 @@ class EmbeddedPdfViewer(QFrame):
         self.setMinimumWidth(self._density.pdf_pane_min_width)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setSpacing(SPACE_S)
 
         documents = QHBoxLayout()
+        documents.setSpacing(SPACE_S)
         documents.addWidget(QLabel("PDF de origen:"))
         self.pdf_combo = QComboBox()
         self.pdf_combo.setEnabled(False)
@@ -958,12 +962,14 @@ class EmbeddedPdfViewer(QFrame):
             Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
         )
         zoom_holder.raise_()
+        keep_overlay_clear_of_scrollbars(zoom_holder, self.scroll)
         hide_overlay_when_tight(zoom_holder)
         layout.addWidget(viewer_frame, 1)
 
         self.pagination = QWidget()
         controls = QHBoxLayout(self.pagination)
         controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(SPACE_S)
         self.prev = QToolButton()
         self.prev.setArrowType(Qt.ArrowType.LeftArrow)
         self.prev.setToolTip("Página anterior (flecha izquierda)")
@@ -975,7 +981,7 @@ class EmbeddedPdfViewer(QFrame):
         self.page_edit = QLineEdit()
         self.page_edit.setValidator(QIntValidator(1, 1, self.page_edit))
         self.page_edit.setAccessibleName("Página del PDF")
-        self.page_edit.setFixedWidth(65)
+        self.page_edit.setFixedWidth(48)
         self.page_edit.editingFinished.connect(self._jump)
         controls.addWidget(self.page_edit)
         self.total_pages = QLabel("de 0")
@@ -1333,7 +1339,7 @@ class EmbeddedPdfViewer(QFrame):
             # Vale tanto antes de abrir un CSV como para uno sin PDF anotados;
             # el detalle lo da el mensaje del área de página.
             text = "Sin PDF de origen para mostrar."
-            color = "#b0b7c0"
+            color = TEXT_SECONDARY
         elif not available:
             text = (
                 f"No se encontró el PDF de origen ({names})."
@@ -1431,7 +1437,7 @@ class CsvViewerWindow(QMainWindow):
         self._summary = "Seleccione una carpeta o un CSV para visualizarlo."
         self._export_note = ""
 
-        self.setWindowTitle("Visor de CSV e historial de procesados")
+        self.setWindowTitle("Visor de resultados CSV")
         # Como la ventana principal: el tamaño lo pone la pantalla. Pedía
         # 1400x840 y en un portátil de 1366x768 se abría más grande que el
         # escritorio, con la fila de exportación fuera de la vista.
@@ -1465,8 +1471,13 @@ class CsvViewerWindow(QMainWindow):
         central = QWidget(self)
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
+        margin = max(SPACE_S, self._density.window_margin)
+        layout.setContentsMargins(margin, margin, margin, margin)
+        layout.setSpacing(self._density.root_spacing)
+        self._root_layout = layout
 
         history_row = QHBoxLayout()
+        history_row.setSpacing(SPACE_S)
         history_row.addWidget(QLabel("Historial:"))
         self.history_combo = QComboBox()
         self.history_combo.setToolTip(
@@ -1482,11 +1493,12 @@ class CsvViewerWindow(QMainWindow):
         layout.addLayout(history_row)
 
         folder_row = QHBoxLayout()
+        folder_row.setSpacing(SPACE_S)
         folder_row.addWidget(QLabel("Origen:"))
         self.folder_edit = QLineEdit()
         self.folder_edit.setReadOnly(True)
         self.folder_edit.setPlaceholderText(
-            "Seleccione una carpeta de output o un archivo CSV"
+            "Seleccione una carpeta procesada o un archivo CSV"
         )
         self.folder_edit.setAccessibleName("Origen de los CSV mostrados")
         folder_row.addWidget(self.folder_edit, 1)
@@ -1501,6 +1513,7 @@ class CsvViewerWindow(QMainWindow):
         layout.addLayout(folder_row)
 
         controls = QHBoxLayout()
+        controls.setSpacing(SPACE_S)
         controls.addWidget(QLabel("Archivo CSV:"))
         self.csv_combo = QComboBox()
         self.csv_combo.setEnabled(False)
@@ -1519,7 +1532,7 @@ class CsvViewerWindow(QMainWindow):
         layout.addLayout(controls)
 
         search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Buscar:"))
+        search_row.setSpacing(SPACE_S)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText(
             "Bitácora, matrícula, archivo, página… cualquier texto del CSV"
@@ -1543,8 +1556,12 @@ class CsvViewerWindow(QMainWindow):
         self.search_next.setToolTip("Coincidencia siguiente")
         self.search_next.clicked.connect(lambda: self._move_search(1))
         search_row.addWidget(self.search_next)
-        self.search_context = QLabel(_SEARCH_HINT)
-        self.search_context.setStyleSheet("color: #c9d1d9;")
+        self.search_context = ElidedLabel(_SEARCH_HINT)
+        self.search_context.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        self.search_context.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        self.search_context.setMinimumWidth(0)
         search_row.addWidget(self.search_context, 1)
         layout.addLayout(search_row)
 
@@ -1622,8 +1639,9 @@ class CsvViewerWindow(QMainWindow):
         layout.addWidget(splitter, 1)
 
         status_row = QHBoxLayout()
-        self.status_label = QLabel(self._summary)
-        self.status_label.setStyleSheet("color: #c9d1d9;")
+        status_row.setSpacing(SPACE_S)
+        self.status_label = ElidedLabel(self._summary)
+        self.status_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         status_row.addWidget(self.status_label, 1)
         self.btn_depurar = QPushButton("Depurar")
         self.btn_depurar.setEnabled(False)
@@ -1654,6 +1672,11 @@ class CsvViewerWindow(QMainWindow):
             return
         self._density = density
         self._apply_density_stylesheet()
+        margin = max(SPACE_S, density.window_margin)
+        self._root_layout.setContentsMargins(
+            margin, margin, margin, margin
+        )
+        self._root_layout.setSpacing(density.root_spacing)
         self.pdf_viewer.apply_density(density)
 
     def showEvent(self, event) -> None:  # noqa: N802 - API Qt
@@ -1887,7 +1910,7 @@ class CsvViewerWindow(QMainWindow):
         self.search_context.setText(_SEARCH_HINT)
         self._sync_search_controls()
         self._sync_export_button()
-        self.setWindowTitle(f"Visor de CSV e historial - {path.name}")
+        self.setWindowTitle(f"Visor de resultados CSV - {path.name}")
 
     def _statuses_from_companion(self) -> dict[tuple[str, str], dict[str, str]]:
         """Mapa de estados del JSON compañero, leído una sola vez por CSV."""
