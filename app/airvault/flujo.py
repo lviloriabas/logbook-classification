@@ -2393,6 +2393,25 @@ def carpeta_del_libro(trabajo: "Trabajo") -> Path:
     return registro_entrega.raiz_de_registro(trabajo.carpeta).parent
 
 
+def comprobar_memoria_de_libros(indexador, raiz: Path | str):
+    """Contrasta la memoria de libros con lo que AirVault ya tenia escrito.
+
+    Sale de la misma lectura del batch que hace el plan, asi que no cuesta
+    ni una peticion de mas y corre igual en el dry run que en el indexado,
+    por lo mismo que se guarda el cache de flota. Devuelve el informe, o
+    ``None`` si no se pudo comprobar: un fallo aqui no puede tumbar un
+    plan, porque esto ayuda a las ejecuciones siguientes y no es el trabajo
+    de esta.
+    """
+    from app.airvault.memoria import verificar_con_el_batch
+
+    try:
+        return verificar_con_el_batch(indexador.remotas.values(), raiz)
+    except Exception as exc:  # noqa: BLE001 - comprobar no es escribir
+        logger.warning("No se pudo comprobar la memoria de libros: {}", exc)
+        return None
+
+
 def marcar_posible_duplicado(trabajo: "Trabajo", motivo: str) -> None:
     """Deja anotado en el manifiesto por que no se sigue con este batch."""
     if trabajo.manifiesto.posible_duplicado == motivo:

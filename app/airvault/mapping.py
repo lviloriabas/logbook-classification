@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+from datetime import date
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence
 
@@ -32,16 +33,21 @@ from app.airvault.model import Registro
 FLOTA_CACHE_FILENAME = "airvault_flota.json"
 
 _FECHA_CSV_RE = re.compile(r"^(\d{4})/(\d{2})/(\d{2})$")
+# Como vuelve una fecha leida de AirVault: la que se escribio, o el ISO que
+# entrega alguna de sus vistas. La hora que a veces acompana no estorba.
+_FECHA_AIRVAULT_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(20\d{2})\b")
+_FECHA_ISO_RE = re.compile(r"^(20\d{2})-(\d{2})-(\d{2})\b")
 # Sufijo con el que se numera un nombre repetido al apartar la entrada a
 # «input/processed» (``bitacora-2.pdf``).
 _SUFIJO_DE_COPIA_RE = re.compile(r"^(?P<base>.+)-\d+$")
 _MATRICULA_RE = re.compile(r"^(HP|HK)-\d{4}(CMP|WWP)?$")
-# Aviones que AirVault tiene indexados con un sufijo distinto al que usa la
-# flota local. El 1522 esta en su picklist como HP-1522CMP y no como
-# HP-1522WWP; en las bitacoras el sufijo aparece escrito de las dos maneras,
-# asi que da igual cual se lea: aqui sale siempre como lo escribe AirVault.
-# Solo cambia lo que se sube. El CSV, «fleet.json» y los nombres de archivo
-# conservan la matricula tal como la normaliza el OCR.
+# Aviones que alguna vez se escribieron con un sufijo distinto al de su
+# picklist. El 1522 es el unico: en las bitacoras aparece de las dos
+# maneras, pero AirVault solo lo tiene como HP-1522CMP, asi que el
+# postproceso, «fleet.json» y el CSV ya lo escriben siempre asi. La
+# traduccion se queda para lo que se escribio antes de esa regla (un
+# manifiesto viejo, un cache de flota heredado, una lista de flota que
+# alguien no actualizo): sin ella esa carga no encontraria su avion.
 _ALIAS_PICKLIST = {"HP-1522WWP": "HP-1522CMP"}
 _LOG_NUMBER_RE = re.compile(r"^\d{7}$")
 
@@ -70,6 +76,30 @@ def fecha_airvault(fecha_csv: str) -> str:
         return ""
     anio, mes, dia = match.groups()
     return f"{mes}/{dia}/{anio}"
+
+
+def fecha_desde_airvault(valor: object) -> str:
+    """La vuelta: lo que AirVault devuelve, en ``AAAA-MM-DD``, o vacio.
+
+    Se acepta el ``MM/DD/AAAA`` que escribe :func:`fecha_airvault`, con o
+    sin la hora detras, y tambien el ISO por si otra vista lo entrega asi.
+    Una fecha en formato de epoca (``/Date(...)/``) se deja pasar de largo
+    a proposito: convertirla obliga a decidir una zona horaria, y
+    equivocarse ahi corre el dia de la bitacora.
+    """
+    limpio = str(valor or "").strip()
+    encontrada = _FECHA_AIRVAULT_RE.match(limpio)
+    if encontrada is not None:
+        mes, dia, anio = encontrada.groups()
+    else:
+        encontrada = _FECHA_ISO_RE.match(limpio)
+        if encontrada is None:
+            return ""
+        anio, mes, dia = encontrada.groups()
+    try:
+        return date(int(anio), int(mes), int(dia)).isoformat()
+    except ValueError:
+        return ""
 
 
 def normalizar_matricula(valor: str) -> str:
