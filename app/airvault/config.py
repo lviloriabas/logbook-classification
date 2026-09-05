@@ -126,8 +126,10 @@ class AirVaultConfig:
     # instalacion se lleva consigo, y dos de los tres pasos son de AirVault.
     # Procesar y exportar no aparecen porque siempre se hacen; esperar a
     # AirVault tampoco, porque va dentro de subir y no se elige aparte. Un
-    # «auto_esperar» de una version anterior se ignora al leer el archivo.
-    auto_depurar: bool = False
+    # «auto_esperar» y «auto_depurar» de versiones anteriores se ignoran al
+    # leer el archivo: esperar va dentro de subir, y depurar ya no se hace
+    # solo, porque de una bitacora repetida hay que ver las dos apariciones
+    # antes de borrar ninguna.
     auto_subir: bool = True
     auto_indexar: bool = True
     # Si antes de subir se le pregunta a Web Search si esas bitacoras ya

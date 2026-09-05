@@ -29,7 +29,6 @@ from app.gui.airvault_window import AirVaultWindow
 from app.gui.automatizacion import (
     COMPLETAR,
     CORTADO,
-    DEPURAR,
     EN_CURSO,
     ESPERAR,
     EXPORTAR,
@@ -39,6 +38,7 @@ from app.gui.automatizacion import (
     PENDIENTE,
     PREPROCESAR,
     PROCESAR,
+    PASOS,
     RECORRIDO,
     SUBIR,
     CadenaAutomatica,
@@ -97,7 +97,6 @@ def test_sin_nada_guardado_la_cadena_llega_hasta_indexar(tmp_path):
     """Los valores con los que la ventana de AirVault ya trabajaba."""
     opciones = OpcionesAutomatizacion(tmp_path)
 
-    assert not opciones.depurar
     assert opciones.subir
     assert opciones.indexar
     # Cerrar el batch en AirVault nunca se ha impuesto solo.
@@ -157,35 +156,35 @@ def test_esperar_a_airvault_no_es_un_paso_que_se_elija(app, tmp_path):
         menu.deleteLater()
 
 
-def test_depurar_va_suelto_y_no_arrastra_a_nadie(tmp_path):
-    """Es opcional de verdad: se marca sin tocar el resto de la cadena."""
+def test_depurar_no_es_un_paso_que_se_pueda_encender(tmp_path):
+    """Borrar paginas sin que nadie las mire ya no se ofrece.
+
+    De una bitacora repetida no se sabe cual de las dos apariciones sobra
+    sin leer las dos, asi que se quita a mano desde «Depurar» y no queda
+    forma de pedirlo dentro de la cadena.
+    """
     opciones = OpcionesAutomatizacion(tmp_path)
 
-    opciones.fijar(DEPURAR, True)
-
-    assert opciones.depurar
-    assert opciones.subir and opciones.indexar
-
-    opciones.fijar(DEPURAR, False)
-
-    assert not opciones.depurar
-    assert opciones.subir and opciones.indexar
+    assert "depurar" not in PASOS
+    assert "depurar" not in RECORRIDO
+    with pytest.raises(KeyError):
+        opciones.fijar("depurar", True)
 
 
 def test_los_pasos_elegidos_sobreviven_al_cierre(tmp_path):
     """Cerrar el programa no devuelve las opciones a lo que traían."""
     primera = OpcionesAutomatizacion(tmp_path)
-    primera.fijar(DEPURAR, True)
+    primera.fijar(COMPLETAR, True)
     primera.fijar(INDEXAR, False)
 
     segunda = OpcionesAutomatizacion(tmp_path)
 
-    assert segunda.depurar
     assert segunda.subir
     assert not segunda.indexar
+    assert not segunda.completar
     guardado = json.loads((tmp_path / "airvault.json").read_text(encoding="utf-8"))
-    assert guardado["auto_depurar"] is True
     assert guardado["auto_indexar"] is False
+    assert guardado["completar_batch"] is False
 
 
 def test_el_menu_solo_ensena_las_opciones_que_se_pueden_cambiar(app, tmp_path):
@@ -196,7 +195,6 @@ def test_el_menu_solo_ensena_las_opciones_que_se_pueden_cambiar(app, tmp_path):
             accion for accion in menu.actions() if not accion.isSeparator()
         ]
         assert [accion.text() for accion in opciones] == [
-            "Depurar antes de exportar",
             "Subir a AirVault",
             "Indexar páginas",
             "Completar batch",
@@ -238,9 +236,9 @@ def test_marcar_un_paso_actualiza_la_opcion(app, tmp_path):
     opciones = OpcionesAutomatizacion(tmp_path)
     menu = MenuAutomatizacion(opciones)
     try:
-        menu.accion(DEPURAR).trigger()
+        menu.accion(COMPLETAR).trigger()
 
-        assert opciones.depurar
+        assert opciones.completar
     finally:
         menu.deleteLater()
         app.processEvents()
@@ -253,7 +251,7 @@ def test_el_menu_no_se_cierra_entre_varias_marcas(app, tmp_path):
     try:
         menu.popup(menu.pos())
         app.processEvents()
-        accion = menu.accion(DEPURAR)
+        accion = menu.accion(COMPLETAR)
         menu.setActiveAction(accion)
 
         QTest.mouseClick(
@@ -263,13 +261,13 @@ def test_el_menu_no_se_cierra_entre_varias_marcas(app, tmp_path):
         )
         app.processEvents()
 
-        assert opciones.depurar
+        assert opciones.completar
         assert menu.isVisible()
 
         QTest.keyClick(menu, Qt.Key.Key_Space)
         app.processEvents()
 
-        assert not opciones.depurar
+        assert not opciones.completar
         assert menu.isVisible()
     finally:
         menu.close()
@@ -339,62 +337,34 @@ def ventana(app, tmp_path):
 
 
 def test_el_boton_dice_lo_que_va_a_hacer(ventana):
-    assert ventana.btn_automatico.text() == "Automático"
+    assert ventana.btn_automatico.text() == "Procesar todo"
     assert ventana._pasos_automaticos() == (
         "preprocesar > procesar > exportar > subir > esperar > indexar"
     )
 
-    ventana._automatizacion.fijar(DEPURAR, True)
     ventana._automatizacion.fijar(COMPLETAR, True)
 
     assert ventana._pasos_automaticos() == (
-        "preprocesar > procesar > depurar > exportar > subir > esperar > "
+        "preprocesar > procesar > exportar > subir > esperar > "
         "indexar > completar"
     )
 
 
-def test_sin_depurar_el_proceso_pasa_derecho_a_exportar(ventana):
+def test_el_proceso_pasa_derecho_a_exportar(ventana):
+    """Entre procesar y exportar ya no hay nada que borre paginas.
+
+    La ejecucion llega entera a la entrega, con sus repetidas y sus
+    blancas: quitarlas es una decision que se toma mirandolas.
+    """
     ventana._auto_en_marcha = True
 
     ventana._seguir_automatico("proceso")
 
     assert ventana.escrituras == [(2, "export", False)]
-
-
-def test_con_depurar_se_quitan_repetidas_y_blancas_sin_abrir_el_cuadro(ventana):
-    """Y solo después se exporta, para que los PDF salgan ya sin ellas."""
-    ventana._automatizacion.fijar(DEPURAR, True)
-    ventana._auto_en_marcha = True
-
-    ventana._seguir_automatico("proceso")
-
-    assert ventana.escrituras == [(2, "depurar", True)]
-    # De la bitácora repetida se va la segunda aparición, no la primera.
     assert [
         (report.pdf_path, [p.page_number for p in report.pages])
         for report in ventana._reports
-    ] == [("primero.pdf", [1, 3]), ("segundo.pdf", [8])]
-
-    ventana._seguir_automatico("depurar")
-
-    assert ventana.escrituras[-1] == (2, "export", False)
-
-
-def test_una_corrida_limpia_no_se_queda_esperando_a_la_depuracion(ventana):
-    """Sin nada que quitar, la cadena sigue a exportar en el mismo paso."""
-    ventana._automatizacion.fijar(DEPURAR, True)
-    ventana._reports = [
-        ValidationReport(
-            pdf_path="unico.pdf",
-            template_name="fixture",
-            pages=[pagina(1, "2147300"), pagina(2, "2147301")],
-        )
-    ]
-    ventana._auto_en_marcha = True
-
-    ventana._seguir_automatico("proceso")
-
-    assert ventana.escrituras == [(1, "export", False)]
+    ] == [("primero.pdf", [1, 2, 3]), ("segundo.pdf", [7, 8])]
 
 
 def test_al_exportar_la_cadena_pasa_a_airvault_y_suelta_esta_ventana(ventana):
@@ -451,11 +421,10 @@ def test_los_pasos_que_no_se_eligieron_no_cuentan(app, tmp_path):
     opciones.fijar(COMPLETAR, False)
     cadena = CadenaAutomatica(opciones)
 
-    assert cadena.estado(DEPURAR) == OMITIDO
     assert cadena.estado(COMPLETAR) == OMITIDO
     assert cadena.estado(PROCESAR) == PENDIENTE
     # Preprocesar, procesar, exportar, subir, esperar e indexar.
-    assert cadena.resumen() == "Automático: 0 de 6 pasos"
+    assert cadena.resumen() == "Procesar todo: 0 de 6 pasos"
 
 
 def test_cambiar_los_pasos_rehace_la_cuenta(app, tmp_path):
@@ -465,7 +434,7 @@ def test_cambiar_los_pasos_rehace_la_cuenta(app, tmp_path):
     opciones.fijar(COMPLETAR, True)
 
     assert cadena.estado(COMPLETAR) == PENDIENTE
-    assert cadena.resumen() == "Automático: 0 de 7 pasos"
+    assert cadena.resumen() == "Procesar todo: 0 de 7 pasos"
 
 
 def test_empezar_un_paso_da_por_hecho_el_anterior(app, tmp_path):
@@ -482,7 +451,7 @@ def test_empezar_un_paso_da_por_hecho_el_anterior(app, tmp_path):
 
     assert cadena.estado(PREPROCESAR) == HECHO
     assert cadena.estado(PROCESAR) == HECHO
-    assert cadena.resumen() == "Automático: subir (2 de 6 pasos)"
+    assert cadena.resumen() == "Procesar todo: subir (2 de 6 pasos)"
 
 
 def test_la_cadena_completa_lo_dice_sin_contar(app, tmp_path):
@@ -494,7 +463,7 @@ def test_la_cadena_completa_lo_dice_sin_contar(app, tmp_path):
     for paso in (PREPROCESAR, PROCESAR, EXPORTAR):
         cadena.marcar(paso, HECHO)
 
-    assert cadena.resumen() == "Automático: completo"
+    assert cadena.resumen() == "Procesar todo: completo"
 
 
 def test_cortar_deja_escrito_donde_se_detuvo(app, tmp_path):
@@ -507,7 +476,7 @@ def test_cortar_deja_escrito_donde_se_detuvo(app, tmp_path):
 
     assert cadena.estado(EXPORTAR) == CORTADO
     assert cadena.resumen() == (
-        "Automático: se cortó en «Exportar» (2 de 6 pasos)"
+        "Procesar todo: se cortó en «Exportar» (2 de 6 pasos)"
     )
 
 

@@ -337,3 +337,66 @@ def test_el_borrado_conserva_una_aparicion_aunque_lleguen_las_dos_marcadas(app):
     assert quitadas == 1
     assert [p.page_number for p in quedan[0].pages] == [1, 2]
     assert [r.pdf_path for r in quedan] == ["primero.pdf"]
+
+
+def bitacora(numero: int, log: str, matricula: str, vuelo: str,
+             fecha: str) -> PageResult:
+    """Una página con los campos por los que se distingue una bitácora."""
+    campos = [
+        FieldResult(page_number=numero, field_id=campo,
+                    field_type="ocr", value=valor)
+        for campo, valor in (
+            ("log_number", log),
+            ("matricula", matricula),
+            ("flight_number", vuelo),
+        )
+    ]
+    return PageResult(page_number=numero, date=fecha, fields=campos)
+
+
+def test_cada_aparicion_repetida_ensena_lo_que_trae_escrito(app):
+    """Sin esto las dos se distinguen solo por el archivo y la página.
+
+    Quitar la repetida dejó de hacerse solo justamente porque cuál sobra
+    no se sabe sin mirarlas, así que el cuadro tiene que enseñar la
+    matrícula, la fecha y el vuelo de cada una.
+    """
+    reports = [
+        ValidationReport(
+            pdf_path="primero.pdf",
+            template_name="fixture",
+            pages=[
+                bitacora(1, "2147300", "HP-1717CMP", "CM103", "2026-08-30"),
+            ],
+        ),
+        ValidationReport(
+            pdf_path="segundo.pdf",
+            template_name="fixture",
+            pages=[
+                bitacora(7, "2147300", "HP-1712CMP", "CM240", "2026-08-31"),
+            ],
+        ),
+    ]
+    dialog = DepurarPaginasDialog(reports)
+    try:
+        grupo = dialog.arbol_duplicados.topLevelItem(0)
+
+        assert grupo.child(0).text(0) == (
+            "primero.pdf, página 1 (primera) - HP-1717CMP, 2026-08-30, CM103"
+        )
+        assert grupo.child(1).text(0) == (
+            "segundo.pdf, página 7 - HP-1712CMP, 2026-08-31, CM240"
+        )
+    finally:
+        dialog.deleteLater()
+
+
+def test_una_pagina_sin_nada_legible_conserva_su_nombre(app):
+    """Un guion seguido de nada se lee como un dato, y no lo es."""
+    dialog = DepurarPaginasDialog(corrida())
+    try:
+        grupo = dialog.arbol_duplicados.topLevelItem(0)
+
+        assert grupo.child(1).text(0) == "segundo.pdf, página 7"
+    finally:
+        dialog.deleteLater()
