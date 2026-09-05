@@ -42,6 +42,7 @@ class JsonReporter:
         reports: List[ValidationReport],
         path: Path,
         corrida: Optional[str] = None,
+        dia_leido: Optional[bool] = None,
     ) -> Path:
         """Guarda todos los reportes de la ejecución en un único JSON.
 
@@ -52,6 +53,8 @@ class JsonReporter:
             reports: Reportes de validación de la ejecución.
             path: Ruta de salida (``datos/<nombre del CSV>.json``).
             ejecución: Nombre de la ejecución (stem del CSV).
+            dia_leido: Si la ejecución leyó el día de la fecha. ``None``
+                no escribe la clave.
 
         Returns:
             La ruta del archivo generado.
@@ -62,6 +65,12 @@ class JsonReporter:
             "corrida": corrida,
             "generado": datetime.now().isoformat(timespec="seconds"),
             "total_bitacoras": len(reports),
+            # Si la ejecución leyó el día. Una que fue a fin de mes no lo
+            # leyó y no se puede volver a representar con el día exacto: es
+            # lo que consulta la ventana de AirVault para apagar esa opción.
+            # Se omite en las ejecuciones anteriores a esta decisión, que
+            # siempre lo leyeron.
+            **({} if dia_leido is None else {"dia_leido": bool(dia_leido)}),
             "reportes": [r.model_dump(mode="json") for r in reports],
         }
         with open(path, "w", encoding="utf-8") as fh:

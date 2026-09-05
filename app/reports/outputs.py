@@ -45,6 +45,10 @@ class OutputOptions:
     run_dir: Path | None = None
     skip_pdfs: bool = False
     csv_date_mode: str = CSV_DATE_MONTH_END
+    # Si la ejecución leyó el día. Va en las salidas para que la ventana de
+    # AirVault sepa que una ejecución a fin de mes ya no puede volver a
+    # representarse con el día exacto.
+    read_day: bool = True
     important_csv_columns: tuple[str, ...] = ()
     # Páginas por parte del PDF único. Cero deja la entrega en un solo
     # archivo; con un tope se reparte, para que ningún batch de AirVault
@@ -224,7 +228,10 @@ def write_outputs(
         }
     stage("Escribiendo JSON…", 20)
     json_path = datos_dir / f"{corrida}.json"
-    JsonReporter().write_consolidated(reports, json_path, corrida=corrida)
+    JsonReporter().write_consolidated(
+        reports, json_path, corrida=corrida,
+        dia_leido=options.read_day,
+    )
 
     if options.debug and not skip_pdfs:
         stage("Generando debug.pdf…", 35)

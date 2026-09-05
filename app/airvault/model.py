@@ -123,6 +123,11 @@ class Manifiesto(BaseModel):
     # Si el PDF interno que se envia fue rasterizado a 200 DPI. Se guarda
     # para que una reanudacion use exactamente el mismo archivo y ajuste.
     compresion: bool = False
+    # Si las fechas de este batch se escribieron con el ultimo dia del mes.
+    # Va en el manifiesto y no solo en la ventana porque decide lo que se
+    # escribe en AirVault: un trabajo guardado tiene que reanudarse con la
+    # misma politica con la que se armo, y cambiarla obliga a rehacerlo.
+    fin_de_mes: bool = False
     # El batch recoge bitacoras con algun dato dudoso o en conflicto. Se
     # indexan automaticamente los valores confirmados y queda abierto para
     # revisar solo lo que falta o no es seguro.

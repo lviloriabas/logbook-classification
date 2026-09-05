@@ -65,6 +65,7 @@ from app.utils.postprocess import (
     apply_postprocess,
     combine_date,
 )
+from app.validation.page_status import recompute_page_status
 from app.validation.validator import validate_page
 from app.vision.alignment import (
     TransformResult,
@@ -662,6 +663,10 @@ def process_page_image(
     ocr_fields = [
         field for field in template.fields
         if field.type not in (FieldType.SIGNATURE, FieldType.CHECKBOX)
+        # El día que no se va a representar no se lee. Sigue en la plantilla
+        # (la retícula de la banda se detecta con su casilla) y sigue
+        # teniendo su campo en la página; lo que no se hace es su OCR.
+        and (config.read_day or field.id not in DAY_FIELD_IDS)
     ]
     ocr_results = ocr_regions(engine, image, ocr_fields,
                               config.crop_padding,
@@ -835,6 +840,12 @@ def process_page_image(
 
     # 8) Reglas de validación (required/regex/longitud/confianza)
     validate_page(page, template, config)
+    if not config.read_day:
+        # El día es obligatorio en la plantilla, así que las reglas lo dejan
+        # en ERROR por vacío. No lo está: nadie lo miró. Se anota como lo que
+        # es y se deja en WARNING, que es donde el corrector lo recoge para
+        # completarlo con el último día que cabe en el libro.
+        _mark_day_not_read(page)
     if page.alignment_quality != "ok":
         if page.status is Status.OK:
             page.status = Status.WARNING
@@ -843,6 +854,20 @@ def process_page_image(
 
     page.processing_ms = round((time.perf_counter() - t_start) * 1000, 1)
     return page
+
+
+def _mark_day_not_read(page: PageResult) -> None:
+    """Deja las casillas del día diciendo que no se leyeron a propósito."""
+    for field in page.fields:
+        if field.field_id not in DAY_FIELD_IDS:
+            continue
+        field.value = None
+        field.confidence = 0.0
+        field.status = Status.WARNING
+        field.comment = DAY_NOT_READ_NOTE
+        field.source = "csv_date_policy"
+        field.inference_method = "month_end_policy"
+    recompute_page_status(page)
 
 
 def _accept_line_reading(
@@ -880,6 +905,18 @@ _DATE_FIELDS = frozenset({"day", "month", "year"})
 
 # Celdas de carácter de la banda de fecha (una por posición de casilla).
 _CHAR_COMPONENTS = (("day", 2), ("month", 3), ("year", 2))
+
+# Las tres casillas que se saltan cuando la ejecución va a fin de mes. La
+# casilla grande y sus dos celdas de carácter: son las únicas cuyo valor no
+# llega a ninguna salida cuando el día se representa como el último del mes.
+DAY_FIELD_IDS = frozenset({"day", "day_1", "day_2"})
+
+# Lo que se anota en su lugar. Dice que no se leyó por decisión y no que no
+# se pudo leer: son cosas distintas para quien revisa el CSV, y la segunda
+# haría buscar un problema donde no lo hay.
+DAY_NOT_READ_NOTE = (
+    "Día no leído: la ejecución se configuró a fin de mes"
+)
 
 
 def _date_band_rect(

@@ -821,6 +821,7 @@ class Trabajo:
         parte: Optional[ParteDeEntrega] = None,
         paginas_por_batch: int | None = None,
         compresion: bool = False,
+        fin_de_mes: bool = False,
     ) -> "Trabajo":
         """Arma el manifiesto de un archivo de entrega.
 
@@ -851,7 +852,9 @@ class Trabajo:
             parte = disponibles[0] if disponibles else None
 
         if parte is not None:
-            registros = registros_desde_entrega(filas, parte.paginas, resolutor)
+            registros = registros_desde_entrega(
+                filas, parte.paginas, resolutor, fin_de_mes
+            )
             detalle_orden = f"{sum(1 for r in registros if r.es_separador)} separadores"
         else:
             # Ejecuciones exportadas antes de que existiera el indice. Se sigue
@@ -862,7 +865,9 @@ class Trabajo:
                 "La ejecución no tiene indice de paginas; se asume que el PDF "
                 "no lleva separadores"
             )
-            registros = registros_desde_csv(filas, resolutor)
+            registros = registros_desde_csv(
+                filas, resolutor, fin_de_mes=fin_de_mes
+            )
             detalle_orden = "sin indice de paginas"
         if not registros:
             raise ErrorDeCorrida(
@@ -880,6 +885,7 @@ class Trabajo:
             partes=parte.total if parte else 1,
             paginas_por_batch=int(limite_paginas or 0),
             compresion=bool(compresion),
+            fin_de_mes=bool(fin_de_mes),
             solo_subir=bool(parte and parte.revisar),
             doc_type=config.doc_type,
             audit_status=config.audit_status,
@@ -911,6 +917,7 @@ class Trabajo:
         parte: Optional[ParteDeEntrega] = None,
         paginas_por_batch: int | None = None,
         compresion: bool = False,
+        fin_de_mes: bool = False,
     ) -> "Trabajo":
         """Retoma el trabajo si ya existe para este CSV; si no, lo crea.
 
@@ -937,7 +944,13 @@ class Trabajo:
                 limite_paginas,
             )
             misma_compresion = trabajo.manifiesto.compresion == bool(compresion)
-            if mismo_csv and mismo_pdf and mismo_limite and misma_compresion:
+            # Cambiar la politica de fecha cambia lo que se escribe en cada
+            # pagina, asi que el trabajo guardado ya no sirve: se rehace.
+            misma_fecha = trabajo.manifiesto.fin_de_mes == bool(fin_de_mes)
+            if (
+                mismo_csv and mismo_pdf and mismo_limite
+                and misma_compresion and misma_fecha
+            ):
                 trabajo.rehidratar_registros_huerfanos(csv, resolutor)
                 propuesto = (
                     parte.nombre_lote(nombre_lote)
@@ -959,6 +972,7 @@ class Trabajo:
             parte,
             limite_paginas,
             compresion,
+            fin_de_mes,
         )
 
     def guardar(self) -> Path:
@@ -1015,7 +1029,11 @@ class Trabajo:
         ]
         try:
             reconstruidos = registros_desde_entrega(
-                leer_csv_corrida(csv), indice, resolutor or ResolutorFlota()
+                leer_csv_corrida(csv), indice,
+                resolutor or ResolutorFlota(),
+                # Con la politica con la que se armo este manifiesto: lo
+                # recuperado tiene que ser lo mismo que se aparto.
+                bool(manifiesto.fin_de_mes),
             )
         except (OSError, ValueError) as exc:
             logger.warning(
@@ -1854,6 +1872,7 @@ def preparar_partes(
     paginas_por_batch: int | None = None,
     avisar: Optional[Aviso] = None,
     compresion: bool = False,
+    fin_de_mes: bool = False,
 ) -> List["Trabajo"]:
     """Un trabajo por cada archivo de entrega de la ejecución.
 
@@ -1876,7 +1895,9 @@ def preparar_partes(
     limite_paginas = int(limite_paginas or 0)
     entrega = comprobar_entrega(csv)
     previos = trabajos_preparados(config, carpeta, csv)
-    if previos and _reparto_al_dia(previos, entrega, limite_paginas, compresion):
+    if previos and _reparto_al_dia(
+        previos, entrega, limite_paginas, compresion, fin_de_mes
+    ):
         # El reparto de disco sigue valiendo. Se devuelve por el camino que
         # comprueba que el juego este entero, que es el que sabe presentarlo.
         existentes = cargar_partes(config, carpeta, csv)
@@ -1943,6 +1964,7 @@ def preparar_partes(
             parte,
             limite_paginas,
             compresion,
+            fin_de_mes,
         )
         for parte in partes
     ]
@@ -2019,6 +2041,7 @@ def previsualizar_reparto(
     resolutor: Optional[ResolutorFlota] = None,
     paginas_por_batch: int | None = None,
     compresion: bool = False,
+    fin_de_mes: bool = False,
 ) -> List[BatchPrevisto]:
     """En que batches quedaria repartida la ejecucion, sin tocar nada.
 
@@ -2049,7 +2072,9 @@ def previsualizar_reparto(
     )
     entrega = comprobar_entrega(csv)
     previos = trabajos_preparados(config, carpeta, csv)
-    if previos and _reparto_al_dia(previos, entrega, limite, compresion):
+    if previos and _reparto_al_dia(
+        previos, entrega, limite, compresion, fin_de_mes
+    ):
         # El reparto de disco ya es el que se esta pidiendo: lo previsto es
         # exactamente lo que hay preparado.
         existentes = cargar_partes(config, carpeta, csv)
@@ -2122,7 +2147,7 @@ def previsualizar_reparto(
                     revisar=revisar,
                     pdf=pdf,
                     registros=registros_desde_entrega(
-                        filas, paginas, resolutor
+                        filas, paginas, resolutor, fin_de_mes
                     ),
                 )
             )
@@ -2137,6 +2162,7 @@ def _reparto_al_dia(
     entrega: Sequence[ParteDeEntrega],
     limite: int,
     compresion: bool,
+    fin_de_mes: bool = False,
 ) -> bool:
     """Si los manifiestos de disco ya son el reparto que se esta pidiendo.
 
@@ -2155,6 +2181,10 @@ def _reparto_al_dia(
         if manifiesto.paginas_por_batch not in (0, limite):
             return False
         if bool(manifiesto.compresion) != bool(compresion):
+            return False
+        # La politica de fecha decide lo que se escribe en cada pagina, asi
+        # que un reparto hecho con la otra ya no es el que se esta pidiendo.
+        if bool(manifiesto.fin_de_mes) != bool(fin_de_mes):
             return False
     return revisar_cobertura(entrega, trabajos, solo_comprometidos=False).completa
 
