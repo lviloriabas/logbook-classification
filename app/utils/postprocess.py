@@ -71,7 +71,13 @@ _MATRICULA_AMBIGUOUS = {
 }
 # Primer carácter del sufijo "CMP"/"WWP" tal como lo devuelve el OCR.
 _MATRICULA_SUFFIX_HEAD = frozenset("CW")
-WWP_ONLY = {"1990", "1522"}
+# Aviones cuyo sufijo no es "CMP" aunque la página no lo diga.
+WWP_ONLY = {"1990"}
+# Aviones que siempre salen como "CMP", se lea lo que se lea. El 1522 está
+# escrito de las dos maneras en las bitácoras, pero el picklist de AirVault
+# solo tiene HP-1522CMP: dejar pasar el WWP obligaba a corregirlo a mano en
+# el CSV y hacía que la carga no encontrara su avión.
+CMP_ONLY = {"1522"}
 WEAK_MATRICULA_NOTE = (
     "registration: digits inferred from scattered OCR (low confidence)"
 )
@@ -380,7 +386,8 @@ def _matricula(value: str) -> Tuple[str, str]:
     """Normaliza la matrícula a HP-XXXXCMP (o HP-XXXXWWP).
 
     Acepta: 1717, hp1717, 1717cmp, HP-1717, hp-1717-cmp, 1717 CMP...
-    Excepciones conocidas (sin CMP): HP-1990WWP, HP-1522WWP.
+    Excepciones conocidas: HP-1990WWP no lleva CMP; el HP-1522, que se
+    escribe de las dos maneras, siempre sale como HP-1522CMP.
 
     Si no hay cuatro dígitos seguidos se reconstruye el número a partir de
     los caracteres que el OCR confunde con dígitos manuscritos
@@ -410,7 +417,8 @@ def _matricula(value: str) -> Tuple[str, str]:
                 note = WEAK_MATRICULA_NOTE
             else:
                 return "", "registration without 4-digit number"
-    sufijo = "WWP" if ("WWP" in raw or numero in WWP_ONLY) else "CMP"
+    lleva_wwp = ("WWP" in raw or numero in WWP_ONLY)
+    sufijo = "WWP" if lleva_wwp and numero not in CMP_ONLY else "CMP"
     return f"HP-{numero}{sufijo}", note
 
 
