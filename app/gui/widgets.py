@@ -330,7 +330,7 @@ QPushButton:default {{
     border-color: palette(highlight);
 }}
 QPushButton:disabled, QToolButton:disabled {{
-    color: #8c959f;
+    color: {TEXT_DISABLED};
     background-color: {TABLE_HEADER_BG};
     border-color: {PANE_BG};
 }}
@@ -353,15 +353,15 @@ QToolButton#spinStepButton {{
 }}
 QToolButton#spinStepButton:hover {{
     background-color: {PANE_CONTROL_HOVER};
-    border-color: #8c959f;
+    border-color: {TEXT_DISABLED};
 }}
 QToolButton#spinStepButton:pressed {{
     background-color: {PANE_SURFACE_BG};
-    border-color: #8c959f;
+    border-color: {TEXT_DISABLED};
 }}
 QToolButton#spinStepButton:disabled {{
     background-color: {TABLE_HEADER_BG};
-    color: #8c959f;
+    color: {TEXT_DISABLED};
 }}
 /* El campo numérico va en la lista. Fuera de ella se quedaba con el marco
    nativo, que mide 3 px por lado en vez de 1, y acababa 4 px más alto que sus
@@ -396,7 +396,7 @@ QLineEdit:read-only {{
 QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled,
 QComboBox:disabled, QDateEdit:disabled, QTimeEdit:disabled,
 QDateTimeEdit:disabled {{
-    color: #8c959f;
+    color: {TEXT_DISABLED};
     background-color: {TABLE_HEADER_BG};
     border-color: {PANE_BG};
 }}
@@ -518,7 +518,7 @@ QMenu::item {{
     padding: 5px 28px 5px 30px;
 }}
 QMenu::item:selected {{ background-color: {PANE_CONTROL_HOVER}; }}
-QMenu::item:disabled {{ color: #8c959f; }}
+QMenu::item:disabled {{ color: {TEXT_DISABLED}; }}
 QMenu::indicator {{
     width: 16px;
     height: 16px;
@@ -987,6 +987,25 @@ def size_columns_once(table, stretch_last: bool = False) -> None:
         header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
     header.setResizeContentsPrecision(RESIZE_PRECISION)
     table.resizeColumnsToContents()
+    # Qt mide el texto, pero no siempre suma el relleno horizontal de la
+    # sección definido en DATA_TABLE_QSS. En columnas cortas como «Páginas»
+    # eso escondía la primera letra aunque hubiera ancho disponible.
+    model = table.model()
+    for column in range(table.columnCount()):
+        label = model.headerData(
+            column,
+            Qt.Orientation.Horizontal,
+            Qt.ItemDataRole.DisplayRole,
+        )
+        if label:
+            minimum = (
+                header.fontMetrics().horizontalAdvance(str(label))
+                + 2 * SPACE_S
+                + 2
+            )
+            table.setColumnWidth(
+                column, max(table.columnWidth(column), minimum)
+            )
     if stretch_last and ultima >= 0:
         header.setSectionResizeMode(ultima, QHeaderView.ResizeMode.Stretch)
 
@@ -1207,6 +1226,74 @@ def hide_overlay_when_tight(holder: QWidget) -> None:
     vigilante = _OverlayFitWatcher(holder)
     marco.installEventFilter(vigilante)
     vigilante.aplicar(marco.size())
+
+
+class _OverlayScrollbarWatcher(QObject):
+    """Aparta un control flotante de las barras del panel que lo lleva."""
+
+    def __init__(self, holder: QWidget, panel: QWidget, base) -> None:
+        super().__init__(holder)
+        self._holder = holder
+        self._panel = panel
+        self._base = base
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - API Qt
+        if event.type() in (
+            QEvent.Type.Show, QEvent.Type.Hide, QEvent.Type.Resize
+        ):
+            self.aplicar()
+        return False
+
+    def aplicar(self) -> None:
+        layout = self._holder.layout()
+        if layout is None:
+            return
+        izquierda, arriba, derecha, abajo = self._base
+        vertical = self._panel.verticalScrollBar()
+        horizontal = self._panel.horizontalScrollBar()
+        if vertical is not None and vertical.isVisible():
+            # El flotante va centrado, así que el hueco de la barra se
+            # descuenta por su lado: el centro se corre a la izquierda
+            # justo la mitad, que es donde queda el centro de la página.
+            derecha += vertical.width()
+        if horizontal is not None and horizontal.isVisible():
+            abajo += horizontal.height()
+        if layout.contentsMargins().right() == derecha and (
+            layout.contentsMargins().bottom() == abajo
+        ):
+            return
+        layout.setContentsMargins(izquierda, arriba, derecha, abajo)
+
+
+def keep_overlay_clear_of_scrollbars(holder: QWidget, panel: QWidget) -> None:
+    """El recuadro flotante se aparta de las barras de desplazamiento.
+
+    Va abajo y centrado sobre el panel entero, y el panel entero incluye
+    sus barras: en cuanto la página se acerca lo suficiente para que
+    aparezca la de abajo, el recuadro se sienta encima de ella y no se
+    puede arrastrar. Es el único control de la ventana que tapa a otro,
+    porque es el único que flota.
+
+    En vez de moverlo a una esquina se le suma al margen lo que mide cada
+    barra visible. Así conserva el sitio que tiene (abajo y centrado sobre
+    la página, no sobre el marco) y se corre solo lo justo, que además es
+    lo que hace que siga centrado sobre lo que se está mirando.
+    """
+    margenes = holder.layout().contentsMargins() if holder.layout() else None
+    if margenes is None:
+        return
+    vigilante = _OverlayScrollbarWatcher(
+        holder,
+        panel,
+        (
+            margenes.left(), margenes.top(),
+            margenes.right(), margenes.bottom(),
+        ),
+    )
+    for barra in (panel.verticalScrollBar(), panel.horizontalScrollBar()):
+        if barra is not None:
+            barra.installEventFilter(vigilante)
+    vigilante.aplicar()
 
 
 class ZoomableScrollArea(QScrollArea):
