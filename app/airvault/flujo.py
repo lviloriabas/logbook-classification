@@ -2442,6 +2442,30 @@ def comprobar_memoria_de_libros(indexador, raiz: Path | str):
         return None
 
 
+def comprobar_tanda_de_libros(buscador, raiz: Path | str, avisar=None):
+    """Contrasta en Web Search los libros a los que les toca turno.
+
+    La comprobacion del plan solo ve los libros del batch de hoy, asi que
+    una entrada vieja se quedaba sin nadie que la desmintiera. Esta alcanza
+    a los demas, unos pocos por ejecucion.
+
+    Sin buscador no hay consulta, que es lo que pasa mientras
+    ``buscar_publicadas`` este apagado, y sin raiz no se sabe que memoria
+    mirar. Devuelve el informe, o ``None`` si no se pudo comprobar: como la
+    del plan, ayuda a las ejecuciones siguientes y no puede tumbar la que la
+    llama.
+    """
+    from app.airvault.memoria import verificar_por_tandas
+
+    if buscador is None or not raiz:
+        return None
+    try:
+        return verificar_por_tandas(buscador, raiz, al_avanzar=avisar)
+    except Exception as exc:  # noqa: BLE001 - comprobar no es escribir
+        logger.warning("No se pudo comprobar la tanda de libros: {}", exc)
+        return None
+
+
 def marcar_posible_duplicado(trabajo: "Trabajo", motivo: str) -> None:
     """Deja anotado en el manifiesto por que no se sigue con este batch."""
     if trabajo.manifiesto.posible_duplicado == motivo:

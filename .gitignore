@@ -45,3 +45,7 @@ img/
 
 # Cache de flota que arma el indexado de AirVault
 airvault_flota.json
+
+# Turno de cada libro en la ronda de comprobacion (local de cada instalacion,
+# cambia en cada indexado y no dice nada fuera de su maquina)
+book_ronda.json

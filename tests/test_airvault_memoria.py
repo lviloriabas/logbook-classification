@@ -21,10 +21,12 @@ from app.airvault.config import (
 from app.airvault.memoria import (
     bitacoras_del_libro,
     libros_de_la_memoria,
+    libros_por_verificar,
     observaciones_de_paginas,
     observaciones_de_websearch,
     verificar_con_el_batch,
     verificar_con_websearch,
+    verificar_por_tandas,
 )
 from app.airvault.websearch import Indice
 
@@ -228,3 +230,102 @@ def test_los_libros_a_comprobar_salen_de_la_memoria(tmp_path):
     raiz = _instalacion(tmp_path, {"23159B": "HP-1376CMP"})
 
     assert libros_de_la_memoria(raiz) == ["23159B"]
+
+
+# ── por tandas ─────────────────────────────────────────────────────
+
+def _ronda(raiz):
+    ruta = raiz / "book_ronda.json"
+    return json.loads(ruta.read_text(encoding="utf-8")) if ruta.is_file() else {}
+
+
+def test_la_tanda_toma_a_los_que_llevan_mas_sin_mirarse(tmp_path):
+    raiz = _instalacion(tmp_path, {
+        "23159B": "HP-1376CMP", "23160A": "HP-1376CMP",
+        "23161A": "HP-1376CMP",
+    })
+    (raiz / "book_ronda.json").write_text(
+        json.dumps({"23159B": "2026-09-01", "23160A": "2026-08-01"}),
+        encoding="utf-8",
+    )
+
+    # 23161A no se consulto nunca, asi que va antes que los dos fechados.
+    assert libros_por_verificar(raiz, 2) == ["23161A", "23160A"]
+
+
+def test_la_tanda_siguiente_mira_a_los_otros(tmp_path):
+    """La rotacion avanza: dos ejecuciones seguidas no repiten libro."""
+    raiz = _instalacion(tmp_path, {
+        "23159B": "HP-1376CMP", "23160A": "HP-1376CMP",
+    })
+    buscador = BuscadorFalso({})
+
+    verificar_por_tandas(
+        buscador, raiz, cuantos=1, cuantas=1, hoy=date(2026, 9, 6)
+    )
+    primera = list(buscador.consultadas)
+    buscador.consultadas.clear()
+    verificar_por_tandas(
+        buscador, raiz, cuantos=1, cuantas=1, hoy=date(2026, 9, 7)
+    )
+
+    assert primera and buscador.consultadas
+    assert primera != buscador.consultadas
+    assert _ronda(raiz) == {"23159B": "2026-09-06", "23160A": "2026-09-07"}
+
+
+def test_el_libro_que_no_contesta_gasta_su_turno_igual(tmp_path):
+    """Si no, la cola se atasca en el que nunca va a contestar.
+
+    Un libro sin publicar no aparece en Web Search por mucho que se
+    pregunte. Anotar el turno solo de los que contestan lo dejaria siempre
+    el primero y los demas no se mirarian jamas.
+    """
+    raiz = _instalacion(tmp_path, {"23159B": "HP-1376CMP"})
+    buscador = BuscadorFalso({})
+
+    informe = verificar_por_tandas(
+        buscador, raiz, cuantos=1, cuantas=1, hoy=date(2026, 9, 6)
+    )
+
+    assert informe.observaciones == 0
+    assert _ronda(raiz) == {"23159B": "2026-09-06"}
+
+
+def test_la_tanda_corrige_un_libro_viejo(tmp_path):
+    raiz = _instalacion(tmp_path, {"23159B": "HP-1835CMP"})
+    buscador = BuscadorFalso({
+        "2315950": {"matricula": "HP-1376CMP"},
+        "2315999": {"matricula": "HP-1376CMP"},
+    })
+
+    verificar_por_tandas(buscador, raiz, cuantos=1, cuantas=2)
+
+    guardado = json.loads(
+        (raiz / "book_matriculas.json").read_text(encoding="utf-8")
+    )
+    assert guardado == {"23159B": "HP-1376CMP"}
+
+
+def test_el_libro_que_sale_de_la_memoria_sale_de_la_ronda(tmp_path):
+    """Su matricula no es de ningun avion, asi que la entrada se borra."""
+    raiz = _instalacion(tmp_path, {"23159B": "HP-9999XXX"})
+    buscador = BuscadorFalso({})
+
+    verificar_por_tandas(
+        buscador, raiz, cuantos=1, cuantas=1, hoy=date(2026, 9, 6)
+    )
+
+    assert libros_de_la_memoria(raiz) == []
+    assert _ronda(raiz) == {}
+
+
+def test_sin_memoria_guardada_la_tanda_no_consulta_nada(tmp_path):
+    raiz = _instalacion(tmp_path)
+    buscador = BuscadorFalso({})
+
+    informe = verificar_por_tandas(buscador, raiz)
+
+    assert buscador.consultadas == []
+    assert informe.observaciones == 0
+    assert not (raiz / "book_ronda.json").is_file()

@@ -190,7 +190,9 @@ portable\python312\tools\python.exe run_airvault.py memoria
 portable\python312\tools\python.exe run_airvault.py memoria --aplicar
 ```
 
-Sin `--aplicar` solo informa de las diferencias. Esta comprobación consulta Web Search; la que va sola en cada `plan` e `indexar` no consulta nada de más y no hay que pedirla.
+Sin `--aplicar` solo informa de las diferencias. Este subcomando comprueba toda la memoria de una vez; la que va sola en cada `plan` e `indexar` no consulta nada de más y no hay que pedirla, pero solo mira los libros del batch.
+
+Los libros viejos, que ya no aparecen en ningún batch, se comprueban solos: al terminar de indexar le toca el turno a unos pocos, los que llevan más tiempo sin mirarse, hasta recorrer la memoria entera en varias ejecuciones. Consulta Web Search, así que solo funciona con **Buscar publicadas** activado.
 
 ## 12. Contingencias
 

@@ -25,8 +25,11 @@ a media entrega (es la misma razon por la que
 son casi todos los de la memoria, y sobre todo a los que se publicaron
 antes de que existiera este programa: ahi AirVault es de verdad una fuente
 externa. Cuesta unas peticiones por libro y la consulta no esta documentada
-(ver :mod:`app.airvault.websearch`), asi que vive en una comprobacion
-aparte que se pide expresamente.
+(ver :mod:`app.airvault.websearch`), asi que no se pregunta por todos a la
+vez: despues de cada indexado le toca el turno a unos pocos, los que llevan
+mas tiempo sin mirarse, y en unas cuantas ejecuciones se recorre la memoria
+entera. Sigue habiendo una comprobacion completa que se pide a mano desde
+la consola. Las dos dependen de ``buscar_publicadas``, que viene apagado.
 
 Queda la objecion evidente de la primera forma: si la memoria estaba mal y
 este programa escribio esa matricula en AirVault, releerla parece darse la
@@ -41,6 +44,7 @@ no.
 from __future__ import annotations
 
 from datetime import date
+import json
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
@@ -76,6 +80,17 @@ BITACORAS_POR_LIBRO = 4
 
 # Paginas de un libro. La mitad A son las 00 a 49 y la B las 50 a 99.
 PAGINAS_POR_LIBRO = 50
+
+# Cuantos libros se comprueban despues de cada indexado. La memoria entera
+# se recorre en unas cuantas ejecuciones sin que ninguna pague de golpe las
+# peticiones de todos los libros que conoce.
+LIBROS_POR_TANDA = 5
+
+# Cuando se le pregunto por ultima vez a Web Search por cada libro. Es un
+# turno, no un aval: una entrada se cree igual este comprobada o no, y esta
+# fecha solo decide a quien le toca en la tanda siguiente. Por eso vive
+# aparte y no dentro de los dos archivos de memoria.
+RONDA_FILENAME = "book_ronda.json"
 
 
 def _fecha(valor: object) -> Optional[date]:
@@ -166,12 +181,13 @@ def observaciones_de_websearch(
 
 
 def _rutas(raiz: Path | str) -> Dict[str, Path]:
-    """Los tres archivos de la instalacion que intervienen."""
+    """Los archivos de la instalacion que intervienen."""
     raiz = Path(raiz)
     return {
         "matriculas": raiz / BOOK_MATRICULAS_FILENAME,
         "fechas": raiz / BOOK_DATES_FILENAME,
         "flota": raiz / FLEET_FILENAME,
+        "ronda": raiz / RONDA_FILENAME,
     }
 
 
@@ -233,3 +249,109 @@ def verificar_con_websearch(
         flota=load_fleet(rutas["flota"]),
         escribir=escribir,
     )
+
+
+def _leer_ronda(ruta: Path) -> Dict[str, date]:
+    """Los turnos anotados; un archivo dañado solo pierde el orden."""
+    ruta = Path(ruta)
+    if not ruta.is_file():
+        return {}
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning(f"No se pudo leer la ronda de libros {ruta}: {exc}")
+        return {}
+    if not isinstance(datos, dict):
+        logger.warning(f"Ronda de libros invalida: {ruta}")
+        return {}
+    turnos: Dict[str, date] = {}
+    for clave, texto in datos.items():
+        if not isinstance(clave, str) or not isinstance(texto, str):
+            continue
+        try:
+            turnos[clave] = date.fromisoformat(texto)
+        except ValueError:
+            continue
+    return turnos
+
+
+def _guardar_ronda(
+    ruta: Path, turnos: Mapping[str, date], conocidos: Iterable[str]
+) -> None:
+    """Anota los turnos de los libros que la memoria todavia conoce.
+
+    Un libro que salio de la memoria (porque su matricula no era de ningun
+    avion) tambien sale de la ronda: si volviera a aprenderse tendria que
+    esperar su turno con un aval que ya no existe.
+    """
+    vivos = set(conocidos)
+    datos = {
+        clave: valor.isoformat()
+        for clave, valor in sorted(turnos.items())
+        if clave in vivos
+    }
+    try:
+        Path(ruta).write_text(
+            json.dumps(datos, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:
+        logger.warning(f"No se pudo guardar la ronda de libros: {exc}")
+
+
+def libros_por_verificar(
+    raiz: Path | str, cuantos: int = LIBROS_POR_TANDA
+) -> List[str]:
+    """Los libros a los que les toca turno, del que lleva mas sin mirarse.
+
+    El que nunca se consulto va primero. Entre los demas manda la fecha de
+    la ultima consulta, y la clave desempata para que la tanda sea la misma
+    aunque cambie el orden en que se leyeron los archivos.
+    """
+    if cuantos <= 0:
+        return []
+    rutas = _rutas(raiz)
+    turnos = _leer_ronda(rutas["ronda"])
+    claves = libros_guardados(rutas["matriculas"], rutas["fechas"])
+    ordenados = sorted(claves, key=lambda c: (turnos.get(c, date.min), c))
+    return ordenados[:cuantos]
+
+
+def verificar_por_tandas(
+    buscador: Buscador,
+    raiz: Path | str,
+    cuantos: int = LIBROS_POR_TANDA,
+    cuantas: int = BITACORAS_POR_LIBRO,
+    escribir: bool = True,
+    al_avanzar: Optional[Callable[[int, int], None]] = None,
+    hoy: Optional[date] = None,
+) -> Informe:
+    """Comprueba la tanda de libros a la que le toca turno.
+
+    Es lo unico que alcanza a un libro que dejo de aparecer en los batches,
+    que con el tiempo son casi todos: la comprobacion del plan solo ve los
+    de hoy, asi que una entrada vieja y equivocada se quedaba inferiendo
+    sobre las cincuenta paginas de su libro sin que nada la contrastara.
+
+    Va por tandas para que ninguna ejecucion pague de golpe las peticiones
+    de toda la memoria, y en unas cuantas las recorre todas.
+
+    El turno se anota de los libros que se preguntaron, contestara Web
+    Search o no. Anotar solo a los que contestan dejaria la cola atascada en
+    los que no estan publicados, que son justo los que no van a contestar
+    nunca, y los demas no llegarian a mirarse jamas.
+    """
+    rutas = _rutas(raiz)
+    claves = libros_por_verificar(raiz, cuantos)
+    if not claves:
+        logger.info("Memoria de libros: no hay nada guardado que comprobar")
+        return Informe()
+    informe = verificar_con_websearch(
+        buscador, raiz, claves, cuantas, escribir, al_avanzar
+    )
+    turnos = _leer_ronda(rutas["ronda"])
+    turnos.update({clave: hoy or date.today() for clave in claves})
+    _guardar_ronda(
+        rutas["ronda"], turnos,
+        libros_guardados(rutas["matriculas"], rutas["fechas"]),
+    )
+    return informe

@@ -803,6 +803,7 @@ class TrabajoAirVaultWorker(QThread):
         from app.airvault.flujo import (
             cerrar_partes,
             completar_partes,
+            comprobar_tanda_de_libros,
             indexar_partes,
             planificar_partes,
             verificar_partes,
@@ -857,6 +858,26 @@ class TrabajoAirVaultWorker(QThread):
             # que queda tomado no da error: cuelga la próxima vez que
             # alguien lo abra.
             cerrar_partes(trabajos, cliente)
+
+        # El plan ya comprobo la memoria, pero solo contra los libros de
+        # este batch. A los viejos no los mira nadie mas que esto. Va al
+        # final y no antes porque el batch ya esta escrito y soltado: lo
+        # que tarde o falle aqui no le quita nada al trabajo de la corrida.
+        #
+        # Una sola vez por ejecucion aunque se indexen muchos batches. La
+        # tanda existe para repartir las peticiones entre dias, y dispararla
+        # en cada batch de una cadena larga seria la rafaga que evita. La
+        # marca se pone antes de preguntar: si falla, no se reintenta en
+        # cada batch que venga detras.
+        def avisar_tanda(hechos: int, total: int) -> None:
+            self._avisar("Comprobando la memoria de libros", hechos, total)
+
+        if not self.estado.get("tanda_hecha"):
+            self.estado["tanda_hecha"] = True
+            comprobar_tanda_de_libros(
+                self.estado.get("buscador"), self.estado.get("raiz"),
+                avisar=avisar_tanda,
+            )
         return {
             "resultado": resultado, "validas": validas, "total": total,
             "lotes": len(trabajos), "cierres": cierres,

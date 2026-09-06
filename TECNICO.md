@@ -152,6 +152,8 @@ De cada libro se guardan su matrícula (`book_matriculas.json`) y los extremos d
 
 Las dos memorias se aprenden del OCR, así que se comprueban contra AirVault, que es el índice que la empresa da por bueno. La comprobación va sola dentro del plan del indexado: las páginas que AirVault ya tenía en verde salen de una lectura que el plan hace igual, así que no cuesta ninguna petición extra ni la pide nadie. Una matrícula que no es de ningún avión de `fleet.json` se descarta sin consultar nada.
 
+Esa comprobación solo ve los libros del batch de hoy, y con el tiempo la mayoría de la memoria deja de aparecer en ninguno. A esos llega la ronda: al terminar de indexar se consultan en Web Search los `LIBROS_POR_TANDA` libros que llevan más tiempo sin mirarse, una sola vez por ejecución aunque se indexen muchos batches, de modo que ninguna paga de golpe las peticiones de toda la memoria y en unas cuantas se recorre entera. `book_ronda.json` anota a quién se preguntó y cuándo; es un turno y no un aval, así que una entrada se cree igual esté comprobada o no, y por eso vive aparte de los dos archivos de memoria. El turno se gasta aunque Web Search no conteste: anotar solo a los que responden dejaría la cola atascada en los libros sin publicar, que son justo los que nunca van a contestar. La ronda depende de `buscar_publicadas`, que viene apagado.
+
 Confirmar no cambia nada. Reemplazar una entrada exige dos bitácoras distintas del mismo libro, el mismo respaldo que se exige para indexar sin revisión. Si AirVault no dice lo mismo en todo el libro, no se toca nada.
 
 Archivos principales:
@@ -268,7 +270,7 @@ Un libro tiene una sola aeronave, así que las páginas del batch que AirVault y
 
 El manifiesto se actualiza después de cada página. Una ejecución interrumpida puede reanudarse sin repetir lo confirmado. El batch `REVISAR` se conserva para intervención manual.
 
-De la misma lectura sale la comprobación de la memoria de libros (sección 7). El subcomando `memoria` de `run_airvault.py` alcanza además los libros que no vienen en ningún batch, consultando Web Search; informa siempre y solo escribe con `--aplicar`.
+De la misma lectura sale la comprobación de la memoria de libros (sección 7). A los libros que no vienen en ningún batch llega la ronda que corre tras cada indexado, y el subcomando `memoria` de `run_airvault.py` los comprueba todos de una vez cuando se pide a mano; informa siempre y solo escribe con `--aplicar`.
 
 Archivos principales:
 
