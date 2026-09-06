@@ -20,27 +20,8 @@ import numpy as np
 from loguru import logger
 
 from app.ocr.engine import OcrEngine
-from app.utils.postprocess import MONTH_WORDS
+from app.ocr.month_evidence import rank_month_slots
 from app.vision.preprocessing import upscale_for_ocr
-
-# Penalización de una ranura vacía (o no leída) al puntuar un mes.
-EMPTY_SLOT_SCORE = 0.05
-MISMATCH_SLOT_SCORE = 0.03
-MONTH_MIN_OBSERVED_SLOTS = 2
-MONTH_MIN_MATCHING_SLOTS = 2
-MONTH_WINNER_MARGIN = 1.5
-
-# Confusiones visuales frecuentes en escritura manuscrita. Se comparan
-# contra la letra esperada, sin reemplazos globales que pudieran romper un
-# mes real como OCT (donde C sí es C) o NOV (donde O sí es O).
-_MONTH_EQUIVALENTS = {
-    "J": frozenset("J3"),
-    "U": frozenset("UV0"),
-    "L": frozenset("LI1C"),
-    "O": frozenset("O0"),
-}
-
-# ── Decodificación por ranuras (casillas separadas por líneas) ──────────
 
 def decode_slots(
     rule: str, readings: List[Tuple[str, float]]
@@ -78,60 +59,10 @@ def decode_slots(
         return (digits, confidence) if digits else ("", 0.0)
 
     if rule == "month":
-        # Las ranuras se mantienen alineadas: una ranura vacía intermedia
-        # no desplaza las letras posteriores (p. ej. 'J' '' 'L').
-        aligned = [
-            ch.upper() if ch.isascii() and ch.isalnum() else ""
-            for ch, _confidence in readings
-        ]
-        observed = sum(bool(ch) for ch in aligned)
-        if observed < MONTH_MIN_OBSERVED_SLOTS:
-            return "", 0.0
-        ranked: List[Tuple[float, int, str]] = []
-        for word, numero in MONTH_WORDS:
-            score = _month_slot_score(word, aligned, readings)
-            matches = sum(
-                bool(ch) and _month_slot_matches(ch, expected)
-                for ch, expected in zip(aligned, word)
-            )
-            ranked.append((score, matches, word))
-        ranked.sort(reverse=True)
-        best_score, best_matches, best_word = ranked[0]
-        runner_score = ranked[1][0] if len(ranked) > 1 else 0.0
-        unique_winner = (
-            runner_score <= 0.0
-            or best_score >= runner_score * MONTH_WINNER_MARGIN
-        )
-        if best_matches >= MONTH_MIN_MATCHING_SLOTS and unique_winner:
-            evidence_ratio = best_matches / 3.0
-            confidence = round(confidence * evidence_ratio, 3)
-            logger.debug(f"Mes por ranuras: {best_word!r} (score={best_score:.4f})")
-            return best_word, confidence
+        evidence = rank_month_slots(readings)
+        return evidence.word, evidence.confidence
+
     return "", 0.0
-
-
-def _month_slot_score(
-    word: str, chars: List[str], readings: List[Tuple[str, float]]
-) -> float:
-    """Puntuación de una abreviatura de mes contra las ranuras leídas."""
-    score = 1.0
-    for i, expected in enumerate(word):
-        if i >= len(chars):
-            score *= EMPTY_SLOT_SCORE
-        elif _month_slot_matches(chars[i], expected):
-            score *= readings[i][1] or EMPTY_SLOT_SCORE
-        elif not chars[i]:
-            score *= EMPTY_SLOT_SCORE
-        else:
-            score *= MISMATCH_SLOT_SCORE
-    return score
-
-
-def _month_slot_matches(observed: str, expected: str) -> bool:
-    """Compara una ranura con una letra esperada usando equivalencias."""
-    return observed == expected or observed in _MONTH_EQUIVALENTS.get(
-        expected, frozenset((expected,))
-    )
 
 
 def read_date_slots(
@@ -203,7 +134,7 @@ def _read_slot_generic(
     if rule in ("day", "year", "log_number", "digits"):
         allowed = [ch for ch in text if ch in "0123456789"]
     elif rule == "month":
-        allowed = [ch for ch in text.upper() if ch.isalpha()]
+        allowed = [ch for ch in text.upper() if ch.isascii() and (ch.isalnum() or ch == "/")]
     else:
         allowed = list(text)
     return (allowed[0], conf) if allowed else ("", 0.0)

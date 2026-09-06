@@ -216,6 +216,34 @@ def test_el_indice_marca_cual_es_el_lote_de_revisar(tmp_path):
     assert [p["revisar"] for p in datos["partes"]] == [False, True]
 
 
+def test_el_indice_marca_solo_la_pagina_con_fecha_dudosa(tmp_path):
+    normal = _page(1, "2147337", "HP-1534CMP", "2026/08/20")
+    dudosa = _page(2, "2147338", "HP-1534CMP", "2024/08/21")
+    dudosa.date_review = True
+    reporte = _reporte(normal, dudosa)
+
+    destino = escribir_indice_paginas(
+        [ArchivoDeEntrega(
+            Path("ejecucion REVISAR.pdf"),
+            secuencia_de_revisar([reporte]),
+            revisar=True,
+        )],
+        tmp_path / "corrida_paginas.json",
+    )
+    paginas = json.loads(
+        Path(destino).read_text(encoding="utf-8")
+    )["partes"][0]["paginas"]
+
+    assert paginas == [
+        {"separador": ETIQUETA_REVISAR},
+        {
+            "archivo": "fixture.pdf",
+            "pagina": 2,
+            "fecha_dudosa": True,
+        },
+    ]
+
+
 def test_el_indice_usa_el_nombre_con_el_que_sale_en_el_csv(tmp_path):
     """El PDF apartado se numera; el CSV conserva el nombre original.
 

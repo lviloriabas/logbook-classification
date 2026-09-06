@@ -7,6 +7,7 @@ no degradación del estado de página, plantilla con celdas y puertas CSV.
 from __future__ import annotations
 
 import csv
+from datetime import date
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -357,7 +358,9 @@ def test_char_cells_do_not_degrade_page_status():
     assert page.status is Status.OK
 
 
-def test_process_page_image_joins_date_cells():
+def test_process_page_image_joins_date_cells(monkeypatch):
+    monkeypatch.setattr("app.validation.date_review.reference_date",
+                        lambda today=None: today or date(2026, 7, 31))
     template = _char_template()
     config = _config()
     with patch.object(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from datetime import date
 
@@ -90,19 +91,21 @@ class TestMonthAndYearInference(unittest.TestCase):
         self.assertEqual(stats["months_filled"], 1)
         self.assertEqual(stats["years_filled"], 1)
 
-    def test_does_not_infer_across_conflicting_month_anchors(self):
+    def test_corrects_conflicting_anchor_before_inference(self):
         first = _page(1, "2147301", "20", "JUL", "26")
         middle = _page(2, "2147302", "21", None, None)
         conflicting = _page(3, "2147303", "22", "AUG", "26")
         last = _page(4, "2147304", "23", "JUL", "26")
 
-        correct_dates_by_book([_report(first, middle, conflicting, last)])
+        stats = correct_dates_by_book([
+            _report(first, middle, conflicting, last)
+        ])
 
-        self.assertIsNone(_field_of(middle, "month").value)
-        # El ano es independiente del conflicto de mes y si puede
-        # inferirse entre las anclas 26.
+        self.assertEqual(_field_of(middle, "month").value, "JUL")
+        self.assertEqual(_field_of(conflicting, "month").value, "JUL")
         self.assertEqual(_field_of(middle, "year").value, "26")
-        self.assertIsNone(middle.date)
+        self.assertEqual(middle.date, "2026/07/21")
+        self.assertEqual(stats["bracket_corrected"], 1)
 
     def test_short_edge_is_inferred_from_two_local_anchors(self):
         missing = _page(1, "2147301", "20", None, None)
@@ -114,6 +117,51 @@ class TestMonthAndYearInference(unittest.TestCase):
         self.assertEqual(_field_of(missing, "month").value, "JUL")
         self.assertEqual(_field_of(missing, "year").value, "26")
         self.assertEqual(missing.date, "2026/07/20")
+
+    def test_short_edge_corrects_years_decades_from_local_anchors(self):
+        first = _page(
+            1, "2147301", "20", "AGO", "01",
+            year_status=Status.WARNING,
+        )
+        second = _page(
+            2, "2147302", "20", "AGO", "06",
+            year_status=Status.WARNING,
+        )
+        third = _page(3, "2147303", "20", "AGO", "26")
+        last = _page(4, "2147304", "21", "AGO", "26")
+        last_year = _field_of(last, "year")
+        last_year.source = "date_cells"
+        last_year.inference_method = "date_cells"
+        last_year.confidence = 0.56
+        last_year.alternatives = ["20"]
+
+        correct_dates_by_book([_report(first, second, third, last)])
+
+        self.assertEqual(_field_of(first, "year").value, "26")
+        self.assertEqual(_field_of(second, "year").value, "26")
+        self.assertEqual(first.date, "2026/08/20")
+        self.assertEqual(
+            _field_of(first, "year").inference_method,
+            "log_number_edge_correction",
+        )
+
+    def test_short_edge_corrects_a_month_that_goes_back(self):
+        first = _page(1, "2147301", "19", "AGO", "26")
+        second = _page(2, "2147302", "20", "AGO", "26")
+        wrong = _page(
+            3, "2147303", "21", "JUL", "26",
+            month_status=Status.WARNING,
+        )
+        month = _field_of(wrong, "month")
+        month.confidence = 0.49
+        month.source = "date_cells"
+        month.inference_method = "date_cells"
+
+        correct_dates_by_book([_report(first, second, wrong)])
+
+        self.assertEqual(month.value, "AGO")
+        self.assertEqual(month.inference_method, "log_number_edge_correction")
+        self.assertEqual(wrong.date, "2026/08/21")
 
     def test_invalid_three_digit_year_can_be_recovered(self):
         first = _page(1, "2147301", "20", "JUL", "26")
@@ -134,7 +182,7 @@ class TestMonthAndYearInference(unittest.TestCase):
         self.assertEqual(year.source, "inferred")
         self.assertEqual(invalid.date, "2026/07/20")
 
-    def test_valid_conflicting_reading_is_preserved_and_flagged(self):
+    def test_valid_conflicting_reading_is_corrected_by_two_anchors(self):
         first = _page(1, "2147301", "20", "JUL", "26")
         conflicting = _page(2, "2147302", "21", "AUG", "26")
         last = _page(3, "2147303", "22", "JUL", "26")
@@ -142,10 +190,11 @@ class TestMonthAndYearInference(unittest.TestCase):
         stats = correct_dates_by_book([_report(first, conflicting, last)])
 
         month = _field_of(conflicting, "month")
-        self.assertEqual(month.value, "AUG")
+        self.assertEqual(month.value, "JUL")
         self.assertIs(month.status, Status.WARNING)
-        self.assertEqual(month.source, "direct")
-        self.assertGreater(stats["flagged"], 0)
+        self.assertEqual(month.source, "book_correction")
+        self.assertEqual(month.inference_method, "log_number_bracket")
+        self.assertEqual(stats["bracket_corrected"], 1)
 
     def test_warning_reading_does_not_become_an_anchor(self):
         doubtful = _page(
@@ -371,6 +420,87 @@ class TestYearConsensus(unittest.TestCase):
                          ["25", "25", "26", "26"])
         self.assertEqual(stats["years_consensus"], 0)
 
+
+class TestRunYearConsensus(unittest.TestCase):
+    def test_uses_a_widespread_year_only_as_an_ocr_tiebreaker(self):
+        pages = []
+        page_number = 1
+        for prefix in ("21473", "21474", "21475"):
+            for suffix in range(1, 5):
+                pages.append(_page(
+                    page_number, f"{prefix}{suffix:02d}",
+                    "20", "AGO", "26",
+                ))
+                page_number += 1
+
+        doubtful = _page(page_number, "2147601", "20", "AGO", "16")
+        doubtful_year = _field_of(doubtful, "year")
+        doubtful_year.source = "date_cells"
+        doubtful_year.alternatives = ["26"]
+        pages.append(doubtful)
+
+        old_anchor = _page(page_number + 1, "2147751", "20", "JUL", "20")
+        old_doubtful = _page(
+            page_number + 2, "2147752", "21", "JUL", "20"
+        )
+        _field_of(old_doubtful, "year").alternatives = ["26"]
+        pages.extend((old_anchor, old_doubtful))
+
+        stats = correct_dates_by_book([_report(*pages)])
+
+        self.assertEqual(doubtful.date, "2026/08/20")
+        self.assertEqual(doubtful_year.inference_method, "run_year_consensus")
+        self.assertEqual(stats["run_year_consensus"], 1)
+        self.assertEqual(old_anchor.date, "2020/07/20")
+        self.assertEqual(old_doubtful.date, "2020/07/21")
+
+    def test_marks_an_isolated_crazy_year_when_ocr_cannot_correct_it(self):
+        pages = []
+        page_number = 1
+        for prefix in ("21473", "21474", "21475"):
+            for suffix in range(1, 5):
+                pages.append(_page(
+                    page_number, f"{prefix}{suffix:02d}",
+                    "20", "AGO", "26",
+                ))
+                page_number += 1
+
+        suspicious = _page(
+            page_number, "2147601", "20", "AGO", "24"
+        )
+        pages.append(suspicious)
+
+        stats = correct_dates_by_book([_report(*pages)])
+
+        self.assertIsNone(suspicious.date)
+        self.assertEqual(_field_of(suspicious, "year").value, "24")
+        self.assertTrue(suspicious.date_review)
+        self.assertIs(_field_of(suspicious, "year").status, Status.ERROR)
+        self.assertEqual(stats["run_year_review"], 1)
+
+    def test_preserves_a_different_year_supported_twice_in_its_book(self):
+        pages = []
+        page_number = 1
+        for prefix in ("21473", "21474", "21475"):
+            for suffix in range(1, 5):
+                pages.append(_page(
+                    page_number, f"{prefix}{suffix:02d}",
+                    "20", "AGO", "26",
+                ))
+                page_number += 1
+        old_first = _page(page_number, "2147601", "20", "AGO", "24")
+        old_second = _page(
+            page_number + 1, "2147602", "21", "AGO", "24"
+        )
+        pages.extend((old_first, old_second))
+
+        correct_dates_by_book([_report(*pages)])
+
+        self.assertTrue(old_first.date_review)
+        self.assertTrue(old_second.date_review)
+        self.assertEqual(old_first.date, "2024/08/20")
+        self.assertEqual(old_second.date, "2024/08/21")
+
 class TestSafetyBoundaries(unittest.TestCase):
     def test_unreadable_log_number_is_not_positionally_inferred(self):
         """Sin número no hay posición, así que no hay tramo que interpolar.
@@ -478,12 +608,13 @@ class TestRunWindow(unittest.TestCase):
         self.assertEqual(first.date, "2026/08/20")
 
 
-    def test_month_after_the_run_is_not_a_reading(self):
+    @patch("app.utils.date_window.reference_date", return_value=date(2026, 9, 25))
+    def test_month_after_the_run_is_not_a_reading(self, _clock):
         # Un AGO leído OCT en una ejecución de agosto no es una bitácora
         # adelantada: es el mes mal leído.
-        run_month = date.today().month
-        ahead_month = _format_month(run_month % 12 + 1)
-        year = f"{date.today().year % 100:02d}"
+        run_month = 9
+        ahead_month = _format_month(run_month + 1)
+        year = "26"
         first = _page(1, "2147301", "19", _format_month(run_month), year)
         ahead = _page(2, "2147302", "20", ahead_month, year)
         last = _page(3, "2147303", "21", _format_month(run_month), year)
@@ -534,16 +665,15 @@ class TestBracketedMonth(unittest.TestCase):
         self.assertEqual(_field_of(blank_month, "month").value, "AGO")
         self.assertEqual(blank_month.date, "2026/08/20")
 
-    def test_a_month_as_firm_as_its_neighbours_is_only_flagged(self):
+    def test_a_firm_impossible_month_is_corrected(self):
         first = _page(1, "2147301", "19", "AGO", "26")
         firm = _page(2, "2147302", "20", "JUL", "26")
         last = _page(3, "2147303", "20", "AGO", "26")
 
         stats = correct_dates_by_book([_report(first, firm, last)])
 
-        self.assertEqual(_field_of(firm, "month").value, "JUL")
-        self.assertEqual(stats["bracket_corrected"], 0)
-        self.assertGreater(stats["flagged"], 0)
+        self.assertEqual(_field_of(firm, "month").value, "AGO")
+        self.assertEqual(stats["bracket_corrected"], 1)
 
     def test_two_equal_months_of_different_years_do_not_fix_the_middle(self):
         # Entre JUL de un año y JUL del siguiente cabe cualquier mes.

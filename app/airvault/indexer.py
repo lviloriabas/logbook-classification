@@ -56,6 +56,7 @@ FALLOS_DE_CAMINO = (ErrorDeSesion, ErrorDeConexion)
 # is required». Mandarla no la deja amarilla, la rechaza, y el rechazo se
 # llevaba por delante el resto del batch.
 AVISOS_DE_REVISION = {
+    "fecha_dudosa",
     "matricula_vacia",
     "matricula_desconocida",
     "log_duplicado",
@@ -260,7 +261,11 @@ class Indexador:
                 self.manifiesto.audit_status_discrepancia,
             )
             avisos = list(por_seq.get(registro.seq, ()))
-            avisos.extend(verificar_obligatorios(registro, valores))
+            avisos.extend(verificar_obligatorios(
+                registro,
+                valores,
+                permitir_fecha_dudosa=self.manifiesto.solo_subir,
+            ))
 
             remota = remotas.get(registro.seq)
             if remota is None:

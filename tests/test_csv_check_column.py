@@ -12,23 +12,12 @@ reordenar índices.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
 
 from app.gui.csv_model import CHECK_COLUMN
 from app.gui.csv_viewer import CsvViewerWindow
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _visor(tmp_path: Path) -> CsvViewerWindow:

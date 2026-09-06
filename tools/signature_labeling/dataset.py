@@ -15,6 +15,7 @@ lugar de tener que volver a extraer el batch entero por cada valor.
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import asdict, dataclass, field as dc_field
 from datetime import datetime
 from pathlib import Path
@@ -85,6 +86,9 @@ class Dataset:
     samples: List[Sample] = dc_field(default_factory=list)
     labels: Dict[str, str] = dc_field(default_factory=dict)
     created: str = ""
+    # Recortes que ya se avisó que no se pueden leer, para no repetir el
+    # aviso una vez por cada margen y umbral que recorre el calibrador.
+    _ilegibles: set = dc_field(default_factory=set, repr=False)
 
     # -- E/S ---------------------------------------------------------------
 
@@ -164,8 +168,23 @@ class Dataset:
         return self.root / sample.file
 
     def load_crop(self, sample: Sample) -> Optional[np.ndarray]:
-        """Recorte completo tal como se guardó (con el margen generoso)."""
+        """Recorte completo tal como se guardó (con el margen generoso).
+
+        Un PNG ilegible se avisa por la salida de error, una vez por muestra.
+        Quien lo lee devuelve NaN y el contador descarta la fila, así que sin
+        el aviso la muestra desaparece de la calibración en silencio: los
+        informes siguen cuadrando, solo que sobre un recorte menos, y el
+        etiquetado de esa muestra —que es trabajo humano— se pierde sin que
+        nadie se entere. Ocurrió con ``test3_p0031_captain_signature``.
+        """
         image = cv2.imread(str(self.crop_path(sample)), cv2.IMREAD_COLOR)
+        if image is None and sample.id not in self._ilegibles:
+            self._ilegibles.add(sample.id)
+            print(
+                f"  aviso: no se pudo leer {self.crop_path(sample)}; "
+                f"la muestra queda fuera de las métricas",
+                file=sys.stderr, flush=True,
+            )
         return image
 
     def load_crop_padded(

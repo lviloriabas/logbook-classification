@@ -5,12 +5,10 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import cv2
-import numpy as np
 import pymupdf as fitz
 
 from app.core.config import AppConfig, config_for_pdf
 from app.core.pipeline import OcrProcessPool, Pipeline
-from app.models.schemas import OcrResult
 from app.templates.schema import Template
 from app.vision.alignment import TransformResult, apply_transform
 from app.vision.pdf_loader import PdfPageRenderer

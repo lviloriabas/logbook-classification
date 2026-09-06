@@ -301,7 +301,7 @@ class CadenaAutomatica(QWidget):
 
     _AYUDAS = {
         PENDIENTE: "todavía no empezó",
-        OMITIDO: "no está marcado en el menú de «Procesar todo»; no se hace",
+        OMITIDO: "no está marcado en el menú de «Automático»; no se hace",
         EN_CURSO: "en curso",
         HECHO: "terminado",
         CORTADO: "se cortó aquí",
@@ -373,21 +373,21 @@ class CadenaAutomatica(QWidget):
         )
         if cortado:
             return (
-                f"Procesar todo: se cortó en «{NOMBRES_CORTOS[cortado]}» "
+                f"Automático: se cortó en «{NOMBRES_CORTOS[cortado]}» "
                 f"({hechos} de {len(elegidos)} pasos)"
             )
         if hechos == len(elegidos):
-            return "Procesar todo: completo"
+            return "Automático: completo"
         en_curso = next(
             (paso for paso in RECORRIDO if self._estados[paso] == EN_CURSO),
             "",
         )
         if en_curso:
             return (
-                f"Procesar todo: {NOMBRES_CORTOS[en_curso].lower()} "
+                f"Automático: {NOMBRES_CORTOS[en_curso].lower()} "
                 f"({hechos} de {len(elegidos)} pasos)"
             )
-        return f"Procesar todo: {hechos} de {len(elegidos)} pasos"
+        return f"Automático: {hechos} de {len(elegidos)} pasos"
 
     # ── cambio ─────────────────────────────────────────────────────
 

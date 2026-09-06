@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 
 from app.core.config import AppConfig
@@ -14,8 +17,12 @@ from app.vision.alignment import (
     TransformResult,
     align_to_template,
     compute_similarity_transform,
+    load_template_reference,
+    printed_structure,
     scale_transform_for_shape,
 )
+from app.templates.manager import TemplateManager
+from app.templates.schema import Template
 
 
 class TestAlignmentGate(unittest.TestCase):
@@ -33,6 +40,21 @@ class TestAlignmentGate(unittest.TestCase):
 
         self.assertEqual(quality, "low")
         np.testing.assert_array_equal(aligned, image)
+
+    def test_reliable_transform_uses_reference_canvas_size(self):
+        page = np.full((40, 50, 3), 255, np.uint8)
+        template = np.full((45, 60, 3), 255, np.uint8)
+        transform = TransformResult(reliable=True)
+        with patch(
+            "app.vision.alignment.compute_similarity_transform",
+            return_value=transform,
+        ):
+            aligned, quality = align_to_template(
+                page, template, AppConfig(align=True)
+            )
+
+        self.assertEqual(quality, "ok")
+        self.assertEqual(aligned.shape, template.shape)
 
     def test_anchor_is_unreliable_without_reliable_window_member(self):
         transforms = [
@@ -84,6 +106,68 @@ class TestAlignmentGate(unittest.TestCase):
         self.assertTrue(transform.reliable)
         self.assertAlmostEqual(transform.tx, -6.0, delta=0.5)
         self.assertAlmostEqual(transform.ty, 0.0, delta=0.5)
+
+    def test_separator_without_printed_grid_is_rejected(self):
+        separator = np.full((400, 600, 3), 255, dtype=np.uint8)
+        cv2.putText(
+            separator, "SEPARADOR", (120, 210), cv2.FONT_HERSHEY_SIMPLEX,
+            2.0, (0, 0, 0), 4,
+        )
+        form = np.full_like(separator, 255)
+        for x in range(30, 571, 60):
+            cv2.line(form, (x, 20), (x, 380), (0, 0, 0), 2)
+        for y in range(20, 381, 45):
+            cv2.line(form, (30, y), (570, y), (0, 0, 0), 2)
+
+        transform = compute_similarity_transform(
+            separator, form, AppConfig(min_match_count=10)
+        )
+
+        self.assertFalse(transform.reliable)
+
+    def test_printed_structure_discards_short_handwriting(self):
+        page = np.full((300, 500, 3), 255, dtype=np.uint8)
+        cv2.line(page, (20, 80), (480, 80), (0, 0, 0), 2)
+        cv2.line(page, (100, 20), (100, 280), (0, 0, 0), 2)
+        cv2.putText(
+            page, "ABC", (210, 180), cv2.FONT_HERSHEY_SCRIPT_SIMPLEX,
+            1.0, (0, 0, 0), 2,
+        )
+
+        structure = printed_structure(page)
+
+        self.assertGreater(np.count_nonzero(structure[77:84, 30:470]), 900)
+        self.assertLess(np.count_nonzero(structure[145:190, 190:290]), 350)
+
+    def test_reference_path_is_relative_to_template_file_and_scales(self):
+        with TemporaryDirectory(dir=Path("tmp")) as directory:
+            root = Path(directory)
+            reference = np.full((30, 40, 3), 173, dtype=np.uint8)
+            cv2.imwrite(str(root / "reference.png"), reference)
+            template_path = root / "template.json"
+            template_path.write_text(
+                '{"name":"fixture","reference_image":"reference.png",'
+                '"reference_dpi":150,"fields":[]}',
+                encoding="utf-8",
+            )
+            template = TemplateManager(root).load(template_path)
+
+            loaded = load_template_reference(template, 300)
+
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.shape[:2], (60, 80))
+
+    def test_reference_metadata_is_not_serialized_as_runtime_source_path(self):
+        template = Template(
+            name="fixture",
+            reference_image="reference.png",
+            source_path=Path("template.json"),
+        )
+
+        dumped = template.model_dump(mode="json")
+
+        self.assertEqual(dumped["reference_image"], "reference.png")
+        self.assertNotIn("source_path", dumped)
 
 
 if __name__ == "__main__":

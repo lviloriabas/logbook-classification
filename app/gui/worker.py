@@ -260,6 +260,7 @@ class PreprocessWorker(QThread):
     def __init__(
         self,
         pdf_paths: List[Path],
+        template_path: Path,
         config: AppConfig,
         page_range: PageRange | None = None,
         reference_page: int = 1,
@@ -267,6 +268,7 @@ class PreprocessWorker(QThread):
     ) -> None:
         super().__init__(parent)
         self.pdf_paths = [Path(path) for path in pdf_paths]
+        self.template_path = Path(template_path)
         self.config = config
         self.page_range = page_range
         self.reference_page = max(1, reference_page)
@@ -274,10 +276,15 @@ class PreprocessWorker(QThread):
     def run(self) -> None:
         """Renderiza, endereza y alinea las páginas para su revisión visual."""
         try:
-            from app.vision.alignment import compute_similarity_transform
+            from app.vision.alignment import (
+                compute_similarity_transform,
+                load_template_reference,
+            )
             from app.core.config import config_for_pdf
             from app.vision.pdf_loader import PdfPageRenderer, page_count
             from app.vision.preprocessing import deskew
+
+            template = TemplateManager().load(self.template_path)
 
             slices = slice_batch(
                 self.pdf_paths,
@@ -298,10 +305,14 @@ class PreprocessWorker(QThread):
                 with PdfPageRenderer(pdf_path) as renderer:
                     reference = None
                     if file_config.align and count:
-                        reference = renderer.render_page(
-                            min(first + self.reference_page - 1, last),
-                            file_config.dpi,
+                        reference = load_template_reference(
+                            template, file_config.dpi
                         )
+                        if reference is None:
+                            reference = renderer.render_page(
+                                min(first + self.reference_page - 1, last),
+                                file_config.dpi,
+                            )
 
                     for page_number in range(first, last + 1):
                         if self.isInterruptionRequested():
@@ -332,6 +343,12 @@ class PreprocessWorker(QThread):
                                     "tx_ratio": float(transform.tx) / max(width, 1),
                                     "ty_ratio": float(transform.ty) / max(height, 1),
                                     "scale": float(transform.scale),
+                                    "target_width_ratio": (
+                                        float(reference.shape[1]) / max(width, 1)
+                                    ),
+                                    "target_height_ratio": (
+                                        float(reference.shape[0]) / max(height, 1)
+                                    ),
                                 }
                         done += 1
                         self.page_ready.emit(

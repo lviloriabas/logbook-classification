@@ -8,17 +8,16 @@ discrepancias al final) para no tener que marcarlo en cada ejecución.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QToolButton
 
 from app.gui.csv_utils import find_run_dirs
 from app.gui.csv_viewer import CsvViewerWindow
 from app.gui.export_options import ExportOptionsGroup
-from app.reports.csv_reporter import CSV_DATE_MONTH_END
+from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
 from app.gui.widgets import SpinBoxWithButtons
 
 
@@ -106,9 +105,18 @@ def test_sin_corridas_el_historial_lo_dice_y_no_se_puede_usar(tmp_path: Path):
         app.processEvents()
 
 
-def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
+def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias(
+    tmp_path: Path,
+):
     QApplication.instance() or QApplication([])
-    options = ExportOptionsGroup()
+    # Con su propio archivo de preferencias, para que lo que tenga guardado
+    # quien ejecuta las pruebas no decida con que arranca el cuadro. Solo
+    # lleva las paginas por parte, que aqui no se miran: el resto de esta
+    # prueba es lo que trae el programa cuando no hay nada elegido.
+    (tmp_path / "airvault.json").write_text(
+        '{"paginas_por_batch": 400}', encoding="utf-8"
+    )
+    options = ExportOptionsGroup(raiz=tmp_path)
 
     assert isinstance(options.output_mode_combo, QComboBox)
     etiquetas = {
@@ -120,6 +128,7 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
     assert options.un_solo_pdf()
     assert options.csv_date_mode_combo.itemText(0) == "Fin de mes"
     assert options.csv_date_mode_combo.itemText(1) == "Día exacto"
+    # Sin nada guardado todavia, la primera de la lista.
     assert options.csv_date_mode() == CSV_DATE_MONTH_END
     assert options.csv_date_mode_combo.maxVisibleItems() == 12
     assert options.csv_date_mode_combo.minimumContentsLength() == 14
@@ -145,6 +154,41 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias():
     options.set_un_solo_pdf(False)
     assert not options.un_solo_pdf()
     assert not options.partes_check.isEnabled()
+
+
+def test_la_politica_de_fecha_se_recuerda_para_la_proxima_vez(tmp_path: Path):
+    """La ventana abre en la ultima elegida, no en una fija del programa."""
+    QApplication.instance() or QApplication([])
+    options = ExportOptionsGroup(raiz=tmp_path)
+    assert options.csv_date_mode() == CSV_DATE_MONTH_END
+
+    options.csv_date_mode_combo.setCurrentIndex(1)
+    assert options.csv_date_mode() == CSV_DATE_SPECIFIC
+    guardado = json.loads(
+        (tmp_path / "airvault.json").read_text(encoding="utf-8")
+    )
+    assert guardado["csv_date_mode"] == CSV_DATE_SPECIFIC
+
+    # Abrir de nuevo el programa: la eleccion sigue en pie.
+    assert ExportOptionsGroup(raiz=tmp_path).csv_date_mode() == (
+        CSV_DATE_SPECIFIC
+    )
+
+    # Y volver atras tambien se recuerda.
+    options.csv_date_mode_combo.setCurrentIndex(0)
+    assert ExportOptionsGroup(raiz=tmp_path).csv_date_mode() == (
+        CSV_DATE_MONTH_END
+    )
+
+
+def test_una_preferencia_de_fecha_ilegible_abre_en_la_primera(tmp_path: Path):
+    """Un valor que ya no existe no deja el desplegable en blanco."""
+    QApplication.instance() or QApplication([])
+    (tmp_path / "airvault.json").write_text(
+        '{"csv_date_mode": "lo_que_sea"}', encoding="utf-8"
+    )
+    options = ExportOptionsGroup(raiz=tmp_path)
+    assert options.csv_date_mode() == CSV_DATE_MONTH_END
 
 
 def test_la_cantidad_de_paginas_se_recuerda_entre_los_dos_lugares(tmp_path):

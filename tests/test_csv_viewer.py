@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import os
 import time
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QColor, QPalette
@@ -1106,3 +1103,69 @@ def test_exporting_rewrites_the_run_without_reprocessing(tmp_path: Path):
     finally:
         viewer.close()
         app.processEvents()
+
+
+def test_el_numero_tecleado_en_el_visor_sobrevive_a_un_refresco(
+    tmp_path: Path, monkeypatch
+):
+    """Lo que se escribe en la caja manda sobre los refrescos de fondo.
+
+    La caja la reescribe cualquier cosa que mueva la página: la fila que se
+    elige en la tabla, el PDF que se carga, el render que llega. Pisar lo
+    tecleado hacía que Enter saltara a la página que ya estaba a la vista.
+    """
+    from PySide6.QtTest import QTest
+
+    app = QApplication.instance() or QApplication([])
+    pdf_path = tmp_path / "book.pdf"
+    pdf_path.touch()
+    _stub_pdf(monkeypatch)
+    viewer = EmbeddedPdfViewer()
+    viewer.load_paths([pdf_path])
+    viewer.show()
+    app.processEvents()
+
+    viewer.page_edit.setFocus()
+    viewer.page_edit.selectAll()
+    QTest.keyClicks(viewer.page_edit, "9")
+    viewer._sync_controls()
+    viewer.show_page(viewer._global_index)
+
+    assert viewer.page_edit.text() == "9"
+
+    QTest.keyClick(viewer.page_edit, Qt.Key.Key_Return)
+    app.processEvents()
+
+    assert viewer._page == 9
+    assert viewer.page_edit.text() == "9"
+
+    # Sin edición a medias la caja vuelve a seguir a la página mostrada.
+    viewer.show_page(4)
+    assert viewer.page_edit.text() == "4"
+    viewer.close()
+    app.processEvents()
+
+
+def test_la_caja_de_pagina_acepta_hasta_el_total_que_anuncia(
+    tmp_path: Path, monkeypatch
+):
+    """El validador va con el total: si se queda corto, Enter no hace nada.
+
+    Sin PDF a la vista la caja seguía admitiendo solo una página, así que Qt
+    daba por incompleto cualquier número de dos cifras y no llegaba a emitir
+    ``editingFinished``.
+    """
+    app = QApplication.instance() or QApplication([])
+    pdf_path = tmp_path / "book.pdf"
+    pdf_path.touch()
+    _stub_pdf(monkeypatch)
+    viewer = EmbeddedPdfViewer()
+
+    viewer.load_paths(
+        [pdf_path], page_refs=[(None, 0)] + [(pdf_path, page) for page in range(1, 12)]
+    )
+
+    assert viewer.total_pages.text() == "de 12"
+    assert viewer.page_edit.validator().top() == 12
+    viewer.close()
+    app.processEvents()

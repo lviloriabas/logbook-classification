@@ -10,14 +10,9 @@ tabla los nombre y que la tabla los deje resaltados a la vez.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtWidgets import QApplication
 
 from app.airvault.model import Registro
 from app.gui.airvault_busqueda import (
@@ -26,11 +21,6 @@ from app.gui.airvault_busqueda import (
     frase_de,
     valores_de,
 )
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _bitacora(seq: int, log: str = "", **campos) -> Registro:

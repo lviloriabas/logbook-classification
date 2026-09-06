@@ -10,15 +10,10 @@ Qt a repasar la columna entera cada vez que cambia una celda.
 
 from __future__ import annotations
 
-import os
 import time
 
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QHeaderView
+from PySide6.QtWidgets import QHeaderView
 
 from app.airvault.flujo import BatchPrevisto
 from app.airvault.model import Registro
@@ -27,11 +22,6 @@ from app.gui.airvault_previa import BitacorasDelBatch, VistaPreviaBatches
 
 #: Columna «Log Page» de la lista de páginas de un batch.
 LOG_PAGE = 3
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _bitacora(seq: int) -> Registro:

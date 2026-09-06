@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pymupdf as fitz
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 

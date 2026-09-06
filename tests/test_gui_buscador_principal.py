@@ -7,23 +7,13 @@ igual en las dos, y en la principal no había manera de buscar.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtWidgets import QApplication, QTableWidgetItem
+from PySide6.QtWidgets import QTableWidgetItem
 
 from app.gui.main_window import MainWindow
 
 RAIZ = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _tabla_con(window: MainWindow, columnas: list[str], filas: list[list[str]]):
@@ -38,107 +28,82 @@ def _tabla_con(window: MainWindow, columnas: list[str], filas: list[list[str]]):
             window.table.setItem(indice, columna, QTableWidgetItem(valor))
 
 
-def test_buscar_una_bitacora_lleva_a_su_fila(app):
-    window = MainWindow()
-    try:
-        _tabla_con(
-            window,
-            ["file", "page", "log_number"],
-            [
-                ["a.pdf", "1", "2147300"],
-                ["a.pdf", "2", "2147301"],
-                ["b.pdf", "1", "2147302"],
-            ],
-        )
+def test_buscar_una_bitacora_lleva_a_su_fila(window):
+    _tabla_con(
+        window,
+        ["file", "page", "log_number"],
+        [
+            ["a.pdf", "1", "2147300"],
+            ["a.pdf", "2", "2147301"],
+            ["b.pdf", "1", "2147302"],
+        ],
+    )
 
-        window.search_edit.setText("2147301")
-        window._buscar_en_la_tabla()
+    window.search_edit.setText("2147301")
+    window._buscar_en_la_tabla()
 
-        assert window.table.currentRow() == 1
-        assert "Coincidencia 1 de 1" in window.search_context.text()
-        assert "log_number" in window.search_context.text()
-    finally:
-        window.close()
-        app.processEvents()
+    assert window.table.currentRow() == 1
+    assert "Coincidencia 1 de 1" in window.search_context.text()
+    assert "log_number" in window.search_context.text()
 
 
-def test_la_bitacora_entera_gana_a_la_mencion_de_paso(app):
+def test_la_bitacora_entera_gana_a_la_mencion_de_paso(window):
     """Escribir el número completo lleva a esa bitácora, no a la que lo contiene."""
-    window = MainWindow()
-    try:
-        _tabla_con(
-            window,
-            ["file", "log_number"],
-            [["largo.pdf", "12147300"], ["justo.pdf", "2147300"]],
-        )
+    _tabla_con(
+        window,
+        ["file", "log_number"],
+        [["largo.pdf", "12147300"], ["justo.pdf", "2147300"]],
+    )
 
-        window.search_edit.setText("2147300")
-        window._buscar_en_la_tabla()
+    window.search_edit.setText("2147300")
+    window._buscar_en_la_tabla()
 
-        assert window.table.currentRow() == 1, "la coincidencia exacta va primero"
-        assert "Coincidencia 1 de 2" in window.search_context.text()
-    finally:
-        window.close()
-        app.processEvents()
+    assert window.table.currentRow() == 1, "la coincidencia exacta va primero"
+    assert "Coincidencia 1 de 2" in window.search_context.text()
 
 
-def test_repetir_la_busqueda_avanza_a_la_siguiente(app):
-    window = MainWindow()
-    try:
-        _tabla_con(
-            window,
-            ["file", "matricula"],
-            [["a.pdf", "YV3021"], ["b.pdf", "YV3021"], ["c.pdf", "YV1010"]],
-        )
+def test_repetir_la_busqueda_avanza_a_la_siguiente(window):
+    _tabla_con(
+        window,
+        ["file", "matricula"],
+        [["a.pdf", "YV3021"], ["b.pdf", "YV3021"], ["c.pdf", "YV1010"]],
+    )
 
-        window.search_edit.setText("YV3021")
-        window._buscar_en_la_tabla()
-        assert window.table.currentRow() == 0
+    window.search_edit.setText("YV3021")
+    window._buscar_en_la_tabla()
+    assert window.table.currentRow() == 0
 
-        window._buscar_en_la_tabla()
+    window._buscar_en_la_tabla()
 
-        assert window.table.currentRow() == 1
-        assert "Coincidencia 2 de 2" in window.search_context.text()
-        assert window.search_next.isEnabled()
-    finally:
-        window.close()
-        app.processEvents()
+    assert window.table.currentRow() == 1
+    assert "Coincidencia 2 de 2" in window.search_context.text()
+    assert window.search_next.isEnabled()
 
 
-def test_sin_coincidencias_lo_dice_y_no_mueve_la_tabla(app):
-    window = MainWindow()
-    try:
-        _tabla_con(window, ["file"], [["a.pdf"], ["b.pdf"]])
-        window.table.selectRow(1)
+def test_sin_coincidencias_lo_dice_y_no_mueve_la_tabla(window):
+    _tabla_con(window, ["file"], [["a.pdf"], ["b.pdf"]])
+    window.table.selectRow(1)
 
-        window.search_edit.setText("no-esta")
-        window._buscar_en_la_tabla()
+    window.search_edit.setText("no-esta")
+    window._buscar_en_la_tabla()
 
-        assert window.table.currentRow() == 1
-        assert "sin coincidencias" in window.search_context.text()
-        assert not window.search_next.isEnabled()
-    finally:
-        window.close()
-        app.processEvents()
+    assert window.table.currentRow() == 1
+    assert "sin coincidencias" in window.search_context.text()
+    assert not window.search_next.isEnabled()
 
 
-def test_no_se_busca_en_las_columnas_que_la_vista_resumida_oculta(app):
-    window = MainWindow()
-    try:
-        _tabla_con(
-            window,
-            ["file", "log_number_comment"],
-            [["a.pdf", "revisar"], ["b.pdf", "otro"]],
-        )
-        window.table.setColumnHidden(1, True)
+def test_no_se_busca_en_las_columnas_que_la_vista_resumida_oculta(window):
+    _tabla_con(
+        window,
+        ["file", "log_number_comment"],
+        [["a.pdf", "revisar"], ["b.pdf", "otro"]],
+    )
+    window.table.setColumnHidden(1, True)
 
-        window.search_edit.setText("revisar")
-        window._buscar_en_la_tabla()
+    window.search_edit.setText("revisar")
+    window._buscar_en_la_tabla()
 
-        assert "sin coincidencias" in window.search_context.text()
-    finally:
-        window.close()
-        app.processEvents()
+    assert "sin coincidencias" in window.search_context.text()
 
 
 def test_rehacer_la_tabla_olvida_las_coincidencias(app):

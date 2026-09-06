@@ -9,12 +9,9 @@ sobre la misma tinta.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import numpy as np
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 

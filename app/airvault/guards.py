@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Mapping, Sequence, Set
 
 from app.airvault.config import (
+    CAMPO_END_DATE,
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
     CAMPOS_OBLIGATORIOS,
@@ -189,7 +190,9 @@ def verificar_matricula_del_libro(
 
 
 def verificar_obligatorios(
-    registro: Registro, valores: Mapping[int, str]
+    registro: Registro,
+    valores: Mapping[int, str],
+    permitir_fecha_dudosa: bool = False,
 ) -> List[Aviso]:
     """Ningun campo obligatorio puede ir vacio.
 
@@ -204,6 +207,20 @@ def verificar_obligatorios(
     avisos: List[Aviso] = []
     for campo in CAMPOS_OBLIGATORIOS:
         if not str(valores.get(campo, "")).strip():
+            if (
+                campo == CAMPO_END_DATE
+                and registro.fecha_dudosa
+                and permitir_fecha_dudosa
+            ):
+                avisos.append(
+                    Aviso(
+                        registro.seq,
+                        "fecha_dudosa",
+                        "End Date se omite en REVISAR porque el ano leido "
+                        "no pudo confirmarse",
+                    )
+                )
+                continue
             avisos.append(
                 Aviso(
                     registro.seq,

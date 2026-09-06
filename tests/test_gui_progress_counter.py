@@ -8,10 +8,7 @@ vuelo los avisos llegan desordenados, así que el contador solo puede subir.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 

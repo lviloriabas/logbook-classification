@@ -52,18 +52,21 @@ from app.models.schemas import (
     ValidationReport,
 )
 from app.ocr.engine import OcrEngine
-from app.ocr.date_ocr import decode_slots, read_date_slots
+from app.ocr.date_ocr import read_date_slots
 from app.ocr.regional import ocr_regions
+from app.ocr.month_evidence import resolve_month_cells
+from app.ocr.month_retry import retry_month
 from app.templates.schema import FieldType, Template
 from app.utils.postprocess import (
     _OCR_LETTER_TO_DIGIT_DICT,
     AMBIGUOUS_MATRICULA_NOTE,
     FLIGHT_FUZZY_NOTE,
-    MONTH_WORDS,
     NUMERIC_MONTH_NOTE,
     WEAK_MATRICULA_NOTE,
     apply_postprocess,
     combine_date,
+    month_candidates,
+    _canonical_month,
 )
 from app.validation.page_status import recompute_page_status
 from app.validation.validator import validate_page
@@ -71,6 +74,7 @@ from app.vision.alignment import (
     TransformResult,
     apply_transform,
     compute_similarity_transform,
+    load_template_reference,
     scale_transform_for_shape,
     warp_with_transform,
 )
@@ -516,28 +520,51 @@ def process_page_image(
 
     # 3) Alineación con la plantilla (ancla estabilizada por batch si existe)
     alignment_transform: Optional[TransformResult] = None
+    alignment_source_shape = image.shape
     if config.align and reference is not None:
         if transform is not None:
-            reliable = (
+            own_reliable = (
                 transform_reliable
                 if transform_reliable is not None
                 else transform.reliable
             )
-            if reliable:
+            if transform.reliable:
                 alignment_transform = transform
-            quality = "ok" if reliable else "low"
+            quality = "ok" if own_reliable else "low"
         else:
             own = compute_similarity_transform(image, reference, config)
             if own.reliable:
                 alignment_transform = own
             quality = "ok" if own.reliable else "low"
         if alignment_transform is not None:
-            image = apply_transform(image, alignment_transform)
+            if image.shape[:2] == reference.shape[:2]:
+                image = apply_transform(image, alignment_transform)
+            else:
+                image = warp_with_transform(
+                    image,
+                    alignment_transform,
+                    (reference.shape[1], reference.shape[0]),
+                )
             if date_image is not None:
                 date_transform = scale_transform_for_shape(
-                    alignment_transform, image.shape, date_image.shape
+                    alignment_transform, alignment_source_shape, date_image.shape
                 )
-                date_image = apply_transform(date_image, date_transform)
+                target_width = round(
+                    reference.shape[1]
+                    * date_image.shape[1] / max(alignment_source_shape[1], 1)
+                )
+                target_height = round(
+                    reference.shape[0]
+                    * date_image.shape[0] / max(alignment_source_shape[0], 1)
+                )
+                if date_image.shape[:2] == (target_height, target_width):
+                    date_image = apply_transform(date_image, date_transform)
+                else:
+                    date_image = warp_with_transform(
+                        date_image,
+                        date_transform,
+                        (max(1, target_width), max(1, target_height)),
+                    )
         page.alignment_quality = quality
         if quality != "ok":
             logger.warning(f"[Página {page_number}] Alineación: {quality}")
@@ -546,13 +573,19 @@ def process_page_image(
     # transformación aplicada en coordenadas relativas para poder reproducir
     # exactamente deskew + alineación a cualquier resolución de vista previa.
     if alignment_transform is not None:
+        source_height, source_width = alignment_source_shape[:2]
         height, width = image.shape[:2]
         page.preview_alignment = {
             "rot": float(alignment_transform.rot),
-            "tx_ratio": float(alignment_transform.tx) / max(width, 1),
-            "ty_ratio": float(alignment_transform.ty) / max(height, 1),
+            "tx_ratio": float(alignment_transform.tx) / max(source_width, 1),
+            "ty_ratio": float(alignment_transform.ty) / max(source_height, 1),
             "scale": float(alignment_transform.scale),
         }
+        if width != source_width or height != source_height:
+            page.preview_alignment.update({
+                "target_width_ratio": float(width) / max(source_width, 1),
+                "target_height_ratio": float(height) / max(source_height, 1),
+            })
 
     # 3.5) Preparar una copia sin fondo impreso para las casillas. No se usa
     # ni para OCR (si varias páginas repiten la misma escritura, el consenso
@@ -592,7 +625,8 @@ def process_page_image(
                 page_number,
                 config.date_dpi,
                 band_rect,
-                image.shape,
+                alignment_source_shape,
+                target_shape=image.shape,
                 deskew_angle=deskew_angle,
                 alignment=alignment_transform,
             )
@@ -723,6 +757,10 @@ def process_page_image(
             recovered = False
             recovered_via = ""
             alternatives: List[str] = []
+            if field.postprocess == "month":
+                candidates = month_candidates(raw_text)
+                if len(candidates) > 1:
+                    alternatives = [_canonical_month(n) for n in candidates]
             is_date_field = field.postprocess in _DATE_FIELDS
             field_image = (
                 date_region.image
@@ -834,6 +872,11 @@ def process_page_image(
 
     # 7a) Unir las celdas de carácter (day_1..year_2) en day/month/year
     _join_char_fields(page)
+    retry_month(
+        page, image, template, engine, date_engine=date_engine,
+        date_image=date_image, date_region=date_region,
+        overrides=ocr_overrides, dpi=config.dpi,
+    )
 
     # 7b) Combinar day/month/year en una sola fecha normalizada
     _combine_date_parts(page)
@@ -849,7 +892,7 @@ def process_page_image(
     if page.alignment_quality != "ok":
         if page.status is Status.OK:
             page.status = Status.WARNING
-        page.comment = "Alineación no confiable; revisar campos críticos"
+        page.comment = " | ".join(filter(None, (page.comment, "Alineación no confiable; revisar campos críticos")))
     logger.info(f"[Página {page_number}] Estado: {page.status.value}")
 
     page.processing_ms = round((time.perf_counter() - t_start) * 1000, 1)
@@ -1129,54 +1172,32 @@ def _join_char_fields(page: PageResult) -> None:
             cells.append(cell)
         if not cells:
             continue
+        if component == "month":
+            numeric_month = _numeric_month_cells(cells)
+            if numeric_month and not re.search(r"[A-Za-z]", target.raw_value or ""):
+                _join_numeric_month(target, cells, numeric_month)
+            else:
+                resolve_month_cells(target, cells)
+            continue
         numeric_ranked: List[Tuple[float, str]] = []
-        if component in ("day", "year"):
-            per_cell = [
-                _numeric_cell_candidates(cell, component, index)
-                for index, cell in enumerate(cells)
-            ]
-            if all(per_cell):
-                numeric_ranked = sorted(
-                    (
-                        (round((left_score + right_score) / 2.0, 3), left + right)
-                        for left, left_score in per_cell[0].items()
-                        for right, right_score in per_cell[1].items()
-                        if component == "year" or 1 <= int(left + right) <= 31
-                    ),
-                    reverse=True,
-                )
-            aligned = [
-                max(options, key=options.get) if options else ""
-                for options in per_cell
-            ]
-        else:
-            aligned = [
-                _month_cell(_date_cell_observation(cell), index)
-                for index, cell in enumerate(cells)
-            ]
-            # El recorte completo suele conservar una letra que la celda
-            # pierde (o viceversa). Se fusionan por posición antes de elegir
-            # entre las 12 abreviaturas válidas.
-            global_month = re.sub(
-                r"[^A-Za-z0-9/]", "", target.raw_value or ""
+        per_cell = [
+            _numeric_cell_candidates(cell, component, index)
+            for index, cell in enumerate(cells)
+        ]
+        if all(per_cell):
+            numeric_ranked = sorted(
+                (
+                    (round((left_score + right_score) / 2.0, 3), left + right)
+                    for left, left_score in per_cell[0].items()
+                    for right, right_score in per_cell[1].items()
+                    if component == "year" or 1 <= int(left + right) <= 31
+                ),
+                reverse=True,
             )
-            global_aligned = (
-                [
-                    _month_cell(character, index)
-                    for index, character in enumerate(global_month)
-                ]
-                if len(global_month) == 3 else ["", "", ""]
-            )
-            month_scores: List[float] = []
-            for index in range(3):
-                if not aligned[index] and global_aligned[index]:
-                    aligned[index] = global_aligned[index]
-                scores = []
-                if _month_cell(_date_cell_observation(cells[index]), index):
-                    scores.append(cells[index].confidence)
-                if global_aligned[index] == aligned[index]:
-                    scores.append(target.confidence)
-                month_scores.append(max(scores, default=0.0))
+        aligned = [
+            max(options, key=options.get) if options else ""
+            for options in per_cell
+        ]
 
         # Evidencia estructurada completa. Para día también se acepta un solo
         # dígito únicamente si está en la segunda ranura (alineado a la
@@ -1194,18 +1215,7 @@ def _join_char_fields(page: PageResult) -> None:
             else:
                 raw = ""
         elif not all(aligned):
-            if component == "month":
-                readings = [
-                    (_date_cell_observation(cell), cell.confidence)
-                    for cell in cells
-                ]
-                partial = decode_slots("month", readings)
-                if partial[0]:
-                    raw = partial[0]
-                else:
-                    raw = _numeric_month_cells(cells)
-            else:
-                raw = ""
+            raw = ""
         else:
             raw = "".join(aligned)
         if numeric_ranked:
@@ -1223,34 +1233,16 @@ def _join_char_fields(page: PageResult) -> None:
                 target.comment = "Incomplete or invalid handwritten date cells"
             continue
         candidate, note = apply_postprocess(component, component, raw)
-        numeric_month = component == "month" and NUMERIC_MONTH_NOTE in note
-        if not candidate or (note and not numeric_month):
+        if not candidate or note:
             continue
-        if numeric_month:
-            # Un mes numérico global solo se confirma si coincide con los
-            # dígitos observados dentro de la retícula.
-            global_numeric = re.sub(r"\D", "", target.value or "")
-            if global_numeric and int(global_numeric) != int(candidate):
-                continue
         if not numeric_ranked:
-            confidences = (
-                [score for score in month_scores if score > 0]
-                if component == "month" else
-                [
-                    cell.confidence for cell in cells
-                    if _date_cell_observation(cell)
-                ]
-            )
+            confidences = [cell.confidence for cell in cells
+                           if _date_cell_observation(cell)]
             structured_confidence = (
                 round(sum(confidences) / len(confidences), 3)
                 if confidences else 0.0
             )
-        minimum_structured_confidence = (
-            0.18 if component == "month" and raw in {
-                word for word, _number in MONTH_WORDS
-            } else 0.35
-        )
-        if structured_confidence < minimum_structured_confidence:
+        if structured_confidence < 0.35:
             continue
         # Una lectura completa por posiciones vence una lectura global
         # discrepante. La confianza de los motores no es comparable entre
@@ -1258,11 +1250,10 @@ def _join_char_fields(page: PageResult) -> None:
         if (
             target.value == candidate
             and target.status is Status.OK
-            and not numeric_month
         ):
             continue
         previous = target.value
-        conflict_threshold = 0.55 if component == "month" else 0.65
+        conflict_threshold = 0.65
         if (
             previous
             and previous != candidate
@@ -1283,11 +1274,8 @@ def _join_char_fields(page: PageResult) -> None:
         target.value = candidate
         target.raw_value = raw
         target.confidence = structured_confidence
-        target.status = Status.WARNING if numeric_month else Status.OK
-        target.comment = (
-            f"{NUMERIC_MONTH_NOTE} confirmado por celdas: {raw!r}"
-            if numeric_month else f"unido de celdas: {raw!r}"
-        )
+        target.status = Status.OK
+        target.comment = f"unido de celdas: {raw!r}"
         target.source = "date_cells"
         target.inference_method = "date_cells"
         logger.info(
@@ -1368,18 +1356,35 @@ def _numeric_cell_candidates(
     return weights
 
 
-def _month_cell(value: Optional[str], position: int) -> str:
-    """Normaliza confusiones visuales de una ranura de mes."""
-    if not value or len(value) != 1:
-        return ""
-    mappings = (
-        {"3": "J", "I": "J", "/": "J"},
-        {"0": "U", "V": "U"},
-        {"1": "L", "I": "L", "C": "L", "2": "L"},
-    )
-    mapping = mappings[position] if 0 <= position < len(mappings) else {}
-    normalized = mapping.get(value.upper(), value.upper())
-    return normalized if re.fullmatch(r"[A-Z]", normalized) else ""
+def _join_numeric_month(target: FieldResult, cells: List[FieldResult], raw: str) -> None:
+    """Conserva el caso excepcional de un mes escrito solo con dígitos."""
+    candidate = str(int(raw))
+    global_numeric = re.sub(r"\D", "", target.value or "")
+    if global_numeric and int(global_numeric) != int(candidate):
+        return
+    confidences = [cell.confidence for cell in cells if _date_cell_observation(cell)]
+    confidence = sum(confidences) / len(confidences) if confidences else 0.0
+    if confidence < 0.35:
+        return
+    previous = target.value
+    if previous and previous != candidate and target.status is not Status.ERROR and confidence < 0.55:
+        if candidate not in target.alternatives:
+            target.alternatives.append(candidate)
+        if target.confidence < 0.5:
+            if previous not in target.alternatives:
+                target.alternatives.append(previous)
+            target.value = None
+            target.status = Status.ERROR
+            target.comment = "Mes numérico en conflicto con la lectura completa"
+        return
+    if previous and previous != candidate and previous not in target.alternatives:
+        target.alternatives.append(previous)
+    target.value = candidate
+    target.confidence = round(confidence, 3)
+    target.status = Status.WARNING
+    target.source = "date_cells"
+    target.inference_method = "date_cells"
+    target.comment = f"{NUMERIC_MONTH_NOTE} confirmado por celdas: {raw!r}"
 
 
 def _numeric_month_cells(cells: List[FieldResult]) -> str:
@@ -1530,15 +1535,22 @@ class Pipeline:
             )
 
         reference = self.reference_image
+        canonical_reference = False
         reference_number = min(first + self.reference_page - 1, last)
         if reference is None:
-            reference = renderer.render_page(
-                reference_number, self.config.dpi
-            )
+            reference = load_template_reference(self.template, self.config.dpi)
+            canonical_reference = reference is not None
+        if reference is None:
+            reference = renderer.render_page(reference_number, self.config.dpi)
         logger.info(
             "[Pipeline] Referencia de alineación: "
-            + ("imagen externa" if self.reference_image is not None
-               else f"página {reference_number}")
+            + (
+                "imagen externa"
+                if self.reference_image is not None
+                else "formulario canonico impreso"
+                if canonical_reference
+                else f"página {reference_number}"
+            )
         )
 
         own_transforms, anchors = self._calibrate(
@@ -1611,14 +1623,19 @@ class Pipeline:
                 if renderer is not None
                 else render_page(pdf_path, page_number, self.config.dpi)
             )
+            own_transform = own[index] if own else None
+            fallback = anchors[index] if anchors else None
+            selected = (
+                own_transform
+                if own_transform is not None and own_transform.reliable
+                else fallback
+            )
             pages.append(process_page_image(
                 image, page_number, self.config, self.engine,
                 self.template, reference,
-                transform=anchors[index] if anchors else None,
+                transform=selected,
                 transform_reliable=(
-                    anchors[index].reliable
-                    if anchors else own[index].reliable
-                    if own else None
+                    own_transform.reliable if own_transform is not None else None
                 ),
                 printed_mask=self._printed_mask,
                 slot_map=self._date_slot_map,
@@ -1641,6 +1658,14 @@ class Pipeline:
             own: Optional[List[TransformResult]] = None,
         ) -> List[PageResult]:
         pages: List[PageResult] = []
+        effective = [
+            measured
+            if measured.reliable
+            else anchors[index]
+            if anchors and index < len(anchors)
+            else measured
+            for index, measured in enumerate(own or [])
+        ]
         last = first + total - 1
         state_path: Optional[Path] = None
         owns_pool = self.process_pool is None
@@ -1650,7 +1675,7 @@ class Pipeline:
                 "template": self.template,
                 "reference": reference,
                 "pdf_path": Path(pdf_path),
-                "transforms": list(anchors or []),
+                "transforms": effective,
                 "own_reliability": [t.reliable for t in own or []],
                 "printed_mask": self._printed_mask,
                 "slot_map": dict(self._date_slot_map),
@@ -1665,7 +1690,7 @@ class Pipeline:
                 initargs=(
                     self.config, self.template, self.engine.name,
                     self.config.ocr_lang, self.cpu_threads, reference, pdf_path,
-                    list(anchors) if anchors else None,
+                    effective or None,
                     [t.reliable for t in own] if own else None,
                     self._printed_mask,
                     self._date_slot_map,
@@ -1818,12 +1843,17 @@ class Pipeline:
             gray = pending_gray.pop(index, None)
             if gray is None:
                 return
-            anchor = self._anchor_at(own, index, half_window)
-            if not anchor.reliable:
+            measured = own[index]
+            transform = (
+                measured
+                if measured.reliable
+                else self._anchor_at(own, index, half_window)
+            )
+            if not transform.reliable:
                 return
             calib_tr = TransformResult(
-                rot=anchor.rot, scale=anchor.scale,
-                tx=anchor.tx / factor, ty=anchor.ty / factor,
+                rot=transform.rot, scale=transform.scale,
+                tx=transform.tx / factor, ty=transform.ty / factor,
             )
             warped = warp_with_transform(
                 gray, calib_tr, (calib_ref.shape[1], calib_ref.shape[0])
@@ -2302,14 +2332,21 @@ class Pipeline:
             elif abs(float(skew_angle)) > 0.0:
                 image = rotate(image, float(skew_angle))
         if self.config.align and reference is not None:
-            if (anchors and 0 <= index < len(anchors)
-                    and anchors[index] is not None):
-                if anchors[index].reliable:
-                    image = apply_transform(image, anchors[index])
+            transform = None
+            if own and 0 <= index < len(own) and own[index].reliable:
+                transform = own[index]
+            elif anchors and 0 <= index < len(anchors) and anchors[index].reliable:
+                transform = anchors[index]
             else:
-                own_t = compute_similarity_transform(image, reference, self.config)
-                if own_t.reliable:
-                    image = apply_transform(image, own_t)
+                measured = compute_similarity_transform(
+                    image, reference, self.config
+                )
+                if measured.reliable:
+                    transform = measured
+            if transform is not None:
+                image = warp_with_transform(
+                    image, transform, (reference.shape[1], reference.shape[0])
+                )
         return image
 
 

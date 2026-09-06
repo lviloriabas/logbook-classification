@@ -195,7 +195,8 @@ class TestDecodeSlots(unittest.TestCase):
         text, conf = decode_slots("month", [("J", 0.9), ("U", 0.8),
                                             ("L", 0.7)])
         self.assertEqual(text, "JUL")
-        self.assertAlmostEqual(conf, 0.8)
+        # La L distingue JUL de JUN: su confianza limita la del mes.
+        self.assertAlmostEqual(conf, 0.7)
 
     def test_month_with_ambiguous_empty_slot_is_rejected(self):
         text, _ = decode_slots("month", [("J", 0.9), ("U", 0.8), ("", 0.0)])

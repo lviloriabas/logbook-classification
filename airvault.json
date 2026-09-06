@@ -14,5 +14,6 @@
   "usuario": "",
   "completar_batch": false,
   "auto_depurar": true,
-  "buscar_publicadas": false
+  "buscar_publicadas": false,
+  "csv_date_mode": "specific_day"
 }

@@ -23,8 +23,6 @@ from unittest.mock import patch
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import (
@@ -412,6 +410,18 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
             assert {control.height() for control in controles} == {
                 CONTROL_HEIGHT
             }
+            assert ventana.time_summary.height() == CONTROL_HEIGHT
+            divisores = [
+                child
+                for child in ventana.time_summary.children()
+                if child.property("role") == "metricDivider"
+            ]
+            assert len(divisores) == 2
+            assert all(divider.width() == 1 for divider in divisores)
+            assert all(
+                divider.height() == ventana.time_summary.height() - 2
+                for divider in divisores
+            )
             assert (
                 ventana.input_actions_button.width()
                 == ventana.template_actions_button.width()
@@ -455,6 +465,7 @@ def test_los_controles_vecinos_comparten_alto_y_ancho():
             assert {control.height() for control in controles} == {
                 CONTROL_HEIGHT_COMPACT
             }
+            assert ventana.time_summary.height() == CONTROL_HEIGHT_COMPACT
             # La compacta aprieta el relleno, pero la celda de la flecha mide
             # lo mismo: el botón sigue teniendo que reservarla.
             assert ventana.btn_automatico.width() >= (
@@ -489,7 +500,7 @@ def test_el_buscador_no_desalinea_el_visor_y_la_tabla():
                 ventana.preview_file_caption.mapTo(ventana, QPoint()).x(),
             }
             assert margenes == {ventana._density.window_margin}
-            assert ventana.search_edit.width() > 420
+            assert 280 <= ventana.search_edit.width() <= 420
             assert ventana.search_edit.placeholderText().startswith("Buscar ")
             assert ventana.search_next.x() + ventana.search_next.width() < (
                 ventana.width() // 2

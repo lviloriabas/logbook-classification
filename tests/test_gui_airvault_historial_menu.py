@@ -8,24 +8,16 @@ no hace falta. Ninguna de las dos toca los batches que ya estén en AirVault.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import QPoint
+from PySide6.QtWidgets import QMessageBox
 
 from app.gui.airvault_window import AirVaultWindow
 
 from test_gui_airvault_window import corrida, registrar_en_airvault
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

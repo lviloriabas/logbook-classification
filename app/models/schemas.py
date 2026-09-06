@@ -67,6 +67,10 @@ class PageResult(BaseModel):
     processing_ms: float = 0.0
     discrepancy: bool = False
     date: Optional[str] = None
+    # La fecha leida contradice una evidencia amplia de la ejecucion y no
+    # pudo corregirse con seguridad. Se conserva para diagnostico, pero el
+    # batch REVISAR no debe enviarla a AirVault.
+    date_review: bool = False
     fields: List[FieldResult] = Field(default_factory=list)
     comment: str = ""
     # Metadatos efímeros del visor. Viajan desde los workers hasta la GUI,

@@ -163,7 +163,7 @@ def page_status(page: PageResult) -> Status:
         return Status.WARNING
     # Un dato del índice marcado ya no puede dejar la página en ERROR: los
     # tres salieron, y lo que quedó marcado es una lectura por confirmar.
-    return Status.WARNING if worst is not Status.OK else Status.OK
+    return Status.WARNING if page.date_review or worst is not Status.OK else Status.OK
 
 
 def ready_for_auto_index(page: PageResult) -> bool:
@@ -181,7 +181,7 @@ def ready_for_auto_index(page: PageResult) -> bool:
     Quick Upload comprueba que esa inferencia sí haya producido un valor. Un
     log inválido va a ``REVISAR`` desde la exportación.
     """
-    if page.blank:
+    if page.blank or page.date_review:
         return False
 
     field = field_of(page, MATRICULA_FIELD_ID)

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
+from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.reports.csv_reporter import (
     CSV_DATE_MONTH_END,
     CSV_DATE_SPECIFIC,

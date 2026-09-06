@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import pickle
 from pathlib import Path
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from app.core.config import AppConfig
 from app.core.pipeline import process_page_image
-from app.gui.main_window import MainWindow, _visible_preview_fields
+from app.gui.main_window import _visible_preview_fields
 from app.models.schemas import PageResult
 from app.templates.schema import FieldTemplate, Template
 from app.vision.alignment import TransformResult
@@ -108,7 +105,7 @@ def test_preview_metadata_defaults_do_not_change_page_report_shape():
 
 
 def test_main_preview_uses_one_editable_global_page_and_tracks_file(
-    tmp_path: Path, monkeypatch
+    window, tmp_path: Path, monkeypatch
 ):
     from app.vision import pdf_loader
 
@@ -122,64 +119,131 @@ def test_main_preview_uses_one_editable_global_page_and_tracks_file(
     )
 
     app = QApplication.instance() or QApplication([])
-    window = MainWindow()
-    try:
-        window.show()
-        app.processEvents()
-        window._set_preview_documents([first, second])
-        window._preview_pdf = first
-        window._preview_page = 2
-        window._preview_total = 2
-        window._update_preview_nav()
+    window.show()
+    app.processEvents()
+    window._set_preview_documents([first, second])
+    window._preview_pdf = first
+    window._preview_page = 2
+    window._preview_total = 2
+    window._update_preview_nav()
 
-        assert not hasattr(window, "preview_pdf_combo")
-        assert window.page_edit.width() == 48
-        assert window.page_edit.text() == "2"
-        assert window.page_total_label.text() == "de 5"
-        assert window.preview_file_label.text() == "book-a.pdf"
-        pagination_center = window.preview_pagination.mapToGlobal(
-            window.preview_pagination.rect().center()
-        ).x()
-        pdf_center = window.preview_scroll.mapToGlobal(
-            window.preview_scroll.rect().center()
-        ).x()
-        assert abs(pagination_center - pdf_center) <= 1
-        file_center = window.preview_file_indicator.mapToGlobal(
-            window.preview_file_indicator.rect().center()
-        )
-        pagination_global_center = window.preview_pagination.mapToGlobal(
-            window.preview_pagination.rect().center()
-        )
-        assert file_center.x() < pagination_global_center.x()
-        assert abs(file_center.y() - pagination_global_center.y()) <= 1
-        window.preview_file_label.setText(
-            "bitacora-con-un-nombre-muy-largo-que-no-debe-tapar-el-paginador.pdf"
-        )
-        app.processEvents()
-        file_rect = window.preview_file_indicator.rect()
-        file_right = window.preview_file_indicator.mapToGlobal(
-            file_rect.topRight()
-        ).x()
-        pagination_left = window.preview_pagination.mapToGlobal(
-            window.preview_pagination.rect().topLeft()
-        ).x()
-        assert file_right < pagination_left
-        assert "Ir" not in {
-            button.text() for button in window.findChildren(QPushButton)
-        }
+    assert not hasattr(window, "preview_pdf_combo")
+    assert window.page_edit.width() == 48
+    assert window.page_edit.text() == "2"
+    assert window.page_total_label.text() == "de 5"
+    assert window.preview_file_label.text() == "book-a.pdf"
+    pagination_center = window.preview_pagination.mapToGlobal(
+        window.preview_pagination.rect().center()
+    ).x()
+    pdf_center = window.preview_scroll.mapToGlobal(
+        window.preview_scroll.rect().center()
+    ).x()
+    assert abs(pagination_center - pdf_center) <= 1
+    file_center = window.preview_file_indicator.mapToGlobal(
+        window.preview_file_indicator.rect().center()
+    )
+    pagination_global_center = window.preview_pagination.mapToGlobal(
+        window.preview_pagination.rect().center()
+    )
+    assert file_center.x() < pagination_global_center.x()
+    assert abs(file_center.y() - pagination_global_center.y()) <= 1
+    window.preview_file_label.setText(
+        "bitacora-con-un-nombre-muy-largo-que-no-debe-tapar-el-paginador.pdf"
+    )
+    app.processEvents()
+    file_rect = window.preview_file_indicator.rect()
+    file_right = window.preview_file_indicator.mapToGlobal(
+        file_rect.topRight()
+    ).x()
+    pagination_left = window.preview_pagination.mapToGlobal(
+        window.preview_pagination.rect().topLeft()
+    ).x()
+    assert file_right < pagination_left
+    assert "Ir" not in {
+        button.text() for button in window.findChildren(QPushButton)
+    }
 
-        window._next_page()
-        assert window._preview_pdf == second
-        assert window._preview_page == 1
-        assert window.page_edit.text() == "3"
-        assert window.preview_file_label.text() == "book-b.pdf"
-        assert "Página 1 de 3" in window.preview_context_label.text()
+    window._next_page()
+    assert window._preview_pdf == second
+    assert window._preview_page == 1
+    assert window.page_edit.text() == "3"
+    assert window.preview_file_label.text() == "book-b.pdf"
+    assert "Página 1 de 3" in window.preview_context_label.text()
 
-        window.page_edit.setText("5")
-        window.page_edit.editingFinished.emit()
-        assert window._preview_pdf == second
-        assert window._preview_page == 3
-        assert window.page_edit.text() == "5"
-    finally:
-        window.close()
-        app.processEvents()
+    window.page_edit.setText("5")
+    window.page_edit.editingFinished.emit()
+    assert window._preview_pdf == second
+    assert window._preview_page == 3
+    assert window.page_edit.text() == "5"
+
+
+def test_el_numero_tecleado_sobrevive_a_un_refresco_de_fondo(
+    window, tmp_path: Path, monkeypatch
+):
+    """Escribir una página y que la tabla se refresque no cambia el destino.
+
+    La navegación de la vista previa se rehace sola muchas veces mientras se
+    mira una ejecución (la tabla se llena por tandas, la lectura de la
+    entrada trae los totales). Ese refresco reescribía la caja con la página
+    que ya estaba a la vista, así que el salto acababa en ella y el selector
+    parecía no obedecer.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from app.vision import pdf_loader
+
+    first = tmp_path / "book-a.pdf"
+    second = tmp_path / "book-b.pdf"
+    first.touch()
+    second.touch()
+    monkeypatch.setattr(pdf_loader, "page_count", lambda _path: 4)
+
+    app = QApplication.instance() or QApplication([])
+    window.show()
+    app.processEvents()
+    window._set_preview_documents([first, second], [4, 4])
+    window._show_preview_page(1, first)
+    app.processEvents()
+
+    window.page_edit.setFocus()
+    window.page_edit.selectAll()
+    QTest.keyClicks(window.page_edit, "7")
+    window._update_preview_nav()
+
+    assert window.page_edit.text() == "7"
+
+    QTest.keyClick(window.page_edit, Qt.Key.Key_Return)
+    app.processEvents()
+
+    assert window._preview_pdf == second
+    assert window._preview_page == 3
+    assert window.page_edit.text() == "7"
+
+    # Sin edición a medias la caja vuelve a seguir a la página mostrada.
+    window._next_page()
+    assert window.page_edit.text() == "8"
+
+
+def test_cerrar_con_el_foco_en_la_caja_de_pagina_no_pide_render(
+    window, tmp_path: Path, monkeypatch
+):
+    """El último ``editingFinished`` del cierre no toca el hilo ya soltado."""
+    from app.vision import pdf_loader
+
+    pdf = tmp_path / "book.pdf"
+    pdf.touch()
+    monkeypatch.setattr(pdf_loader, "page_count", lambda _path: 4)
+
+    app = QApplication.instance() or QApplication([])
+    window.show()
+    app.processEvents()
+    window._set_preview_documents([pdf], [4])
+    window._show_preview_page(1, pdf)
+    window.page_edit.setFocus()
+    window._teardown()
+    app.processEvents()  # deja correr el ``deleteLater`` del hilo de render
+
+    window._jump_to_page_number()  # no debe emitir contra el hilo soltado
+
+    assert window._preview_page == 1

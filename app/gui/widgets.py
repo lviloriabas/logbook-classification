@@ -335,14 +335,17 @@ QPushButton:disabled, QToolButton:disabled {{
     border-color: {PANE_BG};
 }}
 #primaryButton {{
-    background-color: {TABLE_BASE_BG};
+    background-color: palette(highlight);
     color: {PANE_TEXT};
+    border-color: palette(highlight);
 }}
 #primaryButton:hover {{
-    background-color: {PANE_CONTROL_HOVER};
+    background-color: palette(highlight);
+    border-color: {PANE_TEXT};
 }}
 #primaryButton:pressed {{
-    background-color: {TABLE_HEADER_BG};
+    background-color: palette(highlight);
+    border-color: {TEXT_DISABLED};
 }}
 QToolButton#spinStepButton {{
     min-width: 18px; max-width: 18px; min-height: 0;

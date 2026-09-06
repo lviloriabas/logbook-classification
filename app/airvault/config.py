@@ -120,6 +120,12 @@ class AirVaultConfig:
     # la persona marca o desmarca «Completar batch», se conserva exactamente
     # ese último estado en la carpeta portable.
     completar_batch: bool | None = None
+    # Como se representa la fecha en el CSV: «month_end» o «specific_day».
+    # Tampoco tiene valor impuesto por el programa. Es una decision de quien
+    # entrega, no del archivo que se abre, asi que la instalacion conserva
+    # aqui la ultima elegida y el desplegable abre en ella. Vacio o con un
+    # valor que no existe abre en la primera opcion del desplegable.
+    csv_date_mode: str | None = None
     # Hasta donde llega el boton «Automatico» de la ventana principal. Son
     # preferencias de la interfaz, no del indexado, pero viven aqui por lo
     # mismo que «Completar batch»: es el unico archivo portable que la
@@ -267,6 +273,18 @@ def guardar_paginas_por_batch(path: Path | str, cantidad: int) -> bool:
     if valor <= 0:
         return False
     return _actualizar(path, {"paginas_por_batch": valor})
+
+
+def guardar_csv_date_mode(path: Path | str, modo: str) -> bool:
+    """Conserva la ultima politica de fecha elegida para el CSV.
+
+    Junto a las demas preferencias portables, por lo mismo que las paginas
+    por batch: la instalacion se mueve a otro Windows con su archivo.
+    """
+    valor = str(modo or "").strip()
+    if not valor:
+        return False
+    return _actualizar(path, {"csv_date_mode": valor})
 
 
 def guardar_preferencias(path: Path | str, **valores: bool) -> bool:

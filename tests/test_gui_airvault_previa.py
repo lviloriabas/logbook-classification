@@ -9,22 +9,9 @@ fila sin pasar por bitácoras y que elegir un batch lleve a su lista.
 
 from __future__ import annotations
 
-import os
-
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtWidgets import QApplication
-
 from app.airvault.flujo import BatchPrevisto
 from app.airvault.model import EstadoRegistro, Registro
 from app.gui.airvault_previa import BitacorasDelBatch, VistaPreviaBatches
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def bitacora(seq, matricula="HP-1848CMP", log="2271620", **extra):

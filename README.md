@@ -33,7 +33,9 @@ Los archivos tomados directamente de `input/` pasan a `input/processed/` cuando 
 2. Active **Verificar matrículas** para comparar contra `fleet.json`.
 3. Mantenga activadas **Corrección de inclinación**, **Alineación** y **Preprocesar recortes**.
 4. Seleccione una cantidad de hilos adecuada. **Reservar un núcleo** deja capacidad para otras tareas.
-5. Use como referencia una página completa y nítida.
+5. La plantilla normal usa su formulario canónico impreso como referencia. La
+   página de referencia seleccionada solo actúa como respaldo para plantillas
+   que no declaran una imagen canónica.
 
 Si el escaneo tiene una geometría dudosa, active **Visualizar campos** y pulse **Preprocesar**. Revise varias páginas y confirme que los recuadros cubren los datos correctos. Este paso no ejecuta OCR ni crea una salida.
 
@@ -93,7 +95,7 @@ Revise como mínimo:
 
 Cada libro físico tiene 50 páginas y una sola aeronave. Los finales `00` a `49` pertenecen a un libro y `50` a `99` al siguiente. La fecha puede repetirse, pero no retroceder al aumentar `log_number` dentro del mismo libro.
 
-Esa regla también se usa para corregir: la lectura que contradice a las dos páginas que la rodean se rehace con el valor más parecido al leído que el libro admite, y queda marcada con la lectura anterior entre sus alternativas. Una fecha posterior a la ejecución no existe (la página no se firma después de escanearse), así que se aparta y la completa el libro; si no puede, la página se queda sin fecha y va a revisión. Las bitácoras antiguas siguen aceptándose tal como se leen.
+Esa regla también se usa para corregir: la lectura que contradice a las dos páginas que la rodean se rehace con el valor más parecido al leído que el libro admite, y queda marcada con la lectura anterior entre sus alternativas. Una fecha posterior a la ejecución no existe (la página no se firma después de escanearse), así que se aparta y la completa el libro; si no puede, la página se queda sin fecha y va a revisión. El periodo habitual comprende el mes actual y el anterior, hasta hoy. Las fechas anteriores se conservan tal como se leen, pero pasan a REVISAR aunque todo el libro coincida. También se revisa un día futuro dentro del mes actual. El día generado por la opción Fin de mes se comprueba por mes, porque no procede de la escritura.
 
 ## 7. Depurar
 

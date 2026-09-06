@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication
 
-from app.gui.main_window import MainWindow, _COLORS
+from app.gui.main_window import _COLORS
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.reports.csv_reporter import CsvReporter
 from app.templates.schema import FieldTemplate, Template
+
+
+def test_main_table_uses_historic_csv_indicator_colors():
+    assert _COLORS == {
+        Status.OK: "#1a7f37",
+        Status.WARNING: "#9a6700",
+        Status.ERROR: "#cf222e",
+    }
 
 
 def _page(page_number: int, log_number: str) -> PageResult:
@@ -29,8 +32,7 @@ def _page(page_number: int, log_number: str) -> PageResult:
     )
 
 
-def test_main_table_adds_colored_important_dup_from_csv_columns():
-    app = QApplication.instance() or QApplication([])
+def test_main_table_adds_colored_important_dup_from_csv_columns(window):
     template = Template(
         name="fixture",
         fields=[
@@ -56,41 +58,36 @@ def test_main_table_adds_colored_important_dup_from_csv_columns():
             pages=[_page(7, "2147300")],
         ),
     ]
-    window = MainWindow()
-    try:
-        window._processed_template = template
-        window._populate_table(reports)
-        window._table_timer.stop()
-        while window._table_pending:
-            window._on_table_chunk()
+    window._processed_template = template
+    window._populate_table(reports)
+    window._table_timer.stop()
+    while window._table_pending:
+        window._on_table_chunk()
 
-        duplicate_column = window._table_columns.index("dup")
-        # Las dos filas del choque se marcan y se pintan: mirar una sola
-        # obligaba a buscar a mano con cuál chocaba.
-        primera = window.table.item(0, duplicate_column)
-        duplicate_item = window.table.item(1, duplicate_column)
-        assert primera.text() == "true"
-        assert duplicate_item.text() == "true"
-        for item in (primera, duplicate_item):
-            assert item.background().color() == QColor(_COLORS[Status.WARNING])
-        assert "es la primera de ellas" in primera.toolTip()
-        assert "no es la primera" in duplicate_item.toolTip()
-        assert not window.table.isColumnHidden(duplicate_column)
-        assert window.duplicates_label.text() == "Duplicados: 2"
-        assert "página 00 del libro" in window.duplicates_label.toolTip()
-        # El detalle dice cuál de las dos sobrevive a depurar.
-        assert (
-            "first.pdf PDF p. 1 (se conserva)"
-            in window.duplicates_label.toolTip()
-        )
-        assert "second.pdf PDF p. 7" in window.duplicates_label.toolTip()
+    duplicate_column = window._table_columns.index("dup")
+    # Las dos filas del choque se marcan y se pintan: mirar una sola
+    # obligaba a buscar a mano con cuál chocaba.
+    primera = window.table.item(0, duplicate_column)
+    duplicate_item = window.table.item(1, duplicate_column)
+    assert primera.text() == "true"
+    assert duplicate_item.text() == "true"
+    for item in (primera, duplicate_item):
+        assert item.background().color() == QColor(_COLORS[Status.WARNING])
+    assert "es la primera de ellas" in primera.toolTip()
+    assert "no es la primera" in duplicate_item.toolTip()
+    assert not window.table.isColumnHidden(duplicate_column)
+    assert window.duplicates_label.text() == "Duplicados: 2"
+    assert "página 00 del libro" in window.duplicates_label.toolTip()
+    # El detalle dice cuál de las dos sobrevive a depurar.
+    assert (
+        "first.pdf PDF p. 1 (se conserva)"
+        in window.duplicates_label.toolTip()
+    )
+    assert "second.pdf PDF p. 7" in window.duplicates_label.toolTip()
 
-        assert CsvReporter.columns_for(reports, template)[:4] == [
-            "file",
-            "page",
-            "log_number",
-            "dup",
-        ]
-    finally:
-        window.close()
-        app.processEvents()
+    assert CsvReporter.columns_for(reports, template)[:4] == [
+        "file",
+        "page",
+        "log_number",
+        "dup",
+    ]

@@ -78,7 +78,7 @@ class TestMonth(unittest.TestCase):
         self.assertIn("fuzzy", note)
         value, note = apply_postprocess("x", "month", "GUL")
         self.assertEqual(value, "JUL")
-        self.assertEqual(note, "")
+        self.assertIn("fuzzy", note)
 
     def test_digit_misread_as_letter(self):
         # '1' del separador de casilla leído como dígito -> letra 'i'.

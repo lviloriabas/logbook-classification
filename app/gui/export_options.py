@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from app.airvault.config import (
     AIRVAULT_FILENAME,
     AirVaultConfig,
+    guardar_csv_date_mode,
     guardar_paginas_por_batch,
 )
 from app.gui.widgets import (
@@ -43,6 +44,9 @@ class ExportOptionsGroup(QGroupBox):
         self._ruta_preferencias = (
             Path(raiz) if raiz is not None else Path.cwd()
         ) / AIRVAULT_FILENAME
+        # Una sola lectura del archivo portable para todas las
+        # preferencias del cuadro: se abre una vez al construirlo.
+        self._preferencias = AirVaultConfig.load(self._ruta_preferencias)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(4)
@@ -68,10 +72,10 @@ class ExportOptionsGroup(QGroupBox):
         main_row.addSpacing(8)
         main_row.addWidget(QLabel("Fecha del CSV:"))
         self.csv_date_mode_combo = QComboBox()
-        # «Fin de mes» va primero porque es lo que se elige: es la fecha con
-        # la que se indexa, y el día exacto solo hace falta cuando alguien
-        # quiere ver lo que leyó el OCR. Puesto primero, es además el valor
-        # con el que abre el desplegable.
+        # «Fin de mes» va primero porque es lo que se elige casi siempre: es
+        # la fecha con la que se indexa, y el día exacto solo hace falta
+        # cuando alguien quiere ver lo que leyó el OCR. Con qué opción abre
+        # el desplegable no lo decide este orden, sino la última elegida.
         self.csv_date_mode_combo.addItem("Fin de mes", CSV_DATE_MONTH_END)
         self.csv_date_mode_combo.addItem("Día exacto", CSV_DATE_SPECIFIC)
         self.csv_date_mode_combo.setItemData(
@@ -89,6 +93,20 @@ class ExportOptionsGroup(QGroupBox):
             "El resultado OCR original se conserva."
         )
         configure_combo_box(self.csv_date_mode_combo, 14)
+        # Cambiar de política es una decisión de quien entrega y vale para
+        # todo lo que venga después, así que el programa abre en la última
+        # elegida en vez de imponer una. Se restaura antes de conectar el
+        # guardado para no reescribir el archivo al abrir la ventana, y
+        # antes de que las ventanas conecten sus propias reacciones al
+        # cambio: restaurar no es elegir, y no debe reescribir ningún CSV.
+        guardada = self.csv_date_mode_combo.findData(
+            self._preferencias.csv_date_mode or ""
+        )
+        if guardada >= 0:
+            self.csv_date_mode_combo.setCurrentIndex(guardada)
+        self.csv_date_mode_combo.currentIndexChanged.connect(
+            self._guardar_csv_date_mode
+        )
         main_row.addWidget(self.csv_date_mode_combo, 1)
         layout.addLayout(main_row)
 
@@ -129,9 +147,7 @@ class ExportOptionsGroup(QGroupBox):
         self.partes_spin = QSpinBox()
         self.partes_spin.setRange(10, 5000)
         self.partes_spin.setSingleStep(50)
-        guardadas = AirVaultConfig.load(
-            self._ruta_preferencias
-        ).paginas_por_batch
+        guardadas = self._preferencias.paginas_por_batch
         if guardadas is not None:
             self.partes_spin.setValue(guardadas)
         self.partes_spin.setSuffix(" pág.")
@@ -160,6 +176,12 @@ class ExportOptionsGroup(QGroupBox):
         action.setChecked(checked)
         action.setToolTip(tooltip)
         return action
+
+    def _guardar_csv_date_mode(self, _index: int) -> None:
+        """Conserva la política de fecha recién elegida."""
+        guardar_csv_date_mode(
+            self._ruta_preferencias, self.csv_date_mode()
+        )
 
     def _sync_parts(self, *_args) -> None:
         single = self.un_solo_pdf()

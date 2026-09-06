@@ -14,9 +14,9 @@ La politica de inferencia es deliberadamente asimetrica:
   confianza aislada es baja;
 * una lectura que contradice a las dos que la rodean no es una fecha
   discutible sino una lectura equivocada, porque la fecha no retrocede
-  dentro del libro: el mes se corrige cuando es la mas floja de las tres,
-  y los dias se rehacen todos a la vez con la asignacion que no retrocede
-  y que menos evidencia contradice;
+  dentro del libro: el mes y el ano se corrigen con las anclas compatibles,
+  y los dias se rehacen todos a la vez con la asignacion que no retrocede y
+  que menos evidencia contradice;
 * un ano posterior al de la ejecucion no existe (la pagina no se firma
   despues de escanearse) y se trata como lectura invalida; el resto de la
   ventana de ``app.utils.date_window`` solo ordena candidatos, nunca
@@ -52,6 +52,7 @@ from loguru import logger
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.utils.date_window import (
     date_is_possible,
+    reference_date,
     month_is_possible,
     year_is_possible,
     years_outside_usual,
@@ -64,6 +65,7 @@ from app.validation.book_corrector import (
     _storage_key,
 )
 from app.validation.grouping import group_books, log_number
+from app.validation.date_review import review_date_window
 from app.validation.page_status import AUTO_INDEX_MIN_VOTES
 
 DATE_FIELD_IDS = ("day", "month", "year")
@@ -84,6 +86,13 @@ MAX_EDGE_LOG_SPAN = 10
 MIN_YEAR_CONSENSUS_READINGS = 3
 MIN_YEAR_CONSENSUS_COUNT = 2
 MIN_YEAR_CONSENSUS_RATIO = 0.60
+# Un consenso de toda la ejecucion solo desempata una alternativa que el
+# propio OCR ya propuso. Exigir varios libros evita que un unico libro
+# antiguo haga parecer universal su ano.
+MIN_RUN_YEAR_CONSENSUS_READINGS = 12
+MIN_RUN_YEAR_CONSENSUS_BOOKS = 3
+MIN_RUN_YEAR_CONSENSUS_RATIO = 0.90
+MIN_RUN_YEAR_CORRECTION_DISTANCE = 2
 # Un libro se llena en dias seguidos. Mas de una semana de separacion
 # con las paginas vecinas delata una decena que no se leyo, no un salto
 # real de la bitacora.
@@ -180,7 +189,12 @@ def _component_candidates(
     if field is None:
         return []
     candidates: List[str] = []
-    for raw in [field.value, *field.alternatives]:
+    raws = (
+        [field.value]
+        if field.source in {"inferred", "book_correction"}
+        else [field.value, *field.alternatives]
+    )
+    for raw in raws:
         value = normalize(raw)
         if value is not None and value not in candidates:
             candidates.append(value)
@@ -190,7 +204,12 @@ def _component_candidates(
 def _date_candidates(page: PageResult) -> List[Tuple[date, Tuple[str, str, str]]]:
     """Fechas calendario posibles a partir de la evidencia OCR de la página."""
     days = _component_candidates(_field(page, "day"), _day_normalize)
-    months = _component_candidates(_field(page, "month"), _month_number)
+    month_field = _field(page, "month")
+    months = _component_candidates(month_field, _month_number)
+    # La búsqueda general minimiza saltos, pero eso no demuestra qué mes
+    # decía una casilla ambigua. Solo un intervalo directo puede decidirla.
+    if month_field is not None and not month_field.value and len(months) > 1:
+        return []
     years = _component_candidates(_field(page, YEAR_FIELD_ID), _year_normalize)
     candidates: List[Tuple[date, Tuple[str, str, str]]] = []
     for day_value, month_value, year_value in product(days, months, years):
@@ -200,8 +219,70 @@ def _date_candidates(page: PageResult) -> List[Tuple[date, Tuple[str, str, str]]
             )
         except ValueError:
             continue
+        day_field = _field(page, "day")
+        month_only = day_field is not None and day_field.inference_method == "month_end_policy"
+        if not date_is_possible(parsed.replace(day=1) if month_only else parsed):
+            continue
         candidates.append((parsed, (day_value, month_value, year_value)))
     return candidates
+
+
+def _resolve_ambiguous_months(book: Sequence[PageResult]) -> int:
+    """Resuelve candidatos solo si dos fechas directas dejan uno posible."""
+    ordered = _ordered_pages(book)
+    anchors = []
+    for page in ordered:
+        components = [(fid, _field(page, fid), normalize)
+                      for fid, normalize in (("day", _day_normalize),
+                                             ("month", _month_number),
+                                             ("year", _year_normalize))]
+        if not all(_is_book_anchor(page, field,
+                                  normalize(field.value) if field else None, fid)
+                   for fid, field, normalize in components):
+            continue
+        resolved = _resolved_date(page)
+        if resolved is not None:
+            try:
+                anchors.append((log_number(page), date(*resolved)))
+            except ValueError:
+                continue
+    changed = 0
+    for page in ordered:
+        month = _field(page, "month")
+        if month is None or month.value or len(month.alternatives) < 2:
+            continue
+        number = log_number(page)
+        before = [anchor for anchor in anchors if anchor[0] < number]
+        after = [anchor for anchor in anchors if anchor[0] > number]
+        if not before or not after:
+            continue
+        left, right = before[-1], after[0]
+        if left[1] > right[1]:
+            continue
+        day, year = _field(page, "day"), _field(page, "year")
+        if not all(_is_book_anchor(page, field,
+                                  normalize(field.value) if field else None, fid)
+                   for fid, field, normalize in (("day", day, _day_normalize),
+                                                  ("year", year, _year_normalize))):
+            continue
+        possible = set()
+        for value in month.alternatives:
+            candidate = _month_number(value)
+            if candidate is None:
+                continue
+            try:
+                parsed = date(2000 + int(_year_normalize(year.value)),
+                              candidate, int(_day_normalize(day.value)))
+            except ValueError:
+                continue
+            if left[1] <= parsed <= right[1]:
+                possible.add(candidate)
+        if len(possible) == 1:
+            changed += int(_set_inferred_component(
+                page, "month", str(possible.pop()), "log_number_month_candidates",
+                [left[0], right[0]],
+            ))
+    return changed
 
 
 def _resolve_sequence_alternatives(book: Sequence[PageResult]) -> int:
@@ -209,7 +290,9 @@ def _resolve_sequence_alternatives(book: Sequence[PageResult]) -> int:
 
     La búsqueda es dinámica para no explotar combinatoriamente. Cada estado
     conserva el menor costo hasta una fecha candidata. La lectura actual vale
-    cero cambios; usar una alternativa cuesta una unidad por componente.
+    cero cambios; usar una alternativa cuesta una unidad por componente. La
+    cercania a la ejecucion ordena soluciones, pero nunca basta para cambiar
+    un libro que ya tiene una secuencia valida.
     """
     pages = sorted(
         (page for page in book if log_number(page) is not None),
@@ -279,7 +362,11 @@ def _resolve_sequence_alternatives(book: Sequence[PageResult]) -> int:
     current_outside = sum(
         years_outside_usual(parsed) for parsed, _values in current_dates
     )
-    if (best[0], best[1]) >= (current_outside, current_regressions):
+    if (
+        current_regressions == 0
+        or best[1] >= current_regressions
+        or (best[0], best[1]) >= (current_outside, current_regressions)
+    ):
         return 0
 
     corrected = 0
@@ -389,8 +476,116 @@ def _correct_year_by_book_consensus(book: Sequence[PageResult]) -> int:
     return corrected
 
 
+def _correct_year_by_run_consensus(
+    books: Sequence[Sequence[PageResult]],
+) -> Tuple[int, int]:
+    """Desempata anos dudosos con el consenso amplio de la ejecucion.
+
+    No acerca una lectura antigua a la fecha actual por iniciativa propia.
+    Solo actua cuando muchos libros aportan el mismo ano directamente y el
+    OCR de la pagina dudosa incluyo ese ano entre sus alternativas. Si no
+    puede corregir una lectura aislada que esta dos anos o mas lejos del
+    consenso reciente, la marca para revision y conserva el valor como
+    evidencia. Dos paginas del propio libro con el mismo ano bastan para
+    conservar un libro antiguo aunque sea minoritario en la ejecucion.
+    """
+    votes: Counter[str] = Counter()
+    books_by_year: Dict[str, set[int]] = {}
+    readings_by_book: Dict[int, Counter[str]] = {}
+    for book_index, book in enumerate(books):
+        anchors = _anchors(book, YEAR_FIELD_ID, _year_normalize)
+        readings: Counter[str] = Counter()
+        for page in book:
+            field = _field(page, YEAR_FIELD_ID)
+            value = _year_normalize(field.value if field else None)
+            if (
+                value is not None
+                and field is not None
+                and field.source not in {"inferred", "book_correction"}
+            ):
+                readings[value] += 1
+        readings_by_book[book_index] = readings
+        for _number, value, _page in anchors:
+            votes[value] += 1
+            books_by_year.setdefault(value, set()).add(book_index)
+    if not votes:
+        return 0, 0
+    ranked = votes.most_common()
+    majority_year, majority_count = ranked[0]
+    runner_count = ranked[1][1] if len(ranked) > 1 else 0
+    total = sum(votes.values())
+    ratio = majority_count / total
+    if (
+        majority_count < MIN_RUN_YEAR_CONSENSUS_READINGS
+        or len(books_by_year.get(majority_year, ()))
+        < MIN_RUN_YEAR_CONSENSUS_BOOKS
+        or majority_count <= runner_count
+        or ratio < MIN_RUN_YEAR_CONSENSUS_RATIO
+    ):
+        return 0, 0
+
+    corrected = 0
+    reviewed = 0
+    majority_is_recent = 2000 + int(majority_year) in {
+        date.today().year,
+        date.today().year - 1,
+    }
+    for book_index, book in enumerate(books):
+        for page in book:
+            if page.blank or page.alignment_quality != "ok":
+                continue
+            field = _field(page, YEAR_FIELD_ID)
+            current = _year_normalize(field.value if field else None)
+            if field is None or current is None or current == majority_year:
+                continue
+            if readings_by_book.get(book_index, Counter())[current] >= 2:
+                continue
+            if abs(int(current) - int(majority_year)) \
+                    < MIN_RUN_YEAR_CORRECTION_DISTANCE:
+                continue
+            alternatives = {
+                value for raw in field.alternatives
+                if (value := _year_normalize(raw)) is not None
+            }
+            if majority_year in alternatives:
+                previous = field.value
+                if previous and previous not in field.alternatives:
+                    field.alternatives.append(previous)
+                field.value = majority_year
+                field.confidence = round(
+                    min(0.92, 0.55 + ratio * 0.35), 3
+                )
+                field.status = Status.WARNING
+                field.source = "book_correction"
+                field.inference_method = "run_year_consensus"
+                field.comment = (
+                    f"Year corrected by execution consensus "
+                    f"({majority_count}/{total} direct readings across "
+                    f"{len(books_by_year[majority_year])} books) and OCR "
+                    f"alternative: {previous!r} -> {majority_year!r}"
+                )
+                page.date_review = False
+                _recombine(page)
+                corrected += 1
+                continue
+            if not majority_is_recent:
+                continue
+            field.status = Status.ERROR
+            field.inference_method = "run_year_review"
+            _append_comment(
+                field,
+                f"Year {field.value!r} requires review: execution consensus "
+                f"is {majority_year!r} ({majority_count}/{total} direct "
+                f"readings across {len(books_by_year[majority_year])} books) "
+                "and OCR did not provide a safe correction",
+            )
+            page.date_review = True
+            reviewed += 1
+    return corrected, reviewed
+
+
 AFTER_THE_RUN_METHODS = frozenset(
-    {"year_out_of_window", "month_out_of_window"}
+    {"year_out_of_window", "month_out_of_window", "day_out_of_window"}
 )
 
 
@@ -466,6 +661,21 @@ def _flag_readings_after_the_run(book: Sequence[PageResult]) -> int:
             f"invalid month: {month_field.value} is later than the run",
         )
         invalid += 1
+    for page in book:
+        day_field = _field(page, "day")
+        resolved = _resolved_date(page)
+        if page.blank or day_field is None or resolved is None:
+            continue
+        if day_field.inference_method == "month_end_policy":
+            continue
+        try:
+            parsed = date(*resolved)
+        except ValueError:
+            continue
+        if not date_is_possible(parsed):
+            _discard_reading(day_field, "day_out_of_window",
+                             f"Fecha futura: {parsed:%Y/%m/%d}")
+            invalid += 1
     return invalid
 
 
@@ -597,23 +807,6 @@ def _set_inferred_component(
     return True
 
 
-def _mark_interval_conflict(
-    page: PageResult, field_id: str, expected: str, anchor_numbers: Sequence[int]
-) -> bool:
-    """Marca una lectura directa que contradice un intervalo compatible."""
-    field = _field(page, field_id)
-    if field is None or not field.value:
-        return False
-    field.status = Status.WARNING
-    field.inference_method = "log_number_interval_conflict"
-    _append_comment(
-        field,
-        f"Conflicts with {field_id} interval {expected} "
-        f"(log_number anchors {', '.join(str(n) for n in anchor_numbers)})",
-    )
-    return True
-
-
 def _ordered_pages(book: Sequence[PageResult]) -> List[PageResult]:
     """Paginas escritas del libro en el orden en que se llenaron."""
     return sorted(
@@ -639,10 +832,10 @@ def _correct_bracketed_component(
     suyo quedaria por debajo del anterior o por encima del siguiente. Ahi
     no hay dos lecturas discutibles, hay una lectura imposible.
 
-    Se corrige solo cuando la de en medio es la mas floja de las tres (no
-    llega a ancla mientras las dos vecinas si), que es el caso de un mes
-    leido JUL entre dos AGO firmes. Cuando es tan firme como ellas no se
-    toca: el conflicto lo marca la interpolacion y lo decide una persona.
+    Se corrige incluso cuando la lectura intermedia trae buena confianza:
+    si las dos anclas que la rodean coinciden, un valor distinto en medio
+    haria retroceder la fecha por uno de los dos lados. La confianza del OCR
+    no puede convertir esa secuencia imposible en una fecha valida.
 
     Sin esta correccion una sola lectura equivocada hace dos danos: sale
     en el CSV con una fecha a un mes de la real y, por estar en medio,
@@ -670,8 +863,6 @@ def _correct_bracketed_component(
         left_page, left_field, left_value = readings[resolved[position - 1]]
         right_page, right_field, right_value = readings[resolved[position + 1]]
         if left_value != right_value or left_value == value:
-            continue
-        if _is_direct_anchor(field, value):
             continue
         if not (
             _is_book_anchor(left_page, left_field, left_value, field_id)
@@ -712,7 +903,7 @@ def _infer_between_anchors(
     field_id: str,
     normalize: Normalizer,
 ) -> Tuple[int, int]:
-    """Infiere valores solo dentro de un intervalo con dos anclas iguales."""
+    """Completa o corrige dentro de un intervalo con dos anclas iguales."""
     anchors = _anchors(book, field_id, normalize)
     if len(anchors) < MIN_ANCHORS:
         return 0, 0
@@ -736,6 +927,13 @@ def _infer_between_anchors(
         right = after[0]
         if left[1] != right[1]:
             continue
+        if (
+            field_id == "month"
+            and _page_year(left[2]) != _page_year(right[2])
+        ):
+            # El mismo mes a ambos lados no fija el intervalo si las
+            # anclas pertenecen a anos distintos.
+            continue
 
         interior = [
             anchor for anchor in anchors
@@ -750,15 +948,61 @@ def _infer_between_anchors(
         if current == left[1] and field.status is not Status.ERROR:
             continue
         if current is not None and field.status is not Status.ERROR:
-            flagged += int(_mark_interval_conflict(
-                page, field_id, _format_component(field_id, left[1]),
-                anchor_numbers,
+            filled += int(_set_inferred_component(
+                page, field_id, left[1],
+                "log_number_interval_correction", anchor_numbers,
             ))
             continue
         filled += int(_set_inferred_component(
             page, field_id, left[1], "log_number_interval", anchor_numbers
         ))
     return filled, flagged
+
+
+def _edge_component_is_impossible(
+    page: PageResult,
+    field_id: str,
+    current: str,
+    anchor: Anchor,
+    target_is_before: bool,
+) -> bool:
+    """Indica si un valor de borde contradice la direccion del libro."""
+    anchor_value = anchor[1]
+    if field_id == YEAR_FIELD_ID:
+        current_number = int(current)
+        anchor_number = int(anchor_value)
+        if abs(current_number - anchor_number) > 1:
+            return True
+        return (
+            current_number > anchor_number
+            if target_is_before else current_number < anchor_number
+        )
+    if field_id != "month":
+        return False
+    page_year = _page_year(page)
+    anchor_year = _page_year(anchor[2])
+    if page_year is None or anchor_year is None:
+        return False
+    current_date = (int(page_year), int(current))
+    anchor_date = (int(anchor_year), int(anchor_value))
+    return (
+        current_date > anchor_date
+        if target_is_before else current_date < anchor_date
+    )
+
+
+def _is_positional_year_support(
+    field: Optional[FieldResult], value: Optional[str]
+) -> bool:
+    """Acepta como segunda evidencia un ano claro leido por sus casillas."""
+    return bool(
+        field is not None
+        and value is not None
+        and field.status is Status.OK
+        and field.confidence >= MIN_DIRECT_CONFIDENCE
+        and field.inference_method in {"ranuras", "date_cells"}
+        and field.source not in {"inferred", "book_correction"}
+    )
 
 
 def _infer_edges(
@@ -768,8 +1012,36 @@ def _infer_edges(
 ) -> int:
     """Infiere un tramo corto al inicio o final con dos anclas iguales."""
     anchors = _anchors(book, field_id, normalize)
+    if field_id == YEAR_FIELD_ID:
+        supported: List[Anchor] = []
+        for page in book:
+            number = log_number(page)
+            field = _field(page, field_id)
+            value = normalize(field.value if field else None)
+            if number is None or value is None:
+                continue
+            if (
+                _is_book_anchor(page, field, value, field_id)
+                or (
+                    page.alignment_quality == "ok"
+                    and _is_positional_year_support(field, value)
+                )
+            ):
+                supported.append((number, value, page))
+        anchors = sorted(
+            supported, key=lambda item: (item[0], item[2].page_number)
+        )
     if len(anchors) < MIN_ANCHORS:
         return 0
+    direct_anchors = [
+        anchor for anchor in anchors
+        if _is_direct_anchor(_field(anchor[2], field_id), anchor[1])
+    ]
+    if len(direct_anchors) >= MIN_ANCHORS:
+        # Una lectura posicional en WARNING ayuda dentro de un intervalo,
+        # pero no debe ocultar dos lecturas directas iguales solo por estar
+        # en el borde que precisamente se esta comprobando.
+        anchors = direct_anchors
     pages = sorted(
         (page for page in book if log_number(page) is not None),
         key=lambda page: (log_number(page), page.page_number),  # type: ignore[arg-type]
@@ -809,9 +1081,16 @@ def _infer_edges(
                 continue
             current = normalize(field.value)
             if current is not None and field.status is not Status.ERROR:
-                continue
+                target_is_before = number < edge_anchors[0][0]
+                anchor = (
+                    edge_anchors[0] if target_is_before else edge_anchors[-1]
+                )
+                if not _edge_component_is_impossible(
+                    page, field_id, str(current), anchor, target_is_before
+                ):
+                    continue
             filled += int(_set_inferred_component(
-                page, field_id, value, "log_number_local_consensus",
+                page, field_id, value, "log_number_edge_correction",
                 [anchor[0] for anchor in edge_anchors],
             ))
     return filled
@@ -1122,7 +1401,7 @@ def _fill_days_to_month_end(book: Sequence[PageResult]) -> int:
     filled = 0
     for index, page in enumerate(ordered):
         field = _field(page, "day")
-        if field is None or _day_normalize(field.value) is not None:
+        if field is None or _day_normalize(field.value) is not None or _is_after_the_run(field):
             continue
         month = _month_number(
             _field(page, "month").value if _field(page, "month") else None
@@ -1135,6 +1414,9 @@ def _fill_days_to_month_end(book: Sequence[PageResult]) -> int:
             continue
         full_year = 2000 + int(year)
         last_day = monthrange(full_year, month)[1]
+        reference = reference_date()
+        if (full_year, month) == (reference.year, reference.month) and field.inference_method != "month_end_policy":
+            last_day = min(last_day, reference.day)
         same_month = (full_year, month)
         after = _neighbour_day(dates, index, 1, same_month)
         before = _neighbour_day(dates, index, -1, same_month)
@@ -1233,8 +1515,9 @@ def _flag_unresolved(book: Sequence[PageResult]) -> int:
         year = _field(page, YEAR_FIELD_ID)
         if day is not None and _day_normalize(day.value) is None:
             day.status = Status.WARNING
-            day.inference_method = "date_incomplete"
-            day.comment = "Day unresolved; date left incomplete"
+            if not _is_after_the_run(day):
+                day.inference_method = "date_incomplete"
+                day.comment = "Day unresolved; date left incomplete"
         # Lo que se aparto por caer despues de la ejecucion ya explico por
         # que no vale; quien revisa el CSV necesita ese motivo y no un "no
         # se pudo resolver" que parece una casilla ilegible.
@@ -1414,7 +1697,8 @@ def _confirmed_date(page: PageResult) -> Optional[date]:
     ):
         return None
     try:
-        return date(2000 + int(year), int(month), int(day))  # type: ignore[arg-type]
+        parsed = date(2000 + int(year), int(month), int(day))  # type: ignore[arg-type]
+        return parsed if date_is_possible(parsed) else None
     except ValueError:
         return None
 
@@ -1674,6 +1958,8 @@ def correct_dates_by_book(
         "regressions": 0,
         "sequence_candidates": 0,
         "years_consensus": 0,
+        "run_year_consensus": 0,
+        "run_year_review": 0,
         "after_the_run": 0,
         "bracket_corrected": 0,
         "days_repaired": 0,
@@ -1702,11 +1988,9 @@ def correct_dates_by_book(
         # rompe el intervalo que habria completado a las paginas que no se
         # dejaron leer, y deja una regresion que la busqueda por
         # alternativas intenta tapar moviendo el ano de otra pagina.
+        resolved_months = _resolve_ambiguous_months(book)
         bracket = _correct_bracketed_component(book, "month", _month_number)
         stats["bracket_corrected"] += bracket
-
-        sequence_candidates = _resolve_sequence_alternatives(book)
-        stats["sequence_candidates"] += sequence_candidates
 
         # Las anclas del libro se fotografían antes de interpolar: después,
         # una lectura en conflicto con un intervalo ya no cuenta como ancla
@@ -1724,6 +2008,7 @@ def correct_dates_by_book(
         months, month_flags = _infer_between_anchors(
             book, "month", _month_number
         )
+        months += resolved_months
         months += _infer_edges(book, "month", _month_number)
         months += _fill_from_book_consensus(
             book, "month", _month_number, month_anchors
@@ -1739,6 +2024,12 @@ def correct_dates_by_book(
             else 0
         )
         stats["registry_filled"] += registry_filled
+
+        # Las alternativas se deciden despues de aprovechar la evidencia
+        # directa del libro. Asi una lectura como 01 no se convierte primero
+        # en 06 cuando dos paginas cercanas ya demostraban que era 26.
+        sequence_candidates = _resolve_sequence_alternatives(book)
+        stats["sequence_candidates"] += sequence_candidates
 
         for page in book:
             _recombine(page)
@@ -1764,7 +2055,19 @@ def correct_dates_by_book(
         for page in book:
             _recompute_page_status(page)
 
+    run_year_consensus, run_year_review = _correct_year_by_run_consensus(
+        books
+    )
+    stats["run_year_consensus"] = run_year_consensus
+    stats["run_year_review"] = run_year_review
+    stats["corrected"] += run_year_consensus
+    stats["flagged"] += run_year_review
+
     for report in reports:
+        for page in report.pages:
+            _recombine(page)
+            review_date_window(page)
+            _recompute_page_status(page)
         _recompute_summary(report)
     logger.info(f"Corrector de fechas por log_number: {stats}")
     return stats

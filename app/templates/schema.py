@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from enum import Enum
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -153,6 +154,15 @@ class Template(BaseModel):
     name: str
     version: str = "1.0"
     page_size: List[int] = Field(default_factory=lambda: [2480, 3508])
+    reference_image: Optional[str] = Field(
+        default=None,
+        description="Imagen canonica sobre la que se definieron los campos",
+    )
+    reference_dpi: int = Field(
+        default=150, ge=72, le=600,
+        description="Resolucion de la imagen canonica",
+    )
+    source_path: Optional[Path] = Field(default=None, exclude=True, repr=False)
     fields: List[FieldTemplate] = Field(default_factory=list)
 
     @field_validator("fields")
@@ -175,3 +185,14 @@ class Template(BaseModel):
             if field.id == field_id:
                 return field
         return None
+
+    def resolved_reference_image(self) -> Optional[Path]:
+        """Resuelve la referencia sin convertir la plantilla en no portable."""
+        if not self.reference_image:
+            return None
+        path = Path(self.reference_image)
+        if path.is_absolute():
+            return path
+        if self.source_path is None:
+            return path
+        return (self.source_path.parent / path).resolve()

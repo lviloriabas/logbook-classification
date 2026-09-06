@@ -7,15 +7,12 @@ era el del documento abierto en vez del de la ejecución.
 
 from __future__ import annotations
 
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from app.core.config import AppConfig
 from app.core.pipeline import Pipeline, process_pdf_batch

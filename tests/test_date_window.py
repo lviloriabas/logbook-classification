@@ -29,15 +29,18 @@ def test_un_ano_posterior_a_la_ejecucion_no_existe():
     assert not year_is_possible(1999, HOY)
 
 
-def test_la_fecha_hereda_la_ventana_de_su_ano():
-    assert date_is_possible(date(2026, 12, 31), HOY)
+def test_la_fecha_no_puede_superar_el_dia_de_ejecucion():
+    assert date_is_possible(HOY, HOY)
+    assert not date_is_possible(date(2026, 9, 6), HOY)
+    assert not date_is_possible(date(2026, 12, 31), HOY)
     assert not date_is_possible(date(2027, 1, 1), HOY)
 
 
-def test_lo_del_ultimo_mes_y_medio_es_lo_habitual():
+def test_el_mes_actual_y_el_anterior_son_lo_habitual():
     assert is_usual(HOY, HOY)
     assert is_usual(date(2026, 8, 20), HOY)
-    assert is_usual(date(2026, 7, 22), HOY)
+    assert is_usual(date(2026, 8, 1), HOY)
+    assert not is_usual(date(2026, 7, 22), HOY)
     assert not is_usual(date(2026, 6, 1), HOY)
 
 

@@ -100,15 +100,17 @@ from app.gui.automatizacion import (
     MenuAutomatizacion,
     OpcionesAutomatizacion,
 )
+from app.gui.csv_model import STATUS_COLORS as CSV_STATUS_COLORS
 from app.gui.depuracion_dialog import DEPURAR_TOOLTIP, DepurarPaginasDialog
 from app.gui.tokens import (
     CONTROL_BG,
+    CONTROL_HEIGHT,
+    CONTROL_HEIGHT_COMPACT,
     FONT_CAPTION_PT,
+    FONT_SUBTITLE_PT,
     RADIUS_CARD,
-    STATUS_ERROR,
-    STATUS_OK,
-    STATUS_WARNING,
     STROKE,
+    STROKE_STRONG,
     TEXT,
     TEXT_SECONDARY,
     WEIGHT_STRONG,
@@ -118,6 +120,7 @@ from app.gui.widgets import (
     TABLE_RADIUS,
     ElidedLabel,
     MultiSelectMenu,
+    TABLE_BASE_BG,
     ZoomableScrollArea,
     ZoomOverlay,
     configure_combo_box,
@@ -126,6 +129,7 @@ from app.gui.widgets import (
     keep_overlay_clear_of_scrollbars,
     load_icon,
     style_data_table,
+    style_pdf_surface,
     window_stylesheet,
 )
 from app.gui.worker import OutputsWorker, PipelineWorker, PreprocessWorker
@@ -166,6 +170,7 @@ _TABLE_CELL_CHUNK = 2000
 # Espera entre comprobaciones mientras se detiene el trabajo para cerrar.
 _SHUTDOWN_POLL_MS = 150
 _PISTA_BUSQUEDA = "La búsqueda abre cada coincidencia en la vista previa."
+_PREVIEW_EMPTY_MESSAGE = "Seleccione un archivo PDF para ver la vista previa"
 # Lo que se espera a un hilo despues de romperle el pool por debajo. Con el
 # pool roto la espera real es de milisegundos; el margen es para el hilo que
 # estuviera escribiendo en disco justo en ese instante.
@@ -202,12 +207,18 @@ _TIMES_SCROLL_MIN_HEIGHT = 26
 # entren en dos columnas dentro de un escritorio lógico de 1280 px.
 _TEMPLATE_MIN_WIDTH = 200
 _COMPACT_TEMPLATE_MIN_WIDTH = 180
+_PREVIEW_EMPTY_HTML = (
+    f'<div style="font-size:{FONT_SUBTITLE_PT}pt; font-weight:600; '
+    f'color:{TEXT};">Vista previa</div>'
+    f'<div style="margin-top:8px; color:{TEXT_SECONDARY};">'
+    "Seleccione un archivo PDF para comenzar.</div>"
+)
 
 
 _COLORS = {
-    Status.OK: STATUS_OK,
-    Status.WARNING: STATUS_WARNING,
-    Status.ERROR: STATUS_ERROR,
+    Status.OK: CSV_STATUS_COLORS["OK"],
+    Status.WARNING: CSV_STATUS_COLORS["WARNING"],
+    Status.ERROR: CSV_STATUS_COLORS["ERROR"],
 }
 
 
@@ -234,16 +245,50 @@ def _visible_preview_fields(
 # aquí no seguían el escalado de Windows, así que en un monitor al 150 % el
 # panel de tiempos se encogía mientras el resto de la ventana crecía.
 _WINDOW_QSS = f"""
+QLabel#previewPlaceholder {{
+    color: {TEXT_SECONDARY};
+    background-color: transparent;
+    border: 1px solid {STROKE};
+    border-radius: {TABLE_RADIUS}px;
+}}
+QWidget#fileProgressPane {{
+    background-color: {TABLE_BASE_BG};
+    border: 1px solid {STROKE};
+    border-radius: {TABLE_RADIUS}px;
+}}
+QWidget#fileProgressPane QLabel {{
+    border: 0;
+    background-color: transparent;
+}}
+QScrollArea#fileProgressScroll,
+QWidget#fileProgressViewport,
+QWidget#fileProgressList {{
+    background-color: {TABLE_BASE_BG};
+    border: 0;
+}}
 QWidget#previewContext, QLabel#previewContext {{
     color: {TEXT_SECONDARY};
     font-weight: {WEIGHT_STRONG};
     padding: 4px 2px;
 }}
-#timeBar {{
+#fileProgressPane QLabel#previewContext {{
+    font-weight: 400;
+    padding: 0;
+}}
+QLabel#fileProgressTitle {{
+    font-weight: {WEIGHT_STRONG};
+}}
+QProgressBar#timeBar {{
+    min-height: 18px;
+    max-height: 18px;
     background-color: {CONTROL_BG};
     font-size: {FONT_CAPTION_PT}pt;
     font-weight: {WEIGHT_STRONG};
     color: {TEXT};
+    border-radius: 4px;
+}}
+QProgressBar#timeBar::chunk {{
+    border-radius: 3px;
 }}
 #filePages {{ color: {TEXT_SECONDARY}; }}
 #timeSummary {{
@@ -260,7 +305,71 @@ QWidget#previewContext, QLabel#previewContext {{
     font-size: {FONT_CAPTION_PT}pt;
     font-weight: {WEIGHT_STRONG};
 }}
+#timeSummary QFrame[role="metricDivider"] {{
+    background-color: {STROKE_STRONG};
+    border: 0;
+}}
+QLabel#fileProgressEmpty {{
+    color: {TEXT_SECONDARY};
+    padding: 12px;
+}}
 """ + DATA_TABLE_QSS
+
+
+class ResultsTableWidget(QTableWidget):
+    """Tabla que explica su estado inicial sin agregar otro control."""
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - API Qt
+        super().paintEvent(event)
+        if self.rowCount() != 0:
+            return
+        body = "Los resultados aparecerán aquí después de procesar."
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        area = self.viewport().rect().adjusted(24, 24, -24, -24)
+
+        title_font = QFont(self.font())
+        title_font.setPointSize(FONT_SUBTITLE_PT)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        body_font = QFont(self.font())
+        painter.setFont(title_font)
+        title_height = painter.fontMetrics().height()
+        painter.setFont(body_font)
+        body_height = painter.boundingRect(
+            QRectF(0, 0, area.width(), 100),
+            Qt.AlignmentFlag.AlignHCenter
+            | Qt.AlignmentFlag.AlignTop
+            | Qt.TextFlag.TextWordWrap,
+            body,
+        ).height()
+        gap = 8
+        block_height = title_height + gap + body_height
+        top = area.center().y() - block_height // 2
+
+        title_rect = QRectF(area.left(), top, area.width(), title_height)
+        painter.setFont(title_font)
+        painter.setPen(QColor(TEXT))
+        painter.drawText(
+            title_rect,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+            "Resultados",
+        )
+
+        body_rect = QRectF(
+            area.left(),
+            top + title_height + gap,
+            area.width(),
+            body_height,
+        )
+        painter.setFont(body_font)
+        painter.setPen(QColor(TEXT_SECONDARY))
+        painter.drawText(
+            body_rect,
+            Qt.AlignmentFlag.AlignHCenter
+            | Qt.AlignmentFlag.AlignTop
+            | Qt.TextFlag.TextWordWrap,
+            body,
+        )
 
 
 def _format_duration(seconds: float) -> str:
@@ -368,7 +477,7 @@ class PreviewLoader(QObject):
         import cv2
 
         from app.utils.io import resolve_processed_path
-        from app.vision.alignment import TransformResult, apply_transform
+        from app.vision.alignment import TransformResult, warp_with_transform
         from app.vision.pdf_loader import render_page
         from app.vision.preprocessing import rotate
 
@@ -383,7 +492,13 @@ class PreviewLoader(QObject):
                 alignment = geometry.get("alignment")
                 if alignment:
                     height, width = image.shape[:2]
-                    image = apply_transform(
+                    target_width = round(
+                        width * float(alignment.get("target_width_ratio", 1.0))
+                    )
+                    target_height = round(
+                        height * float(alignment.get("target_height_ratio", 1.0))
+                    )
+                    image = warp_with_transform(
                         image,
                         TransformResult(
                             rot=float(alignment.get("rot", 0.0)),
@@ -391,6 +506,7 @@ class PreviewLoader(QObject):
                             ty=float(alignment.get("ty_ratio", 0.0)) * height,
                             scale=float(alignment.get("scale", 1.0)),
                         ),
+                        (max(1, target_width), max(1, target_height)),
                     )
             rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
@@ -691,6 +807,14 @@ class MainWindow(QMainWindow):
         )
         self.log_view.setMaximumHeight(density.bottom_pane_height)
         self.log_view.setMinimumWidth(density.log_min_width)
+        summary_height = (
+            CONTROL_HEIGHT_COMPACT
+            if density.compact
+            else CONTROL_HEIGHT
+        )
+        self.time_summary.setFixedHeight(summary_height)
+        for divider in self.time_dividers:
+            divider.setFixedHeight(summary_height - 2)
         self.times_scroll.setMaximumHeight(density.bottom_pane_height)
         self.times_pane.setMinimumWidth(self._times_pane_min_width())
         self.bottom_splitter.setMinimumHeight(density.bottom_min_height)
@@ -1105,8 +1229,8 @@ class MainWindow(QMainWindow):
         self.btn_airvault = QPushButton("Indexar en AirVault…")
         self.btn_airvault.setToolTip(AIRVAULT_TOOLTIP)
         self.btn_airvault.clicked.connect(lambda: self._open_airvault())
-        tools_row.addWidget(self.btn_airvault)
         tools_row.addStretch()
+        tools_row.addWidget(self.btn_airvault)
         layout.addLayout(tools_row)
         self._fleet_row = tools_row
         return group
@@ -1191,37 +1315,44 @@ class MainWindow(QMainWindow):
 
         time_summary = QFrame()
         time_summary.setObjectName("timeSummary")
-        time_summary.setMinimumWidth(240)
-        # Alto de suelo, no fijo: dentro van dos líneas (el rótulo y su
-        # reloj) y con 30 px clavados no cabían las dos, así que los números
-        # salían con la base cortada. Con suelo se ven enteros aquí y siguen
-        # cabiendo si el equipo dibuja el texto un poco más alto.
-        time_summary.setMinimumHeight(30)
+        time_summary.setMinimumWidth(400)
+        summary_height = (
+            CONTROL_HEIGHT_COMPACT
+            if self._density.compact
+            else CONTROL_HEIGHT
+        )
+        time_summary.setFixedHeight(summary_height)
+        self.time_summary = time_summary
         time_summary.setToolTip(
             "El tiempo restante se recalcula con las páginas completadas y el "
             "ritmo observado."
         )
         time_layout = QHBoxLayout(time_summary)
-        # Sin margen arriba ni abajo: los 30 px de la píldora son el borde
-        # (1 px por lado) más las dos líneas de texto justas. Con los 2 px
-        # que había, las dos líneas no cabían y los relojes salían con la
-        # base cortada.
-        time_layout.setContentsMargins(9, 0, 9, 0)
-        time_layout.setSpacing(12)
+        time_layout.setContentsMargins(12, 0, 12, 0)
+        time_layout.setSpacing(8)
         self.time_labels: dict[str, QLabel] = {}
-        for key, caption in (
+        self.time_dividers: list[QFrame] = []
+        for index, (key, caption) in enumerate((
             ("elapsed", "Transcurrido"),
             ("remaining", "Restante"),
             ("total", "Estimado"),
-        ):
-            metric = QVBoxLayout()
-            metric.setSpacing(0)
+        )):
+            if index:
+                divider = QFrame(time_summary)
+                divider.setProperty("role", "metricDivider")
+                divider.setFixedSize(1, summary_height - 2)
+                time_layout.addWidget(
+                    divider, alignment=Qt.AlignmentFlag.AlignVCenter
+                )
+                self.time_dividers.append(divider)
+            metric = QHBoxLayout()
+            metric.setSpacing(4)
             caption_label = QLabel(caption)
             caption_label.setProperty("role", "caption")
             value_label = QLabel("00:00:00")
             value_label.setProperty("role", "value")
             value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            metric.addWidget(caption_label, alignment=Qt.AlignmentFlag.AlignCenter)
+            metric.addWidget(caption_label)
             metric.addWidget(value_label)
             time_layout.addLayout(metric, 1)
             self.time_labels[key] = value_label
@@ -1257,7 +1388,7 @@ class MainWindow(QMainWindow):
         self.btn_depurar.triggered.connect(self._depurar_paginas)
 
         self.more_actions_button = QToolButton()
-        self.more_actions_button.setText("Acciones")
+        self.more_actions_button.setText("Más acciones")
         configure_menu_button(self.more_actions_button, actions_menu)
         self.more_actions_button.setToolTip(
             "Preprocesar, exportar o depurar."
@@ -1267,7 +1398,7 @@ class MainWindow(QMainWindow):
         # Se lleva el azul porque es el que hace la entrega entera; los
         # demás siguen ahí para hacer un solo tramo cuando hace falta.
         self.btn_automatico = QToolButton()
-        self.btn_automatico.setText("Procesar todo")
+        self.btn_automatico.setText("Automático")
         self.btn_automatico.setObjectName("primaryButton")
         self.btn_automatico.setToolTip(
             "Ejecuta el flujo completo. La flecha permite elegir hasta qué "
@@ -1327,17 +1458,13 @@ class MainWindow(QMainWindow):
         preview_layout = QVBoxLayout(preview_widget)
         preview_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.preview_label = QLabel(
-            "Seleccione un archivo PDF para ver la vista previa"
-        )
+        self.preview_label = QLabel(_PREVIEW_EMPTY_HTML)
+        self.preview_label.setTextFormat(Qt.TextFormat.RichText)
+        self.preview_label.setObjectName("previewPlaceholder")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setWordWrap(True)
         self.preview_label.setMinimumSize(
             self._density.preview_min_width, self._density.preview_min_height
-        )
-        self.preview_label.setStyleSheet(
-            f"border: 1px solid {STROKE}; border-radius: {TABLE_RADIUS}px;"
-            " background: transparent;"
         )
         self.preview_label.setAccessibleName("Vista previa de la página")
 
@@ -1348,6 +1475,7 @@ class MainWindow(QMainWindow):
         self.preview_scroll.setMinimumSize(
             self._density.preview_min_width, self._density.preview_min_height
         )
+        style_pdf_surface(self.preview_scroll)
         self.preview_scroll.setWidget(self.preview_label)
 
         self.preview_pagination = QWidget()
@@ -1496,7 +1624,7 @@ class MainWindow(QMainWindow):
         preview_layout.addWidget(page_area, stretch=1)
         self._update_preview_zoom_controls()
 
-        self.table = QTableWidget(0, 0)
+        self.table = ResultsTableWidget(0, 0)
         self.table.setAccessibleName("Resultados de validación")
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -1516,7 +1644,7 @@ class MainWindow(QMainWindow):
         table_layout.addWidget(self.table, 1)
         table_controls = QHBoxLayout()
         table_controls.setSpacing(8)
-        table_controls.addWidget(self.search_context, 1)
+        table_controls.addStretch(1)
         self.duplicates_label = QLabel("Duplicados: 0")
         self.duplicates_label.setAccessibleName("Resumen de duplicados")
         self.duplicates_label.setToolTip(
@@ -1586,17 +1714,13 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.log_view)
 
         times = QWidget()
+        times.setObjectName("fileProgressPane")
         times_layout = QVBoxLayout(times)
-        times_layout.setSpacing(4)
-        # Los tres rótulos del panel no dan de sí: en una ventana baja el
-        # reparto los apretaba hasta dejarlos en once píxeles y «Avance por
-        # archivo» aparecía partido por la mitad. Con las medidas compactas
-        # el panel cede sus márgenes y su separación, que es lo que se puede
-        # ceder sin cortar ninguna letra.
-        self._register_density_layout(times_layout, stacked=True)
-        title = QLabel("Progreso por archivo")
-        title.setStyleSheet("font-weight: bold;")
-        times_layout.addWidget(title)
+        times_layout.setContentsMargins(10, 8, 10, 8)
+        times_layout.setSpacing(6)
+        self.file_progress_title = QLabel("Progreso por archivo")
+        self.file_progress_title.setObjectName("fileProgressTitle")
+        times_layout.addWidget(self.file_progress_title)
 
         self.preview_context_label = QLabel(
             "Sin archivo activo"
@@ -1607,13 +1731,34 @@ class MainWindow(QMainWindow):
 
         self.times_vbox = QVBoxLayout()
         self.times_vbox.setContentsMargins(0, 0, 0, 0)
-        self.times_vbox.setSpacing(3)
+        self.times_vbox.setSpacing(4)
         self.times_container = QWidget()
+        self.times_container.setObjectName("fileProgressList")
         self.times_container.setLayout(self.times_vbox)
 
         self.times_scroll = QScrollArea()
+        self.times_scroll.setObjectName("fileProgressScroll")
+        self.times_scroll.viewport().setObjectName("fileProgressViewport")
+        self.times_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.times_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.times_scroll.setWidgetResizable(True)
         self.times_scroll.setWidget(self.times_container)
+        progress_palette = self.times_scroll.palette()
+        progress_palette.setColor(
+            QPalette.ColorRole.Base, QColor(TABLE_BASE_BG)
+        )
+        progress_palette.setColor(
+            QPalette.ColorRole.Window, QColor(TABLE_BASE_BG)
+        )
+        for progress_surface in (
+            self.times_scroll,
+            self.times_scroll.viewport(),
+            self.times_container,
+        ):
+            progress_surface.setPalette(progress_palette)
+            progress_surface.setAutoFillBackground(True)
         self.times_scroll.setMaximumHeight(self._density.bottom_pane_height)
         # La lista es la parte elástica del panel: cuando el alto escasea es
         # ella la que se queda con una fila y se desplaza, en vez de robarles
@@ -1624,7 +1769,14 @@ class MainWindow(QMainWindow):
         self.empty_times_label = QLabel(
             "El progreso de cada archivo aparecerá aquí."
         )
+        self.empty_times_label.setObjectName("fileProgressEmpty")
+        self.empty_times_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_times_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         times_layout.addWidget(self.empty_times_label)
+        self.times_scroll.hide()
 
         # Mitad y mitad, como la tabla y el visor del Visor de CSV: el panel
         # lleva cuatro columnas por archivo y la consola no necesita el resto.
@@ -1732,7 +1884,7 @@ class MainWindow(QMainWindow):
         self._clear_times()
         if not paths:
             return
-        self.empty_times_label.setVisible(False)
+        self._show_file_progress_rows(True)
         for index, path in enumerate(paths):
             row = self._make_file_row()
             self._set_row_name(row, path.name, str(path))
@@ -1750,6 +1902,7 @@ class MainWindow(QMainWindow):
         """Crea una fila por archivo en el panel de tiempos (idempotente)."""
         if total == 0 or len(self._file_rows) == total:
             return
+        self._show_file_progress_rows(True)
         _clear_layout(self.times_vbox)
         self._file_rows = {}
         self._row_ms = {}
@@ -1886,9 +2039,7 @@ class MainWindow(QMainWindow):
             self._preview_base_image = None
             self._set_preview_documents([])
             self._preview_zoom = 1.0
-            self._show_preview_placeholder(
-                "Seleccione un archivo PDF para ver la vista previa"
-            )
+            self._show_preview_placeholder(_PREVIEW_EMPTY_MESSAGE)
             self._update_preview_zoom_controls()
             self._update_preview_nav()
             return
@@ -1902,7 +2053,12 @@ class MainWindow(QMainWindow):
     def _show_preview_placeholder(self, text: str) -> None:
         """Muestra un mensaje legible ocupando toda la superficie del visor."""
         self.preview_label.setPixmap(QPixmap())
-        self.preview_label.setText(text)
+        if text == _PREVIEW_EMPTY_MESSAGE:
+            self.preview_label.setTextFormat(Qt.TextFormat.RichText)
+            self.preview_label.setText(_PREVIEW_EMPTY_HTML)
+        else:
+            self.preview_label.setTextFormat(Qt.TextFormat.PlainText)
+            self.preview_label.setText(text)
         # Al mostrar una página se fija el tamaño del QLabel al de la imagen.
         # Hay que quitar ese límite antes de volver al estado de texto, o el
         # mensaje puede quedar en un recuadro pequeño o con el tamaño de la
@@ -2034,14 +2190,32 @@ class MainWindow(QMainWindow):
             remaining -= count
         return None
 
+    def _sync_page_edit(self, texto: str) -> None:
+        """Pone el número en la caja salvo que se esté escribiendo en ella.
+
+        La navegación se refresca sola muchas veces mientras se mira una
+        ejecución: la tabla se llena por tandas, la lectura de la entrada
+        trae los totales, cada render acaba aquí. Si ese refresco pisa lo que
+        la persona lleva tecleado, el salto se hace a la página que ya estaba
+        y parece que el selector no obedece.
+        """
+        if self.page_edit.hasFocus() and self.page_edit.isModified():
+            return
+        self.page_edit.setText(texto)
+        self.page_edit.setModified(False)
+
     def _jump_to_page_number(self) -> None:
-        if self._preview_pdf is None:
+        # Cerrar la ventana con el cursor dentro de la caja saca el foco de
+        # ella, y eso emite un último ``editingFinished`` cuando el hilo de
+        # render ya se soltó: pedir la página ahí revienta contra un objeto
+        # que Qt ya destruyó.
+        if self._preview_pdf is None or self._torn_down:
             return
         try:
             global_page = int(self.page_edit.text())
         except ValueError:
-            self.page_edit.setText(str(self._preview_global_page()))
             self.page_edit.setModified(False)
+            self._sync_page_edit(str(self._preview_global_page()))
             return
         location = self._preview_location(global_page)
         if location is None:
@@ -2066,14 +2240,21 @@ class MainWindow(QMainWindow):
         dialog = ImportantFieldsDialog(
             columns, self._current_important_columns(columns), self
         )
-        dialog.selectionChanged.connect(self._set_important_columns)
+        # El cuadro solo pudo enseñar estas columnas, así que solo de ellas
+        # puede decir si quedaron marcadas o no.
+        dialog.selectionChanged.connect(
+            lambda marcadas: self._set_important_columns(marcadas, columns)
+        )
         dialog.exec()
 
-    def _set_important_columns(self, columns: set[str]) -> None:
+    def _set_important_columns(
+        self, columns: set[str], scope: list[str] | None = None
+    ) -> None:
         """Aplica y recuerda la selección hecha en el selector."""
         self._important_fields_user_selected = True
-        self._selected_important_columns = set(columns)
-        self._important_fields_store.save(self._template_key(), columns)
+        self._selected_important_columns = self._important_fields_store.save(
+            self._template_key(), columns, scope
+        )
         self._apply_csv_table_view()
         self._apply_preview_overlay()
 
@@ -2705,6 +2886,7 @@ class MainWindow(QMainWindow):
         # entrada entera y lo reparte él: recortar antes lo renumeraría.
         worker = PreprocessWorker(
             self._pdf_paths,
+            Path(self.template_combo.currentData()),
             self._config,
             page_range=self._page_range(),
             reference_page=self._reference_page,
@@ -3119,7 +3301,7 @@ class MainWindow(QMainWindow):
 
     def _on_file_started(self, index: int, total: int, name: str) -> None:
         """Activa la fila del archivo en curso en el panel de tiempos."""
-        self.empty_times_label.setVisible(False)
+        self._show_file_progress_rows(True)
         self._ensure_file_rows(total)
         row = self._file_rows.get(index - 1)
         if row is None:
@@ -3952,7 +4134,7 @@ class MainWindow(QMainWindow):
     # ── Tiempo por archivo ──────────────────────────────────────────────
 
     def _clear_times(self) -> None:
-        self.empty_times_label.show()
+        self._show_file_progress_rows(False)
         self._file_rows = {}
         self._row_ms = {}
         self._row_started = {}
@@ -3968,7 +4150,7 @@ class MainWindow(QMainWindow):
         self._row_ms = {}
         self._row_started = {}
         self._current_file_index = 0
-        self.empty_times_label.setVisible(not bool(reports))
+        self._show_file_progress_rows(bool(reports))
         if not reports:
             return
         for index, report in enumerate(reports):
@@ -3981,6 +4163,11 @@ class MainWindow(QMainWindow):
             self._file_rows[index] = row
             self._row_ms[index] = report.processing_ms
         self.times_vbox.addStretch()
+
+    def _show_file_progress_rows(self, visible: bool) -> None:
+        """Alterna entre la lista integrada y el mensaje vacío."""
+        self.times_scroll.setVisible(visible)
+        self.empty_times_label.setVisible(not visible)
 
     # ── Vista previa ───────────────────────────────────────────────────
 
@@ -4003,11 +4190,13 @@ class MainWindow(QMainWindow):
         manera de encontrar una bitácora tiene que ser la misma en las dos.
         """
         row = QHBoxLayout()
+        row.setSpacing(8)
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText(
             "Buscar bitácora, matrícula, archivo o página"
         )
         self.search_edit.setMinimumWidth(280)
+        self.search_edit.setMaximumWidth(420)
         self.search_edit.setAccessibleName("Texto que se busca en la tabla")
         self.search_edit.setToolTip(
             "Busca en las columnas visibles; con el CSV completo, también en "
@@ -4015,29 +4204,23 @@ class MainWindow(QMainWindow):
             "previa."
         )
         self.search_edit.returnPressed.connect(self._buscar_en_la_tabla)
-        search_controls = QHBoxLayout()
-        search_controls.setContentsMargins(0, 0, 0, 0)
-        search_controls.setSpacing(8)
-        search_controls.addWidget(self.search_edit, 1)
+        row.addWidget(self.search_edit)
         self.search_button = QPushButton("Buscar")
         self.search_button.setToolTip(
             "Buscar el texto; repetido, pasa a la coincidencia siguiente"
         )
         self.search_button.clicked.connect(self._buscar_en_la_tabla)
-        search_controls.addWidget(self.search_button)
+        row.addWidget(self.search_button)
         self.search_prev = QPushButton("‹")
         self.search_prev.setToolTip("Coincidencia anterior")
         self.search_prev.setEnabled(False)
         self.search_prev.clicked.connect(lambda: self._mover_busqueda(-1))
-        search_controls.addWidget(self.search_prev)
+        row.addWidget(self.search_prev)
         self.search_next = QPushButton("›")
         self.search_next.setToolTip("Coincidencia siguiente")
         self.search_next.setEnabled(False)
         self.search_next.clicked.connect(lambda: self._mover_busqueda(1))
-        search_controls.addWidget(self.search_next)
-        row.addLayout(search_controls, 1)
-        row.addSpacing(8)
-        row.addStretch(1)
+        row.addWidget(self.search_next)
         # La pista es una frase larga, y un QLabel pide de ancho mínimo la
         # frase entera: metida en el panel de la tabla, ese mínimo era el que
         # empujaba el separador y dejaba la bitácora en su franja más
@@ -4052,6 +4235,7 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
         self.search_context.setMinimumWidth(0)
+        row.addWidget(self.search_context, 1)
         return row
 
     def _columnas_buscables(self) -> list[int]:
@@ -4180,8 +4364,7 @@ class MainWindow(QMainWindow):
         global_total = sum(self._preview_document_counts)
         self.btn_prev.setEnabled(has_pdf and global_page > 1)
         self.btn_next.setEnabled(has_pdf and global_page < global_total)
-        self.page_edit.setText(str(global_page) if has_pdf else "")
-        self.page_edit.setModified(False)
+        self._sync_page_edit(str(global_page) if has_pdf else "")
         validator = self.page_edit.validator()
         if isinstance(validator, QIntValidator):
             validator.setTop(max(1, global_total))

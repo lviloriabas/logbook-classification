@@ -7,16 +7,11 @@ el botón espere a tener una ejecución guardada y ninguna escritura en curso.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox
+from PySide6.QtWidgets import QDialog, QDialogButtonBox
 
 from app.gui.csv_viewer import CsvViewerWindow
 from app.gui.depuracion_dialog import DepurarPaginasDialog
@@ -26,11 +21,6 @@ from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.validation.depuracion import depurar_claves
 
 RAIZ = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def pagina(numero: int, log: str | None = None, blank: bool = False) -> PageResult:
@@ -135,29 +125,24 @@ def test_el_boton_cancelar_esta_en_español(app):
         dialog.deleteLater()
 
 
-def test_la_ventana_principal_no_depura_sin_corrida_guardada(app):
-    window = MainWindow()
-    try:
-        assert not window.btn_depurar.isEnabled()
+def test_la_ventana_principal_no_depura_sin_corrida_guardada(window):
+    assert not window.btn_depurar.isEnabled()
 
-        window._reports = corrida()
-        window._sync_depurar_button()
-        # Todavía sin carpeta: la escritura reutiliza la de la ejecución y sin
-        # ella dejaría una segunda entrega de lo mismo.
-        assert not window.btn_depurar.isEnabled()
+    window._reports = corrida()
+    window._sync_depurar_button()
+    # Todavía sin carpeta: la escritura reutiliza la de la ejecución y sin
+    # ella dejaría una segunda entrega de lo mismo.
+    assert not window.btn_depurar.isEnabled()
 
-        window._corrida_dir = RAIZ / "output" / "BITS 19 AUG 2026 05 00"
-        window._sync_depurar_button()
+    window._corrida_dir = RAIZ / "output" / "BITS 19 AUG 2026 05 00"
+    window._sync_depurar_button()
 
-        assert window.btn_depurar.isEnabled()
+    assert window.btn_depurar.isEnabled()
 
-        window._last_run_cancelled = True
-        window._sync_depurar_button()
+    window._last_run_cancelled = True
+    window._sync_depurar_button()
 
-        assert not window.btn_depurar.isEnabled()
-    finally:
-        window.close()
-        app.processEvents()
+    assert not window.btn_depurar.isEnabled()
 
 
 class DialogoMarcado(DepurarPaginasDialog):

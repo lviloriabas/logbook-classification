@@ -125,37 +125,44 @@ def _lcs_length(a: str, b: str) -> int:
     return row[-1]
 
 
-def _parse_month(value: str) -> Optional[int]:
-    """Número de mes (1-12) a partir de dígitos o letras con fuzzy match.
+def month_candidates(value: str) -> List[int]:
+    """Meses compatibles con la lectura, sin desempatar por calendario.
 
     Acepta: "7", "07", "JUL", "JUIL", "GUL" (confusión OCR), "JAN",
-    "JUL Month" (si las letras dominan). Devuelve None si no es legible.
+    "JUL Month" (si las letras dominan). Agrupa las variantes de idioma.
     """
     raw = value.strip()
     if not raw:
-        return None
+        return []
 
     if not re.search(r"[A-Za-z]", raw):
         digits = re.sub(r"[^\d]", "", raw)
         if not digits:
-            return None
+            return []
         mes = int(digits[:3])
-        return mes if 1 <= mes <= 12 else None
+        return [mes] if 1 <= mes <= 12 else []
+
+    # Una abreviatura real tiene prioridad sobre las equivalencias: la I
+    # de DIC no es la L que el OCR suele confundir en JUL.
+    original = re.sub(r"[^A-Z]", "", raw.upper())
+    exact = sorted({n for word, n in MONTH_WORDS if word in original})
+    if exact:
+        return exact
 
     # El mapa OCR se aplica ANTES de filtrar letras: los dígitos mal leídos
     # ('JU1' -> 'JUI', 'JUL' bien leído) se convierten a su letra probable.
     letters = re.sub(r"[^A-Za-z]", "", raw.upper().translate(_MESES_CHAR_MAP))
     if len(letters) < 2:
-        return None
+        return []
     original_letters = re.sub(r"[^A-Za-z]", "", raw)
     # Si el OCR mezcló varios dígitos con una sola letra no existe evidencia
     # suficiente de un mes manuscrito (``50c`` no debe convertirse en OCT).
     if re.search(r"\d", raw) and len(original_letters) < 2:
-        return None
+        return []
     # Subcadena exacta de un mes dentro de texto impreso ('JULMONTH').
-    for nombre, numero in _MESES_LETRAS.items():
-        if nombre in letters:
-            return numero
+    exact = sorted({n for word, n in MONTH_WORDS if word in letters})
+    if exact:
+        return exact
     # Fuzzy match conservador. Para un campo manuscrito de tres casillas, una
     # sustitución solo es aceptable si al menos dos letras siguen iguales en
     # la misma posición. Esto evita convertir ruido como ``50c`` en OCT/DIC.
@@ -178,17 +185,19 @@ def _parse_month(value: str) -> Optional[int]:
             and _lcs_length(letters, nombre) >= 2
         ]
     if not candidatos:
-        return None
+        return []
     best_dist = min(_levenshtein(letters, nombre) for _, nombre in candidatos)
     empatados = [
         numero for numero, nombre in candidatos
         if _levenshtein(letters, nombre) == best_dist
     ]
-    # Desempate determinista: en un empate (p. ej. 'JUi' = JUN o JUL) se
-    # prefiere el mes posterior del año. El par JUN/JUL es la confusión
-    # típica del formulario: la 'L' de julio pegada al separador de
-    # casilla se lee como '1'/'i'.
-    return max(empatados)
+    return sorted(set(empatados))
+
+
+def _parse_month(value: str) -> Optional[int]:
+    """Devuelve un mes solo cuando la lectura tiene una solución única."""
+    candidates = month_candidates(value)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _normalize_year(anio: int) -> Optional[int]:
@@ -267,15 +276,19 @@ def _month(value: str) -> Tuple[str, str]:
         if not 1 <= numeric <= 12:
             return "", f"invalid month: {value}"
         return str(numeric), f"{NUMERIC_MONTH_NOTE}: {raw}"
-    mes = _parse_month(raw)
-    if mes is None:
+    candidates = month_candidates(raw)
+    if len(candidates) > 1:
+        return "", f"Mes ambiguo: {value}"
+    if not candidates:
         return "", f"invalid month: {value}"
+    mes = candidates[0]
     letters = re.sub(r"[^A-Za-z]", "", raw.upper().translate(_OCR_CHAR_MAP))
     exact = any(nombre in letters for nombre in _MESES_LETRAS)
-    # Una sustitución aislada de tres caracteres conserva dos posiciones y
-    # es determinista. Cadenas de longitud distinta (p. ej. JUIL) siguen
-    # marcándose como aproximación para no convertirse en anclas del libro.
-    note = "" if exact or len(letters) == 3 else f"month fuzzy: {value}"
+    normalized = re.sub(r"[^A-Z]", "", raw.translate(_MESES_CHAR_MAP))
+    exact = exact or (len(normalized) == 3 and normalized in _MESES_LETRAS)
+    # Incluso tres letras pueden ser una aproximación (JOC -> OCT).
+    # La casilla completa no debe convertirla en ancla de otras páginas.
+    note = "" if exact else f"month fuzzy: {value}"
     return _canonical_month(mes), note
 
 

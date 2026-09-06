@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.gui.main_window import MainWindow
+from app.gui.widgets import TABLE_BASE_BG
 from app.models.schemas import PageResult, ValidationReport
 
 
@@ -25,6 +24,8 @@ def _window() -> MainWindow:
 def test_rows_list_the_whole_batch_with_its_pages_before_starting():
     window = _window()
     try:
+        assert not window.times_scroll.isHidden()
+        assert window.empty_times_label.isHidden()
         assert len(window._file_rows) == 2
         assert window._file_rows[0]["name"].text() == "primera.pdf"
         assert window._file_rows[0]["pages"].text() == "0/50 pág."
@@ -38,11 +39,37 @@ def test_the_bar_shows_the_percentage_of_the_file():
     window = _window()
     try:
         bar = window._file_rows[0]["bar"]
+        window.show()
+        QApplication.processEvents()
+        assert bar.height() == 20
         assert bar.isTextVisible()
         assert "%p" in bar.format()
         window._on_file_progress(1, 25, 50)
         assert bar.value() == 50
         assert window._file_rows[0]["pages"].text() == "25/50 pág."
+    finally:
+        window.close()
+
+
+def test_file_progress_is_one_aligned_surface():
+    window = _window()
+    try:
+        window.show()
+        QApplication.processEvents()
+        margins = window.times_pane.layout().contentsMargins()
+        assert (
+            margins.left(),
+            margins.top(),
+            margins.right(),
+            margins.bottom(),
+        ) == (10, 8, 10, 8)
+        assert window.file_progress_title.x() == window.preview_context_label.x()
+        assert (
+            window.times_scroll.viewport().palette().color(
+                QPalette.ColorRole.Base
+            )
+            == QColor(TABLE_BASE_BG)
+        )
     finally:
         window.close()
 
@@ -83,6 +110,7 @@ def test_clearing_the_results_leaves_the_screen_empty():
         assert window.table.rowCount() == 0
         assert window.table.columnCount() == 0
         assert window._file_rows == {}
+        assert window.times_scroll.isHidden()
         assert window.empty_times_label.isVisible() or window.isHidden()
     finally:
         window.close()

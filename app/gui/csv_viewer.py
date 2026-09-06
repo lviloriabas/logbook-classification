@@ -1114,11 +1114,29 @@ class EmbeddedPdfViewer(QFrame):
             if position is not None:
                 self.show_page(position)
 
+    def _sync_page_edit(self, texto: str) -> None:
+        """Pone el número en la caja salvo que se esté escribiendo en ella.
+
+        La caja la refresca cualquier cosa que mueva la página: la fila que
+        se elige en la tabla, el render que llega, el PDF que se carga. Si
+        eso pisa lo que la persona lleva tecleado, el salto se hace a la
+        página que ya estaba y parece que el selector no obedece.
+        """
+        if self.page_edit.hasFocus() and self.page_edit.isModified():
+            return
+        self.page_edit.setText(texto)
+        self.page_edit.setModified(False)
+
     def _jump(self) -> None:
         try:
             page = int(self.page_edit.text())
         except ValueError:
+            # Un número a medias (o ninguno) no es un destino: la caja vuelve
+            # a decir dónde está el visor.
+            self.page_edit.setModified(False)
+            self._sync_page_edit(str(self._global_page()))
             return
+        self.page_edit.setModified(False)
         self.show_page(page)
 
     def _global_page(self, path: Path | None = None, page: int | None = None) -> int:
@@ -1175,10 +1193,7 @@ class EmbeddedPdfViewer(QFrame):
             path = Path(path)
             global_index = self._global_page(path, page)
         self._global_index = global_index
-        self.page_edit.setText(str(global_index))
-        validator = self.page_edit.validator()
-        if isinstance(validator, QIntValidator):
-            validator.setTop(max(1, self._total))
+        self._sync_page_edit(str(global_index))
         if path is None or not path.is_file() or int(page) <= 0:
             self._path = path
             self._page = int(page)
@@ -1374,6 +1389,12 @@ class EmbeddedPdfViewer(QFrame):
     def _sync_controls(self) -> None:
         global_page = self._global_page()
         self.total_pages.setText(f"de {self._total}")
+        # El validador va con el total que anuncia la etiqueta. Si se queda
+        # corto, Qt considera incompleto lo que se teclea y no llega a emitir
+        # ``editingFinished``: la tecla Enter no hace nada.
+        validator = self.page_edit.validator()
+        if isinstance(validator, QIntValidator):
+            validator.setTop(max(1, self._total))
         self.page_edit.setEnabled(self._total > 0)
         self.prev.setEnabled(global_page > 1)
         self.next.setEnabled(0 < global_page < self._total)
@@ -2640,8 +2661,12 @@ class CsvViewerWindow(QMainWindow):
         dialog.exec()
 
     def _set_important_columns(self, columns: set[str]) -> None:
-        self._selected_important_columns = set(columns)
-        self._important_fields_store.save(self._template_name, columns)
+        # El CSV mínimo trae solo las columnas marcadas, así que el selector
+        # abierto sobre él no puede enseñar el resto: lo que esta plantilla
+        # tiene marcado y este archivo no lleva se conserva.
+        self._selected_important_columns = self._important_fields_store.save(
+            self._template_name, columns, self._columns
+        )
         self._apply_column_mode()
 
     def _status_for(self, row: dict[str, str], column: str) -> str | None:

@@ -21,7 +21,6 @@ from app.airvault.flujo import (
     carpeta_de_parte,
     carpeta_de_trabajo,
     comprobar_entrega,
-    partes_de_corrida,
     pdfs_de_corrida,
     preparar_partes,
     ruta_indice_paginas,
@@ -506,14 +505,30 @@ def test_soltar_un_lote_que_no_se_deja_no_tumba_la_corrida(tmp_path):
     csv = corrida(tmp_path)
     cliente = cliente_con_lote()
 
-    def no_se_deja(_batch_id):
-        raise RuntimeError("AirVault no contesto")
-
-    cliente.cerrar_lote = no_se_deja
     trabajo = Trabajo.preparar(AirVaultConfig(), tmp_path / "job", csv,
                                "DP | BIT 18 AUG 2026 05 42")
     trabajo.fijar_lote("003SRO")
+    # Hay que tomarlo: fijar el lote no lo toma, y sin tomarlo cerrar ni
+    # siquiera llega a preguntarle a AirVault.
+    trabajo.tomar(cliente)
+
+    intentos = []
+
+    def no_se_deja(batch_id):
+        intentos.append(batch_id)
+        raise RuntimeError("AirVault no contesto")
+
+    cliente.cerrar_lote = no_se_deja
+
     trabajo.cerrar(cliente)
+
+    assert intentos == ["003SRO"]
+    # Lo escrito sigue en su sitio: el fallo al soltar no deshace la corrida.
+    manifiesto = manifiestos.cargar(tmp_path / "job")
+    assert manifiesto.batch_id == "003SRO"
+    # Y no se vuelve a pedir: insistir da un 500 que parece otro problema.
+    trabajo.cerrar(cliente)
+    assert intentos == ["003SRO"]
 
 
 def test_el_lote_de_revisar_no_queda_tomado(tmp_path):

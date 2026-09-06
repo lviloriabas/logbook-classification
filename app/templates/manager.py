@@ -26,7 +26,9 @@ class TemplateManager:
             raise FileNotFoundError(f"Plantilla no encontrada: {path}")
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        template = Template.model_validate(data)
+        template = Template.model_validate(data).model_copy(
+            update={"source_path": path.resolve()}
+        )
         logger.info(f"Plantilla cargada: {template.name} "
                     f"({len(template.fields)} campos)")
         return template

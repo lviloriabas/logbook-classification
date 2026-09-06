@@ -12,15 +12,12 @@ se queda donde estaba.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from PySide6.QtCore import QItemSelectionModel
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QMessageBox
 
 from app.airvault import registro
 from app.airvault.config import AirVaultConfig
@@ -29,11 +26,6 @@ from app.airvault.manifest import ruta_manifiesto
 from app.gui.airvault_window import AirVaultWindow
 
 from test_airvault_entrega import corrida
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

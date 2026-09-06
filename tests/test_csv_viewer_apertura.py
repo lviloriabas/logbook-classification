@@ -9,22 +9,10 @@ cosas son trabajo que no hacía falta y aquí se fijan para que no vuelva.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtWidgets import QApplication
 
 from app.gui import csv_viewer
 from app.gui.csv_viewer import CsvViewerWindow, _companion_payload
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def _ejecucion(tmp_path: Path, completo: bool) -> Path:

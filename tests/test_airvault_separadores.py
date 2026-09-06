@@ -19,7 +19,7 @@ from app.airvault.guards import ErrorDeGuarda, verificar_cantidad
 from app.airvault.indexer import Indexador
 from app.airvault.mapping import leer_indice_paginas, registros_desde_entrega
 from app.airvault.model import EstadoRegistro
-from tests.airvault_fake import ClienteFalso, lote, pagina
+from tests.airvault_fake import ClienteFalso, pagina
 
 CSV_FILAS = [
     {"file": "Image_001.pdf", "page": "1", "log_number": "2312238",

@@ -161,6 +161,7 @@ class PdfPageRenderer:
         base_shape: tuple[int, ...],
         deskew_angle: float = 0.0,
         alignment: "TransformResult | None" = None,
+        target_shape: tuple[int, ...] | None = None,
     ) -> RenderedRegion:
         """Renderiza y alinea únicamente ``rect`` a alta resolución.
 
@@ -174,17 +175,33 @@ class PdfPageRenderer:
 
         page = self.document.load_page(page_number - 1)
         zoom = dpi / 72.0
-        full_width = max(1, int(round(page.rect.width * zoom)))
-        full_height = max(1, int(round(page.rect.height * zoom)))
+        source_width = max(1, int(round(page.rect.width * zoom)))
+        source_height = max(1, int(round(page.rect.height * zoom)))
+        base_height, base_width = base_shape[:2]
+        if target_shape is None:
+            target_shape = base_shape
+        target_base_height, target_base_width = target_shape[:2]
+        target_width = max(1, int(round(
+            target_base_width * source_width / max(base_width, 1)
+        )))
+        target_height = max(1, int(round(
+            target_base_height * source_height / max(base_height, 1)
+        )))
         x, y, width, height = rect
-        x0 = max(0, min(full_width - 1, int(round(x * full_width))))
-        y0 = max(0, min(full_height - 1, int(round(y * full_height))))
-        x1 = max(x0 + 1, min(full_width, int(round((x + width) * full_width))))
-        y1 = max(y0 + 1, min(full_height, int(round((y + height) * full_height))))
+        x0 = max(0, min(target_width - 1, int(round(x * target_width))))
+        y0 = max(0, min(target_height - 1, int(round(y * target_height))))
+        x1 = max(
+            x0 + 1,
+            min(target_width, int(round((x + width) * target_width))),
+        )
+        y1 = max(
+            y0 + 1,
+            min(target_height, int(round((y + height) * target_height))),
+        )
 
         # Deskew rota alrededor del centro del lienzo completo.
         deskew = cv2.getRotationMatrix2D(
-            (full_width / 2.0, full_height / 2.0), deskew_angle, 1.0
+            (source_width / 2.0, source_height / 2.0), deskew_angle, 1.0
         ).astype(np.float64)
         deskew3 = np.vstack([deskew, (0.0, 0.0, 1.0)])
 
@@ -192,12 +209,11 @@ class PdfPageRenderer:
         if alignment is not None:
             radians = np.deg2rad(float(alignment.rot))
             cosine, sine = np.cos(radians), np.sin(radians)
-            base_height, base_width = base_shape[:2]
             align3[:2] = np.array([
                 [alignment.scale * cosine, -alignment.scale * sine,
-                 alignment.tx * full_width / max(base_width, 1)],
+                 alignment.tx * source_width / max(base_width, 1)],
                 [alignment.scale * sine, alignment.scale * cosine,
-                 alignment.ty * full_height / max(base_height, 1)],
+                 alignment.ty * source_height / max(base_height, 1)],
             ])
         transform = align3 @ deskew3
         inverse = np.linalg.inv(transform)
@@ -210,8 +226,8 @@ class PdfPageRenderer:
         margin = 4
         rx0 = max(0, int(np.floor(raw_corners[0].min())) - margin)
         ry0 = max(0, int(np.floor(raw_corners[1].min())) - margin)
-        rx1 = min(full_width, int(np.ceil(raw_corners[0].max())) + margin)
-        ry1 = min(full_height, int(np.ceil(raw_corners[1].max())) + margin)
+        rx1 = min(source_width, int(np.ceil(raw_corners[0].max())) + margin)
+        ry1 = min(source_height, int(np.ceil(raw_corners[1].max())) + margin)
         clip = fitz.Rect(rx0 / zoom, ry0 / zoom, rx1 / zoom, ry1 / zoom)
         pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
         self._count_render()
@@ -230,10 +246,10 @@ class PdfPageRenderer:
             borderValue=(255, 255, 255),
         )
         normalized = (
-            x0 / full_width,
-            y0 / full_height,
-            (x1 - x0) / full_width,
-            (y1 - y0) / full_height,
+            x0 / target_width,
+            y0 / target_height,
+            (x1 - x0) / target_width,
+            (y1 - y0) / target_height,
         )
         return RenderedRegion(np.ascontiguousarray(aligned), normalized, dpi)
 

@@ -7,14 +7,8 @@ en un hilo de fondo y después de armar la tabla: la pantalla mostraba
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtWidgets import QApplication
-
-from app.gui.main_window import MainWindow
 from app.models.schemas import FieldResult, PageResult, Status, ValidationReport
 from app.templates.manager import TemplateManager
 
@@ -53,8 +47,7 @@ def _vuelo(page_number: int, log_number: str, **extra) -> PageResult:
     return _page(page_number, log_number, **firmas)
 
 
-def test_disc_column_shows_the_classified_pages():
-    app = QApplication.instance() or QApplication([])
+def test_disc_column_shows_the_classified_pages(window):
     reports = [ValidationReport(
         pdf_path="bitacora.pdf",
         template_name=TEMPLATE.name,
@@ -63,21 +56,16 @@ def test_disc_column_shows_the_classified_pages():
             _vuelo(2, "2147338", captain_signature=("false", AUSENTE)),
         ],
     )]
-    window = MainWindow()
-    try:
-        window._processed_template = TEMPLATE
-        window._populate_table(reports)
-        window._table_timer.stop()
-        while window._table_pending:
-            window._on_table_chunk()
+    window._processed_template = TEMPLATE
+    window._populate_table(reports)
+    window._table_timer.stop()
+    while window._table_pending:
+        window._on_table_chunk()
 
-        column = window._table_columns.index("disc")
-        assert window.table.item(0, column).text() == "false"
-        marcada = window.table.item(1, column)
-        assert marcada.text() == "true"
-        assert "discrepancia" in marcada.toolTip()
-        # Es un indicador de la bitácora: se ve también en la vista resumida.
-        assert not window.table.isColumnHidden(column)
-    finally:
-        window.close()
-        app.processEvents()
+    column = window._table_columns.index("disc")
+    assert window.table.item(0, column).text() == "false"
+    marcada = window.table.item(1, column)
+    assert marcada.text() == "true"
+    assert "discrepancia" in marcada.toolTip()
+    # Es un indicador de la bitácora: se ve también en la vista resumida.
+    assert not window.table.isColumnHidden(column)

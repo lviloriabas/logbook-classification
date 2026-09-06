@@ -1,6 +1,5 @@
 """El empaquetado no depende de la computadora donde vive el proyecto."""
 
-from pathlib import Path
 
 from tools.build_launcher import build_command
 

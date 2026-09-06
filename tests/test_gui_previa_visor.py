@@ -9,14 +9,9 @@ clic, que es lo mismo que ya se hace en el visor de CSV.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtWidgets import QApplication
 
 from app.airvault.model import Registro
 from app.gui.airvault_previa import BitacorasDelBatch, VistaPreviaBatches
@@ -25,11 +20,6 @@ from app.airvault.flujo import BatchPrevisto
 
 #: Columna «Log Page» de la lista de páginas de un batch.
 LOG_PAGE = 3
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

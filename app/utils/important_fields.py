@@ -67,10 +67,28 @@ class ImportantFieldsStore:
         stored = self._templates().get(template_name or _DEFAULT_KEY)
         return set(stored) if stored is not None else None
 
-    def save(self, template_name: str | None, columns: Iterable[str]) -> None:
-        """Registra la selección de una plantilla conservando las demás."""
+    def save(
+        self,
+        template_name: str | None,
+        columns: Iterable[str],
+        scope: Iterable[str] | None = None,
+    ) -> set[str]:
+        """Registra la selección de una plantilla conservando las demás.
+
+        ``scope`` son las columnas que el selector pudo enseñar. El CSV
+        mínimo trae solo las marcadas, así que un selector abierto sobre él
+        no sabe nada de las demás: sin esta reserva, editar la lista desde
+        una corrida anterior borraba en silencio lo marcado después, y la
+        selección nunca terminaba de quedarse guardada. Devuelve la lista
+        completa que quedó escrita, que es la que la ventana tiene que
+        seguir usando.
+        """
         templates = self._templates()
-        templates[template_name or _DEFAULT_KEY] = sorted(set(columns))
+        key = template_name or _DEFAULT_KEY
+        selected = set(columns)
+        if scope is not None:
+            selected.update(set(templates.get(key, ())) - set(scope))
+        templates[key] = sorted(selected)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(
@@ -84,3 +102,4 @@ class ImportantFieldsStore:
             )
         except OSError as exc:  # noqa: BLE001 - preferencia, no dato crítico
             logger.warning(f"No se pudo guardar los campos importantes: {exc}")
+        return selected

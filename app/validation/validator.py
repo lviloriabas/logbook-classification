@@ -7,6 +7,7 @@ from app.models.schemas import PageResult, Status
 from app.templates.schema import Template
 from app.validation.page_status import recompute_page_status
 from app.validation.rules import apply_rules
+from app.validation.date_review import review_date_window
 
 
 def validate_page(page: PageResult, template: Template,
@@ -29,5 +30,6 @@ def validate_page(page: PageResult, template: Template,
             continue
         apply_rules(field_result, field_template, config)
 
+    review_date_window(page)
     recompute_page_status(page)
     return page

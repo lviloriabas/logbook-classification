@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
@@ -16,7 +13,7 @@ from app.gui.csv_utils import (
     template_name_for_csv,
 )
 from app.gui.csv_viewer import CsvViewerWindow
-from app.gui.main_window import MainWindow, _visible_preview_fields
+from app.gui.main_window import _visible_preview_fields
 from app.templates.schema import FieldTemplate, Template
 from app.utils.important_fields import ImportantFieldsStore
 
@@ -67,6 +64,32 @@ def test_store_separates_templates_and_remembers_an_empty_selection(
     assert reopened.load("Sin editar") is None
 
 
+def test_editar_la_lista_no_borra_lo_que_el_selector_no_pudo_ensenar(
+    tmp_path: Path,
+):
+    """Un selector abierto sobre menos columnas no habla por las demás.
+
+    El CSV mínimo trae solo las columnas marcadas, y el de una corrida
+    anterior ni siquiera trae las que se marcaron después. Guardando solo
+    lo que el cuadro enseñó, tocar la lista desde ahí borraba en silencio
+    el resto: la selección se editaba una y otra vez y nunca se quedaba.
+    """
+    store = ImportantFieldsStore(tmp_path / "important_fields.json")
+    store.save("Aircraft Log", {"file", "log_number", "technician_license"})
+
+    # El cuadro solo pudo enseñar las columnas de esa corrida.
+    quedo = store.save(
+        "Aircraft Log", {"file"}, scope=["file", "log_number", "matricula"]
+    )
+
+    assert quedo == {"file", "technician_license"}
+    assert store.load("Aircraft Log") == {"file", "technician_license"}
+    # Sin ``scope`` sigue mandando la lista completa: es el cuadro que las
+    # enseñó todas y desmarcar tiene que poder dejarla vacía.
+    assert store.save("Aircraft Log", set()) == set()
+    assert store.load("Aircraft Log") == set()
+
+
 def test_store_ignores_a_damaged_file_without_raising(tmp_path: Path):
     path = tmp_path / "important_fields.json"
     path.write_text("{no es json", encoding="utf-8")
@@ -114,46 +137,40 @@ def test_preview_draws_the_marked_fields_even_if_they_are_not_required():
 
 
 def test_main_window_preview_follows_the_edited_list_and_remembers_it(
-    tmp_path: Path,
+    window, tmp_path: Path
 ):
-    app = QApplication.instance() or QApplication([])
-    window = MainWindow()
-    try:
-        store_path = tmp_path / "important_fields.json"
-        window._important_fields_store = ImportantFieldsStore(store_path)
-        template = _template()
-        columns = _columns()
-        window._table_columns = columns
-        window.table.setColumnCount(len(columns))
-        window.fields_check.setChecked(True)
-        window.important_fields_check.setChecked(True)
+    store_path = tmp_path / "important_fields.json"
+    window._important_fields_store = ImportantFieldsStore(store_path)
+    template = _template()
+    columns = _columns()
+    window._table_columns = columns
+    window.table.setColumnCount(len(columns))
+    window.fields_check.setChecked(True)
+    window.important_fields_check.setChecked(True)
 
-        window._set_important_columns({"log_number", "captain_license", "date"})
+    window._set_important_columns({"log_number", "captain_license", "date"})
 
-        ids = window._current_important_field_ids(template)
-        assert ids == {"log_number", "captain_license", "day"}
-        assert [
-            field.id for field in _visible_preview_fields(template, True, ids)
-        ] == ["log_number", "captain_license", "day"]
+    ids = window._current_important_field_ids(template)
+    assert ids == {"log_number", "captain_license", "day"}
+    assert [
+        field.id for field in _visible_preview_fields(template, True, ids)
+    ] == ["log_number", "captain_license", "day"]
 
-        # La selección queda escrita y se recupera en la siguiente sesión.
-        assert ImportantFieldsStore(store_path).load(window._template_key()) == {
-            "log_number",
-            "captain_license",
-            "date",
-        }
-        window._important_fields_user_selected = False
-        window._selected_important_columns = set()
-        window._restore_important_columns()
-        assert window._important_fields_user_selected
-        assert window._selected_important_columns == {
-            "log_number",
-            "captain_license",
-            "date",
-        }
-    finally:
-        window.close()
-        app.processEvents()
+    # La selección queda escrita y se recupera en la siguiente sesión.
+    assert ImportantFieldsStore(store_path).load(window._template_key()) == {
+        "log_number",
+        "captain_license",
+        "date",
+    }
+    window._important_fields_user_selected = False
+    window._selected_important_columns = set()
+    window._restore_important_columns()
+    assert window._important_fields_user_selected
+    assert window._selected_important_columns == {
+        "log_number",
+        "captain_license",
+        "date",
+    }
 
 
 def test_csv_viewer_reuses_the_stored_list_on_the_next_run(
@@ -186,6 +203,35 @@ def test_csv_viewer_reuses_the_stored_list_on_the_next_run(
         )
     finally:
         reopened.close()
+        app.processEvents()
+
+
+def test_el_visor_conserva_lo_marcado_que_ese_csv_no_trae(
+    tmp_path: Path, monkeypatch
+):
+    """La corrida es anterior a la marca, y su CSV mínimo no la lleva."""
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(csv_viewer, "_PROGRAM_DIR", tmp_path)
+    run = tmp_path / "run"
+    data = run / "datos"
+    data.mkdir(parents=True)
+    (data / "run.csv").write_text(
+        "file,page,log_number,matricula\na.pdf,1,1234500,HP-1234CMP\n",
+        encoding="utf-8",
+    )
+    store = ImportantFieldsStore(tmp_path / "important_fields.json")
+    store.save(None, {"file", "log_number", "technician_license"})
+
+    viewer = CsvViewerWindow(tmp_path)
+    try:
+        assert viewer.load_folder(run)
+        viewer._set_important_columns({"file", "log_number", "matricula"})
+
+        assert store.load(None) == {
+            "file", "log_number", "matricula", "technician_license",
+        }
+    finally:
+        viewer.close()
         app.processEvents()
 
 

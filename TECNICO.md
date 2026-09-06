@@ -71,14 +71,23 @@ Archivos principales:
 
 ## 5. Preprocesamiento y alineación
 
-Cada PDF se calibra con una página de referencia del tramo seleccionado:
+La plantilla normal declara una imagen canónica del formulario. Sus campos se
+definieron sobre ese mismo lienzo y cada página se calibra contra él. Si una
+plantilla no declara la imagen o no puede cargarse, se usa como respaldo la
+página de referencia del tramo seleccionado.
 
 1. Canny y Hough estiman la inclinación.
-2. ORB y RANSAC estiman rotación, escala y traslación.
-3. AKAZE y correlación de fase actúan como respaldo.
-4. Una mediana local estabiliza transformaciones cercanas.
+2. Una apertura morfológica conserva las líneas largas impresas y elimina la
+   mayor parte de la escritura manuscrita.
+3. ORB y RANSAC estiman rotación, escala y traslación sobre esa estructura.
+4. AKAZE y correlación de fase actúan como respaldo.
+5. La transformación propia de cada página se usa cuando es fiable. La mediana
+   local solo cubre páginas sin evidencia suficiente, como portadas.
 
-La alineación adapta el escaneo a la plantilla. No corrige una plantilla equivocada. OpenCV y NumPy realizan todo el cálculo en CPU.
+La cobertura de las coincidencias debe extenderse por el formulario, lo que
+evita aceptar una transformación deducida de una sola esquina. La salida usa
+el tamaño exacto del lienzo canónico, incluso si el escaneo fue recortado o
+tiene dimensiones distintas. OpenCV y NumPy realizan todo el cálculo en CPU.
 
 Archivos principales:
 
@@ -127,7 +136,11 @@ La fecha final usa `YYYY/MM/DD`. Las anclas confiables del mismo libro permiten 
 
 Esa regla no solo completa: también desmiente. Una lectura que contradice a las dos páginas que la rodean es una lectura equivocada, no una fecha discutible, así que el mes se corrige cuando es la más floja de las tres, y los días de todo el libro se rehacen a la vez eligiendo la asignación que no retrocede y que menos evidencia contradice (conservar lo leído no cuesta nada; cambiarlo cuesta la fuerza de esa lectura, más si el día nuevo no lo propuso ninguna lectura y más cuanto más se aleje de lo leído). El error más común que arregla es la casilla de las decenas sin leer, que convierte un 18 en un 8.
 
-Además, nada de lo que se indexa puede estar fechado después de la ejecución: la página no se firma después de escanearse. Un año posterior al de la corrida (un `26` leído `96` o `28`) y un mes posterior al que corre (un `AGO` leído `OCT`) se apartan como lectura inválida, con su motivo en el comentario, y los completa el libro; si el libro no puede, la página se queda sin fecha y va a revisión, que es preferible a indexarla décadas fuera de sitio. Lo antiguo no se descarta: se indexan pocas bitácoras de meses atrás, pero llegan, así que la ventana de `app/utils/date_window.py` solo ordena candidatos y nunca acerca una fecha a hoy.
+El mes se compara por posiciones en `app/ocr/month_evidence.py`. Las abreviaturas en español e inglés se agrupan por mes. Los empates, como `JUX` entre junio y julio, conservan ambos candidatos: no se elige el mes posterior. La confianza de las letras que distinguen candidatos limita la decisión, y la palabra completa puede aportar trazos que una casilla perdió. Las distintas vistas del mismo trazo no suman votos. Cuando falta evidencia, `app/ocr/month_retry.py` relee la palabra y las casillas decisivas con un margen pequeño, como máximo cuatro recortes. Dos fechas directas del mismo libro pueden resolver un candidato si es el único que cabe en el intervalo; la proximidad a hoy no basta para elegirlo.
+
+El periodo habitual de `app/utils/date_window.py` abarca desde el primer día del mes anterior hasta el día de ejecución. En enero incluye diciembre del año anterior. `app/validation/date_review.py` conserva las fechas más antiguas y marca `date_review` para enviarlas a REVISAR, incluso si varias páginas del libro las confirman. La marca se comprueba al validar, después de corregir por libro y antes de exportar o reexportar. No se cambian fechas antiguas para acercarlas a hoy.
+
+Una fecha manuscrita futura es inválida, también si solo se adelanta un día dentro del mes actual. El corrector aparta el componente futuro, conserva la lectura como alternativa y no inventa el día de hoy para reemplazarlo. Si un día no se pudo leer, el relleno del mes actual no supera hoy. El día generado por `month_end_policy` conserva la representación de fin de mes y se valida por mes, pues no es una fecha manuscrita. Las fechas futuras tampoco pueden elegirse como alternativas de secuencia ni guardarse como anclas de la memoria.
 
 Medido sobre 3607 páginas ya procesadas, los retrocesos de fecha dentro del libro (una violación de la regla, así que siempre un error) bajan de 221 a 15, y seis páginas más se quedan sin fecha porque su lectura era imposible y el libro no pudo completarla.
 

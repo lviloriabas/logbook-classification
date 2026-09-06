@@ -1,6 +1,7 @@
 """Alineación automática de páginas contra una imagen de referencia.
 
-Soporta rotación, traslación y pequeñas diferencias de escala mediante
+Extrae primero las líneas largas del formulario impreso, y sobre ellas
+calcula rotación, traslación y pequeñas diferencias de escala mediante
 coincidencia de características ORB/AKAZE + ajuste de similitud (RANSAC).
 Cuando no hay textura suficiente para las características, usa correlación
 de fase como fallback de traslación.
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import cv2
@@ -30,6 +32,8 @@ MAX_SCALE_DRIFT = 0.02
 MAX_TRANSLATION_PX = 40.0
 MAX_TRANSLATION_RATIO = 0.02
 MIN_PHASE_RESPONSE = 0.12
+MIN_FEATURE_COVERAGE = 0.45
+MIN_STRUCTURE_INK_RATIO = 0.004
 
 
 @dataclass
@@ -48,6 +52,55 @@ class TransformResult:
     reliable: bool = True
     method: str = "none"
     score: float = 0.0
+    coverage: float = 0.0
+
+
+def load_template_reference(template, dpi: int) -> Optional[np.ndarray]:
+    """Carga la pagina canonica asociada a una plantilla al DPI de trabajo."""
+    path = template.resolved_reference_image()
+    if path is None:
+        return None
+    path = Path(path)
+    if not path.is_file():
+        logger.warning(f"Referencia canonica no encontrada: {path}")
+        return None
+    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if image is None:
+        logger.warning(f"No se pudo leer la referencia canonica: {path}")
+        return None
+    factor = float(dpi) / float(template.reference_dpi)
+    target = (
+        max(1, round(image.shape[1] * factor)),
+        max(1, round(image.shape[0] * factor)),
+    )
+    if target != (image.shape[1], image.shape[0]):
+        interpolation = cv2.INTER_AREA if factor < 1.0 else cv2.INTER_LINEAR
+        image = cv2.resize(image, target, interpolation=interpolation)
+    return image
+
+
+def printed_structure(image: np.ndarray) -> np.ndarray:
+    """Conserva la reticula impresa y descarta casi toda la escritura."""
+    gray = to_gray(image)
+    height, width = gray.shape[:2]
+    if width < 32 or height < 32:
+        return gray
+    block = min(51, max(15, (min(width, height) // 24) | 1))
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV, block, 12,
+    )
+    horizontal = cv2.morphologyEx(
+        binary,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (max(15, width // 44), 1)),
+    )
+    vertical = cv2.morphologyEx(
+        binary,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(9, height // 60))),
+    )
+    return cv2.bitwise_or(horizontal, vertical)
 
 
 def scale_transform_for_shape(
@@ -79,6 +132,7 @@ def scale_transform_for_shape(
         reliable=transform.reliable,
         method=transform.method,
         score=transform.score,
+        coverage=transform.coverage,
     )
 
 
@@ -95,6 +149,7 @@ def _result_from_matrix(
     shape: Tuple[int, ...],
     method: str,
     score: float = 0.0,
+    coverage: float = 0.0,
 ) -> TransformResult:
     """Convierte una matriz OpenCV en resultado y aplica sus guardarraíles."""
     rot = math.degrees(math.atan2(matrix[1, 0], matrix[0, 0]))
@@ -107,6 +162,7 @@ def _result_from_matrix(
         and abs(scale - 1.0) <= MAX_SCALE_DRIFT
         and abs(tx) <= _max_translation(shape)
         and abs(ty) <= _max_translation(shape)
+        and coverage >= MIN_FEATURE_COVERAGE
     )
     return TransformResult(
         rot=rot,
@@ -117,6 +173,7 @@ def _result_from_matrix(
         reliable=reliable,
         method=method,
         score=score,
+        coverage=coverage,
     )
 
 
@@ -158,12 +215,23 @@ def _feature_transform(
     )
     if matrix is None:
         return None
+    inlier_mask = (
+        mask.reshape(-1).astype(bool)
+        if mask is not None else np.zeros(len(src_pts), dtype=bool)
+    )
+    inlier_points = src_pts[inlier_mask]
+    coverage = 0.0
+    if len(inlier_points) >= 2:
+        span_x = float(np.ptp(inlier_points[:, 0])) / max(gray_template.shape[1], 1)
+        span_y = float(np.ptp(inlier_points[:, 1])) / max(gray_template.shape[0], 1)
+        coverage = min(span_x, span_y)
     return _result_from_matrix(
         matrix,
         mask,
         gray_page.shape,
         method,
         score=(int(mask.sum()) / len(good)) if mask is not None else 0.0,
+        coverage=coverage,
     )
 
 
@@ -204,6 +272,7 @@ def _phase_transform(
         reliable=reliable,
         method="phase",
         score=response,
+        coverage=1.0,
     )
 
 
@@ -217,14 +286,16 @@ def compute_similarity_transform(
     marca ``reliable=False`` para que el ancla por batch tome el control.
     AKAZE y la correlación de fase solo se prueban cuando ORB no es fiable.
     """
-    if page.shape[:2] != template.shape[:2]:
-        page = cv2.resize(
-            page, (template.shape[1], template.shape[0]),
-            interpolation=cv2.INTER_LINEAR,
-        )
-
-    gray_page = to_gray(page)
-    gray_tpl = to_gray(template)
+    gray_page = printed_structure(page)
+    gray_tpl = printed_structure(template)
+    if (
+        float(np.count_nonzero(gray_page)) / max(gray_page.size, 1)
+        < MIN_STRUCTURE_INK_RATIO
+        or float(np.count_nonzero(gray_tpl)) / max(gray_tpl.size, 1)
+        < MIN_STRUCTURE_INK_RATIO
+    ):
+        logger.debug("Alineacion: estructura impresa insuficiente")
+        return TransformResult(reliable=False, method="structure")
     candidates: List[TransformResult] = []
 
     for method in ("orb", "akaze"):
@@ -266,7 +337,8 @@ def compute_similarity_transform(
         f"Alineación ({result.method}): rot={result.rot:.3f} "
         f"tx={result.tx:.2f} ty={result.ty:.2f} "
         f"scale={result.scale:.4f} inliers={result.inliers} "
-        f"score={result.score:.3f} reliable={result.reliable}"
+        f"score={result.score:.3f} coverage={result.coverage:.3f} "
+        f"reliable={result.reliable}"
     )
     return result
 
@@ -313,7 +385,12 @@ def align_to_template(
         (imagen alineada, calidad de alineación: "ok" | "low")
     """
     transform = compute_similarity_transform(page, template, config)
-    aligned = apply_transform(page, transform) if transform.reliable else page
+    aligned = (
+        warp_with_transform(
+            page, transform, (template.shape[1], template.shape[0])
+        )
+        if transform.reliable else page
+    )
     quality = "ok" if transform.reliable else "low"
     if not transform.reliable:
         logger.warning("Alineación: estimación no confiable, se conserva "

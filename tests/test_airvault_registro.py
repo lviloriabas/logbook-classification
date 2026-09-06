@@ -16,7 +16,7 @@ from pathlib import Path
 
 from app.airvault import registro
 from app.airvault.config import AirVaultConfig
-from app.airvault.flujo import Trabajo, preparar_partes
+from app.airvault.flujo import preparar_partes
 from app.airvault.model import EstadoEtapa
 from tests.test_airvault_entrega import corrida
 

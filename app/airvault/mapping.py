@@ -328,6 +328,7 @@ def _registro_de_fila(
     resolutor: ResolutorFlota,
     inferidas: Mapping[tuple[str, int], tuple[str, str]] | None = None,
     fin_de_mes: bool = False,
+    fecha_dudosa: bool = False,
 ) -> Registro:
     """Traduce una fila del CSV al registro que viaja en el manifiesto.
 
@@ -341,7 +342,9 @@ def _registro_de_fila(
     pagina = int(str(fila.get("page", "0")).strip() or 0)
     fecha = str(fila.get("date", "")).strip()
     fecha_inferida = ""
-    if not _FECHA_CSV_RE.match(fecha):
+    if fecha_dudosa:
+        fecha = ""
+    elif not _FECHA_CSV_RE.match(fecha):
         fecha, fecha_inferida = (inferidas or {}).get(
             (archivo, pagina), (fecha, "")
         )
@@ -357,6 +360,7 @@ def _registro_de_fila(
         log_number=normalizar_log_number(fila.get("log_number", "")),
         flight_number=str(fila.get("flight_number", "")).strip().upper(),
         fecha=fecha,
+        fecha_dudosa=fecha_dudosa,
         fecha_inferida=fecha_inferida,
         fleet=fleet if matricula else "",
         lessor=lessor,
@@ -488,7 +492,10 @@ def registros_desde_entrega(
             ))
             continue
         registros.append(
-            _registro_de_fila(seq, fila, resolutor, inferidas, fin_de_mes)
+            _registro_de_fila(
+                seq, fila, resolutor, inferidas, fin_de_mes,
+                fecha_dudosa=bool(entrada.get("fecha_dudosa", False)),
+            )
         )
     return registros
 
@@ -520,8 +527,9 @@ def valores_de_indice(
         CAMPO_FLEET: registro.fleet,
         CAMPO_LOG_NUMBER: registro.log_number,
         CAMPO_AUDIT_STATUS: audit_status,
-        CAMPO_END_DATE: fecha_airvault(registro.fecha),
     }
+    if not registro.fecha_dudosa:
+        valores[CAMPO_END_DATE] = fecha_airvault(registro.fecha)
     if registro.lessor:
         valores[CAMPO_LESSOR] = registro.lessor
     if registro.flight_number:

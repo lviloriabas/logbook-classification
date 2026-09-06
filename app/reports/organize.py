@@ -161,6 +161,7 @@ def por_revisar(page: PageResult) -> bool:
     """
     return (
         page.airvault_review
+        or page.date_review
         or page.airvault_discrepancy
         or page.discrepancy
         or page.blank
@@ -778,6 +779,10 @@ def _paginas_json(secuencia: Sequence[EntradaPdf]) -> List[dict]:
             # con la que el indexado empareja cada pagina con su fila.
             "archivo": entrada.ref.nombre_en_el_csv,
             "pagina": entrada.ref.page.page_number,
+            **(
+                {"fecha_dudosa": True}
+                if entrada.ref.page.date_review else {}
+            ),
         }
         for entrada in secuencia
     ]

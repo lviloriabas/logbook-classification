@@ -296,6 +296,22 @@ def test_una_pagina_que_no_esta_en_el_csv_se_anota():
     assert any("sin_fila" in aviso for aviso in registro.avisos)
 
 
+def test_fecha_dudosa_del_indice_no_se_infiere_ni_se_envia():
+    filas = [_fila(date="2024/08/20")]
+    indice = [{
+        "archivo": "Image_001.pdf",
+        "pagina": 1,
+        "fecha_dudosa": True,
+    }]
+
+    registro = registros_desde_entrega(filas, indice)[0]
+    valores = valores_de_indice(registro, "Log Page", "PUBLISHED")
+
+    assert registro.fecha == ""
+    assert registro.fecha_dudosa is True
+    assert CAMPO_END_DATE not in valores
+
+
 # ── fecha de fin de mes al indexar ─────────────────────────────────
 #
 # Una ejecucion exportada con el dia exacto todavia puede indexarse a fin de

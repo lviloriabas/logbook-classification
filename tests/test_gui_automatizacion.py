@@ -14,16 +14,13 @@ salidas por una lista y se mira por dónde pasó la cadena.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QToolButton
+from PySide6.QtWidgets import QToolButton
 
 from app.gui.airvault_window import AirVaultWindow
 from app.gui.automatizacion import (
@@ -49,11 +46,6 @@ from app.gui.main_window import MainWindow
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 
 RAIZ = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 def pagina(numero: int, log: str | None = None, blank: bool = False) -> PageResult:
@@ -337,7 +329,7 @@ def ventana(app, tmp_path):
 
 
 def test_el_boton_dice_lo_que_va_a_hacer(ventana):
-    assert ventana.btn_automatico.text() == "Procesar todo"
+    assert ventana.btn_automatico.text() == "Automático"
     assert ventana._pasos_automaticos() == (
         "preprocesar > procesar > exportar > subir > esperar > indexar"
     )
@@ -424,7 +416,7 @@ def test_los_pasos_que_no_se_eligieron_no_cuentan(app, tmp_path):
     assert cadena.estado(COMPLETAR) == OMITIDO
     assert cadena.estado(PROCESAR) == PENDIENTE
     # Preprocesar, procesar, exportar, subir, esperar e indexar.
-    assert cadena.resumen() == "Procesar todo: 0 de 6 pasos"
+    assert cadena.resumen() == "Automático: 0 de 6 pasos"
 
 
 def test_cambiar_los_pasos_rehace_la_cuenta(app, tmp_path):
@@ -434,7 +426,7 @@ def test_cambiar_los_pasos_rehace_la_cuenta(app, tmp_path):
     opciones.fijar(COMPLETAR, True)
 
     assert cadena.estado(COMPLETAR) == PENDIENTE
-    assert cadena.resumen() == "Procesar todo: 0 de 7 pasos"
+    assert cadena.resumen() == "Automático: 0 de 7 pasos"
 
 
 def test_empezar_un_paso_da_por_hecho_el_anterior(app, tmp_path):
@@ -451,7 +443,7 @@ def test_empezar_un_paso_da_por_hecho_el_anterior(app, tmp_path):
 
     assert cadena.estado(PREPROCESAR) == HECHO
     assert cadena.estado(PROCESAR) == HECHO
-    assert cadena.resumen() == "Procesar todo: subir (2 de 6 pasos)"
+    assert cadena.resumen() == "Automático: subir (2 de 6 pasos)"
 
 
 def test_la_cadena_completa_lo_dice_sin_contar(app, tmp_path):
@@ -463,7 +455,7 @@ def test_la_cadena_completa_lo_dice_sin_contar(app, tmp_path):
     for paso in (PREPROCESAR, PROCESAR, EXPORTAR):
         cadena.marcar(paso, HECHO)
 
-    assert cadena.resumen() == "Procesar todo: completo"
+    assert cadena.resumen() == "Automático: completo"
 
 
 def test_cortar_deja_escrito_donde_se_detuvo(app, tmp_path):
@@ -476,7 +468,7 @@ def test_cortar_deja_escrito_donde_se_detuvo(app, tmp_path):
 
     assert cadena.estado(EXPORTAR) == CORTADO
     assert cadena.resumen() == (
-        "Procesar todo: se cortó en «Exportar» (2 de 6 pasos)"
+        "Automático: se cortó en «Exportar» (2 de 6 pasos)"
     )
 
 

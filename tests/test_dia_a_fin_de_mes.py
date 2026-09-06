@@ -14,25 +14,12 @@ esa opción se apaga en vez de ofrecer algo que no se puede dar.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PySide6.QtWidgets import QApplication
 
 from app.core.config import AppConfig
 from app.core.pipeline import DAY_FIELD_IDS, DAY_NOT_READ_NOTE
 from app.gui.csv_utils import run_read_day
 from app.models.schemas import FieldResult, PageResult, Status
-from app.reports.csv_reporter import CSV_DATE_MONTH_END, CSV_DATE_SPECIFIC
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 # ── la ejecución ───────────────────────────────────────────────────

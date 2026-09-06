@@ -14,7 +14,6 @@ import json
 import socket
 import struct
 import threading
-import types
 from pathlib import Path
 
 import pytest
@@ -67,8 +66,21 @@ class ServidorWS:
     def url(self) -> str:
         return f"ws://127.0.0.1:{self.puerto}/devtools/browser/abc"
 
+    def cerrar(self) -> None:
+        """Suelta la escucha.
+
+        Sin esto el descriptor sobrevive a la prueba y el aviso de socket sin
+        cerrar sale mucho despues, cargado a la prueba que lo recoja.
+        """
+        self.sock.close()
+        self.hilo.join(timeout=1)
+
     def _atender(self) -> None:
-        cliente, _ = self.sock.accept()
+        try:
+            cliente, _ = self.sock.accept()
+        except OSError:
+            # La prueba termino antes de que nadie se conectara.
+            return
         try:
             peticion = b""
             while b"\r\n\r\n" not in peticion:
@@ -126,6 +138,7 @@ def test_el_cliente_del_protocolo_va_y_vuelve():
         assert ws.pedir("Storage.getCookies") == {"cookies": []}
     finally:
         ws.cerrar()
+        servidor.cerrar()
     assert servidor.recibidos[0]["method"] == "Storage.getCookies"
 
 
@@ -139,6 +152,7 @@ def test_una_respuesta_larga_no_se_parte():
         recibidas = ws.pedir("Storage.getCookies")["cookies"]
     finally:
         ws.cerrar()
+        servidor.cerrar()
     assert len(recibidas) == 4
     assert all(len(c["value"]) == 300 for c in recibidas)
 
@@ -151,6 +165,7 @@ def test_un_aviso_del_navegador_no_confunde_la_respuesta():
         assert ws.pedir("Storage.getCookies")["cookies"][0]["name"] == "a"
     finally:
         ws.cerrar()
+        servidor.cerrar()
 
 
 def test_el_error_del_navegador_se_cuenta():
@@ -163,6 +178,7 @@ def test_el_error_del_navegador_se_cuenta():
             ws.pedir("X")
     finally:
         ws.cerrar()
+        servidor.cerrar()
     assert "wasn't found" in str(fallo.value)
 
 

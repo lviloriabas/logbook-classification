@@ -7,6 +7,7 @@ import pytest
 from app.airvault.config import (
     CAMPO_AUDIT_STATUS,
     CAMPO_DESCRIPCION,
+    CAMPO_END_DATE,
     CAMPO_LOG_NUMBER,
     CAMPO_MATRICULA,
     CAMPO_WORK_LOCATION,
@@ -203,6 +204,39 @@ def test_revisar_sin_vuelo_no_manda_description():
 
     _pagina, valores_remotos, _estado = cliente.escrituras[0]
     assert CAMPO_DESCRIPCION not in valores_remotos
+
+
+def test_revisar_omite_end_date_solo_en_la_fecha_dudosa():
+    cliente = ClienteFalso(page_count=2)
+    m = manifiesto(2)
+    m.solo_subir = True
+    m.registros[0].fecha = ""
+    m.registros[0].fecha_dudosa = True
+    indexador = Indexador(cliente, m, PICKLIST)
+
+    plan = indexador.planificar(2)
+    assert [pagina.escribible for pagina in plan.paginas] == [True, True]
+    assert CAMPO_END_DATE not in plan.paginas[0].valores
+    assert plan.paginas[1].valores[CAMPO_END_DATE] == "08/31/2026"
+
+    indexador.aplicar(plan)
+    escritos = {pagina: valores for pagina, valores, _ in cliente.escrituras}
+    assert CAMPO_END_DATE not in escritos[1]
+    assert escritos[2][CAMPO_END_DATE] == "08/31/2026"
+
+
+def test_fecha_dudosa_no_se_omite_fuera_de_revisar():
+    cliente = ClienteFalso(page_count=1)
+    m = manifiesto(1)
+    m.registros[0].fecha = ""
+    m.registros[0].fecha_dudosa = True
+
+    plan = Indexador(cliente, m, PICKLIST).planificar(1)
+
+    assert plan.escribibles == []
+    assert [a.codigo for a in plan.bloqueadas[0].avisos] == [
+        "obligatorio_vacio"
+    ]
 
 
 def test_pagina_ya_valida_se_respeta():

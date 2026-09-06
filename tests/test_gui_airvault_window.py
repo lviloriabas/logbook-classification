@@ -13,15 +13,12 @@ hilo, y lo que decide si una página se escribe vive en ``app.airvault``.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -46,11 +43,6 @@ from app.gui.airvault_window import (
 )
 
 RAIZ = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture

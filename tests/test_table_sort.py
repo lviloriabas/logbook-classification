@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-import os
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from app.gui.csv_viewer import CsvViewerWindow
-from app.gui.main_window import MainWindow
 from app.gui.table_sort import sorted_row_order
 from app.models.schemas import FieldResult, PageResult, ValidationReport
 from app.templates.schema import FieldTemplate, Template
@@ -129,8 +125,7 @@ def test_changing_csv_starts_again_without_order(tmp_path: Path):
     app.processEvents()
 
 
-def test_main_window_table_sorts_by_column_click():
-    app = QApplication.instance() or QApplication([])
+def test_main_window_table_sorts_by_column_click(window):
     template = Template(
         name="fixture",
         fields=[FieldTemplate(id="log_number", x=0.1, y=0.1, w=0.2, h=0.1)],
@@ -159,27 +154,22 @@ def test_main_window_table_sorts_by_column_click():
             ],
         )
     ]
-    window = MainWindow()
-    try:
-        window._processed_template = template
-        window._populate_table(reports)
-        window._table_timer.stop()
-        # Mientras la tabla se llena por batches, los clics no reordenan nada.
-        _click(window.table, 1)
-        assert window.table_sort.sorted_column == -1
-        while window._table_pending:
-            window._on_table_chunk()
+    window._processed_template = template
+    window._populate_table(reports)
+    window._table_timer.stop()
+    # Mientras la tabla se llena por batches, los clics no reordenan nada.
+    _click(window.table, 1)
+    assert window.table_sort.sorted_column == -1
+    while window._table_pending:
+        window._on_table_chunk()
 
-        page_column = window._table_columns.index("page")
-        _click(window.table, page_column)
-        assert _column_texts(window.table, page_column) == ["11", "7", "2"]
+    page_column = window._table_columns.index("page")
+    _click(window.table, page_column)
+    assert _column_texts(window.table, page_column) == ["11", "7", "2"]
 
-        _click(window.table, page_column)
-        assert _column_texts(window.table, page_column) == ["2", "7", "11"]
+    _click(window.table, page_column)
+    assert _column_texts(window.table, page_column) == ["2", "7", "11"]
 
-        _click(window.table, page_column)
-        assert _column_texts(window.table, page_column) == ["11", "2", "7"]
-        assert window.table_sort.sorted_column == -1
-    finally:
-        window.close()
-        app.processEvents()
+    _click(window.table, page_column)
+    assert _column_texts(window.table, page_column) == ["11", "2", "7"]
+    assert window.table_sort.sorted_column == -1

@@ -8,21 +8,12 @@ baja la ventana crecía sola y dejaba los botones fuera del alcance.
 
 from __future__ import annotations
 
-import os
 import pytest
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 from PySide6.QtCore import QPoint, QRect
-from PySide6.QtWidgets import QApplication
 
 from app.gui import airvault_window as modulo
 from app.gui.airvault_window import AirVaultWindow
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture
