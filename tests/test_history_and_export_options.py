@@ -123,7 +123,7 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias(
         etiqueta.text() for etiqueta in options.findChildren(QLabel)
     }
     assert "Formato:" in etiquetas
-    assert "Fecha del CSV:" in etiquetas
+    assert "Fecha:" in etiquetas
     assert "PDF:" not in etiquetas
     assert options.un_solo_pdf()
     assert options.csv_date_mode_combo.itemText(0) == "Fin de mes"
