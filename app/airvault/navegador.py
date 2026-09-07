@@ -75,6 +75,10 @@ _UBICACIONES_EDGE = (
 # acceso cada vez que se cierra el navegador y hay que entrar de nuevo con
 # el segundo factor en cada ejecución, que es justo lo que el perfil propio
 # viene a evitar. Comprobado midiendo la cookie antes y despues de cerrar.
+#
+# Lo que esa restauracion trae de vuelta ademas de la sesion (las pestanas de
+# la ejecucion anterior) lo quita ``SesionDeNavegador.abrir_pestana``: si no,
+# el perfil acumula pestanas ejecucion tras ejecucion y todas se cargan.
 _ARGUMENTOS = (
     "--no-first-run",
     "--no-default-browser-check",
@@ -87,6 +91,14 @@ _ARGUMENTOS = (
 # Cuanto se le da al navegador para abrir su puerto despues de que el
 # proceso lanzador ya termino. Un perfil recien creado tarda unos segundos.
 _GRACIA_TRAS_LANZADOR_S = 15.0
+
+# Cuantas veces se repasan las pestanas de un navegador recien lanzado, y
+# cuanto se espera entre repasos. La restauracion sigue trayendo paginas
+# despues de que el puerto conteste, asi que un solo repaso deja fuera a las
+# ultimas. Se para en cuanto un repaso no cierra nada, que en un perfil
+# limpio es el segundo: el tope es solo para no repasar sin fin.
+_BARRIDOS_TRAS_RESTAURAR = 4
+_ESPERA_ENTRE_BARRIDOS_S = 0.5
 
 
 class ErrorDeNavegador(RuntimeError):
@@ -520,8 +532,45 @@ class SesionDeNavegador:
             _matar_al_del_puerto(puerto)
         _olvidar_puerto(self.perfil)
 
+    def abrir_pestana(self, url: str, version: Optional[dict] = None,
+                      timeout: float = 15.0, insistir: bool = False) -> str:
+        """Abre la pagina de trabajo y deja el navegador con esa sola.
+
+        Se crea primero la pagina nueva y despues se cierran las demas. Asi
+        Edge puede restaurar la sesion (que es lo que conserva la cookie,
+        ver ``_ARGUMENTOS``) sin quedarse ademas con las pestanas de la
+        ejecucion anterior, y en ningun momento se queda sin ninguna.
+
+        Con ``insistir`` se vuelve a barrer mientras se siga cerrando algo.
+        Es para el navegador recien lanzado: cuando su puerto empieza a
+        contestar, la restauracion todavia esta trayendo pestanas, y las que
+        llegan tarde se libraban del primer barrido. En un perfil limpio el
+        segundo barrido no encuentra nada y no cuesta nada.
+
+        Devuelve el identificador de la pagina. Hace falta para conducirla
+        despues sin confundirla con una restaurada que lleve la misma
+        direccion, que es como se acababa pilotando una copia vieja.
+        """
+        version = version or self._version or {}
+        ws = _WebSocket(version["webSocketDebuggerUrl"], timeout=timeout)
+        try:
+            creada = ws.pedir("Target.createTarget", url=url)
+            target_id = str(creada.get("targetId", ""))
+            if not target_id:
+                raise ErrorDeNavegador(
+                    f"Edge no abrio {url} y no dijo por que."
+                )
+            self._cerrar_otras_pestanas(ws, target_id)
+            for _ in range(_BARRIDOS_TRAS_RESTAURAR if insistir else 0):
+                time.sleep(_ESPERA_ENTRE_BARRIDOS_S)
+                if not self._cerrar_otras_pestanas(ws, target_id):
+                    break
+            return target_id
+        finally:
+            ws.cerrar()
+
     def _abrir_pagina(self, version: dict, url: str,
-                      timeout: float = 5.0) -> bool:
+                      timeout: float = 5.0, insistir: bool = False) -> bool:
         """Manda al navegador que ya estaba a la pagina de entrada.
 
         Es lo mismo que hace la orden de arranque cuando el navegador se
@@ -534,18 +583,57 @@ class SesionDeNavegador:
         esperarlo. Por eso se le da poco tiempo: uno colgado no mejora.
         """
         try:
-            ws = _WebSocket(version["webSocketDebuggerUrl"], timeout=timeout)
-        except (ErrorDeNavegador, OSError, KeyError) as exc:
-            logger.debug("El Edge que estaba no acepto la conexion: {}", exc)
-            return False
-        try:
-            ws.pedir("Target.createTarget", url=url)
+            self.abrir_pestana(
+                url, version=version, timeout=timeout, insistir=insistir
+            )
             return True
-        except (ErrorDeNavegador, OSError, ValueError) as exc:
+        except (ErrorDeNavegador, OSError, KeyError, ValueError) as exc:
             logger.debug("El Edge que estaba no abrio la pagina: {}", exc)
             return False
-        finally:
-            ws.cerrar()
+
+    def _cerrar_otras_pestanas(self, ws: _WebSocket,
+                               conservar: str = "") -> int:
+        """Deja el navegador con una sola pagina abierta y dice cuantas cerro.
+
+        ``conservar`` es la pagina recien creada, la que se va a usar. Sin
+        ella se conserva la ultima de la lista: esto se llama tambien justo
+        antes de cerrar el navegador, y quedarse sin ninguna pagina lo haria
+        irse por su cuenta, sin ocasion de guardar el perfil.
+
+        Solo se cierran paginas, nunca otros objetivos (procesos de servicio,
+        extensiones), y siempre las de este navegador, que es el del perfil
+        propio del programa: la ventana de la persona no se toca. Fallar aqui
+        no puede tumbar el acceso, asi que se anota y se sigue.
+        """
+        try:
+            objetivos = ws.pedir("Target.getTargets").get("targetInfos", [])
+        except (ErrorDeNavegador, OSError, ValueError) as exc:
+            logger.debug("No se pudieron listar las pestanas de Edge: {}", exc)
+            return 0
+        paginas = [
+            str(objetivo.get("targetId", ""))
+            for objetivo in objetivos
+            if objetivo.get("type") == "page" and objetivo.get("targetId")
+        ]
+        if not conservar and paginas:
+            conservar = paginas[-1]
+        cerradas = 0
+        for target_id in paginas:
+            if target_id == conservar:
+                continue
+            try:
+                ws.pedir("Target.closeTarget", targetId=target_id)
+                cerradas += 1
+            except (ErrorDeNavegador, OSError, ValueError) as exc:
+                logger.debug(
+                    "No se pudo cerrar la pestana {}: {}", target_id, exc,
+                )
+        if cerradas:
+            logger.info(
+                "Se cerraron {} pestana(s) sobrantes del perfil {}",
+                cerradas, self.perfil,
+            )
+        return cerradas
 
     def _lanzar(self, url: str, espera_s: float = 30.0) -> dict:
         """Arranca el navegador y espera a que conteste el protocolo."""
@@ -591,6 +679,11 @@ class SesionDeNavegador:
                     f"http://127.0.0.1:{self.puerto}/json/version", timeout=2
                 ) as respuesta:
                     self._version = json.load(respuesta)
+                    # El argumento de restauracion es necesario para
+                    # guardar la cookie de sesion, pero tambien reabre las
+                    # paginas de la ejecucion anterior. Se deja una sola de
+                    # trabajo, insistiendo hasta que la restauracion acabe.
+                    self._abrir_pagina(self._version, url, insistir=True)
                     return self._version
             except (urllib.error.URLError, OSError, ValueError):
                 if self._proceso.poll() is not None:
@@ -731,6 +824,11 @@ class SesionDeNavegador:
             logger.debug("No se pudo pedir el cierre a Edge: {}", exc)
             return
         try:
+            # Lo que este abierto ahora es justo lo que Chromium guarda y
+            # vuelve a abrir en el arranque siguiente. Se limpia aqui, con el
+            # navegador todavia en pie, porque es el unico momento en que
+            # estan todas: al abrir, la restauracion puede no haber acabado.
+            self._cerrar_otras_pestanas(ws)
             ws.pedir("Browser.close")
         except (ErrorDeNavegador, OSError, ValueError) as exc:
             # El navegador se va mientras contesta: que no llegue la
