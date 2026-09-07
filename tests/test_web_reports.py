@@ -99,6 +99,8 @@ def test_formatea_la_fecha_como_la_espera_ssrs() -> None:
 
 def test_la_consulta_de_reportes_mantiene_edge_oculto(monkeypatch) -> None:
     visibles = []
+    pestanas = []
+    cerradas = []
 
     class _SesionFalsa:
         def __init__(self, _perfil, visible=True):
@@ -113,6 +115,10 @@ def test_la_consulta_de_reportes_mantiene_edge_oculto(monkeypatch) -> None:
         def abrir(self, _url, espera_s=30.0):
             return {"webSocketDebuggerUrl": "ws://127.0.0.1:4321/x"}
 
+        def abrir_pestana(self, url):
+            pestanas.append(url)
+            return "x"
+
     class _PaginaFalsa:
         def __init__(self, *_args):
             pass
@@ -121,13 +127,10 @@ def test_la_consulta_de_reportes_mantiene_edge_oculto(monkeypatch) -> None:
             return True
 
         def cerrar(self):
-            pass
+            cerradas.append(True)
 
     monkeypatch.setattr(web_reports, "SesionDeNavegador", _SesionFalsa)
     monkeypatch.setattr(web_reports, "_Pagina", _PaginaFalsa)
-    monkeypatch.setattr(
-        ClienteLogPageAudit, "_abrir_pestana_limpia", staticmethod(lambda _v: "x")
-    )
     monkeypatch.setattr(
         ClienteLogPageAudit, "_elegir_repositorio", staticmethod(lambda _p: None)
     )
@@ -140,6 +143,10 @@ def test_la_consulta_de_reportes_mantiene_edge_oculto(monkeypatch) -> None:
     )
 
     assert visibles == [False]
+    # La pestana la abre la sesion (que de paso cierra las sobrantes) y se
+    # cierra al terminar: el visor no se queda cargado en el perfil.
+    assert pestanas == [web_reports.LOG_PAGE_AUDIT_URL]
+    assert cerradas == [True]
 
 
 def test_la_ventana_abre_en_el_mes_actual_y_solo_consulta(app, tmp_path) -> None:

@@ -295,7 +295,12 @@ class ClienteLogPageAudit:
                 LOG_PAGE_AUDIT_URL, espera_s=self.config.espera_login_s
             )
             try:
-                target_id = self._abrir_pestana_limpia(version)
+                # La pestana la abre la sesion, que ademas cierra las que
+                # hubieran quedado de una consulta anterior: el visor pesa, y
+                # dejar copias abiertas cargaba el perfil ejecucion tras
+                # ejecucion. Se conduce por su identificador, no por su
+                # direccion, para no pilotar una restaurada.
+                target_id = navegador.abrir_pestana(LOG_PAGE_AUDIT_URL)
                 pagina = _Pagina(version, target_id, esta_cancelado)
                 if not pagina.esperar(
                     _FORMULARIO_LISTO, self.config.espera_login_s
@@ -324,38 +329,6 @@ class ClienteLogPageAudit:
             finally:
                 if pagina is not None:
                     pagina.cerrar()
-
-    @staticmethod
-    def _abrir_pestana_limpia(version: dict) -> str:
-        """Abre una pestaña identificable y quita visores restaurados.
-
-        Edge conserva las pestañas del perfil entre sesiones. Elegir una
-        solo por su URL terminaba conduciendo al azar una copia antigua y
-        dejando la recién abierta sin tocar. El perfil es exclusivo del
-        programa, así que se cierran únicamente las copias de este reporte y
-        se crea una cuyo identificador conocemos.
-        """
-        control = _WebSocket(version["webSocketDebuggerUrl"])
-        try:
-            creado = control.pedir(
-                "Target.createTarget", url=LOG_PAGE_AUDIT_URL
-            )
-            target_id = str(creado.get("targetId", ""))
-            if not target_id:
-                raise RuntimeError("Edge no pudo abrir Log Page Audit")
-            for objetivo in _objetivos(_puerto_de(version)):
-                if (
-                    objetivo.get("type") == "page"
-                    and objetivo.get("id") != target_id
-                    and "ReportViewer.aspx?/Reports2014/AVLogPageAudit"
-                    in str(objetivo.get("url", ""))
-                ):
-                    control.pedir(
-                        "Target.closeTarget", targetId=objetivo["id"]
-                    )
-        finally:
-            control.cerrar()
-        return target_id
 
     @staticmethod
     def _elegir_repositorio(pagina: _Pagina) -> None:
