@@ -125,6 +125,101 @@ def test_que_el_lanzador_termine_no_es_que_edge_se_haya_caido(monkeypatch,
     assert "Browser.close" in ws.pedidos
 
 
+def test_al_abrir_deja_una_sola_pestana_y_no_toca_otros_objetivos(
+        monkeypatch, tmp_path):
+    """La restauracion conserva cookies, pero no debe acumular pestanas."""
+    pedidos = []
+
+    class _WSPostizo:
+        def __init__(self, _url, timeout=15.0):
+            pass
+
+        def pedir(self, metodo, **params):
+            pedidos.append((metodo, params))
+            if metodo == "Target.createTarget":
+                return {"targetId": "actual"}
+            if metodo == "Target.getTargets":
+                return {"targetInfos": [
+                    {"type": "page", "targetId": "anterior-1"},
+                    {"type": "service_worker", "targetId": "servicio"},
+                    {"type": "page", "targetId": "actual"},
+                    {"type": "page", "targetId": "anterior-2"},
+                ]}
+            return {}
+
+        def cerrar(self):
+            pass
+
+    monkeypatch.setattr(navegador, "_WebSocket", _WSPostizo)
+    sesion = navegador.SesionDeNavegador(
+        tmp_path, edge=Path("msedge.exe"), visible=False
+    )
+
+    assert sesion._abrir_pagina(
+        {"webSocketDebuggerUrl": "ws://127.0.0.1:4321/x"},
+        "https://airvault/sso",
+    )
+    assert pedidos[:2] == [
+        ("Target.createTarget", {"url": "https://airvault/sso"}),
+        ("Target.getTargets", {}),
+    ]
+    assert [
+        params["targetId"]
+        for metodo, params in pedidos
+        if metodo == "Target.closeTarget"
+    ] == ["anterior-1", "anterior-2"]
+
+
+def test_antes_de_cerrar_se_quitan_las_pestanas_que_se_restauraran(
+        monkeypatch, tmp_path):
+    """Lo que queda abierto al cerrar es lo que Edge vuelve a abrir.
+
+    Es el momento en que estan todas: al abrir, la restauracion puede no
+    haber terminado todavia. Se deja una, no ninguna, porque un navegador
+    sin paginas se va por su cuenta y no llegaria a guardar el perfil.
+    """
+    pedidos = []
+
+    class _WSPostizo:
+        def __init__(self, _url, timeout=15.0):
+            pass
+
+        def pedir(self, metodo, **params):
+            pedidos.append((metodo, params))
+            if metodo == "Target.getTargets":
+                return {"targetInfos": [
+                    {"type": "page", "targetId": "restaurada-1"},
+                    {"type": "service_worker", "targetId": "servicio"},
+                    {"type": "page", "targetId": "restaurada-2"},
+                    {"type": "page", "targetId": "de-trabajo"},
+                ]}
+            return {}
+
+        def cerrar(self):
+            pass
+
+    monkeypatch.setattr(navegador, "_WebSocket", _WSPostizo)
+    sesion = navegador.SesionDeNavegador(
+        tmp_path, edge=Path("msedge.exe"), visible=False
+    )
+
+    sesion._pedir_que_se_cierre(
+        {"webSocketDebuggerUrl": "ws://127.0.0.1:4321/x"}
+    )
+
+    assert [metodo for metodo, _ in pedidos] == [
+        "Target.getTargets",
+        "Target.closeTarget",
+        "Target.closeTarget",
+        "Browser.close",
+    ]
+    assert [
+        params["targetId"]
+        for metodo, params in pedidos
+        if metodo == "Target.closeTarget"
+    ] == ["restaurada-1", "restaurada-2"]
+
+
 def test_si_nadie_contesta_tras_irse_el_lanzador_si_es_un_fallo(monkeypatch,
                                                                tmp_path):
     """Lo que sí vale: el lanzador se fue y el puerto sigue mudo un rato."""
@@ -248,6 +343,10 @@ def _perfil_con(monkeypatch, vivos, tmp_path, colgados=()):
             _WSPostizo.pedidos.append(metodo)
             if metodo == "Browser.close":
                 vivos.pop(self.puerto, None)
+            if metodo == "Target.createTarget":
+                # Edge siempre contesta con el identificador de la pestana,
+                # que es por donde se la conduce y se cierra despues.
+                return {"targetId": "pestana-de-trabajo"}
             return {}
 
         def cerrar(self):
@@ -336,6 +435,21 @@ def test_una_anotacion_vieja_no_manda_a_un_puerto_apagado(monkeypatch,
     finally:
         sesion.cerrar()
     assert not _anotacion(tmp_path).exists()
+
+
+def test_el_arranque_oculto_tambien_limpia_la_sesion_anterior(
+        monkeypatch, tmp_path):
+    """Un arranque nuevo limpia lo restaurado y conserva el modo oculto."""
+    lanzados, ws, _matados = _perfil_con(monkeypatch, {}, tmp_path)
+    sesion = navegador.SesionDeNavegador(
+        tmp_path, edge=Path("msedge.exe"), visible=False
+    )
+    try:
+        sesion.abrir("https://airvault/sso")
+        assert "Target.createTarget" in ws.pedidos
+        assert "--headless=new" in lanzados[0]
+    finally:
+        sesion.cerrar()
 
 
 def test_el_puerto_se_anota_aunque_el_navegador_no_llegue_a_contestar(
