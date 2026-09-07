@@ -113,6 +113,37 @@ def test_eliminar_el_registro_de_una_fila_que_no_es_la_abierta(
         app.processEvents()
 
 
+def test_el_boton_elimina_el_registro_de_una_ejecucion_que_ya_no_esta(
+    app, tmp_path, papelera
+):
+    """El caso que el botón no alcanzaba: trabajo sin ejecución en la lista.
+
+    Es el que más falta hace olvidar. La ejecución se borró de ``output/``
+    (o se salió del historial) y su trabajo se quedó en ``output/airvault``
+    con los manifiestos dentro: mientras el botón mirara el historial, esos
+    registros no había forma de eliminarlos desde la ventana.
+    """
+    import shutil
+
+    csv = corrida(tmp_path, "BITS 18 AUG 2026 05 42")
+    manifiesto = registrar_en_airvault(tmp_path, csv)
+    shutil.rmtree(csv.parent.parent)
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        ventana._refrescar_historial()
+
+        assert ventana.historial.count() == 1  # solo «elegir ejecución»
+        assert ventana.boton_eliminar_registro.isEnabled()
+        ventana.boton_eliminar_registro.trigger()
+
+        assert papelera == [manifiesto]
+        assert not manifiesto.exists()
+        assert not ventana.boton_eliminar_registro.isEnabled()
+    finally:
+        ventana.close()
+        app.processEvents()
+
+
 def test_el_boton_elimina_registros_de_todas_las_ejecuciones_presentes(
     app, tmp_path, papelera
 ):

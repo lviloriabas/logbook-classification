@@ -70,7 +70,7 @@ class ExportOptionsGroup(QGroupBox):
         main_row.addWidget(self.output_mode_combo, 1)
 
         main_row.addSpacing(8)
-        main_row.addWidget(QLabel("Fecha del CSV:"))
+        main_row.addWidget(QLabel("Fecha:"))
         self.csv_date_mode_combo = QComboBox()
         # «Fin de mes» va primero porque es lo que se elige casi siempre: es
         # la fecha con la que se indexa, y el día exacto solo hace falta

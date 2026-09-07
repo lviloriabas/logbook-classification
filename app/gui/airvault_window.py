@@ -299,8 +299,9 @@ TOOLTIP_ELIMINAR_REGISTRO = (
     "nuevo. No toca el CSV, los PDF ni lo que ya esté en AirVault."
 )
 TOOLTIP_ELIMINAR_REGISTROS = (
-    "Borra el estado local de AirVault de todas las ejecuciones presentes "
-    "en el historial. No toca sus CSV, PDF ni los batches remotos."
+    "Borra el estado local de AirVault de todos los trabajos que quedan en "
+    "output/airvault, aunque su ejecución ya no esté en el historial. No "
+    "toca los CSV, los PDF ni los batches remotos."
 )
 
 
@@ -1236,8 +1237,20 @@ class AirVaultWindow(QDialog):
             Qt.ItemDataRole.ToolTipRole,
         )
         self.fecha_combo.setToolTip(TOOLTIP_FECHA_INDEXADO)
+        self.fecha_combo.setAccessibleName("Fecha con la que se indexa")
         configure_combo_box(self.fecha_combo, 12)
-        grid.addWidget(self.fecha_combo, 2, 3)
+        # «Fin de mes» y «Día exacto» solos no dicen de qué son. La etiqueta
+        # va pegada al desplegable y no en la columna de la izquierda, que
+        # esa fila ya la ocupa «Máximo por batch:».
+        fecha_fila = QHBoxLayout()
+        fecha_fila.setContentsMargins(0, 0, 0, 0)
+        fecha_fila.setSpacing(SPACE_S)
+        fecha_label = QLabel("Fecha:")
+        fecha_label.setToolTip(TOOLTIP_FECHA_INDEXADO)
+        fecha_label.setBuddy(self.fecha_combo)
+        fecha_fila.addWidget(fecha_label)
+        fecha_fila.addWidget(self.fecha_combo, 1)
+        grid.addLayout(fecha_fila, 2, 3)
 
         # El campo de la sesión queda por si el navegador no puede: el
         # camino normal es que se resuelva sola.
@@ -2831,8 +2844,8 @@ class AirVaultWindow(QDialog):
             return None
         return carpeta
 
-    def _rutas_del_registro(self, corrida: Path | str = "") -> list[Path]:
-        """Memoria local de la ejecución indicada, nunca de otra.
+    def _rutas_del_registro_en(self, carpeta: Path) -> list[Path]:
+        """Memoria local que guarda esa carpeta de trabajo, nunca otra.
 
         Son los manifiestos vivos, el registro de batches de la entrega y
         los manifiestos que se apartaron al rehacer un reparto. Es una sola
@@ -2842,9 +2855,6 @@ class AirVaultWindow(QDialog):
         from app.airvault.manifest import MANIFIESTO_FILENAME
         from app.airvault.registro import rutas_del_registro
 
-        carpeta = self._carpeta_del_registro(corrida)
-        if carpeta is None:
-            return []
         rutas = {
             ruta for ruta in carpeta.rglob(MANIFIESTO_FILENAME)
             if ruta.is_file() and ruta.resolve().is_relative_to(carpeta)
@@ -2855,30 +2865,36 @@ class AirVaultWindow(QDialog):
         )
         return sorted(rutas)
 
-    def _corridas_presentes(self) -> list[Path]:
-        """Ejecuciones visibles en el historial, incluida la abierta."""
-        corridas: list[Path] = []
-        vistas: set[str] = set()
-        for indice in range(1, self.historial.count()):
-            dato = self.historial.itemData(indice)
-            if not dato:
-                continue
-            ruta = Path(str(dato))
-            clave = str(ruta).casefold()
-            if clave not in vistas:
-                corridas.append(ruta)
-                vistas.add(clave)
-        abierta = self.corrida_edit.text().strip()
-        if abierta and abierta.casefold() not in vistas:
-            corridas.append(Path(abierta))
-        return corridas
+    def _rutas_del_registro(self, corrida: Path | str = "") -> list[Path]:
+        """Memoria local de la ejecución indicada, nunca de otra."""
+        carpeta = self._carpeta_del_registro(corrida)
+        if carpeta is None:
+            return []
+        return self._rutas_del_registro_en(carpeta)
+
+    def _carpetas_de_trabajo_presentes(self) -> list[Path]:
+        """Las carpetas de trabajo de AirVault que hay en el disco.
+
+        Esta lista salía antes del historial, y por eso dejaba fuera justo
+        lo que más falta hace olvidar: cuando la ejecución ya no está en
+        ``output/`` (se borró, o quedó fuera del límite del historial) su
+        trabajo sigue en ``output/airvault/`` con sus manifiestos y su
+        registro, y desde aquí no había manera de eliminarlos. Se mira la
+        carpeta de trabajos, que es donde esa memoria vive de verdad.
+        """
+        from app.airvault.flujo import CARPETA_TRABAJOS
+
+        raiz = (self._raiz / CARPETA_TRABAJOS).resolve()
+        if not raiz.is_dir():
+            return []
+        return sorted(hijo for hijo in raiz.iterdir() if hijo.is_dir())
 
     def _registros_presentes(self) -> dict[Path, list[Path]]:
-        """Registros locales de todas las ejecuciones que muestra la lista."""
+        """Registros locales de todos los trabajos que aún los conservan."""
         return {
-            corrida: rutas
-            for corrida in self._corridas_presentes()
-            if (rutas := self._rutas_del_registro(corrida))
+            carpeta: rutas
+            for carpeta in self._carpetas_de_trabajo_presentes()
+            if (rutas := self._rutas_del_registro_en(carpeta))
         }
 
     def _actualizar_boton_eliminar_registros(self) -> None:
@@ -2890,36 +2906,39 @@ class AirVaultWindow(QDialog):
         )
 
     def _eliminar_registro(self, corrida: Path | str = "") -> None:
-        """Borra memoria local de una ejecución o de todas las presentes.
+        """Borra memoria local de una ejecución o de todos los trabajos.
 
         El menú del historial pasa una ``corrida`` y actúa solo sobre ella.
-        El botón no la pasa y limpia todas las ejecuciones de la lista.
+        El botón no la pasa y limpia todo lo que quede en la carpeta de
+        trabajos, esté o no su ejecución en el historial.
         """
         texto = str(corrida).strip()
         individual = bool(texto)
         if individual:
-            csv = Path(texto)
-            registros = {csv: self._rutas_del_registro(csv)}
-            registros = {
-                csv: rutas for csv, rutas in registros.items() if rutas
-            }
+            carpeta = self._carpeta_del_registro(texto)
+            rutas_de = (
+                self._rutas_del_registro_en(carpeta)
+                if carpeta is not None else []
+            )
+            registros = {carpeta: rutas_de} if rutas_de else {}
         else:
             registros = self._registros_presentes()
         if not registros:
             QMessageBox.information(
                 self,
                 "Eliminar registro",
-                "No hay registros locales de AirVault en las ejecuciones "
-                "presentes.",
+                "No hay registros locales de AirVault que eliminar."
+                if not individual else
+                "Esa ejecución no tiene registro local de AirVault.",
             )
             return
         rutas = sorted({ruta for grupo in registros.values() for ruta in grupo})
         cantidad = len(registros)
         if individual:
-            alcance = f"la ejecución «{next(iter(registros)).stem}»"
+            alcance = f"la ejecución «{next(iter(registros)).name}»"
         else:
             alcance = (
-                "todas las ejecuciones presentes "
+                "todos los trabajos de AirVault "
                 f"({cantidad} con registro)"
             )
         respuesta = QMessageBox.warning(
@@ -2955,10 +2974,11 @@ class AirVaultWindow(QDialog):
                 "ejecuciones pueden iniciarse nuevamente; los batches "
                 "remotos no se modificaron."
             )
-        for csv, grupo in registros.items():
+        for carpeta_anotada, grupo in registros.items():
             if movidos_set.intersection(grupo):
                 self._anotar(
-                    f"Registro local de AirVault eliminado: {csv.stem}"
+                    "Registro local de AirVault eliminado: "
+                    f"{carpeta_anotada.name}"
                 )
 
         if fallidos:
