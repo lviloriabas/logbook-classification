@@ -58,6 +58,11 @@ _MAL_INDEXADA = re.compile(
     re.IGNORECASE,
 )
 
+# El rango del libro, tal y como lo escribe el reporte: «2008150 - 2008199».
+# Sus dos extremos son numeros de bitacora, de siete digitos, asi que valen
+# tal cual como limites de una busqueda por Log Page Number.
+_LIMITES_DEL_RANGO = re.compile(r"(\d{7})\D+(\d{7})")
+
 
 class ConsultaCancelada(RuntimeError):
     """La consulta fue detenida desde la interfaz."""
@@ -80,18 +85,76 @@ class ExcepcionLogPageAudit:
     destino: str = ""
     copias: int | None = None
     url_busqueda: str = ""
+    url_busqueda_libro: str = ""
 
 
-def url_busqueda_log(config: AirVaultConfig, log_number: str) -> str:
-    """Enlace estable de Web Search para las apariciones de una pagina."""
-    numero = str(log_number).strip()
-    parametros = f"1=LOG PAGE\t3={numero}\t4={numero}"
+def url_busqueda_rango(
+    config: AirVaultConfig, desde: str, hasta: str
+) -> str:
+    """Enlace estable de Web Search para un tramo de numeros de bitacora.
+
+    Los parametros 3 y 4 de la busqueda guardada son el primer y el ultimo
+    Log Page Number del tramo: con el mismo numero en los dos sale una sola
+    pagina, y con los dos extremos de un libro salen sus cincuenta.
+    """
+    parametros = (
+        f"1=LOG PAGE\t3={str(desde).strip()}\t4={str(hasta).strip()}"
+    )
     return (
         f"{config.base_url.rstrip('/')}/zfp/client/unencryptedparamssearch/"
         f"?repoId={config.repo_id}&searchId=15504"
         f"&searchParams={quote(parametros, safe='=')}"
         "&maxHits=200&behavior=lockdown=false"
     )
+
+
+def url_busqueda_log(config: AirVaultConfig, log_number: str) -> str:
+    """Enlace estable de Web Search para las apariciones de una pagina."""
+    numero = str(log_number).strip()
+    return url_busqueda_rango(config, numero, numero)
+
+
+def url_busqueda_del_libro(config: AirVaultConfig, rango: str) -> str:
+    """Enlace de Web Search para el libro entero, o vacio si no se lee.
+
+    Si la celda del rango viene vacia, o con algo que no son sus dos
+    extremos, no hay libro que abrir: se devuelve vacio y quien pregunta se
+    queda sin enlace, en vez de con uno inventado que buscaria otra cosa.
+    """
+    hallado = _LIMITES_DEL_RANGO.search(str(rango or ""))
+    if hallado is None:
+        return ""
+    return url_busqueda_rango(config, hallado.group(1), hallado.group(2))
+
+
+def _perfil_de(config: AirVaultConfig) -> Path:
+    """La carpeta de Edge donde vive la sesion de trabajo."""
+    return (
+        Path(config.perfil_navegador)
+        if config.perfil_navegador
+        else PERFIL_POR_DEFECTO
+    )
+
+
+def abrir_en_web_search(
+    config: AirVaultConfig,
+    url: str,
+    avisar: Callable[[str], None] | None = None,
+) -> None:
+    """Deja una busqueda de Web Search a la vista, para leerla.
+
+    Va por el Edge del programa y no por el navegador de la persona: la
+    sesion de AirVault vive en ese perfil, asi que la misma direccion en
+    otro navegador acaba en la pantalla de acceso. La ventana se queda
+    abierta a proposito, porque lo que se pidio fue mirarla; la cierra quien
+    la abrio, o el trabajo siguiente, que reaprovecha este mismo navegador.
+    """
+    if not url:
+        raise ValueError("Esa fila no trae ninguna búsqueda que abrir")
+    notificar = avisar or (lambda _texto: None)
+    notificar("Abriendo Web Search en Edge")
+    navegador = SesionDeNavegador(_perfil_de(config), visible=True)
+    navegador.abrir(url, espera_s=config.espera_login_s)
 
 
 def _texto(celda: object) -> str:
@@ -156,6 +219,9 @@ def parsear_filas(
                     destino=destino,
                     copias=copias,
                     url_busqueda=url_busqueda_log(config, numero),
+                    url_busqueda_libro=url_busqueda_del_libro(
+                        config, celdas[3]
+                    ),
                 )
             )
     return salida
@@ -283,11 +349,7 @@ class ClienteLogPageAudit:
             return []
         notificar = avisar or (lambda _texto: None)
         esta_cancelado = cancelar or (lambda: False)
-        perfil = (
-            Path(self.config.perfil_navegador)
-            if self.config.perfil_navegador
-            else PERFIL_POR_DEFECTO
-        )
+        perfil = _perfil_de(self.config)
         notificar("Abriendo Log Page Audit en Edge")
         pagina: _Pagina | None = None
         with SesionDeNavegador(perfil, visible=False) as navegador:
