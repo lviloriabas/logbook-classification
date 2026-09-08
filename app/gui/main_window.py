@@ -1209,7 +1209,7 @@ class MainWindow(QMainWindow):
         self.view_button.setToolTip(
             "Elegir qué campos se muestran en la vista previa."
         )
-        tools_row.addWidget(self.view_button)
+        group.agregar_menu(self.view_button)
 
         self.fleet_check = QCheckBox("Verificar matrículas")
         self.fleet_check.setChecked(True)
@@ -1224,12 +1224,12 @@ class MainWindow(QMainWindow):
             f"las altas y las bajas; se guarda en {FLEET_FILENAME}."
         )
         fleet_button.clicked.connect(self._open_fleet_editor)
-        tools_row.addWidget(fleet_button)
 
         self.btn_airvault = QPushButton("Indexar en AirVault…")
         self.btn_airvault.setToolTip(AIRVAULT_TOOLTIP)
         self.btn_airvault.clicked.connect(lambda: self._open_airvault())
         tools_row.addStretch()
+        tools_row.addWidget(fleet_button)
         tools_row.addWidget(self.btn_airvault)
         layout.addLayout(tools_row)
         self._fleet_row = tools_row

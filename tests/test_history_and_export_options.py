@@ -144,6 +144,11 @@ def test_las_salidas_arrancan_en_un_pdf_por_matricula_con_discrepancias(
     assert not options.errores_check.isChecked()
     assert isinstance(options.partes_control, SpinBoxWithButtons)
     assert options.partes_spin.parentWidget() is options.partes_control
+    indice_division = options._detail_row.indexOf(options.partes_check)
+    assert options._detail_row.stretch(indice_division - 1) > 0
+    assert options._detail_row.itemAt(
+        options._detail_row.count() - 1
+    ).widget() is options.partes_control
     assert not options.partes_control.up_button.isEnabled()
     assert not options.partes_control.down_button.isEnabled()
 

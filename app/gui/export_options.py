@@ -113,6 +113,7 @@ class ExportOptionsGroup(QGroupBox):
         detail_row = QHBoxLayout()
         detail_row.setSpacing(8)
         detail_row.addSpacing(self.controls_indent)
+        self._detail_row = detail_row
         self.separation_menu = MultiSelectMenu(self)
         self.matricula_check = self._checkable_action(
             "Matrícula",
@@ -139,6 +140,9 @@ class ExportOptionsGroup(QGroupBox):
         configure_menu_button(self.separation_button, self.separation_menu)
         detail_row.addWidget(self.separation_button)
 
+        # Las opciones de division forman un bloque contra el margen derecho,
+        # alineado con los botones de accion de la fila inferior.
+        detail_row.addStretch(1)
         self.partes_check = QCheckBox("Dividir cada")
         self.partes_check.setToolTip(
             "Reparte el PDF único en varias partes sin cortar secciones."
@@ -161,12 +165,16 @@ class ExportOptionsGroup(QGroupBox):
         )
         self.partes_control = SpinBoxWithButtons(self.partes_spin)
         detail_row.addWidget(self.partes_control)
-        detail_row.addStretch()
         layout.addLayout(detail_row)
 
         self.output_mode_combo.currentIndexChanged.connect(self._sync_parts)
         self.partes_check.toggled.connect(self._sync_parts)
         self._sync_parts()
+
+    def agregar_menu(self, boton: QToolButton) -> None:
+        """Suma otro desplegable a la fila en la que ya va «Separación»."""
+        fila = self._detail_row
+        fila.insertWidget(fila.indexOf(self.separation_button) + 1, boton)
 
     def _checkable_action(
         self, text: str, tooltip: str, checked: bool = False
