@@ -1,4 +1,4 @@
-"""Memoria portable de las columnas marcadas como campos importantes."""
+"""Memoria portable de las columnas importantes marcadas en el selector."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ _DEFAULT_KEY = "__default__"
 # una ejecución de línea de comandos tiene que dar el mismo archivo que la
 # interfaz sobre la misma plantilla.
 _DEFAULT_IMPORTANT = frozenset({
-    "file", "page", "date", "time_ms", "dup", "disc", "log_number",
-    "matricula", "flight_number", "pilot_signature",
+    "file", "page", "date", "time_ms", "dup", "disc", "discrepancia",
+    "log_number", "matricula", "flight_number", "pilot_signature",
     "captain_signature", "captain_license",
 })
 
@@ -101,5 +101,5 @@ class ImportantFieldsStore:
                 encoding="utf-8",
             )
         except OSError as exc:  # noqa: BLE001 - preferencia, no dato crítico
-            logger.warning(f"No se pudo guardar los campos importantes: {exc}")
+            logger.warning(f"No se pudo guardar las columnas importantes: {exc}")
         return selected

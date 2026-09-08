@@ -715,7 +715,7 @@ class CsvColumnModeButton(QToolButton):
         icon_name = "columns_important.svg" if important_only else "columns_all.svg"
         self.setIcon(QIcon(str(_ASSETS / icon_name)))
         self.setToolTip(
-            "Mostrando campos importantes. Clic para mostrar todas las columnas."
+            "Mostrando columnas importantes. Clic para mostrar todas las columnas."
             if important_only
             else "Mostrando el CSV completo. Clic para mostrar solo los "
                  "campos importantes."
@@ -729,8 +729,8 @@ class ImportantFieldsButton(QToolButton):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setText("☷")
-        self.setToolTip("Seleccionar campos importantes")
-        self.setAccessibleName("Seleccionar campos importantes")
+        self.setToolTip("Seleccionar columnas importantes")
+        self.setAccessibleName("Seleccionar columnas importantes")
         self.setFixedSize(30, 30)
         self.setAutoRaise(True)
 

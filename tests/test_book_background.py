@@ -335,6 +335,40 @@ class TestRevisionEnElPipeline(unittest.TestCase):
         self.assertEqual(resultado[-1].fields[0].value, UNCLEAR)
         self.assertEqual(len(resultado), len(paginas))
 
+    def test_un_campo_puede_quedarse_fuera_de_la_segunda_opinion(self):
+        """``book_background=False`` deja el campo como lo dejó el detector.
+
+        La segunda opinión compara densidades de tinta. El bloque de
+        corrección no se decide por densidad sino por cuánto se reparte la
+        tinta a lo largo de la línea: un sello desbordado desde la fila de
+        arriba concentra tanta como una corrección escrita, y darlo por
+        escrito abriría una discrepancia que no existe.
+        """
+        plantilla = Template(name="fixture", fields=[FieldTemplate(
+            id="firma", type=FieldType.SIGNATURE, required=True,
+            x=0.0, y=0.0, w=1.0, h=1.0, book_background=False,
+        )])
+        pipeline = Pipeline(AppConfig(align=False), FakeEngine(), plantilla)
+        paginas, imagenes = [], {}
+        for numero in range(1, 15):
+            firmada = numero % 2 == 0
+            paginas.append(_pagina(numero, "true" if firmada else "false"))
+            imagenes[numero] = (_firmada(numero * 3) if firmada
+                                else _formulario())
+        paginas.append(_pagina(15, UNCLEAR))
+        imagenes[15] = _firmada(11)
+
+        def render(_ruta, numero, _dpi):
+            return imagenes[numero]
+
+        with patch.object(pipeline_module, "render_page", side_effect=render):
+            resultado = pipeline._review_signatures(
+                Path("fixture.pdf"), paginas, None, None, None,
+                renderer=None, first_page=1,
+            )
+        self.assertEqual(resultado[-1].fields[0].value, UNCLEAR)
+        self.assertIsNone(resultado[-1].fields[0].inference_method)
+
     def test_se_puede_apagar(self):
         pipeline = Pipeline(
             AppConfig(align=False, signature_book_background=False),

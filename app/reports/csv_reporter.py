@@ -34,8 +34,8 @@ class CsvReporter:
     """Escribe el reporte de validación en CSV ancho (en inglés).
 
     Una fila por página del PDF:
-        file, page, <field>, dup, disc, <field>_conf, <field>_status,
-        <field>_comment, <field>_source, ..., date, time_ms
+        file, page, <field>, dup, disc, discrepancia, <field>_conf,
+        <field>_status, <field>_comment, <field>_source, ..., date, time_ms
 
     - ``file``: nombre del PDF del que proviene la página.
     - ``dup``: ``true`` cuando el ``log_number`` ya apareció antes en el batch.
@@ -45,6 +45,12 @@ class CsvReporter:
       escribir el reporte; si esa clasificación no se ejecutó, la columna
       queda en ``false``. Es la columna que le pone AUDIT IN PROGRESS a la
       página al indexarla, así que las lecturas inciertas no entran.
+    - ``discrepancia``: qué le falta a la página, en una frase corta
+      («Faltan firma de técnico y licencia de técnico»). Solo se escribe
+      cuando ``disc`` es ``true``: es la misma decisión contada en palabras,
+      para no tener que abrir el reporte de discrepancias para saber qué
+      reclamar. Sale de ``page.discrepancy_note``, que fija la misma pasada
+      de ``clasificar_lote``.
     - ``date``: fecha normalizada (YYYY/MM/dd) combinando day/month/year.
     - ``time_ms``: tiempo de procesamiento de la página, repartido sobre el
       reloj real de la ejecución (ver ``page_time_ms``), de modo que la suma
@@ -136,7 +142,7 @@ class CsvReporter:
         for field_id in fields:
             columns.append(field_id)
             if field_id == "log_number":
-                columns.extend(["dup", "disc"])
+                columns.extend(["dup", "disc", "discrepancia"])
             columns.append(f"{field_id}_conf")
             if field_id not in skip_ids:
                 columns.extend([
@@ -147,7 +153,7 @@ class CsvReporter:
         # Las dos banderas de la página acompañan al ``log_number``, que es lo
         # que identifica la bitácora; sin ese campo se emiten igual al final.
         if "dup" not in columns:
-            columns.extend(["dup", "disc"])
+            columns.extend(["dup", "disc", "discrepancia"])
         columns.extend(["date", "time_ms"])
         return columns
 
@@ -187,6 +193,7 @@ class CsvReporter:
             "page": page.page_number,
             "dup": str(duplicate).lower(),
             "disc": str(bool(page.discrepancy)).lower(),
+            "discrepancia": page.discrepancy_note if page.discrepancy else "",
         }
         by_id = {field.field_id: field for field in page.fields}
 

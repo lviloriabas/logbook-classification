@@ -44,12 +44,12 @@ Si el escaneo tiene una geometría dudosa, active **Visualizar campos** y pulse 
 - **Un solo PDF** crea una entrega continua y puede insertar separadores por matrícula o mes. Es la opción necesaria para AirVault.
 - **Varios PDF** crea archivos separados por matrícula, mes o ambos.
 - **Repartir en** limita las páginas de cada parte de una entrega única.
-- **Posibles discrepancias** reúne páginas con firmas faltantes o inciertas.
+- **Posibles discrepancias** reúne páginas con firmas faltantes o inciertas. Incluye las hojas con el recuadro «CORRECTION OR DEFERRAL» escrito y sin cerrar: si hay un trabajo descrito, tienen que estar la firma de piloto, la de técnico y su licencia.
 - **Errores** crea un PDF auxiliar con páginas cuyos datos principales no se resolvieron.
 - **Fecha del CSV** viene en **Fin de mes**, que es la fecha con la que se indexa; **Día exacto** conserva el día leído y solo cae al fin de mes cuando falta.
   - En **Fin de mes** la ejecución no lee el día: no llega a ninguna salida, y saltárselo la acelera un 13 % (medido sobre 21 páginas). A cambio, esa ejecución ya no puede volver a representarse con el día exacto sin procesarla otra vez.
   - En **Día exacto** se lee todo, y al indexar todavía se puede elegir escribir el fin de mes. Cambiar la opción reescribe el CSV sin volver a leer las páginas.
-- **Campos importantes** define las columnas del CSV principal.
+- **Columnas importantes** define las columnas del CSV principal.
 
 Los recuadros de **Visualizar campos** solo aparecen en pantalla. No se imprimen en la entrega.
 
@@ -90,7 +90,8 @@ Revise como mínimo:
 - matrícula y fecha de cada libro;
 - cambios de fecha, que no deben retroceder dentro del libro;
 - `dup=true`, que indica una aparición repetida;
-- `disc=true`, que indica una posible discrepancia de firmas;
+- `disc=true`, que indica una posible discrepancia de firmas, y
+  `discrepancia`, que dice en una frase cuál es;
 - las páginas incluidas en **REVISAR** y en `errores.pdf`.
 
 Cada libro físico tiene 50 páginas y una sola aeronave. Los finales `00` a `49` pertenecen a un libro y `50` a `99` al siguiente. La fecha puede repetirse, pero no retroceder al aumentar `log_number` dentro del mismo libro.

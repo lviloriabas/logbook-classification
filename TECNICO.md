@@ -170,14 +170,16 @@ Archivos principales:
 
 La discrepancia se juzga en cada bitácora por separado. El libro no interviene: dos páginas seguidas del mismo avión pueden ser una de vuelo y otra de mantenimiento.
 
-El tipo lo deciden solo las casillas limpias: la licencia de técnico y el bloque del capitán.
+El tipo lo deciden solo las casillas limpias: la licencia de técnico, el bloque del capitán y el bloque de corrección.
 
-- mantenimiento (licencia de técnico escrita): requiere firma de piloto, firma de técnico y licencia de técnico;
-- vuelo (licencia de técnico vacía y algo escrito en el bloque del capitán o en la firma del piloto): requiere firma de piloto, firma de capitán y licencia de capitán;
-- anulada o VOID (licencia de técnico, las dos casillas del capitán y la firma del piloto vacías): se indexa como cualquier otra y no abre discrepancia;
+- mantenimiento (licencia de técnico escrita, **o** bloque de corrección escrito): requiere firma de piloto, firma de técnico y licencia de técnico;
+- vuelo (licencia de técnico vacía, bloque de corrección vacío y algo escrito en el bloque del capitán o en la firma del piloto): requiere firma de piloto, firma de capitán y licencia de capitán;
+- anulada o VOID (licencia de técnico, las dos casillas del capitán, la firma del piloto y el bloque de corrección vacías): se indexa como cualquier otra y no abre discrepancia;
 - incierto (ninguna casilla limpia lo dice con seguridad): queda para revisión.
 
 `technician_signature` no decide el tipo. Cae justo debajo de los sellos «MXI Entry Performed By» y «DATE / STA», que la llenan de tinta ajena: de 30 páginas revisadas a mano en las que el detector la daba por escrita, ninguna tenía firma. Un sello solo añade tinta y nunca la quita, así que su lectura «ausente» sigue siendo de fiar y el campo se conserva como requisito de mantenimiento; lo que no soporta es decidir de qué tipo es la bitácora.
+
+`correction_block` es el recuadro «CORRECTION OR DEFERRAL», donde el técnico describe el trabajo hecho o el diferimiento aplicado. Escribir ahí es haber intervenido la aeronave, y una intervención se cierra con firmas aunque la casilla de la licencia haya quedado en blanco: es justamente ese caso —trabajo descrito y nadie que lo firme— el que hay que reclamar. Se mide con el mismo detector de escritura que las firmas, pero con umbrales propios: es una casilla mucho más ancha que alta, así que lo que la distingue del papel rayado vacío es la tinta repartida a lo largo de la línea (`min_ink_span` 0.55 sobre `max_empty_peak` 0.10) y no un trazo denso en un punto. Los sellos «MXI Entry Performed By», que desbordan desde la fila de arriba, concentran mucha tinta en un tramo corto y quedan en incierto, que es donde tienen que quedar. Medido sobre 156 páginas de cuatro libros: 35 % escritas, 35 % vacías, 28 % inciertas, sin ninguna vacía dada por escrita.
 
 Una bitácora VOID se anuló al llenarla y se apartó. Lleva el log page y a veces la matrícula, nada más. No le falta ninguna firma porque no llegó a usarse. Lo que la distingue de un vuelo al que le falta el capitán es la firma del piloto: si el vuelo se realizó, esa firma está.
 
@@ -188,6 +190,8 @@ Solo la ausencia confirmada aparta la página. Una lectura incierta se anota en 
 Una alineación que no se pudo verificar anota la firma, pero no borra su lectura: el campo queda en WARNING con la nota «Alineación no confiable» y conserva valor y confianza. Sin ancla fiable la página no se transforma, así que el recorte cae donde lo pone la plantilla, que es donde ya caía. Recortar la confianza dejaba las cinco firmas por debajo de los dos umbrales del campo a la vez, el tipo de página quedaba indeciso y la bitácora salía marcada como discrepancia tuviera lo que tuviera escrito.
 
 Una bitácora con una ausencia confirmada se escribe con el Audit Status `AUDIT IN PROGRESS`, el valor del picklist para lo que queda pendiente de auditar. Es lo único que la distingue en AirVault del resto del batch. Sale de la columna `disc` del CSV, que por eso marca solo las confirmadas.
+
+Junto a `disc` va `discrepancia`, que cuenta la misma decisión en palabras: «Faltan firma de técnico y licencia de técnico», o «Corrección escrita: falta licencia de técnico» cuando el reclamo nació del recuadro. Se escribe solo cuando `disc` es `true`, y va en las columnas importantes: leer la bandera sin la frase obliga a abrir el reporte de discrepancias aparte, que es justo lo que la columna evita.
 
 Archivos principales:
 

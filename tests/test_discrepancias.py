@@ -3,6 +3,9 @@
 Reglas: vuelo requiere piloto + capitán + licencia del capitán;
 mantenimiento (technician_license presente) requiere piloto + técnico,
 y no mira los campos de capitán.
+El bloque de corrección escrito («CORRECTION OR DEFERRAL») exige por sí
+solo el juego de firmas de mantenimiento, aunque la licencia de técnico
+haya quedado en blanco.
 Una licencia de técnico ilegible deja el tipo de página INCIERTO (no se
 acusan los campos ambiguos). Las lecturas de baja confianza nunca se
 acusan como faltas: categoría UNCERTAIN para auditoría, sin apartarlas.
@@ -78,6 +81,25 @@ def _mant_ok(pn: int = 1, log: str = "2147337", mat: str = "HP-1534CMP",
         "captain_license": ("false", AUSENTE),
         "technician_signature": ("true", PRESENTE),
         "technician_license": ("true", PRESENTE),
+    }
+    sigs.update(extra)
+    return _page(pn, log, mat, **sigs)
+
+
+def _corregida(pn: int = 1, log: str = "2147337", mat: str = "HP-1534CMP",
+               **extra) -> PageResult:
+    """Página con el bloque de corrección escrito y nada más firmado.
+
+    Es la hoja del caso: el técnico describió el trabajo y no lo cerró
+    nadie. Sin el bloque de corrección esta misma página sería una VOID.
+    """
+    sigs = {
+        "correction_block": ("true", PRESENTE),
+        "pilot_signature": ("false", AUSENTE),
+        "captain_signature": ("false", AUSENTE),
+        "captain_license": ("false", AUSENTE),
+        "technician_signature": ("false", AUSENTE),
+        "technician_license": ("false", AUSENTE),
     }
     sigs.update(extra)
     return _page(pn, log, mat, **sigs)
@@ -429,6 +451,161 @@ class TestColumnaDiscEnElCsv(unittest.TestCase):
                 rows = list(csv.DictReader(fh))
 
         self.assertEqual([row["disc"] for row in rows], ["false", "true"])
+
+    def test_la_columna_discrepancia_dice_que_falta(self):
+        limpia = _vuelo_ok(1, "2147337")
+        marcada = _vuelo_ok(2, "2147338",
+                            captain_signature=("false", AUSENTE),
+                            captain_license=("false", AUSENTE))
+        corregida = _corregida(3, "2147339")
+        reporte = _reporte(limpia, marcada, corregida)
+
+        clasificar_lote([reporte], TEMPLATE)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.csv"
+            CsvReporter().write(reporte, path, TEMPLATE)
+            with open(path, encoding="utf-8-sig", newline="") as fh:
+                rows = list(csv.DictReader(fh))
+
+        self.assertEqual([row["discrepancia"] for row in rows], [
+            "",
+            "Faltan firma de capitán y licencia de capitán",
+            "Corrección escrita: faltan firma de piloto, firma de técnico "
+            "y licencia de técnico",
+        ])
+
+    def test_la_columna_va_pegada_a_disc(self):
+        columnas = CsvReporter.columns_for([_reporte(_vuelo_ok())], TEMPLATE)
+        self.assertEqual(columnas[columnas.index("disc") + 1], "discrepancia")
+
+
+class TestBloqueDeCorreccion(unittest.TestCase):
+    """El recuadro «CORRECTION OR DEFERRAL» escrito exige las tres firmas."""
+
+    def test_corregida_sin_ninguna_firma_es_discrepancia(self):
+        entradas = clasificar_lote([_reporte(_corregida())], TEMPLATE)
+        self.assertEqual(len(entradas), 1)
+        entrada = entradas[0]
+        self.assertIs(entrada.tipo, TipoEntrada.MANTENIMIENTO)
+        self.assertIs(entrada.categoria, Categoria.MISSING)
+        self.assertTrue(entrada.por_correccion)
+        self.assertEqual(entrada.razones(), [
+            "Falta firma de piloto (corrección escrita)",
+            "Falta firma de técnico (corrección escrita)",
+            "Falta licencia de técnico (corrección escrita)",
+        ])
+
+    def test_corregida_y_firmada_no_es_discrepancia(self):
+        pagina = _corregida(
+            pilot_signature=("true", PRESENTE),
+            technician_signature=("true", PRESENTE),
+            technician_license=("true", PRESENTE),
+        )
+        self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
+
+    def test_corregida_sin_licencia_de_tecnico_es_discrepancia(self):
+        # El caso del recuadro rojo: hay trabajo descrito y firma de técnico,
+        # pero la licencia quedó en blanco.
+        pagina = _corregida(
+            pilot_signature=("true", PRESENTE),
+            technician_signature=("true", PRESENTE),
+        )
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        self.assertEqual(len(entradas), 1)
+        self.assertEqual(entradas[0].razones(),
+                         ["Falta licencia de técnico (corrección escrita)"])
+
+    def test_no_pide_las_firmas_de_capitan(self):
+        # El mismo trato que cualquier entrada de mantenimiento: el bloque
+        # del capitán vive en la otra mitad del formulario.
+        pagina = _corregida(
+            pilot_signature=("true", PRESENTE),
+            technician_signature=("true", PRESENTE),
+            technician_license=("true", PRESENTE),
+            captain_signature=("false", AUSENTE),
+            captain_license=("false", AUSENTE),
+        )
+        self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
+
+    def test_una_void_con_el_recuadro_vacio_sigue_sin_ser_discrepancia(self):
+        # La hoja anulada solo se distingue de la corregida por este campo.
+        pagina = _corregida(correction_block=("false", AUSENTE))
+        self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
+
+    def test_un_recuadro_ilegible_no_convierte_la_void_en_falta(self):
+        # Un sello desbordado desde la fila de arriba deja el recuadro en
+        # «unclear»: no es una corrección y no puede reclamar firmas.
+        pagina = _corregida(correction_block=("unclear", DUDOSA))
+        self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
+
+    def test_la_licencia_de_tecnico_manda_sobre_el_recuadro(self):
+        # Con la licencia escrita la página ya era de mantenimiento por su
+        # cuenta: la explicación sigue siendo la de siempre.
+        pagina = _mant_ok(correction_block=("true", PRESENTE),
+                          technician_signature=("false", AUSENTE))
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        self.assertEqual(len(entradas), 1)
+        self.assertFalse(entradas[0].por_correccion)
+        self.assertIn("Falta firma de técnico (entrada de mantenimiento)",
+                      entradas[0].razones())
+
+    def test_un_vuelo_con_el_recuadro_escrito_y_cerrado_no_es_falta(self):
+        # La hoja que lleva las dos cosas: vuelo completo y corrección
+        # firmada. El recuadro exige el juego de mantenimiento y está todo.
+        pagina = _vuelo_ok(correction_block=("true", PRESENTE),
+                           technician_signature=("true", PRESENTE),
+                           technician_license=("true", PRESENTE))
+        self.assertEqual(clasificar_lote([_reporte(pagina)], TEMPLATE), [])
+
+
+class TestResumenDeLaDiscrepancia(unittest.TestCase):
+    """La frase de una línea que va a la columna ``discrepancia``."""
+
+    def _resumen(self, pagina: PageResult) -> str:
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        return entradas[0].resumen()
+
+    def test_una_sola_falta_va_en_singular(self):
+        pagina = _vuelo_ok(captain_signature=("false", AUSENTE))
+        self.assertEqual(self._resumen(pagina), "Falta firma de capitán")
+
+    def test_varias_faltas_van_en_plural_y_encadenadas(self):
+        pagina = _vuelo_ok(captain_signature=("false", AUSENTE),
+                           captain_license=("false", AUSENTE))
+        self.assertEqual(self._resumen(pagina),
+                         "Faltan firma de capitán y licencia de capitán")
+
+    def test_tres_faltas_llevan_coma_y_una_sola_conjuncion(self):
+        self.assertEqual(
+            self._resumen(_corregida()),
+            "Corrección escrita: faltan firma de piloto, firma de técnico "
+            "y licencia de técnico",
+        )
+
+    def test_el_recuadro_escrito_se_nombra_en_el_resumen(self):
+        pagina = _corregida(pilot_signature=("true", PRESENTE),
+                            technician_signature=("true", PRESENTE))
+        self.assertEqual(self._resumen(pagina),
+                         "Corrección escrita: falta licencia de técnico")
+
+    def test_una_lectura_incierta_no_deja_resumen(self):
+        # UNCERTAIN no acusa, así que no hay nada que escribir en el CSV.
+        pagina = _vuelo_ok(captain_signature=("unclear", DUDOSA))
+        entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)
+        self.assertIs(entradas[0].categoria, Categoria.UNCERTAIN)
+        self.assertEqual(entradas[0].resumen(), "")
+
+    def test_la_pagina_guarda_su_resumen_solo_si_esta_marcada(self):
+        limpia = _vuelo_ok(1, "2147337")
+        incierta = _vuelo_ok(2, "2147338",
+                             captain_signature=("unclear", DUDOSA))
+        marcada = _vuelo_ok(3, "2147339",
+                            captain_signature=("false", AUSENTE))
+        clasificar_lote([_reporte(limpia, incierta, marcada)], TEMPLATE)
+        self.assertEqual(limpia.discrepancy_note, "")
+        self.assertEqual(incierta.discrepancy_note, "")
+        self.assertEqual(marcada.discrepancy_note, "Falta firma de capitán")
 
 
 if __name__ == "__main__":

@@ -235,7 +235,7 @@ def _visible_preview_fields(
 
     Sin ``important_only`` se dibuja la plantilla completa. Con la vista
     simplificada manda ``important_ids``: los campos marcados en el selector
-    de campos importantes, incluidos los que la plantilla no declara
+    de columnas importantes, incluidas las que la plantilla no declara
     ``required``. Solo cuando todavía no hay ninguna selección se recurre a
     ``required``, que es la importancia declarada por la propia plantilla.
     """
@@ -1188,12 +1188,12 @@ class MainWindow(QMainWindow):
         )
         self.fields_check.toggled.connect(self._on_fields_toggled)
         self.important_fields_check = view_menu.addAction(
-            "Solo campos importantes"
+            "Columnas importantes"
         )
         self.important_fields_check.setCheckable(True)
         self.important_fields_check.setEnabled(False)
         self.important_fields_check.setToolTip(
-            "Muestra solo los campos importantes. Sin marcar, se dibuja la "
+            "Muestra solo las columnas importantes. Sin marcar, se dibuja la "
             "plantilla completa."
         )
         self.important_fields_check.toggled.connect(self._on_fields_toggled)
@@ -1201,10 +1201,10 @@ class MainWindow(QMainWindow):
             self.important_fields_check.setEnabled
         )
         important_fields_action = view_menu.addAction(
-            "Elegir campos importantes…"
+            "Elegir columnas importantes…"
         )
         important_fields_action.setToolTip(
-            "Seleccionar los campos importantes; la lista se guarda por "
+            "Seleccionar las columnas importantes; la lista se guarda por "
             "plantilla y decide qué recuadros y columnas se muestran."
         )
         important_fields_action.triggered.connect(self._open_important_fields)
@@ -2263,7 +2263,7 @@ class MainWindow(QMainWindow):
         if not columns:
             QMessageBox.information(
                 self,
-                "Campos importantes",
+                "Columnas importantes",
                 "Cargue o procese un CSV para seleccionar sus columnas.",
             )
             return
@@ -4204,7 +4204,7 @@ class MainWindow(QMainWindow):
     def _refresh_preview_template(self, _index: int = -1) -> None:
         """Redibuja las casillas de la plantilla sobre la vista actual.
 
-        Cada plantilla recuerda sus propios campos importantes, así que al
+        Cada plantilla recuerda sus propias columnas importantes, así que al
         cambiarla se recupera la selección guardada para la nueva.
         """
         self._restore_important_columns()
