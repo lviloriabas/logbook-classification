@@ -212,10 +212,11 @@ class TestCsvGates(unittest.TestCase):
                 rows = list(reader)
                 columns = reader.fieldnames
 
-        self.assertEqual(columns[:5], [
+        self.assertEqual(columns[:6], [
             "file",
             "page",
             "log_number",
+            "review",
             "dup",
             "disc",
         ])

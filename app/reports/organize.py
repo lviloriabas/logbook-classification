@@ -68,7 +68,7 @@ from app.validation.discrepancias import (
     Discrepancia,
 )
 from app.validation.grouping import log_number
-from app.validation.page_status import has_log_number
+from app.validation.page_status import needs_review
 from app.vision.pdf_loader import PdfDocumentCache, copy_pdf_pages, render_page
 from app.vision.signature import SIGNATURE_PAD_X, SIGNATURE_PAD_Y
 
@@ -143,31 +143,12 @@ def clave_avion(page: PageResult) -> str:
 def por_revisar(page: PageResult) -> bool:
     """La página necesita el batch manual por falta de datos o discrepancia.
 
-    ``airvault_review`` se decide con la fila final del CSV: queda activo si
-    algún obligatorio no pudo completarse o si la página tiene una
-    discrepancia confirmada. Las advertencias de confianza no bastan para
-    apartarla cuando matrícula y número ya tienen valores utilizables; el
-    indexador puede escribir esos valores y dejar la página en verde.
-
-    ``discrepancy`` aparta las ausencias de firma confirmadas, que van a la
-    sección «Posibles discrepancias» dentro del mismo batch. Las lecturas
-    inciertas ya no llevan esa marca y no pasan por aquí: sus seis index
-    fields están resueltos y ninguna firma es uno de ellos, así que apartarlas
-    solo obligaría a teclear a mano lo que el sistema ya resolvió. Quedan en
-    el reporte de discrepancias para quien quiera mirarlas.
-
-    Las comprobaciones directas conservan segura esta función cuando se usa
-    antes de escribir el CSV o con reportes antiguos que no traen la marca.
+    El criterio vive en ``app.validation.page_status``: es el mismo que
+    escribe la columna ``review`` del CSV, y el reparto de la entrega no
+    puede decidirlo por su cuenta sin que el archivo y los PDFs dejen de
+    contar lo mismo.
     """
-    return (
-        page.airvault_review
-        or page.date_review
-        or page.airvault_discrepancy
-        or page.discrepancy
-        or page.blank
-        or clave_avion(page) == SIN_MATRICULA
-        or not has_log_number(page)
-    )
+    return needs_review(page)
 
 
 def paginas_para_revisar(

@@ -85,9 +85,10 @@ def test_main_table_adds_colored_important_dup_from_csv_columns(window):
     )
     assert "second.pdf PDF p. 7" in window.duplicates_label.toolTip()
 
-    assert CsvReporter.columns_for(reports, template)[:4] == [
+    assert CsvReporter.columns_for(reports, template)[:5] == [
         "file",
         "page",
         "log_number",
+        "review",
         "dup",
     ]

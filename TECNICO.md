@@ -193,6 +193,8 @@ Una alineación que no se pudo verificar anota la firma, pero no borra su lectur
 
 Una bitácora con una ausencia confirmada se escribe con el Audit Status `AUDIT IN PROGRESS`, el valor del picklist para lo que queda pendiente de auditar. Es lo único que la distingue en AirVault del resto del batch. Sale de la columna `disc` del CSV, que por eso marca solo las confirmadas.
 
+La columna `review` recoge esa decisión junto con las demás que apartan una página: un obligatorio del Web Index que la fila no llega a traer, una fecha que contradice al libro, una página en blanco, una matrícula o un log page sin resolver. Una discrepancia confirmada sale marcada en las dos columnas, y es a propósito: `disc` dice qué la apartó y `review` dice a dónde va, así que contar cuánto hay que revisar no obliga a sumar banderas y acordarse de cuál está dentro de cuál. La escribe `needs_review` (`app/validation/page_status.py`), el mismo criterio con el que la exportación reparte la entrega, y por eso el recuadro de la ventana de AirVault puede contar el batch manual leyendo solo el CSV.
+
 Junto a `disc` va `discrepancia`, que cuenta la misma decisión en palabras: «Faltan firma de técnico y licencia de técnico», o «Corrección escrita: falta licencia de técnico» cuando el reclamo nació del recuadro. Se escribe solo cuando `disc` es `true`, y va en las columnas importantes: leer la bandera sin la frase obliga a abrir el reporte de discrepancias aparte, que es justo lo que la columna evita.
 
 Archivos principales:

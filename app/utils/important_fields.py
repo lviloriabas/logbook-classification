@@ -18,9 +18,9 @@ _DEFAULT_KEY = "__default__"
 # una ejecución de línea de comandos tiene que dar el mismo archivo que la
 # interfaz sobre la misma plantilla.
 _DEFAULT_IMPORTANT = frozenset({
-    "file", "page", "date", "time_ms", "dup", "disc", "discrepancia",
-    "log_number", "matricula", "flight_number", "pilot_signature",
-    "captain_signature", "captain_license",
+    "file", "page", "date", "time_ms", "review", "dup", "disc",
+    "discrepancia", "log_number", "matricula", "flight_number",
+    "pilot_signature", "captain_signature", "captain_license",
 })
 
 

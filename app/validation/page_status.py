@@ -204,6 +204,42 @@ def ready_for_auto_index(page: PageResult) -> bool:
     )
 
 
+def needs_review(page: PageResult) -> bool:
+    """La bitácora va al batch REVISAR en vez de indexarse sola.
+
+    Es una sola pregunta con dos superficies: la columna ``review`` del CSV
+    y el reparto de la entrega. Lo que da verdadero aquí cierra la entrega en
+    ``revisar.pdf`` y se indexa a mano; lo demás viaja en los batches
+    automáticos. Vive en este módulo para que las dos la hagan igual y para
+    que responderla no obligue a cargar el generador de PDFs.
+
+    ``airvault_review`` es la decisión tomada sobre la fila final del CSV
+    (la escribe ``app.reports.outputs``): queda activo cuando algún campo
+    obligatorio del Web Index no pudo completarse. Las comprobaciones
+    directas que la acompañan conservan segura esta función cuando se usa
+    antes de escribir el CSV o con reportes antiguos que no traen la marca.
+
+    ``discrepancy`` aparta las ausencias de firma confirmadas, que van a la
+    sección «Posibles discrepancias» dentro del mismo batch. Las lecturas
+    inciertas ya no llevan esa marca y no pasan por aquí: sus index fields
+    están resueltos y ninguna firma es uno de ellos, así que apartarlas solo
+    obligaría a teclear a mano lo que el sistema ya resolvió.
+
+    Las advertencias de confianza no bastan para apartar la página cuando
+    matrícula y número ya tienen valores utilizables: el indexador puede
+    escribir esos valores y dejarla en verde.
+    """
+    return bool(
+        page.airvault_review
+        or page.date_review
+        or page.airvault_discrepancy
+        or page.discrepancy
+        or page.blank
+        or not has_matricula(page)
+        or not has_log_number(page)
+    )
+
+
 def recompute_page_status(page: PageResult) -> None:
     """Reescribe ``page.status`` con la política de indexación."""
     if not page.fields:

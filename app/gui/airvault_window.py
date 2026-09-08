@@ -92,7 +92,7 @@ from app.gui.csv_utils import (
 )
 from app.gui.responsive import available_area, fit_to_screen
 from app.gui.text_copy import CopyableListWidget
-from app.gui.tokens import SPACE_S, TEXT_SECONDARY
+from app.gui.tokens import SPACE_L, SPACE_S, TEXT_SECONDARY
 from app.gui.widgets import (
     DATA_TABLE_QSS,
     PANE_STATUS_COLORS,
@@ -110,6 +110,9 @@ from app.utils.io import send_to_trash
 COLOR_AYUDA = TEXT_SECONDARY
 COLOR_INDEXADO = PANE_STATUS_COLORS["OK"]
 COLOR_INDEXANDO = "#0078d4"
+# El mismo ámbar con el que la ventana principal marca lo que hay que
+# confirmar: el recuadro de reparto lo usa para las que van a REVISAR.
+COLOR_REVISAR = PANE_STATUS_COLORS["WARNING"]
 
 # Lo que se lee debajo de la tabla de batches mientras no se ha buscado
 # ninguna bitácora, y a lo que se vuelve al vaciar el campo.
@@ -181,6 +184,19 @@ TEXTO_SIN_SUBIR = (
     "Sin subir. El proceso comienza con «Subir a AirVault»."
 )
 
+# Lo que dice el recuadro de reparto mientras no hay una ejecución elegida,
+# y cuando la elegida se exportó antes de que el CSV llevara la columna.
+TEXTO_SIN_EJECUCION = "Elija una ejecución para ver cuántas hay que revisar."
+TEXTO_SIN_COLUMNA = (
+    "Esta ejecución se exportó antes de que el CSV dijera cuáles van a "
+    "revisar. Vuelva a exportarla para saberlo."
+)
+TOOLTIP_REPARTO = (
+    "Cuántas bitácoras de la ejecución se indexan solas y cuántas viajan en "
+    "el batch REVISAR para terminarlas a mano. Sale de la columna «review» "
+    "del CSV, la misma con la que se reparte la entrega."
+)
+
 AIRVAULT_TOOLTIP = (
     "Escribe en AirVault los datos que la ejecución ya leyó, sin teclear "
     "página por página en el Web Index."
@@ -226,6 +242,52 @@ def paginas_de_corrida(carpeta: Path | str) -> Optional[int]:
         return None
     total = datos.get("total_paginas") if isinstance(datos, dict) else None
     return int(total) if isinstance(total, (int, float)) else None
+
+
+def _filas_con_review(ruta: Path) -> list[dict] | None:
+    """Filas de un CSV que ya trae la columna ``review``, o ``None``."""
+    # Local: en esta ventana ``csv`` es el nombre con el que viaja la ruta
+    # de la ejecución, y traer el módulo al espacio del archivo dejaría dos
+    # cosas distintas llamadas igual.
+    import csv
+
+    if not ruta.is_file():
+        return None
+    try:
+        with ruta.open("r", encoding="utf-8-sig", newline="") as handle:
+            lector = csv.DictReader(handle)
+            if not lector.fieldnames or "review" not in lector.fieldnames:
+                return None
+            return list(lector)
+    except (OSError, ValueError):
+        return None
+
+
+def reparto_de_revision(csv: Path | str) -> tuple[int, int] | None:
+    """Cuántas bitácoras se indexan solas y cuántas van a REVISAR.
+
+    Sale de la columna ``review`` del CSV, que es la misma decisión con la
+    que la exportación reparte la entrega: contar aquí por otro camino
+    daría un número que no es el de los batches que se van a subir.
+
+    Se mira primero el CSV mínimo, que es el que se sube; si esa columna no
+    está marcada como importante, la trae igual el ``_completo``. Devuelve
+    ``None`` cuando la ejecución se exportó antes de que la columna
+    existiera, que es lo único que no se puede contestar.
+    """
+    from app.reports.outputs import complete_csv_path
+
+    ruta = Path(csv)
+    filas = _filas_con_review(ruta)
+    if filas is None:
+        filas = _filas_con_review(complete_csv_path(ruta))
+    if filas is None:
+        return None
+    revisar = sum(
+        1 for fila in filas
+        if str(fila.get("review", "")).strip().lower() == "true"
+    )
+    return len(filas) - revisar, revisar
 
 
 def batches_de_entrega(csv: Path | str, limite: int) -> int | None:
@@ -1066,6 +1128,7 @@ class AirVaultWindow(QDialog):
         # la cola de batches, que es lo que se mira mientras trabaja.
         cuerpo.addWidget(self._historial())
         cuerpo.addLayout(self._campos())
+        cuerpo.addWidget(self._recuadro_de_revision())
         self.solo_ejecucion_check = QCheckBox("Mostrar solo la ejecución seleccionada")
         self.solo_ejecucion_check.setToolTip(
             "Limita la cola y sus acciones a los batches de la ejecución seleccionada."
@@ -1290,6 +1353,72 @@ class AirVaultWindow(QDialog):
         )
         grid.addWidget(self.cookie_edit, 3, 1, 1, 3)
         return grid
+
+    def _recuadro_de_revision(self) -> QGroupBox:
+        """Cuánto de la ejecución se indexa solo y cuánto hay que mirar.
+
+        La cola dice en qué va cada batch, pero no cuánto trabajo a mano
+        deja la ejecución: eso solo se sabía subiéndola y abriendo el batch
+        REVISAR en AirVault. Aquí se lee antes de subir nada, y con los dos
+        porcentajes se sabe de un vistazo si la ejecución se termina sola o
+        si detrás hay una tarde de Web Index.
+        """
+        recuadro = QGroupBox("Bitácoras de la ejecución")
+        recuadro.setToolTip(TOOLTIP_REPARTO)
+        fila = QHBoxLayout(recuadro)
+        fila.setContentsMargins(0, 0, 0, 0)
+        fila.setSpacing(SPACE_L)
+        self.reparto_total = QLabel()
+        self.reparto_automaticas = QLabel()
+        self.reparto_automaticas.setStyleSheet(f"color: {COLOR_INDEXADO};")
+        self.reparto_revisar = QLabel()
+        self.reparto_revisar.setStyleSheet(f"color: {COLOR_REVISAR};")
+        fila.addWidget(self.reparto_total)
+        fila.addWidget(self.reparto_automaticas)
+        fila.addWidget(self.reparto_revisar)
+        fila.addStretch()
+        self._mostrar_reparto(None)
+        return recuadro
+
+    def _mostrar_reparto(self, reparto: Optional[tuple[int, int]]) -> None:
+        """Escribe en el recuadro el reparto de la ejecución elegida.
+
+        Sin ejecución, o con una exportada antes de que el CSV lo dijera,
+        se explica por qué no hay números en vez de enseñar tres ceros, que
+        se leerían como una ejecución vacía.
+        """
+        aviso = ""
+        if reparto is None:
+            aviso = (
+                TEXTO_SIN_EJECUCION if not self.corrida_edit.text().strip()
+                else TEXTO_SIN_COLUMNA
+            )
+        elif sum(reparto) == 0:
+            aviso = "La ejecución no dejó ninguna bitácora."
+        # El aviso es una frase y necesita partirse; la cuenta son dos
+        # palabras y con el salto activo la caja se llevaba dos líneas de
+        # alto para escribir «148» encima de «bitácoras».
+        self.reparto_total.setWordWrap(bool(aviso))
+        if aviso:
+            self.reparto_total.setText(aviso)
+            self.reparto_automaticas.clear()
+            self.reparto_revisar.clear()
+            return
+        automaticas, revisar = reparto
+        total = automaticas + revisar
+        # Solo se redondea el porcentaje de revisar y el otro se despeja de
+        # él: redondeando los dos por separado la suma se iba a 99 o 101 y
+        # parecía que faltaban bitácoras.
+        parte_revisar = round(revisar * 100 / total)
+        self.reparto_total.setText(
+            f"{total} bitácoras" if total != 1 else "1 bitácora"
+        )
+        self.reparto_automaticas.setText(
+            f"{automaticas} se indexan solas ({100 - parte_revisar} %)"
+        )
+        self.reparto_revisar.setText(
+            f"{revisar} van a REVISAR ({parte_revisar} %)"
+        )
 
     def _cabecera_de_lotes(self) -> QHBoxLayout:
         """El título de la tabla de batches, el buscador y la vista previa.
@@ -3128,6 +3257,7 @@ class AirVaultWindow(QDialog):
     def _sincronizar_entrega(self, csv: Path) -> None:
         """Dice si la ejecución elegida se puede subir, antes de intentarlo."""
         entrega, listo = estado_de_entrega(csv)
+        self._mostrar_reparto(reparto_de_revision(csv))
         self._listo_para_subir = listo
         self.boton_subir.setEnabled(listo)
         if listo:

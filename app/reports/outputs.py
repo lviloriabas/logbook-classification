@@ -16,7 +16,7 @@ from loguru import logger
 
 from app.models.schemas import ValidationReport
 from app.reports.csv_reporter import CSV_DATE_MONTH_END, CsvReporter
-from app.reports.dual_csv import write_minimal_csv
+from app.reports.dual_csv import minimal_columns, write_minimal_csv
 from app.reports.debug_pdf import write_debug_pdf
 from app.reports.json_reporter import JsonReporter
 from app.templates.schema import Template
@@ -61,6 +61,61 @@ def complete_csv_path(csv_path: Path) -> Path:
     """Nombre estable del CSV referencial con todas las columnas."""
     csv_path = Path(csv_path)
     return csv_path.with_name(f"{csv_path.stem}_completo{csv_path.suffix}")
+
+
+def marcar_revision(
+    reports: Sequence[ValidationReport],
+    template: Template,
+    date_mode: str = CSV_DATE_MONTH_END,
+    important_columns: Sequence[str] = (),
+) -> dict[tuple[str, int], tuple[str, ...]]:
+    """Decide qué bitácoras van al batch REVISAR y deja la marca en cada una.
+
+    Se resuelve sobre la fila que el CSV está a punto de llevar, no sobre el
+    reporte: lo que deja amarilla una página en AirVault es lo que le falte
+    al archivo, y un campo que la ejecución leyó pero que no entra en el CSV
+    mínimo (el que se sube) no llega a indexarse. Por eso las filas se miran
+    ya recortadas a las columnas que ese archivo va a tener.
+
+    Lo demás que aparta una página (discrepancia confirmada, fecha que
+    contradice al libro) ya viene marcado en el reporte, y ``needs_review``
+    lo vuelve a mirar al escribir la columna ``review``. Aquí solo se añade
+    lo único que no se puede saber sin la fila.
+
+    Devuelve, por página, qué campos obligatorios quedarían vacíos, que es
+    lo que la ventana de AirVault enseña al preguntar por las amarillas.
+    """
+    from app.airvault.mapping import obligatorios_vacios_por_pagina
+
+    reports = list(reports)
+    filas = CsvReporter.rows_for(reports, template, date_mode=date_mode)
+    columnas = minimal_columns(
+        CsvReporter.columns_for(reports, template), important_columns
+    )
+    faltantes = obligatorios_vacios_por_pagina(
+        {columna: str(fila.get(columna, "")) for columna in columnas}
+        for fila in filas
+    )
+    discrepancias = 0
+    for report in reports:
+        archivo = report.source_filename
+        for page in report.pages:
+            if page.discrepancy:
+                discrepancias += 1
+            page.airvault_review = bool(
+                (archivo, page.page_number) in faltantes
+                or page.discrepancy
+                or page.airvault_discrepancy
+                or page.date_review
+            )
+    if faltantes or discrepancias:
+        logger.info(
+            "[Organize] {} páginas van a REVISAR por campos obligatorios "
+            "vacíos y {} por discrepancias confirmadas",
+            len(faltantes),
+            discrepancias,
+        )
+    return faltantes
 
 
 def run_csv_name() -> str:
@@ -171,17 +226,22 @@ def write_outputs(
     datos_dir = run_dir / "datos"
     datos_dir.mkdir(parents=True, exist_ok=True)
 
-    from app.validation.discrepancias import (
-        clasificar_lote,
-        confirmadas_para_revision,
-    )
+    from app.validation.discrepancias import clasificar_lote
 
     entradas = clasificar_lote(reports, template)
-    confirmadas = confirmadas_para_revision(entradas)
 
     stage("Escribiendo CSV mínimo y completo…", 10)
     csv_path = datos_dir / csv_name
     full_csv_path = complete_csv_path(csv_path)
+    # El reparto se decide antes de escribir: la columna ``review`` del CSV
+    # es esa misma decisión, así que tomarla después obligaría a rehacer el
+    # archivo para poder contarlo.
+    marcar_revision(
+        reports,
+        template,
+        date_mode=options.csv_date_mode,
+        important_columns=options.important_csv_columns,
+    )
     CsvReporter().write(
         reports,
         full_csv_path,
@@ -191,35 +251,6 @@ def write_outputs(
     write_minimal_csv(
         full_csv_path, csv_path, options.important_csv_columns
     )
-    from app.airvault.mapping import (
-        leer_csv_corrida,
-        obligatorios_vacios_por_pagina,
-    )
-
-    faltantes_por_pagina = obligatorios_vacios_por_pagina(
-        leer_csv_corrida(csv_path)
-    )
-    discrepancias_confirmadas = {
-        (Path(entrada.pdf_path).name, entrada.page_number)
-        for entrada in confirmadas
-    }
-    for report in reports:
-        archivo = report.source_filename
-        for page in report.pages:
-            clave = (archivo, page.page_number)
-            page.airvault_review = (
-                clave in faltantes_por_pagina
-                or clave in discrepancias_confirmadas
-                or page.airvault_discrepancy
-                or page.date_review
-            )
-    if faltantes_por_pagina or discrepancias_confirmadas:
-        logger.info(
-            "[Organize] {} páginas van a REVISAR por campos obligatorios "
-            "vacíos y {} por discrepancias confirmadas",
-            len(faltantes_por_pagina),
-            len(discrepancias_confirmadas),
-        )
 
     # Las que van a «Posibles discrepancias»: las confirmadas y las
     # inciertas por igual. Las confirmadas ya estan en REVISAR; a las

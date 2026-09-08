@@ -89,6 +89,10 @@ Revise como mínimo:
 - `log_number`, que debe tener siete dígitos;
 - matrícula y fecha de cada libro;
 - cambios de fecha, que no deben retroceder dentro del libro;
+- `review=true`, que indica que la bitácora no se indexa sola y viaja en el
+  batch **REVISAR**. Recoge todo lo que aparta una página, las discrepancias
+  incluidas, así que contar esa columna dice cuánto trabajo manual deja la
+  ejecución;
 - `dup=true`, que indica una aparición repetida;
 - `disc=true`, que indica una posible discrepancia de firmas, y
   `discrepancia`, que dice en una frase cuál es;
@@ -145,6 +149,8 @@ El archivo `_paginas.json` se crea con **Un solo PDF** y es necesario para relac
 10. Compruebe el estado final de todos los batches.
 
 BITS sube un archivo a la vez y espera a identificarlo antes de continuar. No sobrescribe páginas que ya están válidas. Si una carga aceptada no aparece, no la vuelve a enviar automáticamente, porque podría crear un duplicado. Use el menú de la fila solo después de comprobar el caso en AirVault.
+
+El recuadro **Bitácoras de la ejecución** dice, antes de subir nada, cuántas se indexan solas y cuántas van a `REVISAR`, con el porcentaje de cada parte. Sale de la columna `review` del CSV, la misma con la que se reparte la entrega.
 
 Las páginas dudosas forman un batch terminado en `REVISAR`. Ese batch se conserva para clasificación manual. Las páginas normales reciben los campos configurados de documento, aeronave, flota, número de bitácora, estado de auditoría, fecha y nombre del batch. El número de vuelo se usa en la descripción cuando está disponible.
 

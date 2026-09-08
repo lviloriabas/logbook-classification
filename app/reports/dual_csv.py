@@ -19,6 +19,24 @@ def default_minimum_columns(columns: Iterable[str]) -> list[str]:
     ]
 
 
+def minimal_columns(
+    columns: Iterable[str], selected_columns: Iterable[str] = ()
+) -> list[str]:
+    """Columnas que se quedan en el CSV mínimo, en el orden del completo.
+
+    Se separa del volcado porque el reparto de la entrega necesita saber con
+    qué columnas se va a quedar el archivo antes de que exista: el CSV
+    mínimo es el que lee AirVault, así que un campo que no llegue a él deja
+    la página amarilla aunque la ejecución lo hubiera leído.
+    """
+    columns = list(columns)
+    selected = set(selected_columns)
+    if not selected:
+        selected = set(default_minimum_columns(columns))
+    selected.update({"file", "page"})
+    return [column for column in columns if column in selected]
+
+
 def write_minimal_csv(
     complete_path: Path,
     minimal_path: Path,
@@ -31,12 +49,7 @@ def write_minimal_csv(
         reader = csv.DictReader(source)
         if not reader.fieldnames:
             raise ValueError("El CSV completo no contiene encabezados")
-        columns = list(reader.fieldnames)
-        selected = set(selected_columns)
-        if not selected:
-            selected = set(default_minimum_columns(columns))
-        selected.update({"file", "page"})
-        output_columns = [column for column in columns if column in selected]
+        output_columns = minimal_columns(reader.fieldnames, selected_columns)
         rows = list(reader)
 
     minimal_path.parent.mkdir(parents=True, exist_ok=True)

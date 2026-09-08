@@ -187,6 +187,7 @@ _RESULTS_SHARE = 1
 _PREVIEW_RESIZE_MS = 80
 _DUP_COLUMN = "dup"
 _DISC_COLUMN = "disc"
+_REVIEW_COLUMN = "review"
 # Tamaño con el que se pide abrir la ventana principal. No es una promesa: la
 # pantalla manda y ``fit_to_screen`` lo recorta a lo que haya de sitio.
 _PREFERRED_WIDTH = 1280
@@ -2724,20 +2725,26 @@ class MainWindow(QMainWindow):
         csv_path = run_dir / "datos" / f"{run_dir.name}.CSV"
         try:
             from app.reports.dual_csv import write_minimal_csv
-            from app.reports.outputs import complete_csv_path
+            from app.reports.outputs import complete_csv_path, marcar_revision
 
             full_csv_path = complete_csv_path(csv_path)
+            importantes = self._important_columns_for_export(template)
+            # La fecha decide si la página se queda sin ``End Date``, y con
+            # ello si va a REVISAR: la columna ``review`` se vuelve a
+            # resolver antes de reescribir para no contradecir a la entrega.
+            marcar_revision(
+                self._reports,
+                template,
+                date_mode=self._csv_date_mode(),
+                important_columns=importantes,
+            )
             CsvReporter().write(
                 self._reports,
                 full_csv_path,
                 template,
                 date_mode=self._csv_date_mode(),
             )
-            write_minimal_csv(
-                full_csv_path,
-                csv_path,
-                self._important_columns_for_export(template),
-            )
+            write_minimal_csv(full_csv_path, csv_path, importantes)
         except Exception as exc:  # noqa: BLE001 - actualización opcional
             logger.error(f"No se pudo actualizar la fecha del CSV: {exc}")
             self.status_label.setText("Error al actualizar la fecha del CSV.")
@@ -3948,6 +3955,7 @@ class MainWindow(QMainWindow):
             }
             self._table_important_field_ids.add(_DUP_COLUMN)
             self._table_important_field_ids.add(_DISC_COLUMN)
+            self._table_important_field_ids.add(_REVIEW_COLUMN)
             # La selección guardada se conserva completa: recortarla contra
             # las columnas de esta ejecución perdería las marcas de un CSV con
             # otras columnas la próxima vez que el usuario edite la lista.
@@ -4036,6 +4044,15 @@ class MainWindow(QMainWindow):
         self.duplicates_label.setToolTip("\n".join(lines))
 
     @staticmethod
+    def _review_tooltip(value: str) -> str:
+        if value.strip().lower() == "true":
+            return (
+                "La bitácora va al batch REVISAR: se sube con lo que se "
+                "sepa de ella y se termina de indexar a mano."
+            )
+        return "La bitácora se indexa sola en su batch automático."
+
+    @staticmethod
     def _discrepancy_tooltip(value: str) -> str:
         if value.strip().lower() == "true":
             return (
@@ -4106,7 +4123,10 @@ class MainWindow(QMainWindow):
                     )
                 field_id = column.removesuffix("_conf")
                 field = field_results.get(field_id)
-                if column == _DISC_COLUMN:
+                if column == _REVIEW_COLUMN:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setToolTip(self._review_tooltip(str(value)))
+                elif column == _DISC_COLUMN:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     item.setToolTip(self._discrepancy_tooltip(str(value)))
                 elif column == _DUP_COLUMN:
