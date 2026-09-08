@@ -21,7 +21,11 @@ portable/
 output/
 recortes_firmas/
 build/
-tmp/portable-cleanup-*/
+
+# Banco de trabajo: scripts sueltos, corridas de prueba, salidas de pytest y
+# lo que haga falta dejar a mano un rato. Nada de aqui es del proyecto y nada
+# de aqui se commitea; se puede borrar entero cuando estorbe.
+tmp/
 
 # Directorio de entrada (PDFs escaneados, descargables por separado)
 input/*
