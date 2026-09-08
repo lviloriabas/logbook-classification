@@ -1209,6 +1209,9 @@ class MainWindow(QMainWindow):
         self.view_button.setToolTip(
             "Elegir qué campos se muestran en la vista previa."
         )
+        # Arriba, pegado a «Separación»: los dos abren un menú y miden lo
+        # mismo, así que uno debajo del otro y en filas distintas se leían
+        # como una columna rota.
         group.agregar_menu(self.view_button)
 
         self.fleet_check = QCheckBox("Verificar matrículas")

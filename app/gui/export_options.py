@@ -172,7 +172,13 @@ class ExportOptionsGroup(QGroupBox):
         self._sync_parts()
 
     def agregar_menu(self, boton: QToolButton) -> None:
-        """Suma otro desplegable a la fila en la que ya va «Separación»."""
+        """Suma otro desplegable a la fila en la que ya va «Separación».
+
+        Los botones con menú son la misma clase de control y llevan el mismo
+        ancho, así que se leen como un juego. Repartidos en dos filas, y
+        encima uno justo debajo del otro, parecían una columna partida por
+        la mitad en vez de dos controles hermanos.
+        """
         fila = self._detail_row
         fila.insertWidget(fila.indexOf(self.separation_button) + 1, boton)
 
