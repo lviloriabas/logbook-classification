@@ -52,9 +52,19 @@ firmas, pero con umbrales propios: es una casilla mucho más ancha que alta y
 el rasgo que distingue una corrección escrita del papel rayado vacío es la
 tinta *repartida* a lo largo de la línea, no un trazo denso en un punto. Por
 eso pide densidad ``max_empty_peak`` sostenida sobre ``min_ink_span`` del
-ancho. Los sellos «MXI Entry Performed By», que desbordan desde la fila de
-arriba, concentran mucha tinta en un tramo corto y quedan en *incierto*, que
-es donde tienen que quedar: no son una corrección y no deben reclamar firmas.
+ancho.
+
+La extensión sola no basta. Lo que invade esta casilla desde la fila de
+arriba son los sellos «MXI Entry Performed By» y «DATE / STA», y un sello no
+es un borrón: es un recuadro con su rótulo, su número y su raya, que llega a
+cruzar dos tercios del ancho. Sobre un libro entero de 122 páginas, las
+cuatro que el detector daba por escritas sin serlo eran las cuatro un sello,
+y las cuatro cruzaban entre el 56 % y el 70 % del ancho. Lo que sí las
+separa es cuánta tinta hay en el recuadro *entero*: un sello ensucia entre
+el 2.5 % y el 3.9 %, y la corrección más floja de ese mismo libro, el 5.7 %.
+Por eso el campo exige además ``min_ink_coverage`` (0.05), a mitad de camino
+entre los dos grupos. Lo que no lo alcanza queda en *incierto*, que es donde
+tiene que quedar: no es una corrección y no debe reclamar firmas.
 
 La "presencia" de una firma se decide con el resultado del detector
 (``true`` / ``false`` / ``unclear``) combinado con la confianza y los

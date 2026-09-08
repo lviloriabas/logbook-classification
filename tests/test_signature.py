@@ -3,7 +3,8 @@
 Los casos reproducen lo que trae de verdad el recorte de un campo de firma
 en estas bitácoras y que antes provocaba fallos: el rótulo impreso dentro
 del campo, la fotocopia gris sin escritura, la escritura clara sobre esa
-misma fotocopia, la línea preimpresa y la calca de la página vecina.
+misma fotocopia, la línea preimpresa, la calca de la página vecina y el
+sello que invade una casilla ancha desde la fila de al lado.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import cv2
 import numpy as np
 
 from app.templates.schema import FieldTemplate
-from app.vision.signature import UNCLEAR, detect_signature
+from app.vision.signature import UNCLEAR, _classify, detect_signature
 
 ANCHO, ALTO = 360, 90
 
@@ -186,6 +187,99 @@ class TestFirmaIncierta(unittest.TestCase):
         resultado = detect_signature(img, _campo(max_ink_ratio=0.60), 1)
         self.assertEqual(resultado.value, UNCLEAR)
         self.assertLess(resultado.confidence, _campo().sig_present_conf)
+
+
+class TestCoberturaMinima(unittest.TestCase):
+    """La puerta que separa una corrección escrita de un sello invasor.
+
+    El bloque «CORRECTION OR DEFERRAL» es una casilla mucho más ancha que
+    alta, y ahí la extensión deja de discriminar: lo que la invade desde la
+    fila de arriba son los sellos «MXI Entry Performed By» y «DATE / STA»,
+    que con su recuadro, su número y su raya cruzan más de medio ancho sin
+    ser escritura.
+
+    Los números son los que midió el detector sobre las 122 páginas de un
+    libro real. Las cuatro que daba por escritas sin serlo eran las cuatro
+    un sello; van aquí con su número de página para poder volver a mirarlas.
+    """
+
+    # (página, densidad, extensión, cobertura)
+    SELLOS = (
+        (2, 0.1231, 0.700, 0.0356),
+        (8, 0.2373, 0.563, 0.0394),
+        (115, 0.1391, 0.568, 0.0253),
+        (122, 0.1445, 0.657, 0.0360),
+    )
+    CORRECCIONES = (
+        (42, 0.1042, 0.726, 0.0565),
+        (60, 0.1330, 0.792, 0.0629),
+        (56, 0.1401, 0.607, 0.0656),
+        (19, 0.1096, 0.714, 0.0662),
+        (11, 0.1367, 0.687, 0.0670),
+    )
+
+    def _bloque(self, **kw) -> FieldTemplate:
+        """El campo tal como lo define la plantilla real."""
+        valores = dict(min_ink_peak=0.28, max_empty_peak=0.10,
+                       min_ink_span=0.55, min_ink_coverage=0.05)
+        valores.update(kw)
+        return _campo(required=False, **valores)
+
+    def _metricas(self, pico, ext, cob) -> dict:
+        # ``weak_peak`` y ``dark_ratio`` no intervienen en esta decisión: la
+        # primera solo puede evitar un «false» y la segunda descarta recortes
+        # quemados, que no es el caso de ninguna de estas páginas.
+        return {"peak": pico, "span": ext, "coverage": cob,
+                "weak_peak": pico, "dark_ratio": 0.05}
+
+    def test_los_sellos_del_libro_quedan_inciertos(self):
+        campo = self._bloque()
+        for pagina, pico, ext, cob in self.SELLOS:
+            with self.subTest(pagina=pagina):
+                valor, _conf, _motivo = _classify(
+                    self._metricas(pico, ext, cob), campo
+                )
+                self.assertEqual(valor, UNCLEAR)
+
+    def test_las_correcciones_del_libro_siguen_detectandose(self):
+        campo = self._bloque()
+        for pagina, pico, ext, cob in self.CORRECCIONES:
+            with self.subTest(pagina=pagina):
+                valor, _conf, _motivo = _classify(
+                    self._metricas(pico, ext, cob), campo
+                )
+                self.assertEqual(valor, "true")
+
+    def test_sin_la_puerta_los_cuatro_sellos_pasaban(self):
+        """El contraste: si no, la prueba de arriba no diría de qué depende."""
+        campo = self._bloque(min_ink_coverage=0.0)
+        for pagina, pico, ext, cob in self.SELLOS:
+            with self.subTest(pagina=pagina):
+                valor, _conf, _motivo = _classify(
+                    self._metricas(pico, ext, cob), campo
+                )
+                self.assertEqual(valor, "true")
+
+    def test_por_defecto_la_puerta_no_pide_nada(self):
+        """Los demás campos de firma no cambian: siguen con su regla."""
+        self.assertEqual(_campo().min_ink_coverage, 0.0)
+        valor, _conf, _motivo = _classify(
+            self._metricas(0.15, 0.60, 0.0001), _campo()
+        )
+        self.assertEqual(valor, "true")
+
+    def test_un_trazo_denso_no_pasa_por_la_puerta(self):
+        """La cobertura solo condiciona la vía de la tinta repartida.
+
+        Una rúbrica concentra tinta en un punto y puede dejar limpio el resto
+        del recorte; eso ya lo resuelve ``min_ink_peak`` y no tiene que pedir
+        permiso a la cobertura.
+        """
+        campo = self._bloque()
+        valor, _conf, _motivo = _classify(
+            self._metricas(0.40, 0.20, 0.0100), campo
+        )
+        self.assertEqual(valor, "true")
 
 
 if __name__ == "__main__":

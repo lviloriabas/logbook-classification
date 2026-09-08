@@ -95,6 +95,15 @@ class FieldTemplate(BaseModel):
                     "presente una escritura poco densa pero repartida "
                     "(números de licencia manuscritos)",
     )
+    min_ink_coverage: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="fracción del recorte entero que debe ser tinta para dar "
+                    "por escrita una casilla por su extensión. En una casilla "
+                    "mucho más ancha que alta la extensión sola no distingue "
+                    "una línea de texto de un sello compacto: el sello cruza "
+                    "medio ancho pero apenas ensucia el recuadro. En 0 (por "
+                    "defecto) no pide nada y la regla es la de siempre",
+    )
     sig_present_conf: float = Field(
         default=0.45, ge=0.0, le=1.0,
         description="confianza mínima para confiar en que una firma está presente",

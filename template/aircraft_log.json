@@ -415,7 +415,8 @@
       "min_ink_span": 0.55,
       "sig_present_conf": 0.45,
       "sig_absent_conf": 0.55,
-      "book_background": false
+      "book_background": false,
+      "min_ink_coverage": 0.05
     },
     {
       "id": "technician_license",
