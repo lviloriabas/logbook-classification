@@ -2128,21 +2128,31 @@ class Pipeline:
         firmes no se revisan. Y solo se renderizan las páginas necesarias (una
         muestra para el fondo, más las dudosas), no el libro entero.
 
+        Quedan fuera los campos con ``book_background`` en false. La segunda
+        opinión compara densidades de tinta, y hay casillas que no se deciden
+        por densidad: el bloque de corrección es mucho más ancho que alto y lo
+        que lo distingue del papel rayado es la tinta repartida a lo largo de
+        la línea. Un sello desbordado desde la fila de arriba concentra tanta
+        tinta como una corrección escrita, así que contrastarlo por densidad
+        lo daba por escrito y abría una discrepancia que no existe.
+
         Cualquier fallo aquí deja los resultados como estaban: es una segunda
         opinión, no un eslabón del que dependa la ejecución.
         """
         if not self.config.signature_book_background:
             return pages
         fields = [field for field in self.template.fields
-                  if field.type is FieldType.SIGNATURE]
+                  if field.type is FieldType.SIGNATURE and field.book_background]
         if not fields:
             return pages
+        revisables = {field.id for field in fields}
         pending = [
             (page, result)
             for page in pages
             for result in page.fields
             if result.value == UNCLEAR
             and result.field_type == FieldType.SIGNATURE.value
+            and result.field_id in revisables
             and page.alignment_quality == "ok"
         ]
         if not pending:

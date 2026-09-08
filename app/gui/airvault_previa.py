@@ -341,7 +341,7 @@ class _ListaBuscable(QDialog):
 class BitacorasDelBatch(_ListaBuscable):
     """Las páginas que van dentro de un batch, con su hoja al lado.
 
-    De cada una se enseñan los campos importantes, y la fecha ya convertida
+    De cada una se enseñan las columnas importantes, y la fecha ya convertida
     al formato de AirVault: lo que se busca aquí es comprobar de un vistazo
     que la bitácora va donde debe, no repasar su índice entero.
     """
@@ -482,7 +482,7 @@ class BitacorasDelBatch(_ListaBuscable):
         """Lo que la página tiene que decir, por columna.
 
         Se arma entero y la tabla se queda con lo que enseña: qué columnas
-        son eso lo decide la lista de campos importantes, y esto no tiene
+        son eso lo decide la lista de columnas importantes, y esto no tiene
         por qué saberlo. La fecha se convierte con la misma función que la
         manda a AirVault, así que la lista no puede prometer una distinta de
         la que se va a escribir.

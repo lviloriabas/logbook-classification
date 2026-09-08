@@ -186,7 +186,11 @@ def parse_args() -> argparse.Namespace:
              "fin de mes cuando falta (default: fin-de-mes).",
     )
     parser.add_argument(
-        "--campos-importantes", default=None, metavar="COLUMNAS",
+        # ``--campos-importantes`` es como se llamó hasta que la interfaz
+        # pasó a decir «columnas importantes». Se conserva como alias para
+        # no romper los .cmd que ya la escriben.
+        "--columnas-importantes", "--campos-importantes",
+        dest="columnas_importantes", default=None, metavar="COLUMNAS",
         help="Columnas del CSV mínimo, separadas por coma. Sin esta opción "
              "se usa la selección guardada en la carpeta del programa, la "
              "misma que aplica la interfaz.",
@@ -236,7 +240,7 @@ def _important_columns(
 ) -> tuple[str, ...]:
     """Columnas del CSV mínimo, las mismas que aplicaría la interfaz.
 
-    Sin ``--campos-importantes`` se lee la selección que el selector de la
+    Sin ``--columnas-importantes`` se lee la selección que el selector de la
     ventana dejó guardada en la carpeta del programa, y si esa plantilla
     nunca se editó se usa el mismo conjunto por defecto. Así una ejecución de
     línea de comandos y una de la interfaz escriben el mismo CSV mínimo.
@@ -496,7 +500,7 @@ def _run(args: argparse.Namespace) -> int:
             ),
             read_day=args.fecha_csv != "fin-de-mes",
             important_csv_columns=_important_columns(
-                template, args.campos_importantes
+                template, args.columnas_importantes
             ),
         ),
         on_stage=on_stage,

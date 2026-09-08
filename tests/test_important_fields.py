@@ -1,4 +1,4 @@
-"""Memoria de campos importantes y recuadros que dibuja la vista previa."""
+"""Memoria de columnas importantes y recuadros que dibuja la vista previa."""
 
 from __future__ import annotations
 
@@ -15,7 +15,10 @@ from app.gui.csv_utils import (
 from app.gui.csv_viewer import CsvViewerWindow
 from app.gui.main_window import _visible_preview_fields
 from app.templates.schema import FieldTemplate, Template
-from app.utils.important_fields import ImportantFieldsStore
+from app.utils.important_fields import (
+    ImportantFieldsStore,
+    default_important_columns,
+)
 
 
 def _template() -> Template:
@@ -62,6 +65,13 @@ def test_store_separates_templates_and_remembers_an_empty_selection(
     assert reopened.load("Aircraft Log") == {"log_number", "captain_license"}
     assert reopened.load("Otra") == set()
     assert reopened.load("Sin editar") is None
+
+
+def test_la_frase_de_la_discrepancia_viene_marcada_por_defecto():
+    marcadas = default_important_columns(
+        ["file", "page", "log_number", "dup", "disc", "discrepancia", "date"]
+    )
+    assert "discrepancia" in marcadas
 
 
 def test_editar_la_lista_no_borra_lo_que_el_selector_no_pudo_ensenar(

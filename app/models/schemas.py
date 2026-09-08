@@ -66,6 +66,12 @@ class PageResult(BaseModel):
     alignment_quality: str = "ok"
     processing_ms: float = 0.0
     discrepancy: bool = False
+    # Qué discrepancia se detectó, en una frase corta y en castellano
+    # («Faltan firma de técnico y licencia de técnico»). La escribe
+    # ``clasificar_lote`` junto con ``discrepancy``, y solo cuando esa
+    # bandera queda en True: es el texto de la columna ``discrepancia`` del
+    # CSV, que está vacía siempre que no haya nada que reclamar.
+    discrepancy_note: str = ""
     date: Optional[str] = None
     # La fecha leida contradice una evidencia amplia de la ejecucion y no
     # pudo corregirse con seguridad. Se conserva para diagnostico, pero el

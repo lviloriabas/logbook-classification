@@ -15,14 +15,21 @@ nunca la quita, así que su lectura «ausente» sigue siendo de fiar: el campo s
 conserva como requisito de mantenimiento, pero no puede decidir el tipo.
 
 - Una página es de **mantenimiento** cuando ``technician_license`` está
-  escrita de forma confiable.
-- Es de **vuelo** cuando esa licencia está vacía y hay algo escrito en el
-  bloque del capitán o en la firma del piloto.
+  escrita de forma confiable, o cuando lo está el bloque de corrección
+  (``correction_block``): el recuadro «CORRECTION OR DEFERRAL» donde el
+  técnico describe el trabajo hecho o el diferimiento aplicado. Escribir ahí
+  es haber intervenido la aeronave, y una intervención se cierra con firmas
+  aunque la casilla de la licencia haya quedado en blanco; de hecho es
+  justamente ese caso —trabajo descrito y nadie que lo firme— el que hay que
+  reclamar.
+- Es de **vuelo** cuando esa licencia está vacía, el bloque de corrección no
+  tiene nada escrito y hay algo escrito en el bloque del capitán o en la
+  firma del piloto.
 - Es una hoja **anulada** (VOID) cuando la licencia de técnico, las dos
-  casillas del capitán y la firma del piloto están vacías. Se llenó mal, se
-  apartó y lleva el log page y a veces la matrícula, nada más. No le falta
-  ninguna firma porque no llegó a usarse: se indexa como cualquier otra y no
-  abre discrepancia.
+  casillas del capitán, la firma del piloto y el bloque de corrección están
+  vacías. Se llenó mal, se apartó y lleva el log page y a veces la matrícula,
+  nada más. No le falta ninguna firma porque no llegó a usarse: se indexa
+  como cualquier otra y no abre discrepancia.
 - Si ninguna casilla limpia lo dice con seguridad, el tipo es **incierto**
   (INCIERTO): se reportan solo las anomalías robustas (firma de piloto,
   exigida en las dos interpretaciones) y las casillas ilegibles que impiden
@@ -40,6 +47,15 @@ conserva como requisito de mantenimiento, pero no puede decidir el tipo.
 De las dos licencias solo se mira si la casilla está escrita o vacía. No se
 lee lo que dice: el número no forma parte del índice ni de la regla.
 
+El bloque de corrección se mide con el mismo detector de escritura que las
+firmas, pero con umbrales propios: es una casilla mucho más ancha que alta y
+el rasgo que distingue una corrección escrita del papel rayado vacío es la
+tinta *repartida* a lo largo de la línea, no un trazo denso en un punto. Por
+eso pide densidad ``max_empty_peak`` sostenida sobre ``min_ink_span`` del
+ancho. Los sellos «MXI Entry Performed By», que desbordan desde la fila de
+arriba, concentran mucha tinta en un tramo corto y quedan en *incierto*, que
+es donde tienen que quedar: no son una corrección y no deben reclamar firmas.
+
 La "presencia" de una firma se decide con el resultado del detector
 (``true`` / ``false`` / ``unclear``) combinado con la confianza y los
 umbrales del campo (``sig_present_conf`` / ``sig_absent_conf``): una
@@ -48,6 +64,11 @@ falsas) y se marca como *incierta* (categoría UNCERTAIN, revisión manual).
 
 Las discrepancias se ordenan globalmente por número de bitácora
 (``log_number``) ascendente, sin subdividirlas por matrícula o mes.
+
+Cada discrepancia confirmada resume en una frase qué le falta a la página
+(``Discrepancia.resumen``). Es lo que va a la columna ``discrepancia`` del
+CSV, así que se escribe corto y en el idioma del que revisa: «Faltan firma
+de técnico y licencia de técnico», no una lista de identificadores.
 """
 
 from __future__ import annotations
@@ -68,6 +89,7 @@ FIELD_CAPTAIN = "captain_signature"
 FIELD_CAPTAIN_LICENSE = "captain_license"
 FIELD_TECH = "technician_signature"
 FIELD_TECH_LICENSE = "technician_license"
+FIELD_CORRECTION = "correction_block"
 
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(CMP|WWP)$")
 
@@ -77,6 +99,23 @@ _NOMBRE_ILEGIBLE = {
     FIELD_CAPTAIN: "Firma de capitán",
     FIELD_CAPTAIN_LICENSE: "Licencia del capitán",
 }
+
+# Cómo se nombra cada casilla dentro del resumen de una línea. Van en
+# minúscula porque se encadenan detrás de «Falta(n)».
+_NOMBRE_CORTO = {
+    FIELD_PILOT: "firma de piloto",
+    FIELD_CAPTAIN: "firma de capitán",
+    FIELD_CAPTAIN_LICENSE: "licencia de capitán",
+    FIELD_TECH: "firma de técnico",
+    FIELD_TECH_LICENSE: "licencia de técnico",
+}
+
+
+def _enumerar(nombres: List[str]) -> str:
+    """Une los nombres en castellano: «a», «a y b», «a, b y c»."""
+    if len(nombres) <= 1:
+        return "".join(nombres)
+    return f"{', '.join(nombres[:-1])} y {nombres[-1]}"
 
 
 class TipoEntrada(str, Enum):
@@ -112,10 +151,37 @@ class Discrepancia(BaseModel):
     tipo: TipoEntrada
     categoria: Categoria
     campos: List[CampoAfectado] = Field(default_factory=list)
+    # La exigencia de firmas nació del bloque de corrección escrito y no de
+    # la licencia de técnico. Cambia cómo se explica la falta, no cuáles se
+    # exigen: el resumen tiene que decir de dónde salió el reclamo para que
+    # quien revise sepa dónde mirar en la hoja.
+    por_correccion: bool = False
 
     def razones(self) -> List[str]:
         """Razones legibles de la discrepancia, en orden de importancia."""
         return [campo.razon for campo in self.campos]
+
+    def resumen(self) -> str:
+        """Una línea con lo que le falta a la página, para la columna del CSV.
+
+        Solo nombra las ausencias confirmadas: una lectura incierta no es una
+        falta y no se acusa (la misma regla que deja ``page.discrepancy`` en
+        ``False``). Sin ninguna ausencia confirmada devuelve cadena vacía, que
+        es lo que el CSV escribe cuando no hay nada que reportar.
+        """
+        faltan = [
+            _NOMBRE_CORTO[campo.field_id]
+            for campo in self.campos
+            if campo.categoria is Categoria.MISSING
+            and campo.field_id in _NOMBRE_CORTO
+        ]
+        if not faltan:
+            return ""
+        verbo = "Falta" if len(faltan) == 1 else "Faltan"
+        frase = f"{verbo} {_enumerar(faltan)}"
+        if self.por_correccion:
+            return f"Corrección escrita: {frase[0].lower()}{frase[1:]}"
+        return frase
 
 
 def _campo(page: PageResult, field_id: str) -> Optional[FieldResult]:
@@ -167,17 +233,18 @@ def _matricula(page: PageResult) -> Optional[str]:
 
 def _clasificar_pagina(page: PageResult, template: Template
                        ) -> Optional[Tuple[TipoEntrada, Categoria,
-                                           List[CampoAfectado]]]:
+                                           List[CampoAfectado], bool]]:
     """Clasifica una página y devuelve sus campos de firma afectados.
 
     Returns:
-        (tipo, categoria, campos afectados) si hay discrepancia,
-        o None si la página cumple todas las firmas requeridas.
+        (tipo, categoria, campos afectados, por corrección) si hay
+        discrepancia, o None si la página cumple todas las firmas requeridas.
     """
     licencia_tecnico = _campo_presente(page, template, FIELD_TECH_LICENSE)
     firma_capitan = _campo_presente(page, template, FIELD_CAPTAIN)
     licencia_capitan = _campo_presente(page, template, FIELD_CAPTAIN_LICENSE)
     firma_piloto = _campo_presente(page, template, FIELD_PILOT)
+    correccion = _campo_presente(page, template, FIELD_CORRECTION)
 
     # Una bitácora VOID se anuló al llenarla y se apartó: lleva el log page y
     # a veces la matrícula, y nada más. No le falta ninguna firma porque no
@@ -185,8 +252,11 @@ def _clasificar_pagina(page: PageResult, template: Template
     # discrepancia. Se reconoce porque ninguna de las casillas fiables tiene
     # nada. La firma de técnico no entra en la comprobación a propósito: un
     # sello sobre ella no convierte una hoja anulada en una discrepancia.
+    # El bloque de corrección sí: una hoja con el trabajo descrito no se
+    # anuló, se dejó a medias, y es exactamente lo que hay que reclamar.
     if (licencia_tecnico is False and firma_capitan is False
-            and licencia_capitan is False and firma_piloto is False):
+            and licencia_capitan is False and firma_piloto is False
+            and correccion is not True):
         return None
 
     # El tipo lo deciden solo las casillas limpias. La de firma de técnico
@@ -196,17 +266,24 @@ def _clasificar_pagina(page: PageResult, template: Template
     # nunca la quita, así que su lectura «ausente» sigue siendo de fiar y por
     # eso el campo se conserva como requisito de mantenimiento; lo que no
     # soporta es decidir de qué tipo es la bitácora.
-    if licencia_tecnico is True:
+    #
+    # El bloque de corrección escrito basta por sí solo para exigir el juego
+    # de firmas de mantenimiento: describe un trabajo hecho sobre la
+    # aeronave, y no lo escribe nadie más que el técnico que lo hizo.
+    por_correccion = licencia_tecnico is not True and correccion is True
+    if licencia_tecnico is True or correccion is True:
         tipo = TipoEntrada.MANTENIMIENTO
+        contexto = ("corrección escrita" if por_correccion
+                    else "entrada de mantenimiento")
         requisitos = [
-            ("Falta firma de piloto (entrada de mantenimiento)",
-             "Firma de piloto incierta (entrada de mantenimiento); revisar",
+            (f"Falta firma de piloto ({contexto})",
+             f"Firma de piloto incierta ({contexto}); revisar",
              FIELD_PILOT),
-            ("Falta firma de técnico (entrada de mantenimiento)",
-             "Firma de técnico incierta (entrada de mantenimiento); revisar",
+            (f"Falta firma de técnico ({contexto})",
+             f"Firma de técnico incierta ({contexto}); revisar",
              FIELD_TECH),
-            ("Falta licencia de técnico (entrada de mantenimiento)",
-             "Licencia de técnico incierta (entrada de mantenimiento); revisar",
+            (f"Falta licencia de técnico ({contexto})",
+             f"Licencia de técnico incierta ({contexto}); revisar",
              FIELD_TECH_LICENSE),
         ]
     elif licencia_tecnico is False and True in (
@@ -265,7 +342,7 @@ def _clasificar_pagina(page: PageResult, template: Template
             if any(a.categoria is Categoria.MISSING for a in afectados)
             else Categoria.UNCERTAIN
         )
-        return tipo, categoria, afectados
+        return tipo, categoria, afectados, False
 
     afectados: List[CampoAfectado] = []
     for razon_missing, razon_uncertain, field_id in requisitos:
@@ -291,7 +368,7 @@ def _clasificar_pagina(page: PageResult, template: Template
         if any(a.categoria is Categoria.MISSING for a in afectados)
         else Categoria.UNCERTAIN
     )
-    return tipo, categoria, afectados
+    return tipo, categoria, afectados, por_correccion
 
 
 def clasificar_lote(reports: List[ValidationReport], template: Template
@@ -299,11 +376,12 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
     """Clasifica todas las páginas del batch y devuelve las discrepancias.
 
     Marca ``page.discrepancy`` solo en las páginas con una ausencia
-    confirmada. Las lecturas inciertas se devuelven igual, y con ellas se
-    escribe el reporte de discrepancias, pero no llevan marca: ninguna firma
-    es un index field, así que una firma ilegible no puede estropear lo que
-    se escribe en AirVault, y apartar esa página costaría teclear a mano seis
-    campos que ya están resueltos.
+    confirmada, y deja en ``page.discrepancy_note`` la frase que explica
+    cuál es. Las lecturas inciertas se devuelven igual, y con ellas se
+    escribe el reporte de discrepancias, pero no llevan marca ni frase:
+    ninguna firma es un index field, así que una firma ilegible no puede
+    estropear lo que se escribe en AirVault, y apartar esa página costaría
+    teclear a mano seis campos que ya están resueltos.
 
     El resultado va ordenado globalmente por ``log_number`` ascendente
     (libro + logpage), y dentro del mismo número por archivo/página.
@@ -312,14 +390,14 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
     for report in reports:
         for page in report.pages:
             page.discrepancy = False
+            page.discrepancy_note = ""
             if page.blank:
                 continue
             resultado = _clasificar_pagina(page, template)
             if resultado is None:
                 continue
-            tipo, categoria, campos = resultado
-            page.discrepancy = categoria is Categoria.MISSING
-            entradas.append(Discrepancia(
+            tipo, categoria, campos, por_correccion = resultado
+            entrada = Discrepancia(
                 pdf_path=str(report.pdf_path),
                 page_number=page.page_number,
                 matricula=_matricula(page),
@@ -327,7 +405,12 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
                 tipo=tipo,
                 categoria=categoria,
                 campos=campos,
-            ))
+                por_correccion=por_correccion,
+            )
+            page.discrepancy = categoria is Categoria.MISSING
+            if page.discrepancy:
+                page.discrepancy_note = entrada.resumen()
+            entradas.append(entrada)
 
     entradas.sort(key=lambda d: (
         d.log_number if d.log_number is not None else 1 << 30,

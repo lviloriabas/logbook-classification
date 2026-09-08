@@ -124,7 +124,7 @@ def test_column_mode_control_is_compact_icon_only():
     assert button.width() == button.height() == 30
     assert button.text() == ""
     assert not button.icon().isNull()
-    assert "campos importantes" in button.toolTip()
+    assert "columnas importantes" in button.toolTip()
 
     button.setChecked(False)
     app.processEvents()

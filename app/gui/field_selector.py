@@ -34,7 +34,7 @@ class ImportantFieldsDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Seleccionar campos importantes")
+        self.setWindowTitle("Seleccionar columnas importantes")
         # En una pantalla baja el alto pedido no cabe y los botones de
         # aceptar y cancelar quedan por debajo del borde.
         self._density = fit_to_screen(self, 420, 520)
@@ -52,7 +52,7 @@ class ImportantFieldsDialog(QDialog):
         layout.setContentsMargins(margin, margin, margin, margin)
         layout.setSpacing(SPACE_S)
         intro = QLabel(
-            "Elija los campos de la vista resumida y de los recuadros de la "
+            "Elija las columnas de la vista resumida y de los recuadros de la "
             "vista previa. La selección se guarda por plantilla y no "
             "modifica el CSV."
         )

@@ -104,6 +104,16 @@ class FieldTemplate(BaseModel):
         description="confianza mínima para confiar en que una firma está ausente "
                      "(región limpia); por debajo se trata como incierta",
     )
+    book_background: bool = Field(
+        default=True,
+        description="si una lectura incierta de este campo puede resolverse "
+                    "contrastándola con el resto de la bitácora. Esa segunda "
+                    "opinión compara densidades de tinta, así que solo vale "
+                    "para los campos que se deciden por densidad; una casilla "
+                    "que se decide por cuánto se reparte la tinta a lo largo "
+                    "de la línea tiene que declararlo en false o la segunda "
+                    "opinión le dará por escrito cualquier borrón denso",
+    )
 
     @model_validator(mode="after")
     def _validate_geometry(self) -> "FieldTemplate":

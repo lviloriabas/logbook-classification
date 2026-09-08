@@ -17,7 +17,7 @@ TEXTO_ELEGIR_EJECUCION = "Seleccionar ejecución"
 
 _CSV_METADATA_SUFFIXES = ("_conf", "_status", "_comment", "_source")
 _ALWAYS_IMPORTANT_COLUMNS = frozenset(
-    {"file", "page", "dup", "disc", "date", "time_ms"}
+    {"file", "page", "dup", "disc", "discrepancia", "date", "time_ms"}
 )
 _DATE_COMPONENT_FIELDS = frozenset({"day", "month", "year"})
 _FALLBACK_IMPORTANT_FIELDS = frozenset(
@@ -187,7 +187,7 @@ def template_name_for_csv(path: Path) -> str | None:
     El CSV completo no tiene JSON propio: la ejecucion escribe uno solo,
     con el nombre del CSV minimo. Sin este respaldo, abrir el completo
     dejaba la ejecucion sin plantilla, y con ella se perdian los campos
-    importantes que esa plantilla tiene guardados.
+    importantes que esa plantilla tiene guardadas.
     """
     companion = path.with_suffix(".json")
     if not companion.is_file() and path.stem.casefold().endswith("_completo"):
