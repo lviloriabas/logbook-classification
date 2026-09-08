@@ -145,16 +145,20 @@ def abrir_en_web_search(
 
     Va por el Edge del programa y no por el navegador de la persona: la
     sesion de AirVault vive en ese perfil, asi que la misma direccion en
-    otro navegador acaba en la pantalla de acceso. La ventana se queda
-    abierta a proposito, porque lo que se pidio fue mirarla; la cierra quien
-    la abrio, o el trabajo siguiente, que reaprovecha este mismo navegador.
+    otro navegador acaba en la pantalla de acceso.
+
+    Cada busqueda se suma como una pestana mas y las anteriores se quedan
+    donde estaban. Estas paginas se abren para leerlas, y quien mira una
+    bitacora casi siempre quiere ver ademas el libro al que pertenece:
+    dejarle una sola pestana obligaba a elegir. Se cierran a mano, o cuando
+    la consulta o la correccion siguientes reaprovechen este navegador.
     """
     if not url:
         raise ValueError("Esa fila no trae ninguna búsqueda que abrir")
     notificar = avisar or (lambda _texto: None)
     notificar("Abriendo Web Search en Edge")
     navegador = SesionDeNavegador(_perfil_de(config), visible=True)
-    navegador.abrir(url, espera_s=config.espera_login_s)
+    navegador.abrir_a_la_vista(url, espera_s=config.espera_login_s)
 
 
 def _texto(celda: object) -> str:
