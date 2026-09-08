@@ -811,6 +811,24 @@ def test_gris_solo_significa_sin_subir_y_subido_queda_blanco(ventana):
     assert ventana.lotes.item(1, 0).foreground().style() is Qt.BrushStyle.NoBrush
 
 
+def test_azul_solo_durante_indexacion_y_verde_al_terminar(ventana):
+    from app.airvault.flujo import INDEXADO, LISTO
+    from app.gui.airvault_window import COLOR_INDEXANDO
+
+    activo = parte(LISTO)
+    terminado = parte(INDEXADO, carpeta="terminado")
+    ventana._estados = [activo, terminado]
+    ventana._al_batch_indexando(activo.trabajo, True)
+    for columna in range(ventana.lotes.columnCount()):
+        assert ventana.lotes.item(0, columna).foreground().color() == QColor(COLOR_INDEXANDO)
+        assert ventana.lotes.item(1, columna).foreground().color() == QColor(COLOR_INDEXADO)
+    ventana._al_batch_indexando(activo.trabajo, False)
+    assert ventana.lotes.item(0, 0).foreground().style() is Qt.BrushStyle.NoBrush
+    ventana._estados = [parte(INDEXADO)]
+    ventana._pintar_lotes()
+    assert ventana.lotes.item(0, 0).foreground().color() == QColor(COLOR_INDEXADO)
+
+
 def test_un_batch_parcial_no_se_pinta_como_terminado(ventana):
     from app.airvault.flujo import LISTO
     from app.airvault.model import EstadoEtapa, Etapa

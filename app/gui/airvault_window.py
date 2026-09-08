@@ -109,6 +109,7 @@ from app.utils.io import send_to_trash
 # Gris con el que la ventana principal escribe las líneas de ayuda.
 COLOR_AYUDA = TEXT_SECONDARY
 COLOR_INDEXADO = PANE_STATUS_COLORS["OK"]
+COLOR_INDEXANDO = "#0078d4"
 
 # Lo que se lee debajo de la tabla de batches mientras no se ha buscado
 # ninguna bitácora, y a lo que se vuelve al vaciar el campo.
@@ -332,6 +333,7 @@ class TrabajoAirVaultWorker(QThread):
     subidas_actualizadas = Signal(object)
     batch_encontrado = Signal(object)
     batch_indexado = Signal(object)
+    batch_indexando = Signal(object, bool)
     subido = Signal(object)
     comprobado = Signal(object)
     indexado = Signal(object)
@@ -827,7 +829,8 @@ class TrabajoAirVaultWorker(QThread):
         try:
             for intento in range(1, INTENTOS_INDEXADO + 1):
                 parcial = indexar_partes(
-                    trabajos, planes, avisar=self._avisar
+                    trabajos, planes, avisar=self._avisar,
+                    al_indexar=self.batch_indexando.emit,
                 )
                 for atributo in (
                     "escritas", "omitidas", "fallidas",
@@ -976,6 +979,7 @@ class AirVaultWindow(QDialog):
         self._opciones = opciones or OpcionesAutomatizacion(self._raiz, self)
         self._opciones.cambiado.connect(self._al_cambiar_automatizacion)
         self._worker: Optional[TrabajoAirVaultWorker] = None
+        self._indexando: set[str] = set()
         # Todo lo que el hilo necesita y devuelve: la conexión abierta, los
         # trabajos de cada parte y los planes ya calculados. Vive aquí para
         # que la comprobación periódica reuse la sesión en vez de volver al
@@ -3215,7 +3219,9 @@ class AirVaultWindow(QDialog):
                         Qt.AlignmentFlag.AlignRight
                         | Qt.AlignmentFlag.AlignVCenter
                     )
-                if ya_indexado:
+                if str(parte.trabajo.carpeta) in self._indexando:
+                    item.setForeground(QColor(COLOR_INDEXANDO))
+                elif ya_indexado:
                     item.setForeground(QColor(COLOR_INDEXADO))
                 elif parte.estado in (
                     SIN_SUBIR, CANCELADO, POSIBLE_DUPLICADO
@@ -3681,6 +3687,7 @@ class AirVaultWindow(QDialog):
         worker.subidas_actualizadas.connect(self._al_actualizar_subidas)
         worker.batch_encontrado.connect(self._al_batch_encontrado)
         worker.batch_indexado.connect(self._al_batch_indexado)
+        worker.batch_indexando.connect(self._al_batch_indexando)
         worker.subido.connect(self._al_subir)
         worker.comprobado.connect(self._al_comprobar)
         worker.indexado.connect(self._al_indexar)
@@ -3848,6 +3855,14 @@ class AirVaultWindow(QDialog):
         self._anotar(
             f"Batch {remoto.batch_id} asignado a «{remoto.nombre}»"
         )
+
+    def _al_batch_indexando(self, trabajo, activo: bool) -> None:
+        clave = str(trabajo.carpeta)
+        if activo:
+            self._indexando.add(clave)
+        else:
+            self._indexando.discard(clave)
+        self._pintar_lotes()
 
     def _al_batch_indexado(self, datos: dict) -> None:
         """Pinta en verde un batch terminado por el carril paralelo."""
@@ -4137,6 +4152,8 @@ class AirVaultWindow(QDialog):
 
     def _al_terminar(self) -> None:
         """Cierre común del hilo, salga como salga."""
+        self._indexando.clear()
+        self._pintar_lotes()
         self._habilitar(True)
         self._parar_reloj()
         if self._cerrar_al_terminar:

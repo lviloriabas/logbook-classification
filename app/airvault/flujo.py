@@ -4799,6 +4799,7 @@ def indexar_partes(
     planes: Sequence[Tuple[Plan, Indexador]],
     detener_en_error: bool = True,
     avisar: Optional[Aviso] = None,
+    al_indexar: Optional[Callable[["Trabajo", bool], None]] = None,
 ) -> Resultado:
     """Escribe todas las partes y devuelve el resultado sumado.
 
@@ -4823,9 +4824,15 @@ def indexar_partes(
             if avisar is not None:
                 avisar(f"{cabeza}{texto}", arrastre + propias, total)
 
-        resultado = trabajo.indexar(
-            indexador, plan, detener_en_error, propio if avisar else None
-        )
+        if al_indexar is not None:
+            al_indexar(trabajo, True)
+        try:
+            resultado = trabajo.indexar(
+                indexador, plan, detener_en_error, propio if avisar else None
+            )
+        finally:
+            if al_indexar is not None:
+                al_indexar(trabajo, False)
         hechas += resultado.escritas
         sumado.escritas += resultado.escritas
         sumado.omitidas += resultado.omitidas
