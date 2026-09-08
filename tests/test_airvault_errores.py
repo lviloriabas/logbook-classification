@@ -410,13 +410,17 @@ def test_una_pagina_rechazada_no_deja_sin_indexar_a_las_demas():
 # ── verificacion ───────────────────────────────────────────────────
 
 def test_verificar_cuenta_aparte_la_pagina_que_no_pudo_leerse():
+    from app.airvault.config import CAMPO_DOC_TYPE, CAMPO_FLEET, CAMPO_AUDIT_STATUS
     from app.airvault.indexer import verificar_lote
-    from app.airvault.config import CAMPO_LOG_NUMBER, CAMPO_MATRICULA
+    from app.airvault.config import CAMPO_LOG_NUMBER, CAMPO_MATRICULA, CAMPO_END_DATE
+    from app.airvault.mapping import fecha_airvault
 
     manifiesto_ = manifiesto()
     cliente = ClienteQueFalla(
         [2], paginas={
             numero: pagina(numero, estado=0, valores={
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+                CAMPO_END_DATE: fecha_airvault(manifiesto_.registros[numero - 1].fecha),
                 CAMPO_LOG_NUMBER: manifiesto_.registros[numero - 1].log_number,
                 CAMPO_MATRICULA: manifiesto_.registros[numero - 1].matricula,
             })

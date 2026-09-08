@@ -139,6 +139,10 @@ class Manifiesto(BaseModel):
     # pierde C_BatchName y publica ``Empty-Batch``, acota los candidatos que
     # despues se confirman por paginas y contenido.
     lotes_previos: List[str] = Field(default_factory=list)
+    # Mezclas identificadas por su contenido y apartadas antes de resubir.
+    batches_descartados: List[str] = Field(default_factory=list)
+    mezcla_pendiente: str = ""
+    resubir_por_mezcla: bool = False
     # Antes de considerar perdida una subida, varias revisiones completas
     # recorren nombres, cantidades y contenido. Solo al agotarlas empieza el
     # reloj de espera que eventualmente permite ofrecer una resubida.

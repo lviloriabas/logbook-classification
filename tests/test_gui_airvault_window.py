@@ -602,6 +602,75 @@ def parte(estado, nombre="DP | BITS", detalle="", carpeta="job", lote=None):
     )
 
 
+def cola_de_dos_ejecuciones(ventana):
+    from app.airvault.flujo import LISTO
+
+    actual = parte(LISTO, "Actual", carpeta="actual")
+    anterior = parte(LISTO, "Anterior", carpeta="anterior")
+    actual.trabajo.manifiesto.csv_origen = "C:/entregas/actual.csv"
+    anterior.trabajo.manifiesto.csv_origen = "C:/entregas/anterior.csv"
+    ventana.corrida_edit.setText(actual.trabajo.manifiesto.csv_origen)
+    ventana.lote_edit.setText("Actual")
+    ventana._trabajos = [anterior.trabajo, actual.trabajo]
+    ventana._estados = [anterior, actual]
+    ventana._estado["planes"] = {"actual": object(), "anterior": object()}
+    ventana._pintar_lotes()
+    return actual, anterior
+
+
+def test_filtrar_cola_conserva_correspondencia_de_filas_y_acciones(ventana):
+    actual, anterior = cola_de_dos_ejecuciones(ventana)
+    ventana.solo_ejecucion_check.setChecked(True)
+    assert ventana.lotes.rowCount() == 1
+    assert ventana.lotes.item(0, 1).text() == "Actual"
+    ventana.lotes.selectRow(0)
+    assert ventana._seleccionadas() == [actual]
+    assert ventana._elegidas(0) == [actual]
+    assert ventana._listos() == [actual.trabajo]
+    assert ventana._ejecucion() == [actual.trabajo]
+    assert [nombre for nombre, _registros in ventana._batches_de_la_cola()] == ["Actual"]
+    ventana.solo_ejecucion_check.setChecked(False)
+    assert ventana.lotes.rowCount() == 2
+    assert ventana._seleccionadas() == []
+    assert ventana._ejecucion() == [anterior.trabajo, actual.trabajo]
+
+
+@pytest.mark.parametrize("modo,clave", [
+    ("comprobar", "comprobar_trabajos"), ("indexar", "listos"),
+    ("completar", "por_completar"), ("resubir", "pendientes_subida"),
+])
+def test_acciones_en_espera_excluyen_batches_ocultos(ventana, monkeypatch, modo, clave):
+    actual, anterior = cola_de_dos_ejecuciones(ventana)
+    ventana.solo_ejecucion_check.setChecked(True)
+    llamadas = []
+    monkeypatch.setattr(ventana, "_lanzar", lambda modo, estado: llamadas.append((modo, dict(estado))))
+    assert ventana._ejecutar_accion(modo, [anterior.trabajo, actual.trabajo])
+    assert llamadas[0][1][clave] == [actual.trabajo]
+    assert llamadas[0][1]["trabajos"] == [actual.trabajo]
+    assert not ventana._ejecutar_accion(modo, [anterior.trabajo])
+    assert len(llamadas) == 1
+
+
+def test_subir_filtrado_no_recupera_ejecuciones_anteriores(ventana, monkeypatch):
+    actual, _anterior = cola_de_dos_ejecuciones(ventana)
+    ventana.solo_ejecucion_check.setChecked(True)
+    llamadas = []
+    monkeypatch.setattr(ventana, "_lanzar", lambda modo, estado: llamadas.append(dict(estado)))
+    ventana._subir_a_mano()
+    assert llamadas[0]["trabajos"] == [actual.trabajo]
+    assert llamadas[0]["recuperar_pendientes"] is False
+
+
+def test_actualizacion_filtrada_conserva_ocultos_sin_meterlos_en_el_worker(ventana):
+    actual, anterior = cola_de_dos_ejecuciones(ventana)
+    ventana.solo_ejecucion_check.setChecked(True)
+    ventana._al_actualizar_subidas({"trabajos": [actual.trabajo]})
+    assert ventana._estado["trabajos"] == [actual.trabajo]
+    assert anterior.trabajo in ventana._trabajos
+    ventana.solo_ejecucion_check.setChecked(False)
+    assert ventana.lotes.rowCount() == 2
+
+
 def test_subir_no_indexa_nada_y_dice_que_falta_esperar(ventana):
     """Subir y estar listo son cosas distintas: entre medias está AirVault."""
     ventana._al_subir({"trabajos": [TrabajoFalso()], "cliente": object()})

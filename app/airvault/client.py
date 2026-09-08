@@ -8,8 +8,9 @@ que se pueden probar sin red.
 
 from __future__ import annotations
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Protocol, Sequence
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Protocol, Sequence
 
 from loguru import logger
 
@@ -175,6 +176,49 @@ class ClienteHttp:
         self.config = config
 
     # ── batches ──────────────────────────────────────────────────────
+
+    def buscar_lotes(
+        self, nombres: Sequence[str],
+    ) -> Iterator[tuple[str, List[ResumenLote]]]:
+        """Entrega las consultas por nombre conforme terminan, con hasta cuatro conexiones.
+
+        Solo se paraleliza el listado. Abrir, identificar y modificar batches
+        sigue en el hilo del flujo, sin compartir una sesion HTTP entre hilos.
+        """
+        nombres = list(dict.fromkeys(nombres))
+        if len(nombres) < 2 or not callable(getattr(self.sesion, "clonar", None)):
+            for nombre in nombres:
+                yield nombre, self.listar_lotes(nombre)
+            return
+
+        def consultar(sesion, nombre):
+            try:
+                return ClienteHttp(sesion, self.config).listar_lotes(nombre)
+            finally:
+                sesion.http.close()
+
+        restantes = iter(nombres)
+        ejecutor = ThreadPoolExecutor(max_workers=4)
+        futuros = {}
+        try:
+            def enviar():
+                nombre = next(restantes, None)
+                if nombre is not None:
+                    # Clonar ocurre en el hilo propietario de la sesion.
+                    sesion = self.sesion.clonar()
+                    futuros[ejecutor.submit(consultar, sesion, nombre)] = nombre
+
+            for _ in range(min(4, len(nombres))):
+                enviar()
+            while futuros:
+                terminados, _ = wait(futuros, return_when=FIRST_COMPLETED)
+                for futuro in terminados:
+                    nombre = futuros.pop(futuro)
+                    resultado = futuro.result()
+                    enviar()
+                    yield nombre, resultado
+        finally:
+            ejecutor.shutdown(wait=True)
 
     def listar_lotes(self, filtro: str = "") -> List[ResumenLote]:
         """Lista los batches de la cola, opcionalmente filtrados por nombre.
@@ -442,7 +486,7 @@ class ClienteHttp:
         siquiera existe: ASP.NET contesta «The resource cannot be found»
         con un 404, que se leia como «esa pagina ya no esta en el batch».
         """
-        return self.sesion.post_json(
+        respuesta = self.sesion.post_json(
             "/index/FormsProcessing/SaveAndGetIndexFields",
             data={
                 "encodedBatchId": codificar_batch_id(batch_id),
@@ -456,6 +500,16 @@ class ClienteHttp:
                 "status": estado,
             },
         )
+        if isinstance(respuesta, Mapping) and str(
+            respuesta.get("IsError", "false")
+        ).strip().casefold() in ("true", "1"):
+            from app.airvault.session import ErrorDeAirVault
+
+            raise ErrorDeAirVault(
+                f"AirVault rechazo la pagina {pagina}: "
+                f"{respuesta.get('Message') or 'no confirmo el guardado'}"
+            )
+        return respuesta
 
     # ── catalogos ──────────────────────────────────────────────────
 

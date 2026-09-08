@@ -15,7 +15,9 @@ campos para Quick Upload, esta etapa podria cerrarlo todo de una vez.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
+from threading import RLock
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from loguru import logger
@@ -37,6 +39,27 @@ CAMPOS_QUICK_UPLOAD = {
 }
 
 TROZO_BYTES = 1024 * 1024
+_TURNO_CARGA = RLock()
+
+
+def serializar_cargas(funcion):
+    """Una sola carga de la aplicacion puede estar en vuelo, entre ventanas."""
+    @wraps(funcion)
+    def ejecutar(*args, **kwargs):
+        sesion = kwargs.get("sesion") or (args[1] if len(args) > 1 else None)
+        if args and isinstance(args[0], SubidorQuickUpload):
+            sesion = args[0].sesion
+        sesion = getattr(sesion, "sesion", sesion)
+        while not _TURNO_CARGA.acquire(timeout=0.25):
+            if getattr(sesion, "cancelada", False):
+                from app.airvault.session import SesionCancelada
+
+                raise SesionCancelada("Se cancelo esperando el turno de subida")
+        try:
+            return funcion(*args, **kwargs)
+        finally:
+            _TURNO_CARGA.release()
+    return ejecutar
 
 
 @dataclass(frozen=True)
@@ -90,6 +113,7 @@ class SubidorQuickUpload:
         self.sesion = sesion
         self.repo_id = repo_id
 
+    @serializar_cargas
     def subir(
         self, ruta: Path | str, valores: Mapping[int, str],
         avisar: Optional[Callable[[str, int, int], None]] = None,

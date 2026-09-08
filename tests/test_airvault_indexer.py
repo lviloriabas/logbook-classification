@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.airvault.config import (
+    CAMPOS_OBLIGATORIOS,
     CAMPO_AUDIT_STATUS,
     CAMPO_DESCRIPCION,
     CAMPO_END_DATE,
@@ -45,6 +46,65 @@ def test_plan_no_escribe_nada():
     cliente = ClienteFalso(page_count=2)
     Indexador(cliente, manifiesto(), PICKLIST).planificar(2)
     assert cliente.escrituras == []
+
+
+@pytest.mark.parametrize("fecha", ["", "08/30/2026", "02/31/2026"])
+def test_verificar_no_da_por_buena_una_fecha_ausente_o_distinta(fecha):
+    cli = ClienteFalso(paginas={1: pagina(1, estado=0, valores={
+        CAMPO_LOG_NUMBER: "2287321", CAMPO_MATRICULA: "HP-1848CMP",
+        CAMPO_END_DATE: fecha,
+    })})
+    validas, total, problemas = verificar_lote(cli, manifiesto(1))
+    assert (validas, total) == (0, 1)
+    assert any("fecha guardada" in p for p in problemas)
+
+
+@pytest.mark.parametrize("fecha", ["08/31/2026", "8/31/2026 00:00:00", "2026-08-31T00:00:00"])
+def test_verificar_acepta_la_misma_fecha_en_las_respuestas_de_airvault(fecha):
+    from app.airvault.config import CAMPO_DOC_TYPE, CAMPO_FLEET, CAMPO_AUDIT_STATUS
+    cli = ClienteFalso(paginas={1: pagina(1, estado=0, valores={
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+        CAMPO_LOG_NUMBER: "2287321", CAMPO_MATRICULA: "HP-1848CMP",
+        CAMPO_END_DATE: fecha,
+    })})
+    assert verificar_lote(cli, manifiesto(1)) == (1, 1, [])
+
+
+def test_repara_fecha_vacia_sin_cambiar_los_campos_remotos():
+    m = manifiesto(1)
+    cli = ClienteFalso(paginas={1: pagina(1, estado=0, valores={
+        CAMPO_LOG_NUMBER: "2287321", CAMPO_MATRICULA: "HP-1848CMP",
+        CAMPO_END_DATE: "", CAMPO_AUDIT_STATUS: "Conservado",
+    })}, page_count=1)
+    indexador = Indexador(cli, m, PICKLIST)
+    plan = indexador.planificar(1)
+    assert len(plan.escribibles) == 1
+    indexador.aplicar(plan)
+    assert cli.escrituras[0][1][CAMPO_END_DATE] == "08/31/2026"
+    assert cli.escrituras[0][1][CAMPO_AUDIT_STATUS] == "Conservado"
+    assert verificar_lote(cli, m) == (1, 1, [])
+
+
+def test_no_repara_fecha_si_el_log_remoto_pertenece_a_otra_bitacora():
+    cli = ClienteFalso(paginas={1: pagina(1, estado=0, valores={
+        CAMPO_LOG_NUMBER: "9999999", CAMPO_MATRICULA: "HP-1848CMP",
+        CAMPO_END_DATE: "",
+    })}, page_count=1)
+    indexador = Indexador(cli, manifiesto(1), PICKLIST)
+    assert not indexador.planificar(1).escribibles
+
+
+@pytest.mark.parametrize("campo", CAMPOS_OBLIGATORIOS)
+def test_una_pagina_sin_obligatorio_no_cuenta_como_indexada(campo):
+    from app.airvault.mapping import valores_de_indice
+
+    m = manifiesto(1)
+    valores = valores_de_indice(m.registros[0], m.doc_type, m.audit_status)
+    valores.pop(campo)
+    cli = ClienteFalso(paginas={1: pagina(1, estado=0, valores=valores)})
+    validas, total, problemas = verificar_lote(cli, m)
+    assert (validas, total) == (0, 1)
+    assert any("faltan datos obligatorios" in p for p in problemas)
 
 
 def test_lote_con_otra_cantidad_de_paginas_corta():
@@ -90,7 +150,7 @@ def test_otro_avion_en_el_libro_bloquea_las_paginas_que_lo_contradicen():
 def test_el_avion_que_airvault_confirma_no_bloquea_nada():
     cliente = ClienteFalso(
         paginas={1: pagina(1, estado=ESTADO_VALIDO, valores={
-            CAMPO_LOG_NUMBER: "2287321",
+            CAMPO_END_DATE: "08/31/2026", CAMPO_LOG_NUMBER: "2287321",
             CAMPO_MATRICULA: "HP-1848CMP",
         })},
         page_count=2,
@@ -324,13 +384,16 @@ def test_sin_lote_no_se_planifica():
 
 
 def test_verificar_cuenta_las_validas():
+    from app.airvault.config import CAMPO_DOC_TYPE, CAMPO_FLEET, CAMPO_AUDIT_STATUS
     cliente = ClienteFalso(
         paginas={
             1: pagina(1, estado=ESTADO_VALIDO, valores={
-                CAMPO_LOG_NUMBER: "2287321", CAMPO_MATRICULA: "HP-1848CMP",
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+                CAMPO_END_DATE: "08/31/2026", CAMPO_LOG_NUMBER: "2287321", CAMPO_MATRICULA: "HP-1848CMP",
             }),
             2: pagina(2, estado=3, valores={
-                CAMPO_LOG_NUMBER: "2287322", CAMPO_MATRICULA: "HP-1848CMP",
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+                CAMPO_END_DATE: "08/31/2026", CAMPO_LOG_NUMBER: "2287322", CAMPO_MATRICULA: "HP-1848CMP",
             }),
         },
         page_count=2,

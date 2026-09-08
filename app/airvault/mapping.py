@@ -37,7 +37,7 @@ _FECHA_CSV_RE = re.compile(r"^(\d{4})/(\d{2})/(\d{2})$")
 # Como vuelve una fecha leida de AirVault: la que se escribio, o el ISO que
 # entrega alguna de sus vistas. La hora que a veces acompana no estorba.
 _FECHA_AIRVAULT_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(20\d{2})\b")
-_FECHA_ISO_RE = re.compile(r"^(20\d{2})-(\d{2})-(\d{2})\b")
+_FECHA_ISO_RE = re.compile(r"^(20\d{2})-(\d{2})-(\d{2})(?=$|[Tt\s])")
 # Sufijo con el que se numera un nombre repetido al apartar la entrada a
 # «input/processed» (``bitacora-2.pdf``).
 _SUFIJO_DE_COPIA_RE = re.compile(r"^(?P<base>.+)-\d+$")
@@ -76,6 +76,10 @@ def fecha_airvault(fecha_csv: str) -> str:
     if not match:
         return ""
     anio, mes, dia = match.groups()
+    try:
+        date(int(anio), int(mes), int(dia))
+    except ValueError:
+        return ""
     return f"{mes}/{dia}/{anio}"
 
 

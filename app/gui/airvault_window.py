@@ -727,6 +727,15 @@ class TrabajoAirVaultWorker(QThread):
             else estado["trabajos"]
         )
         estados = comprobar_partes(trabajos, cliente, avisar=self._avisar)
+        from app.airvault.flujo import DESCUADRADO
+        from app.airvault.mezclas import recuperar_mezclas
+
+        if any(p.estado == DESCUADRADO or p.trabajo.manifiesto.mezcla_pendiente for p in estados):
+            if recuperar_mezclas(trabajos, cliente, self._avisar):
+                estados = comprobar_partes(trabajos, cliente, avisar=self._avisar)
+        recuperados = [
+            t for t in trabajos if t.manifiesto.resubir_por_mezcla
+        ]
 
         # Cada revision vuelve a leer las paginas. Asi se reconocen batches
         # indexados a mano y un plan calculado antes de esa intervencion no
@@ -779,6 +788,7 @@ class TrabajoAirVaultWorker(QThread):
         ]
         self.comprobado.emit({
             "estados": estados, "planes": planes, "partes": partes,
+            "recuperados": recuperados,
             "cliente": cliente,
             "acotado": seleccionados is not None,
         })
@@ -849,6 +859,10 @@ class TrabajoAirVaultWorker(QThread):
                         self.estado.setdefault("planes", {})[
                             str(trabajo.carpeta)
                         ] = plan
+            if validas != total:
+                resultado.detalles.extend(_problemas)
+                for problema in _problemas[:5]:
+                    self._avisar(problema, 0, 0)
             if completar and validas == total:
                 cierres = completar_partes(
                     trabajos, cliente, avisar=self._avisar, automatico=True
@@ -1048,6 +1062,12 @@ class AirVaultWindow(QDialog):
         # la cola de batches, que es lo que se mira mientras trabaja.
         cuerpo.addWidget(self._historial())
         cuerpo.addLayout(self._campos())
+        self.solo_ejecucion_check = QCheckBox("Mostrar solo la ejecución seleccionada")
+        self.solo_ejecucion_check.setToolTip(
+            "Limita la cola y sus acciones a los batches de la ejecución seleccionada."
+        )
+        self.solo_ejecucion_check.toggled.connect(self._al_filtrar_ejecucion)
+        cuerpo.addWidget(self.solo_ejecucion_check)
         cuerpo.addLayout(self._cabecera_de_lotes())
         cuerpo.addWidget(self._lotes(), 1)
         cuerpo.addWidget(self._respuesta_de_la_busqueda())
@@ -1485,7 +1505,7 @@ class AirVaultWindow(QDialog):
                 parte.nombre or "(sin nombre)",
                 parte.trabajo.manifiesto.registros,
             )
-            for parte in self._estados
+            for parte in self._partes_en_cola()
         ]
 
     def _buscar_bitacora(self) -> None:
@@ -1591,7 +1611,7 @@ class AirVaultWindow(QDialog):
         se están mirando.
         """
         fila = self.lotes.rowAt(punto.y())
-        if fila < 0 or fila >= len(self._estados):
+        if fila < 0 or fila >= len(self._partes_en_cola()):
             return
         menu = self._acciones_de_la_cola(self._elegidas(fila))
         menu.exec(self.lotes.viewport().mapToGlobal(punto))
@@ -1606,8 +1626,8 @@ class AirVaultWindow(QDialog):
             self.lotes.selectRow(fila)
             filas = [fila]
         return [
-            self._estados[numero] for numero in filas
-            if numero < len(self._estados)
+            self._partes_en_cola()[numero] for numero in filas
+            if numero < len(self._partes_en_cola())
         ]
 
     def _seleccionadas(self) -> list:
@@ -1617,8 +1637,8 @@ class AirVaultWindow(QDialog):
             return []
         filas = sorted({indice.row() for indice in seleccion.selectedRows()})
         return [
-            self._estados[fila] for fila in filas
-            if fila < len(self._estados)
+            self._partes_en_cola()[fila] for fila in filas
+            if fila < len(self._partes_en_cola())
         ]
 
     def _actualizar_eliminar_seleccionados(self) -> None:
@@ -1865,6 +1885,9 @@ class AirVaultWindow(QDialog):
 
     def _ejecutar_accion(self, modo: str, trabajos) -> bool:
         """Prepara el estado que pide cada modo y arranca el hilo."""
+        trabajos = self._filtrar_trabajos(trabajos)
+        if not trabajos:
+            return False
         estado = self._base_del_estado()
         if estado is None:
             return False
@@ -2913,6 +2936,10 @@ class AirVaultWindow(QDialog):
         trabajos, esté o no su ejecución en el historial.
         """
         texto = str(corrida).strip()
+        if not texto and self.solo_ejecucion_check.isChecked():
+            texto = self.corrida_edit.text().strip()
+            if not texto:
+                return
         individual = bool(texto)
         if individual:
             carpeta = self._carpeta_del_registro(texto)
@@ -3125,6 +3152,37 @@ class AirVaultWindow(QDialog):
 
     # ── la lista de batches ──────────────────────────────────────────
 
+    def _filtrar_trabajos(self, trabajos) -> list:
+        if not self.solo_ejecucion_check.isChecked():
+            return list(trabajos)
+        return [
+            trabajo for trabajo in trabajos
+            if self._es_la_ejecucion_abierta(trabajo.manifiesto.csv_origen)
+        ]
+
+    def _partes_en_cola(self) -> list:
+        visibles = {id(t) for t in self._filtrar_trabajos(
+            parte.trabajo for parte in self._estados
+        )}
+        return [parte for parte in self._estados if id(parte.trabajo) in visibles]
+
+    def _al_filtrar_ejecucion(self, _marcado: bool) -> None:
+        self._pintar_lotes()
+        self._ajustar_vigilancia()
+        self._habilitar(self.hilo() is None)
+
+    def _recibir_trabajos(self, trabajos) -> None:
+        """Conserva las ejecuciones ocultas cuando termina una accion filtrada."""
+        nuevos = list(trabajos)
+        if self.solo_ejecucion_check.isChecked():
+            claves = {str(t.carpeta) for t in nuevos}
+            nuevos.extend(
+                t for t in self._trabajos
+                if not self._es_la_ejecucion_abierta(t.manifiesto.csv_origen)
+                and str(t.carpeta) not in claves
+            )
+        self._trabajos = nuevos
+
     def _pintar_lotes(self) -> None:
         """Vuelca en la tabla en qué va cada batch."""
         from app.airvault.flujo import (
@@ -3134,7 +3192,7 @@ class AirVaultWindow(QDialog):
 
         tabla = self.lotes
         tabla.setRowCount(0)
-        for parte in self._estados:
+        for parte in self._partes_en_cola():
             fila = tabla.rowCount()
             tabla.insertRow(fila)
             nombre = parte.nombre or "(sin nombre)"
@@ -3185,7 +3243,7 @@ class AirVaultWindow(QDialog):
         """Partes que ya se pueden escribir y tienen su plan calculado."""
         planes = self._estado.get("planes") or {}
         return [
-            parte.trabajo for parte in self._estados
+            parte.trabajo for parte in self._partes_en_cola()
             if parte.se_puede_indexar and str(parte.trabajo.carpeta) in planes
         ]
 
@@ -3194,7 +3252,7 @@ class AirVaultWindow(QDialog):
         from app.airvault.flujo import INDEXADO
 
         return [
-            parte.trabajo for parte in self._estados
+            parte.trabajo for parte in self._partes_en_cola()
             if parte.estado == INDEXADO and not parte.trabajo.manifiesto.solo_subir
         ]
 
@@ -3205,7 +3263,7 @@ class AirVaultWindow(QDialog):
         siguientes, ya indexadas, las que demuestran que AirVault pasó de
         largo. Ninguna regla puede decidirlo mirando una sola fila.
         """
-        return [parte.trabajo for parte in self._estados]
+        return [parte.trabajo for parte in self._partes_en_cola()]
 
     def _falta_esperar(self) -> bool:
         """Si queda algún batch que AirVault todavía no ha terminado.
@@ -3229,7 +3287,7 @@ class AirVaultWindow(QDialog):
             not parte.se_acabo
             and not parte.se_puede_indexar
             and parte.estado != POSIBLE_DUPLICADO
-            for parte in self._estados
+            for parte in self._partes_en_cola()
         )
 
     def _subidas_perdidas(self) -> list:
@@ -3242,7 +3300,7 @@ class AirVaultWindow(QDialog):
 
         ejecucion = self._ejecucion()
         return [
-            parte for parte in self._estados
+            parte for parte in self._partes_en_cola()
             if subida_perdida(parte, ejecucion)
         ]
 
@@ -3258,7 +3316,7 @@ class AirVaultWindow(QDialog):
         if not self.auto_check.isChecked():
             return []
         return [
-            trabajo for trabajo in partes_por_subir(self._estados)
+            trabajo for trabajo in partes_por_subir(self._partes_en_cola())
             if str(trabajo.carpeta) not in self._subidas_del_ciclo
         ]
 
@@ -3284,7 +3342,7 @@ class AirVaultWindow(QDialog):
         delante sabe más que él. Si ya miró y el batch no está, no tiene por
         qué esperar a que venza ningún reloj.
         """
-        if not any(parte.se_puede_subir for parte in self._estados):
+        if not any(parte.se_puede_subir for parte in self._partes_en_cola()):
             return ""
         return (
             " Si ya miró la cola de AirVault y el batch no está, no espere: "
@@ -3461,7 +3519,9 @@ class AirVaultWindow(QDialog):
             "recuperar_pendientes": self._recuperar_pendientes,
         })
         self._recuperar_pendientes = False
-        self._estado.setdefault("trabajos", self._trabajos)
+        self._estado["trabajos"] = self._filtrar_trabajos(self._trabajos)
+        if self.solo_ejecucion_check.isChecked():
+            self._estado["recuperar_pendientes"] = False
         return self._estado
 
     def _subir_a_mano(self) -> None:
@@ -3499,7 +3559,7 @@ class AirVaultWindow(QDialog):
         # camino de recuperacion para trabajos que quedaron a medias.
         if any(
             not trabajo.manifiesto.etapa_hecha("subir")
-            for trabajo in self._trabajos
+            for trabajo in self._filtrar_trabajos(self._trabajos)
         ):
             self._continuar_pendiente()
             return
@@ -3529,12 +3589,12 @@ class AirVaultWindow(QDialog):
         estado = self._base_del_estado()
         if estado is None:
             return
-        if not self._trabajos:
+        if not self._filtrar_trabajos(self._trabajos):
             self._indexar_al_terminar = self._opciones.indexar
             self._comprobar()
             return
         pendientes_subida = [
-            trabajo for trabajo in self._trabajos
+            trabajo for trabajo in self._filtrar_trabajos(self._trabajos)
             if not trabajo.manifiesto.etapa_hecha("subir")
         ]
         if pendientes_subida:
@@ -3570,9 +3630,9 @@ class AirVaultWindow(QDialog):
 
         filas = self.lotes.selectionModel().selectedRows()
         objetivos = (
-            [self._estados[filas[0].row()].trabajo]
-            if filas and filas[0].row() < len(self._estados)
-            else list(self._trabajos)
+            [self._partes_en_cola()[filas[0].row()].trabajo]
+            if filas and filas[0].row() < len(self._partes_en_cola())
+            else self._filtrar_trabajos(self._trabajos)
         )
         reiniciados = reiniciar_trabajos_incompletos(objetivos)
         if not reiniciados:
@@ -3596,6 +3656,14 @@ class AirVaultWindow(QDialog):
     def _lanzar(self, modo: str, estado: dict) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
+        if self.solo_ejecucion_check.isChecked():
+            estado["recuperar_pendientes"] = False
+            for clave in (
+                "trabajos", "listos", "por_completar", "pendientes_subida",
+                "comprobar_trabajos",
+            ):
+                if clave in estado:
+                    estado[clave] = self._filtrar_trabajos(estado[clave])
         if modo != "resubir":
             # El estado se reusa de una acción a la siguiente. Sin borrar
             # esto, una orden expresa dejaría a la reanudación automática
@@ -3627,6 +3695,7 @@ class AirVaultWindow(QDialog):
         self._publicar_avance()
 
     def _habilitar(self, activo: bool) -> None:
+        self.solo_ejecucion_check.setEnabled(activo)
         # La ejecución de esta ventana no cambia mientras trabaja. El
         # historial y «Otra ejecución» siguen disponibles: elegir otra emite
         # una solicitud para abrirla en su propia ventana y su propio hilo.
@@ -3757,8 +3826,8 @@ class AirVaultWindow(QDialog):
         """Actualiza el estado interno antes de buscar los IDs."""
         from app.airvault.flujo import estado_local
 
-        self._trabajos = list(datos["trabajos"])
-        self._estado["trabajos"] = self._trabajos
+        self._recibir_trabajos(datos["trabajos"])
+        self._estado["trabajos"] = self._filtrar_trabajos(self._trabajos)
         self._estados = [estado_local(t) for t in self._trabajos]
         self._pintar_lotes()
 
@@ -3766,8 +3835,8 @@ class AirVaultWindow(QDialog):
         """Muestra el ID apenas se resuelve, sin esperar las otras búsquedas."""
         from app.airvault.flujo import estado_local
 
-        self._trabajos = list(datos["trabajos"])
-        self._estado["trabajos"] = self._trabajos
+        self._recibir_trabajos(datos["trabajos"])
+        self._estado["trabajos"] = self._filtrar_trabajos(self._trabajos)
         remoto = datos["estado"]
         self._estados = [estado_local(t) for t in self._trabajos]
         clave = str(remoto.trabajo.carpeta)
@@ -3804,10 +3873,10 @@ class AirVaultWindow(QDialog):
         # dejó de fallar.
         self._fallos_seguidos = 0
         self._estado["planes"] = datos["planes"]
-        self._trabajos = list(self._estado.get("trabajos") or self._trabajos)
+        self._recibir_trabajos(self._estado.get("trabajos") or self._trabajos)
         acotado = bool(datos.get("acotado"))
         revisados = list(datos["estados"])
-        if acotado:
+        if acotado or self.solo_ejecucion_check.isChecked():
             por_carpeta = {
                 str(parte.trabajo.carpeta): parte for parte in revisados
             }
@@ -3840,7 +3909,9 @@ class AirVaultWindow(QDialog):
         # para siempre mientras el reloj seguía consultando por él. Lo que
         # sí llegó y AirVault no publicó no entra aquí: eso se avisa y lo
         # manda quien mire Web Index.
-        sin_subir = [] if acotado else self._sin_subir_todavia()
+        sin_subir = self._filtrar_trabajos(datos.get("recuperados") or [])
+        if not sin_subir and not acotado:
+            sin_subir = self._sin_subir_todavia()
         if sin_subir:
             self._estado["pendientes_subida"] = sin_subir
             self._estado["indexar_al_encontrar"] = self._opciones.indexar
@@ -3953,11 +4024,18 @@ class AirVaultWindow(QDialog):
             return
         if datos.get("incompleto"):
             self._indexado_incompleto = True
+            motivo = next(
+                (d for d in resultado.detalles
+                 if "fecha" in d.casefold() or "end date" in d.casefold()
+                 or "obligatorios" in d.casefold()),
+                resultado.detalles[-1] if resultado.detalles else "",
+            )
             self.resumen.setText(
                 cuenta
                 + " Aún hay páginas amarillas. Se reintentaron en esta "
                 "ejecución y el proceso queda disponible para continuar "
                 "sin repetir las páginas verdes."
+                + (f" Motivo: {motivo}" if motivo else "")
             )
             self.estado_label.setText("Indexado incompleto")
             self._anotar("Indexado incompleto; quedan páginas pendientes")

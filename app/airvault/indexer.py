@@ -15,6 +15,9 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence
 from loguru import logger
 
 from app.airvault.config import (
+    CAMPO_END_DATE,
+    CAMPOS_OBLIGATORIOS,
+    nombre_campo,
     CAMPO_DESCRIPCION,
     CAMPO_FLEET,
     CAMPO_LESSOR,
@@ -36,7 +39,9 @@ from app.airvault.guards import (
     verificar_no_pisar,
     verificar_obligatorios,
 )
-from app.airvault.mapping import ResolutorFlota, valores_de_indice
+from app.airvault.mapping import (
+    ResolutorFlota, fecha_airvault, fecha_desde_airvault, valores_de_indice,
+)
 from app.airvault.model import EstadoRegistro, Manifiesto, Registro
 from app.airvault.session import (
     ErrorDeAirVault,
@@ -268,6 +273,7 @@ class Indexador:
             ))
 
             remota = remotas.get(registro.seq)
+            reparar_fecha = False
             if remota is None:
                 avisos.append(Aviso(
                     registro.seq, "no_cargo",
@@ -282,11 +288,27 @@ class Indexador:
                 work_location = str(
                     remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
                 ).strip()
+                # Solo se recupera una fecha ausente si log y avion confirman
+                # la identidad. Una fecha existente conserva la guarda habitual.
+                reparar_fecha = bool(
+                    remota.estado == ESTADO_VALIDO
+                    and valores.get(CAMPO_END_DATE)
+                    and not str(remota.valores.get(CAMPO_END_DATE, "") or "").strip()
+                    and str(remota.valores.get(CAMPO_LOG_NUMBER, "")).strip()
+                    == registro.log_number
+                    and str(remota.valores.get(CAMPO_MATRICULA, "")).strip().upper()
+                    == registro.matricula.upper()
+                )
+                if reparar_fecha:
+                    valores = {
+                        **valores, **remota.valores,
+                        CAMPO_END_DATE: valores[CAMPO_END_DATE],
+                    }
                 # Incluso una pagina Valid se vuelve a guardar si AirVault
                 # lleno Work Location. Es el unico caso en que se toca una
                 # pagina verde sin pedir sobrescritura: el flujo exige ese
                 # campo vacio y el payload conserva el resto de sus datos.
-                if not (remota.estado == ESTADO_VALIDO and work_location):
+                if not (remota.estado == ESTADO_VALIDO and work_location) and not reparar_fecha:
                     avisos.extend(verificar_no_pisar(
                         registro, remota.estado, self.sobrescribir
                     ))
@@ -300,6 +322,7 @@ class Indexador:
                 ya_indexada=(
                     remota is not None
                     and remota.estado == ESTADO_VALIDO
+                    and not reparar_fecha
                     and not str(
                         remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
                     ).strip()
@@ -568,6 +591,27 @@ def verificar_lote(
             remota.valores.get(CAMPO_MATRICULA, "") or ""
         ).strip().upper()
         identidad_correcta = True
+        faltantes = [
+            campo for campo in CAMPOS_OBLIGATORIOS
+            if not str(remota.valores.get(campo, "") or "").strip()
+        ]
+        if faltantes:
+            problemas.append(
+                f"pagina {pagina}: faltan datos obligatorios en AirVault: "
+                + ", ".join(nombre_campo(campo) for campo in faltantes)
+            )
+        fecha_esperada = fecha_desde_airvault(fecha_airvault(registro.fecha))
+        fecha_remota = fecha_desde_airvault(remota.valores.get(CAMPO_END_DATE))
+        fecha_correcta = bool(
+            fecha_esperada and not registro.fecha_dudosa
+            and fecha_remota == fecha_esperada
+        )
+        if not fecha_correcta:
+            problemas.append(
+                f"pagina {pagina}: fecha guardada "
+                f"{fecha_remota or '(vacia o no reconocida)'}; "
+                f"se esperaba {fecha_esperada or '(sin fecha confirmada)'}"
+            )
         if log_remoto != registro.log_number:
             identidad_correcta = False
             problemas.append(
@@ -587,7 +631,7 @@ def verificar_lote(
                 problemas.append(
                     f"pagina {pagina}: Work Location no quedo vacio"
                 )
-            if not work_location and identidad_correcta:
+            if not work_location and identidad_correcta and fecha_correcta and not faltantes:
                 validas += 1
         else:
             problemas.append(

@@ -61,6 +61,7 @@ from app.airvault.flujo import (
     subida_rebasada,
     subir_partes,
 )
+from app.airvault.mapping import fecha_airvault
 from app.airvault.model import EstadoEtapa, EstadoRegistro
 from tests.airvault_fake import ClienteFalso, lote, pagina
 
@@ -231,6 +232,7 @@ def test_el_lote_encontrado_queda_anotado_y_con_su_nombre(tmp_path):
 def test_sin_registro_recupera_por_nombre_y_detecta_el_indexado(
     tmp_path, monkeypatch,
 ):
+    from app.airvault.config import CAMPO_DOC_TYPE, CAMPO_FLEET, CAMPO_AUDIT_STATUS
     """Un manifiesto reconstruido no autoriza otra carga del mismo PDF."""
     csv = corrida(tmp_path)
     carpeta = tmp_path / "registro-reconstruido"
@@ -242,6 +244,8 @@ def test_sin_registro_recupera_por_nombre_y_detecta_el_indexado(
             registro.seq,
             estado=0,
             valores={
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+                CAMPO_END_DATE: fecha_airvault(registro.fecha),
                 CAMPO_LOG_NUMBER: registro.log_number,
                 CAMPO_MATRICULA: registro.matricula,
             },
@@ -272,6 +276,7 @@ def test_sin_registro_recupera_por_nombre_y_detecta_el_indexado(
 
 
 def test_revisar_detecta_paginas_completadas_a_mano(tmp_path):
+    from app.airvault.config import CAMPO_DOC_TYPE, CAMPO_FLEET, CAMPO_AUDIT_STATUS
     trabajo, cliente = trabajo_subido(tmp_path)
     trabajo.fijar_lote("003SRO")
     trabajo.manifiesto.etapa("verificar").marcar(
@@ -282,6 +287,8 @@ def test_revisar_detecta_paginas_completadas_a_mano(tmp_path):
             registro.seq,
             estado=0,
             valores={
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+                CAMPO_END_DATE: fecha_airvault(registro.fecha),
                 CAMPO_LOG_NUMBER: registro.log_number,
                 CAMPO_MATRICULA: registro.matricula,
             },
@@ -299,6 +306,7 @@ def test_revisar_detecta_paginas_completadas_a_mano(tmp_path):
 def test_worker_de_revision_descarta_el_plan_anterior_al_indexado_manual(
     tmp_path,
 ):
+    from app.airvault.config import CAMPO_DOC_TYPE, CAMPO_FLEET, CAMPO_AUDIT_STATUS
     from app.gui.airvault_window import TrabajoAirVaultWorker
 
     trabajo, cliente = trabajo_subido(tmp_path)
@@ -311,6 +319,8 @@ def test_worker_de_revision_descarta_el_plan_anterior_al_indexado_manual(
             registro.seq,
             estado=0,
             valores={
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+                CAMPO_END_DATE: fecha_airvault(registro.fecha),
                 CAMPO_LOG_NUMBER: registro.log_number,
                 CAMPO_MATRICULA: registro.matricula,
             },
@@ -966,6 +976,58 @@ def test_el_estado_local_no_le_pregunta_nada_a_airvault(tmp_path):
     assert "falta comprobar" in parte.detalle
 
 
+def test_busqueda_amplia_no_inspecciona_batches_ya_indexados(tmp_path):
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    terminado, pendiente, _ = trabajos
+    terminado.fijar_lote("003VIEJO")
+    terminado.manifiesto.etapa("verificar").marcar(EstadoEtapa.HECHA, "2/2 en Valid")
+    pendiente.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, "parte.pdf")
+    pendiente.manifiesto.lotes_previos = ["003OTRO"]
+    cliente = ClienteFalso(lotes=[lote("003VIEJO", "Empty-Batch", 2)])
+
+    def no_abrir(*args):
+        pytest.fail("No debe inspeccionar el batch ya indexado")
+
+    cliente.abrir_lote = no_abrir
+    estados = comprobar_partes([terminado, pendiente], cliente)
+    assert estados[0].estado == INDEXADO
+    assert terminado.manifiesto.batch_id == "003VIEJO"
+    assert terminado.manifiesto.nombre_batch not in cliente.filtros
+    assert "" in cliente.filtros
+
+
+def test_reconciliar_no_busca_verificados_sin_id(tmp_path, monkeypatch):
+    trabajo, cliente = trabajo_subido(tmp_path)
+    trabajo.manifiesto.etapa("verificar").marcar(EstadoEtapa.HECHA, "2/2 en Valid")
+
+    def no_identificar(*args, **kwargs):
+        pytest.fail("Un trabajo verificado no vuelve a buscarse por contenido")
+
+    monkeypatch.setattr("app.airvault.flujo._lote_por_identidad_y_contenido", no_identificar)
+    assert _reconciliar_batches([trabajo], cliente, cliente.lotes) == 0
+
+
+def test_consultas_fuera_de_orden_conservan_el_orden_de_las_partes(tmp_path):
+    trabajos = _trabajos_principal_division_y_revisar(tmp_path)
+    cliente = ClienteFalso(lotes=[
+        lote("003PRI", "DP | BIT", 2),
+        lote("003DOS", "DP | BIT -2", 2),
+        lote("003REV", "DP | BIT REVISAR", 2),
+    ])
+    nombres = [trabajo.manifiesto.nombre_batch for trabajo in trabajos]
+
+    def buscar(pedidos):
+        assert pedidos == nombres
+        for nombre in reversed(pedidos):
+            yield nombre, cliente.listar_lotes(nombre)
+
+    cliente.buscar_lotes = buscar
+    estados = comprobar_partes(trabajos, cliente)
+    assert [estado.trabajo for estado in estados] == trabajos
+    assert [estado.batch_id for estado in estados] == ["003PRI", "003DOS", "003REV"]
+    assert cliente.filtros == list(reversed(nombres))
+
+
 def test_revisar_subido_sigue_esperando_hasta_que_tenga_id(tmp_path):
     revisar = _trabajos_principal_division_y_revisar(tmp_path)[2]
     revisar.manifiesto.etapa("subir").marcar(
@@ -1153,6 +1215,29 @@ def test_el_worker_reintenta_una_pagina_que_airvault_deja_amarilla(tmp_path):
 
 class SesionFalsa:
     """Se traga la subida sin red."""
+
+
+def test_worker_reenvia_la_fecha_si_airvault_no_la_conservo(tmp_path):
+    from app.gui.airvault_window import TrabajoAirVaultWorker
+
+    class PierdeFecha(ClienteFalso):
+        def guardar_pagina(self, batch_id, numero, valores, estado, siguiente=None):
+            respuesta = super().guardar_pagina(batch_id, numero, valores, estado, siguiente)
+            if len(self.escrituras) == 1:
+                guardados = dict(valores)
+                guardados.pop(CAMPO_END_DATE)
+                self.paginas[numero] = pagina(numero, estado=0, valores=guardados)
+            return respuesta
+
+    trabajo, base = trabajo_subido(tmp_path)
+    trabajo.fijar_lote("003SRO")
+    cli = PierdeFecha(paginas=base.paginas, picklist=base.picklist, page_count=2)
+    plan = trabajo.planificar(cli)
+    worker = TrabajoAirVaultWorker("indexar", {"tanda_hecha": True})
+    datos = worker._ejecutar_indexado([trabajo], [plan], cli)
+    assert datos["validas"] == datos["total"] == 2
+    assert [p for p, _v, _e in cli.escrituras] == [1, 2, 1]
+    assert cli.escrituras[-1][1][CAMPO_END_DATE] == "08/12/2026"
 
 
 # ── la orden de subir dada a mano ──────────────────────────────────
