@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from app.airvault import correcciones as modulo_correcciones
 from app.airvault.config import AirVaultConfig
 from app.airvault.correcciones import (
     ACCION_BORRAR,
     ACCION_REINDEXAR,
     ACCION_REVISAR,
+    CorrectorLogPageAudit,
+    _NavegadorDeCorrecciones,
     copias_en,
     planificar,
     por_antiguedad,
@@ -113,8 +118,8 @@ def test_el_resumen_cuenta_copias_y_paginas_por_separado() -> None:
 
     # Tres copias sobrantes (2 + 1) de dos bitácoras, y una reindexada.
     assert "borrar 3 copias sobrantes de 2 bitácoras" in texto
-    assert "reindexar 1 páginas" in texto
-    assert "Quedan 1 casos para revisar" in texto
+    assert "reindexar 1 página mal indexada" in texto
+    assert "Queda 1 caso para revisar" in texto
 
 
 def test_sin_nada_que_corregir_el_resumen_lo_dice() -> None:
@@ -186,3 +191,194 @@ def test_cada_copia_se_queda_con_el_identificador_de_su_fila() -> None:
 
     assert se_queda.identificador == "231"
     assert [copia.identificador for copia in sobran] == ["884", "907"]
+
+
+def test_el_corrector_conserva_las_filas_con_identificador() -> None:
+    """El navegador entrega diccionarios, no listas de celdas sueltas."""
+    rejilla = [
+        {"id": "", "celdas": ["Log Page", "Aircraft", "Scan Date"]},
+        {
+            "id": "884",
+            "celdas": ["2008159", "HP-9913CMP", "3/14/2025"],
+        },
+    ]
+
+    class _PaginaFalsa:
+        def esperar(self, _condicion, _segundos):
+            return True
+
+        def evaluar(self, _expresion):
+            return rejilla
+
+    leida = CorrectorLogPageAudit._rejilla(_PaginaFalsa())
+
+    assert leida == rejilla
+    assert copias_en(leida, "2008159")[0].identificador == "884"
+
+
+def test_una_rejilla_con_identificadores_llega_hasta_el_borrado() -> None:
+    correccion = planificar(
+        _excepciones(("HP-9913CMP", "DUPLICATED 2008159(2x)"))
+    )[0]
+    antes = [
+        {"id": "", "celdas": ["Log Page", "Aircraft", "Scan Date"]},
+        {
+            "id": "vieja",
+            "celdas": ["2008159", "HP-9913CMP", "1/9/2025"],
+        },
+        {
+            "id": "nueva",
+            "celdas": ["2008159", "HP-9913CMP", "3/14/2025"],
+        },
+    ]
+    despues = antes[:2]
+
+    class _PaginaFalsa:
+        lecturas = 0
+
+        def esperar(self, _condicion, _segundos):
+            return True
+
+        def evaluar(self, expresion):
+            if expresion == modulo_correcciones._LEER_REJILLA:
+                self.lecturas += 1
+                return antes if self.lecturas == 1 else despues
+            return "OK"
+
+    pagina = _PaginaFalsa()
+    corrector = CorrectorLogPageAudit(AirVaultConfig())
+    rejilla = corrector._rejilla(pagina)
+
+    resultado = corrector._borrar(
+        pagina, correccion, copias_en(rejilla, "2008159"), ensayo=False
+    )
+
+    assert resultado.hecho
+    assert "Borradas 1" in resultado.detalle
+
+
+def test_una_rejilla_con_identificadores_llega_hasta_el_reindexado() -> None:
+    correccion = planificar(
+        _excepciones(
+            ("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]")
+        )
+    )[0]
+    rejilla = [
+        {"id": "", "celdas": ["Log Page", "Aircraft", "Scan Date"]},
+        {
+            "id": "pagina",
+            "celdas": ["2008152", "HP-9813CMP", "1/9/2025"],
+        },
+    ]
+
+    class _PaginaFalsa:
+        def esperar(self, _condicion, _segundos):
+            return True
+
+        def evaluar(self, expresion):
+            if expresion == modulo_correcciones._LEER_REJILLA:
+                return rejilla
+            return "OK"
+
+    pagina = _PaginaFalsa()
+    corrector = CorrectorLogPageAudit(AirVaultConfig())
+    leida = corrector._rejilla(pagina)
+
+    resultado = corrector._reindexar(
+        pagina, correccion, copias_en(leida, "2008152"), ensayo=False
+    )
+
+    assert resultado.hecho
+    assert "HP-9913CMP" in resultado.detalle
+
+
+def test_la_correccion_usa_una_pestana_de_fondo_y_deja_edge_abierto(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Una ventana abierta desde el reporte pertenece a la persona."""
+    version = {
+        "User-Agent": "Mozilla/5.0 Edg/151",
+        "webSocketDebuggerUrl": "ws://127.0.0.1:4321/x",
+    }
+    pedidos: list[tuple[str, dict]] = []
+
+    class _WebSocketFalso:
+        def __init__(self, _url):
+            pass
+
+        def pedir(self, metodo, **parametros):
+            pedidos.append((metodo, parametros))
+            return {"targetId": "temporal"}
+
+        def cerrar(self):
+            pass
+
+    class _SesionProhibida:
+        def __init__(self, *_args, **_kwargs):
+            raise AssertionError("no debe abrir otro Edge")
+
+    monkeypatch.setattr(
+        modulo_correcciones, "_puerto_anotado", lambda _perfil: 4321
+    )
+    monkeypatch.setattr(
+        modulo_correcciones, "_version_en", lambda _puerto: version
+    )
+    monkeypatch.setattr(
+        modulo_correcciones, "_edges_del_perfil", lambda _perfil: []
+    )
+    monkeypatch.setattr(modulo_correcciones, "_WebSocket", _WebSocketFalso)
+    monkeypatch.setattr(
+        modulo_correcciones, "SesionDeNavegador", _SesionProhibida
+    )
+
+    with _NavegadorDeCorrecciones(tmp_path) as navegador:
+        encontrada = navegador.abrir("https://airvault", espera_s=30.0)
+        target_id = navegador.abrir_pestana(
+            "https://airvault/busqueda", encontrada
+        )
+
+    assert target_id == "temporal"
+    assert pedidos == [
+        (
+            "Target.createTarget",
+            {"url": "https://airvault/busqueda", "background": True},
+        )
+    ]
+
+
+def test_la_correccion_sin_edge_visible_abre_uno_oculto(
+    monkeypatch, tmp_path: Path
+) -> None:
+    estados: list[object] = []
+
+    class _SesionFalsa:
+        def __init__(self, _perfil, visible=True):
+            estados.append(("visible", visible))
+
+        def abrir(self, url, espera_s):
+            estados.append(("abrir", url, espera_s))
+            return {"webSocketDebuggerUrl": "ws://oculto"}
+
+        def abrir_pestana(self, url, version):
+            estados.append(("pestaña", url, version))
+            return "temporal"
+
+        def cerrar(self):
+            estados.append("cerrar")
+
+    monkeypatch.setattr(
+        modulo_correcciones, "_puerto_anotado", lambda _perfil: None
+    )
+    monkeypatch.setattr(
+        modulo_correcciones, "_edges_del_perfil", lambda _perfil: []
+    )
+    monkeypatch.setattr(
+        modulo_correcciones, "SesionDeNavegador", _SesionFalsa
+    )
+
+    with _NavegadorDeCorrecciones(tmp_path) as navegador:
+        version = navegador.abrir("https://airvault", espera_s=30.0)
+        navegador.abrir_pestana("https://airvault/busqueda", version)
+
+    assert estados[0] == ("visible", False)
+    assert estados[-1] == "cerrar"

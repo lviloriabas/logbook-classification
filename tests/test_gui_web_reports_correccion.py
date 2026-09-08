@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from app.gui import web_reports_window as modulo_ventana
 from app.airvault.config import AirVaultConfig
 from app.airvault.correcciones import (
     ACCION_BORRAR,
     ACCION_REINDEXAR,
     ACCION_REVISAR,
+    Resultado,
 )
 from app.airvault.web_reports import TIPO_MAL_INDEXADA, parsear_filas
-from app.gui.web_reports_window import WebReportsWindow
+from app.gui.web_reports_window import ADVERTENCIA_CORRECCION, WebReportsWindow
 
 
 def _fila(matricula: str, detalle: str) -> list[dict[str, str]]:
@@ -59,6 +61,88 @@ def test_corregir_empieza_apagado_y_no_toca_nada(app, tmp_path) -> None:
         assert ventana.plan() == []
     finally:
         ventana.close()
+
+
+def test_el_aviso_nombra_el_borrado_y_el_reindexado() -> None:
+    assert "borrar" in ADVERTENCIA_CORRECCION
+    assert "reindexarla" in ADVERTENCIA_CORRECCION
+    assert "recuperar desde BITS" in ADVERTENCIA_CORRECCION
+    assert "archiv" not in ADVERTENCIA_CORRECCION.casefold()
+
+
+def test_una_correccion_completa_no_abre_otro_aviso(
+    app, tmp_path, monkeypatch
+) -> None:
+    ventana = WebReportsWindow(tmp_path)
+    plan = modulo_ventana.planificar(
+        _excepciones(("HP-9913CMP", "DUPLICATED 2008159(2x)"))
+    )
+
+    class _SinAviso:
+        Icon = modulo_ventana.QMessageBox.Icon
+
+        def __init__(self, *_args):
+            raise AssertionError("no debe abrir un aviso de éxito")
+
+    monkeypatch.setattr(
+        modulo_ventana,
+        "QMessageBox",
+        _SinAviso,
+    )
+    try:
+        ventana._al_corregir([Resultado(plan[0], hecho=True)])
+        assert "Corregidas 1 bitácora" in ventana.resumen.text()
+    finally:
+        ventana.close()
+
+
+def test_el_aviso_de_fallo_muestra_el_primer_motivo(
+    app, tmp_path, monkeypatch
+) -> None:
+    visto: dict[str, str] = {}
+
+    class _AvisoFalso:
+        Icon = modulo_ventana.QMessageBox.Icon
+
+        def __init__(self, _parent):
+            pass
+
+        def setIcon(self, _icon):
+            pass
+
+        def setWindowTitle(self, texto):
+            visto["titulo"] = texto
+
+        def setText(self, texto):
+            visto["texto"] = texto
+
+        def setInformativeText(self, texto):
+            visto["motivo"] = texto
+
+        def setDetailedText(self, texto):
+            visto["detalle"] = texto
+
+        def findChildren(self, _tipo):
+            return []
+
+        def exec(self):
+            pass
+
+    plan = modulo_ventana.planificar(
+        _excepciones(("HP-9913CMP", "DUPLICATED 2008159(2x)"))
+    )
+    monkeypatch.setattr(modulo_ventana, "QMessageBox", _AvisoFalso)
+    ventana = WebReportsWindow(tmp_path)
+    try:
+        ventana._al_corregir(
+            [Resultado(plan[0], detalle="No apareció el botón Borrar.")]
+        )
+    finally:
+        ventana.close()
+
+    assert visto["titulo"] == "Corrección incompleta"
+    assert "2008159" in visto["motivo"]
+    assert "botón Borrar" in visto["motivo"]
 
 
 def test_se_enciende_con_lo_que_el_reporte_deja_resuelto(app, tmp_path) -> None:

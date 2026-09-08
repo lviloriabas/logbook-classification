@@ -49,7 +49,16 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence
 
 from app.airvault.config import AirVaultConfig
-from app.airvault.navegador import PERFIL_POR_DEFECTO, SesionDeNavegador
+from app.airvault.navegador import (
+    PERFIL_POR_DEFECTO,
+    ErrorDeNavegador,
+    SesionDeNavegador,
+    _edges_del_perfil,
+    _puerto_anotado,
+    _sin_ventana,
+    _version_en,
+    _WebSocket,
+)
 from app.airvault.web_reports import (
     TIPO_DUPLICADA,
     TIPO_MAL_INDEXADA,
@@ -93,6 +102,70 @@ _FORMATOS_FECHA = (
 
 class ControlNoEncontrado(RuntimeError):
     """La pantalla no traia el control que hacia falta para este caso."""
+
+
+class _NavegadorDeCorrecciones:
+    """Abre pestañas temporales sin tocar las que abrió la persona.
+
+    El corrector comparte el perfil de AirVault para usar la sesión iniciada.
+    Si ese perfil ya está abierto en una ventana visible, trabaja en pestañas
+    de fondo y deja la ventana abierta. Si el perfil está libre, usa el Edge
+    oculto habitual y lo cierra al terminar.
+    """
+
+    def __init__(self, perfil: Path) -> None:
+        self.perfil = Path(perfil)
+        self._sesion: SesionDeNavegador | None = None
+        self._version_visible: dict | None = None
+
+    def __enter__(self) -> "_NavegadorDeCorrecciones":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        if self._sesion is not None:
+            self._sesion.cerrar()
+
+    def abrir(self, url: str, espera_s: float) -> dict:
+        version = self._edge_visible()
+        if version is not None:
+            self._version_visible = version
+            return version
+        self._sesion = SesionDeNavegador(self.perfil, visible=False)
+        return self._sesion.abrir(url, espera_s=espera_s)
+
+    def abrir_pestana(self, url: str, version: dict) -> str:
+        if self._version_visible is None:
+            if self._sesion is None:
+                raise ErrorDeNavegador("No hay una sesión de Edge abierta")
+            return self._sesion.abrir_pestana(url, version=version)
+
+        ws = _WebSocket(version["webSocketDebuggerUrl"])
+        try:
+            creada = ws.pedir(
+                "Target.createTarget", url=url, background=True
+            )
+        finally:
+            ws.cerrar()
+        target_id = str(creada.get("targetId", ""))
+        if not target_id:
+            raise ErrorDeNavegador(
+                "Edge no abrió la pestaña temporal de corrección"
+            )
+        return target_id
+
+    def _edge_visible(self) -> dict | None:
+        anotado = _puerto_anotado(self.perfil)
+        if anotado is not None:
+            version = _version_en(anotado)
+            if version is not None and not _sin_ventana(version):
+                return version
+        for _pid, puerto in _edges_del_perfil(self.perfil):
+            if puerto is None or puerto == anotado:
+                continue
+            version = _version_en(puerto)
+            if version is not None and not _sin_ventana(version):
+                return version
+        return None
 
 
 @dataclass(frozen=True)
@@ -227,20 +300,29 @@ def resumen_del_plan(plan: Sequence[Correccion]) -> str:
 
     partes: list[str] = []
     if borrar:
+        copia = "copia sobrante" if copias == 1 else "copias sobrantes"
+        bitacora = "bitácora" if len(borrar) == 1 else "bitácoras"
         partes.append(
-            f"borrar {copias} copias sobrantes de {len(borrar)} bitácoras"
+            f"borrar {copias} {copia} de {len(borrar)} {bitacora}"
         )
     if reindexar:
-        partes.append(f"reindexar {len(reindexar)} páginas mal archivadas")
+        cantidad = len(reindexar)
+        pagina = "página mal indexada" if cantidad == 1 else (
+            "páginas mal indexadas"
+        )
+        partes.append(f"reindexar {cantidad} {pagina}")
     if not partes:
         texto = "No hay nada que corregir automáticamente."
     else:
         texto = "Se va a " + " y ".join(partes) + "."
     if revisar:
-        texto += (
-            f" Quedan {len(revisar)} casos para revisar a mano; esos no se "
-            "tocan."
-        )
+        if len(revisar) == 1:
+            texto += " Queda 1 caso para revisar a mano; no se toca."
+        else:
+            texto += (
+                f" Quedan {len(revisar)} casos para revisar a mano; no se "
+                "tocan."
+            )
     return texto
 
 
@@ -438,7 +520,7 @@ class CorrectorLogPageAudit:
             else PERFIL_POR_DEFECTO
         )
         notificar("Abriendo AirVault en Edge")
-        with SesionDeNavegador(perfil, visible=False) as navegador:
+        with _NavegadorDeCorrecciones(perfil) as navegador:
             version = navegador.abrir(
                 self.config.base_url, espera_s=self.config.espera_login_s
             )
@@ -478,8 +560,8 @@ class CorrectorLogPageAudit:
                 return Resultado(
                     correccion,
                     detalle=(
-                        "La búsqueda no devolvió esa bitácora. Puede que ya "
-                        "esté corregida; no se tocó nada."
+                        "Web Search no devolvió esa bitácora. Consulte de "
+                        "nuevo Log Page Audit antes de reintentar."
                     ),
                 )
             if correccion.accion == ACCION_BORRAR:
@@ -492,14 +574,14 @@ class CorrectorLogPageAudit:
         except Exception as exc:  # noqa: BLE001 - llega a la interfaz
             return Resultado(
                 correccion,
-                detalle=f"No se pudo corregir: {exc}. No se tocó nada.",
+                detalle=f"No se modificó. Edge devolvió este error: {exc}",
             )
         finally:
             if pagina is not None:
                 pagina.cerrar()
 
     @staticmethod
-    def _rejilla(pagina: _Pagina) -> list[list[str]]:
+    def _rejilla(pagina: _Pagina) -> list[object]:
         if not pagina.esperar("document.querySelectorAll('tr').length > 1", 90.0):
             raise ControlNoEncontrado(
                 "La búsqueda no llegó a mostrar resultados. No se tocó nada."
@@ -511,9 +593,7 @@ class CorrectorLogPageAudit:
                 "tocó nada."
             )
         return [
-            [str(celda) for celda in fila]
-            for fila in leidas
-            if isinstance(fila, list)
+            fila for fila in leidas if isinstance(fila, (list, Mapping))
         ]
 
     def _borrar(
@@ -529,9 +609,9 @@ class CorrectorLogPageAudit:
             return Resultado(
                 correccion,
                 detalle=(
-                    f"El reporte contaba {esperadas} copias y ahora hay "
-                    f"{len(copias)}. Cambió desde que se consultó, así que "
-                    "no se tocó nada: vuelva a consultar."
+                    f"El reporte indica {esperadas} copias, pero Web Search "
+                    f"muestra {len(copias)}. No se borró ninguna. Consulte "
+                    "de nuevo Log Page Audit."
                 ),
             )
         se_queda, sobran = por_antiguedad(copias)
@@ -539,9 +619,9 @@ class CorrectorLogPageAudit:
             return Resultado(
                 correccion,
                 detalle=(
-                    "Las copias no traen una fecha que se pueda leer, así "
-                    "que no se sabe cuál es la más antigua. No se borró "
-                    "ninguna."
+                    "Web Search no muestra una fecha válida para todas las "
+                    "copias. No se borró ninguna porque no se pudo saber "
+                    "cuál era la más antigua."
                 ),
             )
         if ensayo:
@@ -589,8 +669,8 @@ class CorrectorLogPageAudit:
             return Resultado(
                 correccion,
                 detalle=(
-                    f"Esa bitácora aparece {len(copias)} veces, así que no "
-                    "está claro cuál hay que mover. No se tocó nada."
+                    f"Web Search muestra {len(copias)} copias. No se "
+                    "reindexó porque no se pudo identificar una sola página."
                 ),
             )
         copia = copias[0]
@@ -601,9 +681,9 @@ class CorrectorLogPageAudit:
             return Resultado(
                 correccion,
                 detalle=(
-                    f"El reporte la daba en {correccion.matricula_actual} y "
-                    f"ahora está en {actual}. Cambió desde que se consultó, "
-                    "así que no se tocó nada: vuelva a consultar."
+                    f"El reporte indica {correccion.matricula_actual}, pero "
+                    f"Web Search muestra {actual}. No se reindexó. Consulte "
+                    "de nuevo Log Page Audit."
                 ),
             )
         if ensayo:

@@ -140,6 +140,9 @@ class ExportOptionsGroup(QGroupBox):
         configure_menu_button(self.separation_button, self.separation_menu)
         detail_row.addWidget(self.separation_button)
 
+        # Las opciones de division forman un bloque contra el margen derecho,
+        # alineado con los botones de accion de la fila inferior.
+        detail_row.addStretch(1)
         self.partes_check = QCheckBox("Dividir cada")
         self.partes_check.setToolTip(
             "Reparte el PDF único en varias partes sin cortar secciones."
@@ -162,7 +165,6 @@ class ExportOptionsGroup(QGroupBox):
         )
         self.partes_control = SpinBoxWithButtons(self.partes_spin)
         detail_row.addWidget(self.partes_control)
-        detail_row.addStretch()
         layout.addLayout(detail_row)
 
         self.output_mode_combo.currentIndexChanged.connect(self._sync_parts)

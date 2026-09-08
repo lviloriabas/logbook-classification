@@ -86,6 +86,12 @@ CORREGIR_SELECCION_TOOLTIP = (
     "varias; sin ninguna elegida no hay nada que corregir."
 )
 
+ADVERTENCIA_CORRECCION = (
+    "Las copias que se borren en AirVault no se pueden recuperar desde BITS. "
+    "Cada bitácora se comprueba antes de borrarla o reindexarla; si ya no "
+    "coincide con el reporte, no se modifica."
+)
+
 # Las dos columnas que llevan a Web Search, y lo que abre cada una: la
 # página, sus apariciones; el rango, el libro entero al que pertenece.
 COLUMNA_BITACORA = 2
@@ -537,7 +543,7 @@ class WebReportsWindow(QDialog):
         worker = CorreccionWorker(self._config, plan, self)
         worker.avance.connect(self._al_avanzar)
         worker.resultado.connect(self._al_corregir)
-        worker.fallo.connect(self._al_fallar)
+        worker.fallo.connect(self._al_fallar_correccion)
         worker.cancelado.connect(self._al_cancelar)
         worker.finished.connect(self._al_terminar)
         worker.finished.connect(worker.deleteLater)
@@ -558,14 +564,7 @@ class WebReportsWindow(QDialog):
         dialogo.setIcon(QMessageBox.Icon.Question)
         dialogo.setWindowTitle("Corregir en AirVault")
         dialogo.setText(resumen_del_plan(plan))
-        dialogo.setInformativeText(
-            "Lo que se borre en AirVault no se deshace desde aquí. Cada caso "
-            "se comprueba contra la pantalla antes de tocarlo: el que ya no "
-            "coincida con el reporte se deja como está."
-        )
-        dialogo.setDetailedText(
-            "\n".join(correccion.descripcion for correccion in plan)
-        )
+        dialogo.setInformativeText(ADVERTENCIA_CORRECCION)
         aceptar = dialogo.addButton(
             "Corregir", QMessageBox.ButtonRole.AcceptRole
         )
@@ -582,28 +581,50 @@ class WebReportsWindow(QDialog):
             for resultado in resultados
             if resultado.correccion.accion != ACCION_REVISAR
         ]
-        quedaron = len(intentados) - len(hechos)
-        texto = f"Corregidas {len(hechos)} de {len(intentados)} bitácoras."
-        if quedaron:
-            texto += (
-                f" {quedaron} se dejaron como estaban; el detalle dice por "
-                "qué."
+        fallidos = [resultado for resultado in intentados if not resultado.hecho]
+        total = len(intentados)
+        unidad = "bitácora" if total == 1 else "bitácoras"
+        if fallidos:
+            sin_cambiar = (
+                "1 no se modificó"
+                if len(fallidos) == 1
+                else f"{len(fallidos)} no se modificaron"
             )
-        texto += " Vuelva a consultar para ver cómo quedó el reporte."
+            texto = (
+                f"Corregidas {len(hechos)} de {total} {unidad}. "
+                f"{sin_cambiar}."
+            )
+        else:
+            texto = (
+                f"Corregidas {len(hechos)} {unidad}. Consulte de nuevo "
+                "el reporte para confirmar el resultado."
+            )
         self.resumen.setText(texto)
 
+        if not fallidos:
+            return
         aviso = QMessageBox(self)
-        aviso.setIcon(QMessageBox.Icon.Information)
-        aviso.setWindowTitle("Corregir en AirVault")
+        aviso.setIcon(QMessageBox.Icon.Warning)
+        aviso.setWindowTitle("Corrección incompleta")
         aviso.setText(texto)
+        primero = fallidos[0]
+        aviso.setInformativeText(
+            f"Bitácora {primero.log_number}: {primero.detalle}"
+        )
         aviso.setDetailedText(
             "\n".join(
                 f"{resultado.log_number}: {resultado.detalle}"
-                for resultado in resultados
-                if resultado.detalle
+                for resultado in fallidos
             )
         )
+        for boton in aviso.findChildren(QPushButton):
+            if "details" in boton.text().casefold():
+                boton.setText("Ver detalles…")
         aviso.exec()
+
+    def _al_fallar_correccion(self, mensaje: str) -> None:
+        """Un fallo del corrector no se presenta como fallo de consulta."""
+        self.resumen.setText(f"No se pudo completar la corrección: {mensaje}")
 
     @staticmethod
     def _fecha(valor: QDate) -> QDateEdit:
