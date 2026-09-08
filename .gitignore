@@ -53,3 +53,15 @@ airvault_flota.json
 # Turno de cada libro en la ronda de comprobacion (local de cada instalacion,
 # cambia en cada indexado y no dice nada fuera de su maquina)
 book_ronda.json
+
+# Preferencias del indexado (usuario, paginas por batch, politica de fecha).
+# Cada instalacion las cambia sola en cuanto alguien toca un control, asi que
+# tenerlas versionadas bloqueaba el pull en la otra maquina. El repositorio
+# lleva los valores de partida en airvault.example.json.
+airvault.json
+
+# Memoria de libros que aprende el OCR: matricula de cada libro y extremos de
+# fecha confirmados. Crece en cada corrida y es distinta en cada maquina; dos
+# copias divergentes no se fusionan, se pisan.
+book_matriculas.json
+book_fechas.json
