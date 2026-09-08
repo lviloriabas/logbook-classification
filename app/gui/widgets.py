@@ -445,6 +445,68 @@ QComboBox QAbstractItemView::item {{
     padding: 3px 8px;
     border-radius: 4px;
 }}
+/* El campo de fecha es el unico desplegable de la aplicacion que no es un
+   QComboBox, y era el unico sin reglas: se quedaba con lo que dibuja
+   Windows, un boton gris con el triangulo del sistema donde el resto de la
+   ventana lleva la flecha fina de la hoja. El hueco de la derecha es el
+   mismo que reserva el combo, para que el texto no se meta debajo. */
+QDateEdit, QTimeEdit, QDateTimeEdit {{
+    padding: 0 30px 0 {CONTROL_PAD_H}px;
+}}
+QDateEdit::drop-down, QTimeEdit::drop-down, QDateTimeEdit::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 28px;
+    border: 0;
+    background: transparent;
+}}
+QDateEdit::down-arrow, QTimeEdit::down-arrow, QDateTimeEdit::down-arrow {{
+    width: 10px;
+    height: 6px;
+    image: url("{_DROPDOWN_ARROW}");
+}}
+QDateEdit:hover::drop-down, QDateEdit:on::drop-down,
+QTimeEdit:hover::drop-down, QDateTimeEdit:hover::drop-down {{
+    background-color: {PANE_CONTROL_HOVER};
+}}
+/* Y el calendario que sale al pulsarla. Es una ventana con sus propios
+   hijos, asi que hay que nombrarlos uno a uno: la barra del mes, sus
+   flechas y la rejilla de dias. La rejilla ademas hace falta nombrarla
+   porque es un QTableView, y sin esto le caia entera la hoja de las tablas
+   de datos: lineas de cuadricula, filas alternas y cabecera en negrita
+   sobre lo que tiene que ser un calendario. */
+QCalendarWidget QWidget#qt_calendar_navigationbar {{
+    background-color: {TABLE_HEADER_BG};
+    border-top-left-radius: {TABLE_RADIUS}px;
+    border-top-right-radius: {TABLE_RADIUS}px;
+}}
+QCalendarWidget QToolButton {{
+    color: {PANE_TEXT};
+    background-color: transparent;
+    border: 0;
+    border-radius: {TABLE_RADIUS}px;
+    margin: 2px;
+    padding: 0 {SPACE_S}px;
+}}
+QCalendarWidget QToolButton:hover {{
+    background-color: {PANE_CONTROL_HOVER};
+}}
+QCalendarWidget QToolButton::menu-indicator {{
+    image: none;
+}}
+QCalendarWidget QAbstractItemView {{
+    color: {PANE_TEXT};
+    background-color: {PANE_BG};
+    alternate-background-color: {PANE_BG};
+    gridline-color: transparent;
+    selection-background-color: palette(highlight);
+    selection-color: {PANE_TEXT};
+    border: 0;
+    outline: 0;
+}}
+QCalendarWidget QAbstractItemView:disabled {{
+    color: {TEXT_DISABLED};
+}}
 QGroupBox {{
     color: {PANE_TEXT};
     background-color: {TABLE_BASE_BG};
