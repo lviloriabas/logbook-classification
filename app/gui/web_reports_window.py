@@ -76,8 +76,14 @@ WEB_REPORTS_TOOLTIP = (
 
 CORREGIR_TOOLTIP = (
     "Deja una sola copia de cada bitácora repetida (la más antigua) y "
-    "devuelve las mal indexadas a la matrícula de su libro. Enseña el plan "
-    "y pide autorización antes de escribir en AirVault."
+    "devuelve las mal indexadas a la matrícula de su libro, en toda la "
+    "tabla. Enseña el plan y pide autorización antes de escribir en "
+    "AirVault."
+)
+
+CORREGIR_SELECCION_TOOLTIP = (
+    "Lo mismo, pero solo en las filas elegidas. Con Ctrl o Mayús se eligen "
+    "varias; sin ninguna elegida no hay nada que corregir."
 )
 
 # Las dos columnas que llevan a Web Search, y lo que abre cada una: la
@@ -254,6 +260,10 @@ class WebReportsWindow(QDialog):
         self._worker: Optional[_TrabajoEnEdge] = None
         self._cerrar_al_terminar = False
         self._resultados: list[ExcepcionLogPageAudit] = []
+        # Si ahora mismo no hay ningún trabajo en Edge. Lo consulta el
+        # cambio de selección, que llega por su cuenta y no puede encender
+        # un botón en mitad de una consulta.
+        self._libre = True
 
         self.setWindowTitle("Web Reports")
         self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint, True)
@@ -321,7 +331,8 @@ class WebReportsWindow(QDialog):
             "M & E Integration. La consulta usa For Export = Yes para "
             "repetir los datos del libro y Refresh = Yes para regenerar el "
             "reporte. En la tabla, lo subrayado abre Web Search en Edge: la "
-            "página, con sus apariciones; el rango, con el libro entero."
+            "página, con sus apariciones; el rango, con el libro entero. "
+            "Cada una se suma en su pestaña y se queda abierta."
         )
         ayuda.setWordWrap(True)
         ayuda.setStyleSheet(f"color: {COLOR_AYUDA};")
@@ -337,8 +348,11 @@ class WebReportsWindow(QDialog):
         self.tabla.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
+        # Varias filas a la vez porque la selección es lo que elige qué
+        # corregir. Con una sola, «Corregir seleccionadas…» habría sido un
+        # botón para una bitácora, y lo que se pidió fue elegir un grupo.
         self.tabla.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
+            QAbstractItemView.SelectionMode.ExtendedSelection
         )
         self.tabla.setEditTriggers(
             QAbstractItemView.EditTrigger.NoEditTriggers
@@ -346,9 +360,10 @@ class WebReportsWindow(QDialog):
         self.tabla.verticalHeader().setVisible(False)
         self.tabla.setSortingEnabled(True)
         self.tabla.setToolTip(
-            "Resultados de Log Page Audit. Consultar no cambia nada en "
-            "AirVault; «Corregir…» sí, y avisa antes de hacerlo. Las celdas "
-            "subrayadas se abren en Web Search."
+            "Resultados de Log Page Audit. Elija filas (con Ctrl o Mayús "
+            "para varias) y use «Corregir seleccionadas…». Consultar no "
+            "cambia nada en AirVault; corregir sí, y avisa antes de "
+            "hacerlo. Las celdas subrayadas se abren en Web Search."
         )
         self.tabla.setAccessibleName("Excepciones de Log Page Audit")
         # Sin seguimiento del ratón no llega «cellEntered», y sin él el
@@ -390,13 +405,17 @@ class WebReportsWindow(QDialog):
         cuerpo.addWidget(self.resumen)
 
         cuerpo.addLayout(self._fila_botones())
+        # Después de los botones: lo que hace al cambiar la selección es
+        # encenderlos o apagarlos, y hasta aquí no existen.
+        self.tabla.itemSelectionChanged.connect(self._al_elegir_filas)
 
     def _fila_botones(self) -> QHBoxLayout:
         """Las acciones contra el margen derecho, como en AirVault.
 
-        Y con «Consultar» en azul: es la que hace el trabajo de la ventana,
-        y era la única de la aplicación que arrancaba algo largo sin
-        distinguirse de las que lo detienen o la cierran.
+        En azul va «Corregir todas…», que es la que cierra el trabajo de la
+        ventana. Las otras dos que arrancan algo quedan en el gris de
+        siempre: consultar es el paso previo, y corregir lo elegido es la
+        misma acción sobre menos filas.
         """
         fila = QHBoxLayout()
         fila.setContentsMargins(0, 0, 0, 0)
@@ -404,14 +423,19 @@ class WebReportsWindow(QDialog):
         fila.addStretch()
 
         self.boton_consultar = QPushButton("Consultar")
-        self.boton_consultar.setObjectName("primaryButton")
         self.boton_consultar.setToolTip(WEB_REPORTS_TOOLTIP)
         self.boton_consultar.clicked.connect(self._consultar)
 
-        self.boton_corregir = QPushButton("Corregir…")
+        self.boton_corregir = QPushButton("Corregir seleccionadas…")
         self.boton_corregir.setEnabled(False)
-        self.boton_corregir.setToolTip(CORREGIR_TOOLTIP)
-        self.boton_corregir.clicked.connect(self._corregir)
+        self.boton_corregir.setToolTip(CORREGIR_SELECCION_TOOLTIP)
+        self.boton_corregir.clicked.connect(self._corregir_seleccion)
+
+        self.boton_corregir_todas = QPushButton("Corregir todas…")
+        self.boton_corregir_todas.setObjectName("primaryButton")
+        self.boton_corregir_todas.setEnabled(False)
+        self.boton_corregir_todas.setToolTip(CORREGIR_TOOLTIP)
+        self.boton_corregir_todas.clicked.connect(self._corregir_todas)
 
         self.boton_cancelar = QPushButton("Cancelar")
         self.boton_cancelar.setEnabled(False)
@@ -427,6 +451,7 @@ class WebReportsWindow(QDialog):
         for boton in (
             self.boton_consultar,
             self.boton_corregir,
+            self.boton_corregir_todas,
             self.boton_cancelar,
             self.boton_cerrar,
         ):
@@ -439,6 +464,43 @@ class WebReportsWindow(QDialog):
         """Qué haría la corrección con lo que hay ahora en la tabla."""
         return planificar(self._resultados)
 
+    def seleccionadas(self) -> list[ExcepcionLogPageAudit]:
+        """Las excepciones de las filas elegidas, de arriba abajo.
+
+        Salen de la propia celda y no de la posición de la fila: la tabla se
+        ordena por cualquier columna, así que la fila tercera de la pantalla
+        no tiene por qué ser la tercera que trajo la consulta.
+        """
+        filas = sorted(
+            {indice.row() for indice in self.tabla.selectedIndexes()}
+        )
+        elegidas: list[ExcepcionLogPageAudit] = []
+        for fila in filas:
+            item = self.tabla.item(fila, 0)
+            if item is None:
+                continue
+            excepcion = item.data(Qt.ItemDataRole.UserRole)
+            if excepcion is not None:
+                elegidas.append(excepcion)
+        return elegidas
+
+    def plan_seleccionado(self) -> list[Correccion]:
+        """El plan de siempre, recortado a las filas elegidas.
+
+        Se planifica con la tabla entera y después se recorta, y no al
+        revés: el plan cruza unas excepciones con otras (una mal indexada
+        que además está repetida se deja para después de quitar las
+        copias). Planificando solo lo elegido, elegir la mal indexada sin su
+        duplicada la habría dado por reindexable, que es justo lo que esa
+        regla evita.
+        """
+        elegidas = {id(excepcion) for excepcion in self.seleccionadas()}
+        return [
+            correccion
+            for correccion in self.plan()
+            if id(correccion.excepcion) in elegidas
+        ]
+
     @staticmethod
     def _aplicables(plan: list[Correccion]) -> list[Correccion]:
         return [
@@ -447,11 +509,25 @@ class WebReportsWindow(QDialog):
             if correccion.accion != ACCION_REVISAR
         ]
 
-    def _corregir(self) -> None:
+    def _corregir_todas(self) -> None:
+        """Todo lo que el reporte deja decidido, sin elegir nada."""
+        self._corregir(self.plan())
+
+    def _corregir_seleccion(self) -> None:
+        """Solo las filas elegidas en la tabla."""
+        plan = self.plan_seleccionado()
+        if not plan:
+            self.resumen.setText(
+                "No hay ninguna fila elegida. Elija las bitácoras que quiere "
+                "corregir, o use «Corregir todas…»."
+            )
+            return
+        self._corregir(plan)
+
+    def _corregir(self, plan: list[Correccion]) -> None:
         """Aplica en AirVault lo que el reporte deja decidido."""
         if self.hilo() is not None:
             return
-        plan = self.plan()
         if not self._aplicables(plan):
             self.resumen.setText(resumen_del_plan(plan))
             return
@@ -598,8 +674,9 @@ class WebReportsWindow(QDialog):
             aplicables = len(self._aplicables(self.plan()))
             if aplicables:
                 texto += (
-                    f" El reporte deja {aplicables} resueltas: «Corregir…» "
-                    "enseña el plan antes de aplicarlo."
+                    f" El reporte deja {aplicables} resueltas: «Corregir "
+                    "todas…» enseña el plan antes de aplicarlo, y eligiendo "
+                    "filas se corrigen solo esas."
                 )
             else:
                 texto += " Ninguna se puede corregir sola."
@@ -694,9 +771,15 @@ class WebReportsWindow(QDialog):
 
         Con el mismo candado que el resto: Edge admite un navegador por
         perfil, así que abrir esto mientras se consulta o se corrige le
-        quitaría la pestaña al trabajo que ya estaba corriendo.
+        quitaría la pestaña al trabajo que ya estaba corriendo. Las
+        búsquedas de una en una, entonces; abierta la primera, cada una
+        siguiente se suma a la misma ventana y ninguna cierra a la anterior.
         """
         if self.hilo() is not None:
+            self.resumen.setText(
+                "Hay un trabajo en Edge sin terminar. Espere a que acabe y "
+                "vuelva a pulsar."
+            )
             return
         self._config = AirVaultConfig.load(self._raiz / AIRVAULT_FILENAME)
         worker = WebSearchWorker(self._config, url, etiqueta, self)
@@ -714,8 +797,9 @@ class WebReportsWindow(QDialog):
 
     def _al_abrir(self, etiqueta: object) -> None:
         self.resumen.setText(
-            f"Web Search abierto en {etiqueta}. La ventana de Edge se queda "
-            "abierta: ciérrela al terminar de mirarla."
+            f"Web Search abierto en {etiqueta}. Cada búsqueda se suma en su "
+            "pestaña y ninguna se cierra sola: ciérrelas al terminar de "
+            "mirarlas."
         )
 
     def _al_fallar_al_abrir(self, mensaje: str) -> None:
@@ -748,6 +832,7 @@ class WebReportsWindow(QDialog):
             self.close()
 
     def _habilitar(self, habilitado: bool) -> None:
+        self._libre = habilitado
         for control in (
             self.desde_edit,
             self.hasta_edit,
@@ -757,11 +842,19 @@ class WebReportsWindow(QDialog):
             control.setEnabled(habilitado)
         # Corregir solo se ofrece cuando hay algo que el reporte deje
         # decidido. Con la tabla vacía, o con todo pendiente de revisar a
-        # mano, el botón no tendría nada que hacer.
-        self.boton_corregir.setEnabled(
+        # mano, el botón no tendría nada que hacer; y el de la selección
+        # tampoco mientras no haya filas elegidas que corregir.
+        self.boton_corregir_todas.setEnabled(
             habilitado and bool(self._aplicables(self.plan()))
         )
+        self.boton_corregir.setEnabled(
+            habilitado and bool(self._aplicables(self.plan_seleccionado()))
+        )
         self.boton_cancelar.setEnabled(not habilitado)
+
+    def _al_elegir_filas(self) -> None:
+        """Elegir filas enciende o apaga el botón que actúa sobre ellas."""
+        self._habilitar(self._libre)
 
     def _cancelar(self) -> None:
         worker = self.hilo()
