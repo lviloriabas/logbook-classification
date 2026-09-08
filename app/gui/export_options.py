@@ -113,6 +113,7 @@ class ExportOptionsGroup(QGroupBox):
         detail_row = QHBoxLayout()
         detail_row.setSpacing(8)
         detail_row.addSpacing(self.controls_indent)
+        self._detail_row = detail_row
         self.separation_menu = MultiSelectMenu(self)
         self.matricula_check = self._checkable_action(
             "Matrícula",
@@ -167,6 +168,17 @@ class ExportOptionsGroup(QGroupBox):
         self.output_mode_combo.currentIndexChanged.connect(self._sync_parts)
         self.partes_check.toggled.connect(self._sync_parts)
         self._sync_parts()
+
+    def agregar_menu(self, boton: QToolButton) -> None:
+        """Suma otro desplegable a la fila en la que ya va «Separación».
+
+        Los botones con menú son la misma clase de control y llevan el mismo
+        ancho, así que se leen como un juego. Repartidos en dos filas, y
+        encima uno justo debajo del otro, parecían una columna partida por
+        la mitad en vez de dos controles hermanos.
+        """
+        fila = self._detail_row
+        fila.insertWidget(fila.indexOf(self.separation_button) + 1, boton)
 
     def _checkable_action(
         self, text: str, tooltip: str, checked: bool = False

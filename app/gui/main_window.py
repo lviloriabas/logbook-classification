@@ -1220,7 +1220,10 @@ class MainWindow(QMainWindow):
         self.view_button.setToolTip(
             "Elegir qué campos se muestran en la vista previa."
         )
-        tools_row.addWidget(self.view_button)
+        # Arriba, pegado a «Separación»: los dos abren un menú y miden lo
+        # mismo, así que uno debajo del otro y en filas distintas se leían
+        # como una columna rota.
+        group.agregar_menu(self.view_button)
 
         self.fleet_check = QCheckBox("Verificar matrículas")
         self.fleet_check.setChecked(True)
@@ -1235,7 +1238,6 @@ class MainWindow(QMainWindow):
             f"las altas y las bajas; se guarda en {FLEET_FILENAME}."
         )
         fleet_button.clicked.connect(self._open_fleet_editor)
-        tools_row.addWidget(fleet_button)
 
         self.btn_airvault = QPushButton("Indexar en AirVault…")
         self.btn_airvault.setToolTip(AIRVAULT_TOOLTIP)
@@ -1245,9 +1247,19 @@ class MainWindow(QMainWindow):
         self.btn_web_reports.clicked.connect(self._open_web_reports)
         self.btn_web_reports.setVisible(not self._density.compact)
         self.web_reports_action.setVisible(self._density.compact)
+        # Los tres que abren otra ventana, juntos y contra el margen
+        # derecho; a la izquierda queda solo la casilla, que es lo que esta
+        # fila elige. «Editar flota…» estaba en medio, entre la casilla y el
+        # hueco elástico, así que la fila alternaba botón y opción sin que
+        # el sitio de cada uno dijera nada. Van de menos a más alcance: la
+        # lista local, la consulta y el indexado.
         tools_row.addStretch()
-        tools_row.addWidget(self.btn_web_reports)
-        tools_row.addWidget(self.btn_airvault)
+        for boton in (
+            fleet_button,
+            self.btn_web_reports,
+            self.btn_airvault,
+        ):
+            tools_row.addWidget(boton)
         layout.addLayout(tools_row)
         self._fleet_row = tools_row
         return group
