@@ -36,7 +36,11 @@ La decisión tiene tres estados:
 - ``true``: densidad local >= ``min_ink_peak``; o densidad moderada
   (>= ``max_empty_peak``) repartida a lo largo de al menos ``min_ink_span``
   del ancho, que es la forma de un número de licencia: dígitos separados
-  que nunca concentran tanta tinta como una rúbrica.
+  que nunca concentran tanta tinta como una rúbrica. En una casilla mucho
+  más ancha que alta la extensión sola no basta —un sello compacto llega a
+  cruzar más de medio ancho sin ser escritura—, así que el campo puede
+  exigir además una cobertura mínima (``min_ink_coverage``): cuánta tinta
+  hay en el recorte entero, no en su punto más denso.
 - ``false``: densidad por debajo de ``max_empty_peak``, poca tinta total y
   ninguna evidencia ni siquiera con el umbral de tinta relajado.
 - ``unclear`` (WARNING): todo lo demás, escritura que se sale del campo,
@@ -265,7 +269,11 @@ def _classify(metrics: dict, field: FieldTemplate) -> tuple[str, float, str]:
         )
 
     concentrated = peak >= field.min_ink_peak
-    spread = peak >= field.max_empty_peak and span >= field.min_ink_span
+    spread = (
+        peak >= field.max_empty_peak
+        and span >= field.min_ink_span
+        and metrics["coverage"] >= field.min_ink_coverage
+    )
     if concentrated or spread:
         margin = min(1.0, peak / (3.0 * field.min_ink_peak))
         return (
