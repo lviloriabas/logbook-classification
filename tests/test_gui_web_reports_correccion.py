@@ -63,10 +63,10 @@ def test_corregir_empieza_apagado_y_no_toca_nada(app, tmp_path) -> None:
         ventana.close()
 
 
-def test_el_aviso_nombra_el_borrado_y_el_reindexado() -> None:
-    assert "borrar" in ADVERTENCIA_CORRECCION
-    assert "reindexarla" in ADVERTENCIA_CORRECCION
-    assert "recuperar desde BITS" in ADVERTENCIA_CORRECCION
+def test_el_aviso_de_borrado_es_breve() -> None:
+    assert ADVERTENCIA_CORRECCION == (
+        "Las copias borradas no se pueden recuperar desde BITS."
+    )
     assert "archiv" not in ADVERTENCIA_CORRECCION.casefold()
 
 
@@ -163,7 +163,9 @@ def test_se_enciende_con_lo_que_el_reporte_deja_resuelto(app, tmp_path) -> None:
         assert ventana.boton_corregir_todas.isEnabled()
         # Sin filas elegidas, la otra no tiene sobre qué actuar.
         assert not ventana.boton_corregir.isEnabled()
-        assert "Corregir todas…" in ventana.resumen.text()
+        assert ventana.resumen.text() == (
+            "1 mal indexada, 1 duplicada. 2 se pueden corregir."
+        )
     finally:
         ventana.close()
 
@@ -179,7 +181,7 @@ def test_sigue_apagado_si_todo_queda_para_revisar(app, tmp_path) -> None:
 
         assert ventana.plan()
         assert not ventana.boton_corregir_todas.isEnabled()
-        assert "Ninguna se puede corregir sola" in ventana.resumen.text()
+        assert "Requieren revisión manual" in ventana.resumen.text()
     finally:
         ventana.close()
 
@@ -279,7 +281,7 @@ def test_sin_filas_elegidas_lo_dice_y_no_corrige(app, tmp_path) -> None:
 
         ventana._corregir_seleccion()
 
-        assert "No hay ninguna fila elegida" in ventana.resumen.text()
+        assert ventana.resumen.text() == "Seleccione al menos una fila."
         assert ventana.hilo() is None
     finally:
         ventana.close()

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from app.airvault.config import AIRVAULT_FILENAME, AirVaultConfig
 from app.airvault.correcciones import (
+    ACCION_BORRAR,
     ACCION_REVISAR,
     Correccion,
     CorrectorLogPageAudit,
@@ -70,26 +71,19 @@ FORMATO_FECHA = "d/M/yyyy"
 FECHA_MAS_LARGA = QDate(2000, 12, 30)
 
 WEB_REPORTS_TOOLTIP = (
-    "Consulta en AirVault las páginas mal indexadas y duplicadas del reporte "
-    "Log Page Audit. No modifica documentos."
+    "Consulta páginas mal indexadas y duplicadas en Log Page Audit."
 )
 
 CORREGIR_TOOLTIP = (
-    "Deja una sola copia de cada bitácora repetida (la más antigua) y "
-    "devuelve las mal indexadas a la matrícula de su libro, en toda la "
-    "tabla. Enseña el plan y pide autorización antes de escribir en "
-    "AirVault."
+    "Corrige todas las filas que Log Page Audit permite resolver."
 )
 
 CORREGIR_SELECCION_TOOLTIP = (
-    "Lo mismo, pero solo en las filas elegidas. Con Ctrl o Mayús se eligen "
-    "varias; sin ninguna elegida no hay nada que corregir."
+    "Corrige las filas seleccionadas. Use Ctrl o Mayús para elegir varias."
 )
 
 ADVERTENCIA_CORRECCION = (
-    "Las copias que se borren en AirVault no se pueden recuperar desde BITS. "
-    "Cada bitácora se comprueba antes de borrarla o reindexarla; si ya no "
-    "coincide con el reporte, no se modifica."
+    "Las copias borradas no se pueden recuperar desde BITS."
 )
 
 # Las dos columnas que llevan a Web Search, y lo que abre cada una: la
@@ -334,11 +328,7 @@ class WebReportsWindow(QDialog):
         grid.setColumnStretch(7, 1)
 
         ayuda = QLabel(
-            "M & E Integration. La consulta usa For Export = Yes para "
-            "repetir los datos del libro y Refresh = Yes para regenerar el "
-            "reporte. En la tabla, lo subrayado abre Web Search en Edge: la "
-            "página, con sus apariciones; el rango, con el libro entero. "
-            "Cada una se suma en su pestaña y se queda abierta."
+            "Las celdas subrayadas abren la página o el libro en Web Search."
         )
         ayuda.setWordWrap(True)
         ayuda.setStyleSheet(f"color: {COLOR_AYUDA};")
@@ -366,10 +356,8 @@ class WebReportsWindow(QDialog):
         self.tabla.verticalHeader().setVisible(False)
         self.tabla.setSortingEnabled(True)
         self.tabla.setToolTip(
-            "Resultados de Log Page Audit. Elija filas (con Ctrl o Mayús "
-            "para varias) y use «Corregir seleccionadas…». Consultar no "
-            "cambia nada en AirVault; corregir sí, y avisa antes de "
-            "hacerlo. Las celdas subrayadas se abren en Web Search."
+            "Consultar no modifica AirVault. Las celdas subrayadas abren "
+            "Web Search."
         )
         self.tabla.setAccessibleName("Excepciones de Log Page Audit")
         # Sin seguimiento del ratón no llega «cellEntered», y sin él el
@@ -393,9 +381,7 @@ class WebReportsWindow(QDialog):
         self.progreso.setTextVisible(False)
         cuerpo.addWidget(self.progreso)
 
-        self.resumen = QLabel(
-            "Listo para consultar desde el primer día del mes hasta hoy."
-        )
+        self.resumen = QLabel("Listo para consultar.")
         self.resumen.setWordWrap(True)
         self.resumen.setStyleSheet(f"color: {COLOR_AYUDA};")
         # Con el sitio reservado, como allá: los motivos de fallo de esta
@@ -445,10 +431,7 @@ class WebReportsWindow(QDialog):
 
         self.boton_cancelar = QPushButton("Cancelar")
         self.boton_cancelar.setEnabled(False)
-        self.boton_cancelar.setToolTip(
-            "Detiene el trabajo en curso y cierra la pestaña de Edge. Lo ya "
-            "hecho se conserva; nada queda a medias."
-        )
+        self.boton_cancelar.setToolTip("Detiene el trabajo en curso.")
         self.boton_cancelar.clicked.connect(self._cancelar)
 
         self.boton_cerrar = QPushButton("Cerrar")
@@ -523,10 +506,7 @@ class WebReportsWindow(QDialog):
         """Solo las filas elegidas en la tabla."""
         plan = self.plan_seleccionado()
         if not plan:
-            self.resumen.setText(
-                "No hay ninguna fila elegida. Elija las bitácoras que quiere "
-                "corregir, o use «Corregir todas…»."
-            )
+            self.resumen.setText("Seleccione al menos una fila.")
             return
         self._corregir(plan)
 
@@ -550,7 +530,7 @@ class WebReportsWindow(QDialog):
         self._worker = worker
         self._habilitar(False)
         self.progreso.setRange(0, 0)
-        self.resumen.setText("Abriendo AirVault en Edge para corregir.")
+        self.resumen.setText("Corrigiendo en AirVault…")
         worker.start()
 
     def _autorizado(self, plan: list[Correccion]) -> bool:
@@ -564,7 +544,8 @@ class WebReportsWindow(QDialog):
         dialogo.setIcon(QMessageBox.Icon.Question)
         dialogo.setWindowTitle("Corregir en AirVault")
         dialogo.setText(resumen_del_plan(plan))
-        dialogo.setInformativeText(ADVERTENCIA_CORRECCION)
+        if any(correccion.accion == ACCION_BORRAR for correccion in plan):
+            dialogo.setInformativeText(ADVERTENCIA_CORRECCION)
         aceptar = dialogo.addButton(
             "Corregir", QMessageBox.ButtonRole.AcceptRole
         )
@@ -595,10 +576,7 @@ class WebReportsWindow(QDialog):
                 f"{sin_cambiar}."
             )
         else:
-            texto = (
-                f"Corregidas {len(hechos)} {unidad}. Consulte de nuevo "
-                "el reporte para confirmar el resultado."
-            )
+            texto = f"Corregidas {len(hechos)} {unidad}."
         self.resumen.setText(texto)
 
         if not fallidos:
@@ -624,7 +602,7 @@ class WebReportsWindow(QDialog):
 
     def _al_fallar_correccion(self, mensaje: str) -> None:
         """Un fallo del corrector no se presenta como fallo de consulta."""
-        self.resumen.setText(f"No se pudo completar la corrección: {mensaje}")
+        self.resumen.setText(f"Error al corregir: {mensaje}")
 
     @staticmethod
     def _fecha(valor: QDate) -> QDateEdit:
@@ -659,10 +637,7 @@ class WebReportsWindow(QDialog):
         self._worker = worker
         self._habilitar(False)
         self.progreso.setRange(0, 0)
-        self.resumen.setText(
-            "Abriendo Edge con la cuenta de trabajo. Si pide acceso, "
-            "complételo en esa ventana."
-        )
+        self.resumen.setText("Consultando Web Reports…")
         worker.start()
 
     def _al_avanzar(self, texto: str) -> None:
@@ -680,27 +655,27 @@ class WebReportsWindow(QDialog):
             for resultado in self._resultados
         )
         if not self._resultados:
-            self.resumen.setText(
-                "El reporte no encontró páginas mal indexadas ni duplicadas "
-                "en el rango seleccionado."
-            )
+            self.resumen.setText("Sin resultados en el rango seleccionado.")
         else:
-            # Consultar sigue sin tocar nada, y lo dice. Lo que cambia es
-            # que ahora hay adónde ir después: se cuenta cuántos de esos
-            # casos quedan decididos, que es lo que «Corregir…» aplicaría.
+            tipo_mal = (
+                "mal indexada" if mal_indexadas == 1 else "mal indexadas"
+            )
+            tipo_duplicada = (
+                "duplicada" if duplicadas == 1 else "duplicadas"
+            )
             texto = (
-                f"Se encontraron {mal_indexadas} mal indexadas y "
-                f"{duplicadas} duplicadas. Consultar no modificó AirVault."
+                f"{mal_indexadas} {tipo_mal}, "
+                f"{duplicadas} {tipo_duplicada}."
             )
             aplicables = len(self._aplicables(self.plan()))
             if aplicables:
                 texto += (
-                    f" El reporte deja {aplicables} resueltas: «Corregir "
-                    "todas…» enseña el plan antes de aplicarlo, y eligiendo "
-                    "filas se corrigen solo esas."
+                    " 1 se puede corregir."
+                    if aplicables == 1
+                    else f" {aplicables} se pueden corregir."
                 )
             else:
-                texto += " Ninguna se puede corregir sola."
+                texto += " Requieren revisión manual."
             self.resumen.setText(texto)
 
     def _llenar_tabla(
@@ -797,10 +772,7 @@ class WebReportsWindow(QDialog):
         siguiente se suma a la misma ventana y ninguna cierra a la anterior.
         """
         if self.hilo() is not None:
-            self.resumen.setText(
-                "Hay un trabajo en Edge sin terminar. Espere a que acabe y "
-                "vuelva a pulsar."
-            )
+            self.resumen.setText("Espere a que termine el trabajo actual.")
             return
         self._config = AirVaultConfig.load(self._raiz / AIRVAULT_FILENAME)
         worker = WebSearchWorker(self._config, url, etiqueta, self)
@@ -817,11 +789,7 @@ class WebReportsWindow(QDialog):
         worker.start()
 
     def _al_abrir(self, etiqueta: object) -> None:
-        self.resumen.setText(
-            f"Web Search abierto en {etiqueta}. Cada búsqueda se suma en su "
-            "pestaña y ninguna se cierra sola: ciérrelas al terminar de "
-            "mirarlas."
-        )
+        self.resumen.setText(f"Abierto en Web Search: {etiqueta}.")
 
     def _al_fallar_al_abrir(self, mensaje: str) -> None:
         self.resumen.setText(f"No se pudo abrir Web Search: {mensaje}")
@@ -833,15 +801,14 @@ class WebReportsWindow(QDialog):
         dentro: lo único que queda por decir es dónde quedó la ventana.
         """
         self.resumen.setText(
-            "Web Search se abrió antes de que llegara la cancelación: la "
-            "ventana de Edge está abierta. No se modificó AirVault."
+            "Web Search quedó abierto."
         )
 
     def _al_fallar(self, mensaje: str) -> None:
-        self.resumen.setText(f"No se pudo consultar Web Reports: {mensaje}")
+        self.resumen.setText(f"Error al consultar: {mensaje}")
 
     def _al_cancelar(self) -> None:
-        self.resumen.setText("Consulta cancelada. No se modificó AirVault.")
+        self.resumen.setText("Consulta cancelada.")
 
     def _al_terminar(self) -> None:
         self._worker = None
@@ -883,7 +850,7 @@ class WebReportsWindow(QDialog):
             return
         worker.cancelar()
         self.boton_cancelar.setEnabled(False)
-        self.resumen.setText("Cancelando la consulta…")
+        self.resumen.setText("Cancelando…")
 
     def hilo(self) -> Optional[QThread]:
         worker = self._worker

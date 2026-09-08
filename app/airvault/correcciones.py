@@ -506,7 +506,7 @@ class CorrectorLogPageAudit:
         resultados: list[Resultado] = [
             Resultado(
                 correccion,
-                detalle="No se intentó: queda para revisar a mano.",
+                detalle="Revisión manual.",
             )
             for correccion in plan
             if correccion.accion == ACCION_REVISAR
@@ -559,10 +559,7 @@ class CorrectorLogPageAudit:
             if not copias:
                 return Resultado(
                     correccion,
-                    detalle=(
-                        "Web Search no devolvió esa bitácora. Consulte de "
-                        "nuevo Log Page Audit antes de reintentar."
-                    ),
+                    detalle="No aparece en Web Search.",
                 )
             if correccion.accion == ACCION_BORRAR:
                 return self._borrar(pagina, correccion, copias, ensayo)
@@ -574,7 +571,7 @@ class CorrectorLogPageAudit:
         except Exception as exc:  # noqa: BLE001 - llega a la interfaz
             return Resultado(
                 correccion,
-                detalle=f"No se modificó. Edge devolvió este error: {exc}",
+                detalle=f"Error en Edge: {exc}",
             )
         finally:
             if pagina is not None:
@@ -584,13 +581,12 @@ class CorrectorLogPageAudit:
     def _rejilla(pagina: _Pagina) -> list[object]:
         if not pagina.esperar("document.querySelectorAll('tr').length > 1", 90.0):
             raise ControlNoEncontrado(
-                "La búsqueda no llegó a mostrar resultados. No se tocó nada."
+                "Web Search no mostró resultados."
             )
         leidas = pagina.evaluar(_LEER_REJILLA)
         if not isinstance(leidas, list):
             raise ControlNoEncontrado(
-                "No se reconoció la lista de resultados de AirVault. No se "
-                "tocó nada."
+                "No se pudo leer la tabla de Web Search."
             )
         return [
             fila for fila in leidas if isinstance(fila, (list, Mapping))
@@ -609,20 +605,15 @@ class CorrectorLogPageAudit:
             return Resultado(
                 correccion,
                 detalle=(
-                    f"El reporte indica {esperadas} copias, pero Web Search "
-                    f"muestra {len(copias)}. No se borró ninguna. Consulte "
-                    "de nuevo Log Page Audit."
+                    f"El reporte indica {esperadas} copias; Web Search "
+                    f"muestra {len(copias)}."
                 ),
             )
         se_queda, sobran = por_antiguedad(copias)
         if se_queda is None:
             return Resultado(
                 correccion,
-                detalle=(
-                    "Web Search no muestra una fecha válida para todas las "
-                    "copias. No se borró ninguna porque no se pudo saber "
-                    "cuál era la más antigua."
-                ),
+                detalle="No se pudo identificar la copia más antigua.",
             )
         if ensayo:
             return Resultado(
@@ -643,9 +634,8 @@ class CorrectorLogPageAudit:
             return Resultado(
                 correccion,
                 detalle=(
-                    f"Se pidió borrar {len(sobran)} copias y después de "
-                    f"hacerlo siguen {len(quedan)}. AirVault no aceptó el "
-                    "borrado: revíselo a mano."
+                    f"Se intentaron borrar {len(sobran)} copias; todavía "
+                    f"aparecen {len(quedan)}."
                 ),
             )
         return Resultado(
@@ -669,8 +659,8 @@ class CorrectorLogPageAudit:
             return Resultado(
                 correccion,
                 detalle=(
-                    f"Web Search muestra {len(copias)} copias. No se "
-                    "reindexó porque no se pudo identificar una sola página."
+                    f"Aparece {len(copias)} veces; no se puede elegir una "
+                    "sola página."
                 ),
             )
         copia = copias[0]
@@ -681,9 +671,8 @@ class CorrectorLogPageAudit:
             return Resultado(
                 correccion,
                 detalle=(
-                    f"El reporte indica {correccion.matricula_actual}, pero "
-                    f"Web Search muestra {actual}. No se reindexó. Consulte "
-                    "de nuevo Log Page Audit."
+                    f"El reporte indica {correccion.matricula_actual}; Web "
+                    f"Search muestra {actual}."
                 ),
             )
         if ensayo:
@@ -770,8 +759,7 @@ class CorrectorLogPageAudit:
         )
         if hecho != "OK":
             raise ControlNoEncontrado(
-                "La pantalla de AirVault no dejó borrar esa copia "
-                f"({hecho}). No se borró ninguna."
+                f"No se pudo borrar la copia ({hecho})."
             )
 
     @staticmethod
@@ -839,6 +827,5 @@ class CorrectorLogPageAudit:
         )
         if hecho != "OK":
             raise ControlNoEncontrado(
-                "La pantalla de AirVault no traía el campo del avión o el "
-                f"de guardar ({hecho}). No se reindexó nada."
+                f"No se pudo cambiar la matrícula ({hecho})."
             )
