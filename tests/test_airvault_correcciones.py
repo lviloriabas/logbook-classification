@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.airvault import correcciones as modulo_correcciones
 from app.airvault.config import AirVaultConfig
 from app.airvault.correcciones import (
     ACCION_BORRAR,
     ACCION_REINDEXAR,
     ACCION_REVISAR,
+    ControlNoEncontrado,
     CorrectorLogPageAudit,
     _NavegadorDeCorrecciones,
     copias_en,
@@ -17,6 +20,7 @@ from app.airvault.correcciones import (
     por_antiguedad,
     resumen_del_plan,
 )
+from app.airvault.mapping import ResolutorFlota
 from app.airvault.web_reports import parsear_filas
 
 
@@ -128,12 +132,60 @@ def test_sin_nada_que_corregir_el_resumen_lo_dice() -> None:
 
 # ── lo que se lee de la pantalla de búsqueda ────────────────────────
 
+# Una fila de Web Search tal y como llega: el registro que guarda jqGrid,
+# con sus nombres. «fila» es el número de orden dentro de la página y no
+# identifica nada; el documento es «clave» (el DocKey de AirVault).
+
+
+def _fila_de_rejilla(
+    fila: str,
+    documento: str,
+    log: str,
+    matricula: str,
+    cuando: str,
+) -> dict[str, str]:
+    return {
+        "fila": fila,
+        "clave": f"1_3209_{documento}_1_1_0",
+        "documento": documento,
+        "log": log,
+        "matricula": matricula,
+        "cuando": cuando,
+    }
+
+
 _REJILLA = [
-    ["", "Log Page", "Aircraft", "Scan Date", "Doc Type"],
-    ["", "2008159", "HP-9913CMP", "3/14/2025 09:12:00", "Log Page"],
-    ["", "2008159", "HP-9913CMP", "1/9/2025 14:05:00", "Log Page"],
-    ["", "2008160", "HP-9913CMP", "2/2/2025 08:00:00", "Log Page"],
+    _fila_de_rejilla("1", "884", "2008159", "HP-9913CMP", "3/14/2025 9:12:00 AM"),
+    _fila_de_rejilla("2", "231", "2008159", "HP-9913CMP", "1/9/2025 2:05:00 PM"),
+    _fila_de_rejilla("3", "907", "2008160", "HP-9913CMP", "2/2/2025 8:00:00 AM"),
 ]
+
+
+class _PaginaFalsa:
+    """Una pantalla de Web Search que contesta lo que se le diga.
+
+    Guarda las órdenes que recibe: lo que se le pide es la mitad de lo que
+    hay que comprobar, porque una orden que sale con el documento
+    equivocado se ve aquí y no en el resultado.
+    """
+
+    def __init__(self, *lecturas: list[dict[str, str]]) -> None:
+        self._lecturas = list(lecturas)
+        self.ordenes: list[str] = []
+        self.aviso = ""
+
+    def esperar(self, _condicion, _segundos, cada: float = 0.5) -> bool:
+        return True
+
+    def evaluar(self, expresion: str):
+        self.ordenes.append(expresion)
+        if expresion == modulo_correcciones._LEER_REJILLA:
+            if len(self._lecturas) > 1:
+                return self._lecturas.pop(0)
+            return self._lecturas[0]
+        if expresion == modulo_correcciones._MENSAJE:
+            return self.aviso
+        return "OK"
 
 
 def test_solo_se_toman_las_filas_de_esa_bitacora() -> None:
@@ -143,10 +195,9 @@ def test_solo_se_toman_las_filas_de_esa_bitacora() -> None:
     assert {copia.matricula for copia in copias} == {"HP-9913CMP"}
 
 
-def test_la_columna_de_fecha_se_reconoce_por_su_nombre() -> None:
-    """El orden de las columnas lo decide quien monta la búsqueda."""
-    copias = copias_en(_REJILLA, "2008159")
-    se_queda, sobran = por_antiguedad(copias)
+def test_se_conserva_la_copia_mas_antigua() -> None:
+    """La fecha viene en su campo, no en la columna que toque ese día."""
+    se_queda, sobran = por_antiguedad(copias_en(_REJILLA, "2008159"))
 
     assert se_queda is not None
     assert se_queda.cuando.month == 1
@@ -155,9 +206,8 @@ def test_la_columna_de_fecha_se_reconoce_por_su_nombre() -> None:
 
 def test_sin_fecha_legible_no_se_borra_ninguna_copia() -> None:
     rejilla = [
-        ["", "Log Page", "Aircraft"],
-        ["", "2008159", "HP-9913CMP"],
-        ["", "2008159", "HP-9913CMP"],
+        _fila_de_rejilla("1", "884", "2008159", "HP-9913CMP", ""),
+        _fila_de_rejilla("2", "231", "2008159", "HP-9913CMP", ""),
     ]
 
     se_queda, sobran = por_antiguedad(copias_en(rejilla, "2008159"))
@@ -173,123 +223,181 @@ def test_una_sola_copia_no_deja_nada_por_borrar() -> None:
     assert sobran == []
 
 
-def test_cada_copia_se_queda_con_el_identificador_de_su_fila() -> None:
+def test_cada_copia_se_queda_con_la_clave_de_su_documento() -> None:
     """Borrar por posición cae en otro documento en cuanto falta una fila.
 
-    AirVault monta la rejilla con jqGrid, que numera cada ``<tr>`` con el
-    identificador del registro. Es lo que hay que apuntar: al borrar la
-    primera sobrante, las de abajo se corren de sitio.
+    El id del ``<tr>`` que monta jqGrid es el número de orden dentro de la
+    página: dos consultas seguidas de la misma bitácora devuelven las mismas
+    copias en distinto orden, y al borrar una las de abajo se corren. Lo que
+    identifica al documento es su DocKey.
     """
-    rejilla = [
-        {"id": "", "celdas": ["", "Log Page", "Aircraft", "Scan Date"]},
-        {"id": "884", "celdas": ["", "2008159", "HP-9913CMP", "3/14/2025"]},
-        {"id": "231", "celdas": ["", "2008159", "HP-9913CMP", "1/9/2025"]},
-        {"id": "907", "celdas": ["", "2008159", "HP-9913CMP", "5/2/2025"]},
-    ]
+    se_queda, sobran = por_antiguedad(copias_en(_REJILLA, "2008159"))
 
-    se_queda, sobran = por_antiguedad(copias_en(rejilla, "2008159"))
-
-    assert se_queda.identificador == "231"
-    assert [copia.identificador for copia in sobran] == ["884", "907"]
+    assert se_queda.clave == "1_3209_231_1_1_0"
+    assert [copia.clave for copia in sobran] == ["1_3209_884_1_1_0"]
 
 
-def test_el_corrector_conserva_las_filas_con_identificador() -> None:
-    """El navegador entrega diccionarios, no listas de celdas sueltas."""
-    rejilla = [
-        {"id": "", "celdas": ["Log Page", "Aircraft", "Scan Date"]},
-        {
-            "id": "884",
-            "celdas": ["2008159", "HP-9913CMP", "3/14/2025"],
-        },
-    ]
+def test_la_rejilla_se_lee_entera_tal_y_como_llega() -> None:
+    pagina = _PaginaFalsa(_REJILLA)
 
-    class _PaginaFalsa:
-        def esperar(self, _condicion, _segundos):
-            return True
+    leida = CorrectorLogPageAudit._rejilla(pagina)
 
-        def evaluar(self, _expresion):
-            return rejilla
-
-    leida = CorrectorLogPageAudit._rejilla(_PaginaFalsa())
-
-    assert leida == rejilla
-    assert copias_en(leida, "2008159")[0].identificador == "884"
+    assert leida == _REJILLA
+    assert copias_en(leida, "2008159")[0].documento == "884"
 
 
-def test_una_rejilla_con_identificadores_llega_hasta_el_borrado() -> None:
+def test_el_borrado_llega_hasta_airvault_y_se_comprueba_despues() -> None:
     correccion = planificar(
         _excepciones(("HP-9913CMP", "DUPLICATED 2008159(2x)"))
     )[0]
-    antes = [
-        {"id": "", "celdas": ["Log Page", "Aircraft", "Scan Date"]},
-        {
-            "id": "vieja",
-            "celdas": ["2008159", "HP-9913CMP", "1/9/2025"],
-        },
-        {
-            "id": "nueva",
-            "celdas": ["2008159", "HP-9913CMP", "3/14/2025"],
-        },
-    ]
-    despues = antes[:2]
-
-    class _PaginaFalsa:
-        lecturas = 0
-
-        def esperar(self, _condicion, _segundos):
-            return True
-
-        def evaluar(self, expresion):
-            if expresion == modulo_correcciones._LEER_REJILLA:
-                self.lecturas += 1
-                return antes if self.lecturas == 1 else despues
-            return "OK"
-
-    pagina = _PaginaFalsa()
-    corrector = CorrectorLogPageAudit(AirVaultConfig())
-    rejilla = corrector._rejilla(pagina)
+    queda = [_REJILLA[1], _REJILLA[2]]
+    pagina = _PaginaFalsa(_REJILLA, queda)
+    corrector = CorrectorLogPageAudit(AirVaultConfig(), ResolutorFlota())
 
     resultado = corrector._borrar(
-        pagina, correccion, copias_en(rejilla, "2008159"), ensayo=False
+        pagina,
+        correccion,
+        copias_en(corrector._rejilla(pagina), "2008159"),
+        ensayo=False,
     )
 
     assert resultado.hecho
-    assert "Borradas 1" in resultado.detalle
+    assert "Borrada 1 copia" in resultado.detalle
+    # Se pidió por la clave de la copia que sobra, que es la más nueva.
+    pedidas = [orden for orden in pagina.ordenes if "onDeletePage" in orden]
+    assert len(pedidas) == 1
+    assert "1_3209_884_1_1_0" in pedidas[0]
 
 
-def test_una_rejilla_con_identificadores_llega_hasta_el_reindexado() -> None:
+def test_un_borrado_que_no_borro_no_se_da_por_hecho() -> None:
+    """AirVault puede aceptar la orden y no llegar a borrar nada."""
     correccion = planificar(
-        _excepciones(
-            ("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]")
-        )
+        _excepciones(("HP-9913CMP", "DUPLICATED 2008159(2x)"))
     )[0]
-    rejilla = [
-        {"id": "", "celdas": ["Log Page", "Aircraft", "Scan Date"]},
-        {
-            "id": "pagina",
-            "celdas": ["2008152", "HP-9813CMP", "1/9/2025"],
-        },
+    pagina = _PaginaFalsa(_REJILLA)
+    corrector = CorrectorLogPageAudit(AirVaultConfig(), ResolutorFlota())
+
+    resultado = corrector._borrar(
+        pagina,
+        correccion,
+        copias_en(corrector._rejilla(pagina), "2008159"),
+        ensayo=False,
+    )
+
+    assert not resultado.hecho
+    assert "todavía aparecen 2" in resultado.detalle
+
+
+def test_el_reindexado_escribe_la_matricula_y_la_flota_que_le_toca() -> None:
+    correccion = planificar(
+        _excepciones(("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]"))
+    )[0]
+    antes = [
+        _fila_de_rejilla("1", "551", "2008152", "HP-9813CMP", "1/9/2025 9:00:00 AM")
     ]
-
-    class _PaginaFalsa:
-        def esperar(self, _condicion, _segundos):
-            return True
-
-        def evaluar(self, expresion):
-            if expresion == modulo_correcciones._LEER_REJILLA:
-                return rejilla
-            return "OK"
-
-    pagina = _PaginaFalsa()
-    corrector = CorrectorLogPageAudit(AirVaultConfig())
-    leida = corrector._rejilla(pagina)
+    despues = [
+        _fila_de_rejilla("1", "551", "2008152", "HP-9913CMP", "1/9/2025 9:00:00 AM")
+    ]
+    pagina = _PaginaFalsa(antes, despues)
+    corrector = CorrectorLogPageAudit(
+        AirVaultConfig(), ResolutorFlota({"HP-9913CMP": {"fleet": "MAX"}})
+    )
 
     resultado = corrector._reindexar(
-        pagina, correccion, copias_en(leida, "2008152"), ensayo=False
+        pagina,
+        correccion,
+        copias_en(corrector._rejilla(pagina), "2008152"),
+        ensayo=False,
     )
 
     assert resultado.hecho
     assert "HP-9913CMP" in resultado.detalle
+    escritas = [
+        orden for orden in pagina.ordenes if "C_ACREG" in orden
+    ]
+    assert escritas and '"HP-9913CMP"' in escritas[0]
+    # Mover una página de una HP-15 a una HP-99 le cambia la flota, y
+    # dejarle la de antes sería cambiar un dato malo por otro.
+    assert '"MAX"' in escritas[0]
+
+
+def test_un_reindexado_que_no_cuajo_no_se_da_por_hecho() -> None:
+    correccion = planificar(
+        _excepciones(("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]"))
+    )[0]
+    sin_cambiar = [
+        _fila_de_rejilla("1", "551", "2008152", "HP-9813CMP", "1/9/2025 9:00:00 AM")
+    ]
+    pagina = _PaginaFalsa(sin_cambiar)
+    corrector = CorrectorLogPageAudit(AirVaultConfig(), ResolutorFlota())
+
+    resultado = corrector._reindexar(
+        pagina,
+        correccion,
+        copias_en(corrector._rejilla(pagina), "2008152"),
+        ensayo=False,
+    )
+
+    assert not resultado.hecho
+    assert "HP-9813CMP" in resultado.detalle
+
+
+def test_un_aviso_de_airvault_detiene_ese_caso_sin_tocar_nada() -> None:
+    """«Locked by another user» es un motivo, no un fallo del programa."""
+    correccion = planificar(
+        _excepciones(("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]"))
+    )[0]
+    rejilla = [
+        _fila_de_rejilla("1", "551", "2008152", "HP-9813CMP", "1/9/2025 9:00:00 AM")
+    ]
+    pagina = _PaginaFalsa(rejilla)
+    pagina.aviso = "The specified document page is locked by another user."
+    corrector = CorrectorLogPageAudit(AirVaultConfig(), ResolutorFlota())
+
+    with pytest.raises(ControlNoEncontrado) as fallo:
+        corrector._reindexar(
+            pagina,
+            correccion,
+            copias_en(corrector._rejilla(pagina), "2008152"),
+            ensayo=False,
+        )
+
+    assert "locked by another user" in str(fallo.value)
+    # Y no se llegó a escribir nada: el aviso llega en lugar del cuadro.
+    assert not any("C_ACREG" in orden for orden in pagina.ordenes)
+
+def test_un_caso_que_se_corta_suelta_el_documento() -> None:
+    """El cuadro abierto deja el documento tomado para todo el mundo."""
+    correccion = planificar(
+        _excepciones(("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]"))
+    )[0]
+    rejilla = [
+        _fila_de_rejilla(
+            "1", "551", "2008152", "HP-9813CMP", "1/9/2025 9:00:00 AM"
+        )
+    ]
+
+    class _PaginaQueNoGuarda(_PaginaFalsa):
+        def evaluar(self, expresion: str):
+            respuesta = super().evaluar(expresion)
+            if "C_ACREG" in expresion:
+                return "AirVault no ofrece HP-9913CMP en C_ACREG"
+            return respuesta
+
+    pagina = _PaginaQueNoGuarda(rejilla)
+    corrector = CorrectorLogPageAudit(AirVaultConfig(), ResolutorFlota())
+
+    with pytest.raises(ControlNoEncontrado):
+        corrector._reindexar(
+            pagina,
+            correccion,
+            copias_en(corrector._rejilla(pagina), "2008152"),
+            ensayo=False,
+        )
+
+    assert any(
+        "ui-dialog-titlebar-close" in orden for orden in pagina.ordenes
+    )
 
 
 def test_la_correccion_usa_una_pestana_de_fondo_y_deja_edge_abierto(
