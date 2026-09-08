@@ -12,6 +12,19 @@ def test_la_cantidad_no_tiene_un_default_fijo_en_el_codigo():
     assert AirVaultConfig().espera_reenvio_s == 30 * 60
 
 
+def test_usa_el_ejemplo_si_no_hay_preferencias_locales(tmp_path):
+    ruta = tmp_path / "airvault.json"
+    (tmp_path / "airvault.example.json").write_text(
+        json.dumps({"repo_id": 77, "paginas_por_batch": 325}),
+        encoding="utf-8",
+    )
+
+    config = AirVaultConfig.load(ruta)
+
+    assert config.repo_id == 77
+    assert config.paginas_por_batch == 325
+
+
 def test_guarda_la_ultima_cantidad_sin_perder_la_configuracion(tmp_path):
     ruta = tmp_path / "airvault.json"
     ruta.write_text(

@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 AIRVAULT_FILENAME = "airvault.json"
+# Los valores de partida, que si viajan en el repositorio. El archivo real es
+# local de cada instalacion: se escribe solo al mover un control y no se
+# versiona, para que un pull no choque con las preferencias de la maquina.
+AIRVAULT_EXAMPLE_FILENAME = "airvault.example.json"
 _CONFIG_WRITE_LOCK = threading.Lock()
 
 # Identificadores de campo del repositorio MXDocs (repoId 3209). Son
@@ -180,8 +184,16 @@ class AirVaultConfig:
 
     @classmethod
     def load(cls, path: Path | str) -> "AirVaultConfig":
-        """Carga la configuracion; si no existe el archivo, usa defectos."""
+        """Carga la configuracion; si no existe el archivo, usa defectos.
+
+        Un clon recien hecho todavia no tiene ``airvault.json``, asi que
+        antes de caer a los defectos del codigo se mira el ejemplo que si
+        viene versionado: es de donde salen las paginas por batch y demas
+        valores de partida.
+        """
         ruta = Path(path)
+        if not ruta.is_file():
+            ruta = ruta.with_name(AIRVAULT_EXAMPLE_FILENAME)
         if not ruta.is_file():
             return cls()
         try:
