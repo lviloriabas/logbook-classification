@@ -84,6 +84,11 @@ QGroupBox::title {{ top: 4px; }}
 QLineEdit {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 {CONTROL_PAD_H_COMPACT}px; }}
 QSpinBox {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 {CONTROL_PAD_H_COMPACT}px; }}
 QComboBox {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 28px 0 {CONTROL_PAD_H_COMPACT}px; }}
+/* La hoja base los mete en la misma regla que el campo y el desplegable, pero
+   aqui faltaban: en las medidas apretadas el campo de fecha se quedaba con los
+   30 px de las holgadas y salia cuatro mas alto que el desplegable de al lado,
+   en la misma fila. */
+QDateEdit, QTimeEdit, QDateTimeEdit {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; padding: 0 28px 0 {CONTROL_PAD_H_COMPACT}px; }}
 QProgressBar {{ min-height: {CONTROL_BOX_H_COMPACT}px; max-height: {CONTROL_BOX_H_COMPACT}px; }}
 QCheckBox, QRadioButton {{ min-height: {CONTROL_HEIGHT_COMPACT}px; max-height: {CONTROL_HEIGHT_COMPACT}px; }}
 """
