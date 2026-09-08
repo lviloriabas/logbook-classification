@@ -347,6 +347,18 @@ QPushButton:disabled, QToolButton:disabled {{
     background-color: palette(highlight);
     border-color: {TEXT_DISABLED};
 }}
+/* El acento llega hasta la flecha. La celda del menú se pintaba con el gris
+   de la regla general al pasar el cursor, y sobre el acento eso se lee como
+   un trozo apagado del botón en vez de un botón entero. El aviso de que ahí
+   se abre el menú lo da un velo claro, que vale para cualquier acento porque
+   no trae color propio; el separador, por lo mismo, es blanco translúcido y
+   no el gris del marco. */
+QToolButton#primaryButton[menuRole="split"]::menu-button {{
+    border-left: 1px solid rgba(255, 255, 255, 0.45);
+}}
+QToolButton#primaryButton[menuRole="split"]::menu-button:hover {{
+    background-color: rgba(255, 255, 255, 0.14);
+}}
 QToolButton#spinStepButton {{
     min-width: 18px; max-width: 18px; min-height: 0;
     padding: 0;
