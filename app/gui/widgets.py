@@ -589,10 +589,15 @@ QMenu {{
     border-radius: {TABLE_RADIUS}px;
     padding: 4px;
 }}
+/* El relleno de la izquierda no es la sangría del texto: Qt le suma la
+   columna del icono o de la marca, así que los 30 px de antes dejaban al
+   rótulo a 46 px del borde y abrían un hueco enorme entre la marca y su
+   texto. Con 12 px la separación queda en los ~12 que usa el menú de
+   Windows, y los menús sin marcas ni iconos siguen con su sangría. */
 QMenu::item {{
     border-radius: {TABLE_RADIUS}px;
     min-height: 22px;
-    padding: 5px 28px 5px 30px;
+    padding: 5px 28px 5px 12px;
 }}
 QMenu::item:selected {{ background-color: {PANE_CONTROL_HOVER}; }}
 QMenu::item:disabled {{ color: {TEXT_DISABLED}; }}
