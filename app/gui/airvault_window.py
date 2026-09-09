@@ -2907,6 +2907,15 @@ class AirVaultWindow(QDialog):
             estado_local,
         )
 
+        # La cantidad es una preferencia compartida con la exportacion.
+        # Se recupera tambien si otra ventana la cambio estando esta abierta.
+        guardadas = AirVaultConfig.load(
+            self._raiz / AIRVAULT_FILENAME
+        ).paginas_por_batch
+        if guardadas is not None:
+            self._config = self._config.with_overrides(paginas_por_batch=guardadas)
+            with QSignalBlocker(self.limite_batch_spin):
+                self.limite_batch_spin.setValue(guardadas)
         try:
             self._trabajos = cargar_partes(self._config_actual(), carpeta, csv)
         except Exception:  # noqa: BLE001 - sin trabajos se empieza de cero
@@ -2933,15 +2942,6 @@ class AirVaultWindow(QDialog):
         self._trabajos.sort(
             key=lambda trabajo: estado_local(trabajo).estado != SIN_SUBIR
         )
-        limites = {
-            t.manifiesto.paginas_por_batch for t in trabajos_de_corrida
-            if t.manifiesto.paginas_por_batch > 0
-        }
-        if len(limites) == 1:
-            # Retomar un batch conserva su reparto, pero no convierte un
-            # valor historico en la preferencia para la proxima carga.
-            with QSignalBlocker(self.limite_batch_spin):
-                self.limite_batch_spin.setValue(limites.pop())
         compresiones = {t.manifiesto.compresion for t in trabajos_de_corrida}
         if len(compresiones) == 1:
             self.compresion_check.setChecked(compresiones.pop())

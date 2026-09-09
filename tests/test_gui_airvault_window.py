@@ -191,6 +191,63 @@ def test_el_limite_de_quick_upload_toma_las_400_paginas_guardadas(app, tmp_path)
     ventana.close()
 
 
+def test_configuracion_parcial_y_reapertura_conservan_la_cantidad(app, tmp_path):
+    from app.airvault.config import guardar_preferencias
+    from app.gui.export_options import ExportOptionsGroup
+
+    (tmp_path / "airvault.example.json").write_text(
+        json.dumps({"paginas_por_batch": 400}), encoding="utf-8",
+    )
+    guardar_preferencias(tmp_path / "airvault.json", auto_subir=False)
+    primera = AirVaultWindow(tmp_path)
+    assert primera.limite_batch_spin.value() == 400
+    primera.limite_batch_spin.setValue(475)
+    primera.close()
+    guardar_preferencias(tmp_path / "airvault.json", completar_batch=False)
+
+    segunda = AirVaultWindow(tmp_path)
+    exportacion = ExportOptionsGroup(raiz=tmp_path)
+    assert segunda.limite_batch_spin.value() == 475
+    assert exportacion.partes_spin.value() == 475
+    segunda.close()
+    exportacion.close()
+
+
+def test_un_batch_antiguo_no_reemplaza_la_cantidad_configurada(app, tmp_path):
+    csv = corrida(tmp_path)
+    registro = registrar_en_airvault(tmp_path, csv)
+    datos = json.loads(registro.read_text(encoding="utf-8"))
+    datos["paginas_por_batch"] = 10
+    registro.write_text(json.dumps(datos), encoding="utf-8")
+    ventana = AirVaultWindow(tmp_path)
+    ventana.limite_batch_spin.setValue(475)
+
+    ventana.fijar_corrida(csv)
+
+    assert len(ventana._trabajos) == 1
+    assert ventana._trabajos[0].manifiesto.paginas_por_batch == 10
+    assert ventana.limite_batch_spin.value() == 475
+    assert ventana._base_del_estado()["paginas_por_batch"] == 475
+    assert AirVaultConfig.load(tmp_path / "airvault.json").paginas_por_batch == 475
+    ventana.close()
+
+
+def test_al_elegir_corrida_recupera_la_preferencia_cambiada_en_exportacion(app, tmp_path):
+    from app.gui.export_options import ExportOptionsGroup
+
+    ventana = AirVaultWindow(tmp_path)
+    ventana.limite_batch_spin.setValue(300)
+    exportacion = ExportOptionsGroup(raiz=tmp_path)
+    exportacion.partes_spin.setValue(550)
+
+    ventana.fijar_corrida(corrida(tmp_path))
+
+    assert ventana.limite_batch_spin.value() == 550
+    assert ventana._config.paginas_por_batch == 550
+    ventana.close()
+    exportacion.close()
+
+
 def test_la_compresion_es_opcional_y_explica_los_200_dpi(ventana):
     assert ventana.compresion_check.text() == "Compresión"
     assert not ventana.compresion_check.isChecked()
