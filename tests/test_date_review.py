@@ -38,8 +38,8 @@ def fixed_clock(monkeypatch):
 @pytest.mark.parametrize("value,review", [
     ("2026/09/06", False), ("2026/09/01", False), ("2026/08/01", False),
     ("2026/08/31", False), ("2026/07/31", False), ("2026/05/11", False),
-    ("2025/10/01", False), ("2025/09/30", True), ("2025/09/06", True),
-    ("2020/07/25", True),
+    ("2025/10/01", True), ("2025/09/30", True), ("2024/01/01", True),
+    ("2023/12/31", True), ("2020/07/25", True), ("2001/05/04", True),
 ])
 def test_temporal_review_keeps_the_read_date(value, review):
     page = PageResult(page_number=1, date=value)
@@ -50,21 +50,32 @@ def test_temporal_review_keeps_the_read_date(value, review):
         assert por_revisar(page)
 
 
-def test_the_scanning_backlog_of_the_year_is_not_a_reason_to_review():
+def test_only_the_current_year_is_normal_outside_january():
     # El periodo habitual sigue siendo estrecho porque ordena candidatos; el
-    # de revisión cubre el año, que es lo que una entrega arrastra de verdad.
-    assert review_start(TODAY) == date(2025, 10, 1)
-    assert review_start(date(2026, 1, 15)) == date(2025, 2, 1)
+    # de revisión admite solo el año de la ejecución fuera de enero.
+    assert review_start(TODAY) == date(2026, 1, 1)
     assert not is_usual(date(2026, 5, 11), TODAY)
     page = PageResult(page_number=1, date="2026/05/11")
     assert not review_date_window(page)
     assert not page.date_review
+    for value in ("2025/09/06", "2024/08/07"):
+        page = PageResult(page_number=1, date=value)
+        assert review_date_window(page)
+        assert page.date_review
 
 
-def test_the_same_month_of_last_year_is_still_reviewed():
-    # Un año justo de diferencia casi siempre es el año mal leído, así que
-    # el periodo se cierra antes de cumplirlo.
-    page = PageResult(page_number=1, date="2025/09/06")
+def test_january_accepts_the_previous_year_backlog():
+    reference = date(2026, 1, 15)
+    assert review_start(reference) == date(2025, 1, 1)
+    page = PageResult(page_number=1, date="2025/12/31")
+    assert not review_date_window(page, reference)
+    assert not page.date_review
+
+
+def test_a_year_that_cannot_be_the_delivery_is_reviewed():
+    # Seis, diez o veinte años atrás no es una bitácora vieja en una entrega
+    # del año en curso: es un año que nadie puede dar por bueno sin verlo.
+    page = PageResult(page_number=1, date="2020/08/14")
     assert review_date_window(page)
     assert "Fecha muy antigua" in page.comment
 
@@ -150,7 +161,7 @@ def test_an_unread_day_filled_by_the_book_is_checked_by_month():
     ))
     assert not review_date_window(page)
     assert not page.date_review
-    # Medido por mes, una fecha del año pasado sigue pasando a revisión.
+    # Fuera de enero, el año anterior ya necesita revisión.
     page.date = "2025/07/31"
     assert review_date_window(page)
 

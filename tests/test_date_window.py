@@ -61,19 +61,25 @@ def test_los_anos_fuera_no_se_mueven_por_el_borde_de_la_ventana():
     assert years_outside_usual(date(2020, 8, 20), HOY) == 5
 
 
-def test_el_periodo_de_revision_cubre_el_ano_corrido():
-    # Lo que decide la revisión es mucho más ancho que lo habitual: una cola
-    # de escaneo de meses es normal, un año entero de diferencia no.
-    assert review_start(HOY) == date(2025, 10, 1)
+def test_fuera_de_enero_solo_el_ano_actual_evade_revision():
+    assert review_start(HOY) == date(2026, 1, 1)
     assert not needs_review_for_age(HOY, HOY)
     assert not needs_review_for_age(date(2026, 1, 3), HOY)
-    assert not needs_review_for_age(date(2025, 10, 1), HOY)
-    assert needs_review_for_age(date(2025, 9, 30), HOY)
-    assert needs_review_for_age(date(2024, 8, 20), HOY)
+    assert needs_review_for_age(date(2025, 12, 31), HOY)
+    assert needs_review_for_age(date(2024, 1, 1), HOY)
+    assert needs_review_for_age(date(2023, 12, 31), HOY)
+    assert needs_review_for_age(date(2020, 8, 20), HOY)
+    assert needs_review_for_age(date(2001, 5, 4), HOY)
 
 
-def test_el_periodo_de_revision_cruza_el_ano_por_meses_enteros():
-    assert review_start(date(2026, 1, 31)) == date(2025, 2, 1)
-    assert review_start(date(2026, 12, 1)) == date(2026, 1, 1)
-    assert not needs_review_for_age(date(2025, 2, 1), date(2026, 1, 31))
-    assert needs_review_for_age(date(2025, 1, 31), date(2026, 1, 31))
+def test_enero_admite_la_cola_del_ano_anterior():
+    enero = date(2026, 1, 31)
+    assert review_start(enero) == date(2025, 1, 1)
+    assert not needs_review_for_age(date(2025, 1, 1), enero)
+    assert needs_review_for_age(date(2024, 12, 31), enero)
+
+
+def test_desde_febrero_el_ano_anterior_vuelve_a_revision():
+    febrero = date(2026, 2, 1)
+    assert review_start(febrero) == date(2026, 1, 1)
+    assert needs_review_for_age(date(2025, 12, 31), febrero)

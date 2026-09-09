@@ -4,8 +4,9 @@ Solo la antigüedad aparta una página. Una fecha posterior a la ejecución no
 llega hasta aquí: el corrector de fechas aparta esa lectura y la sustituye
 por el día que el libro admite, así que la bitácora se indexa sola en vez de
 pasar a REVISAR por un número mal leído. Lo que se revisa es lo que ninguna
-inferencia puede arreglar: una fecha de hace más de un año, que casi siempre
-es el año mal leído y que nadie puede confirmar sin ver la página.
+inferencia puede arreglar: una fecha anterior al año de la ejecución, salvo
+la cola del año anterior que todavía es normal durante enero. Cualquier otra
+necesita que alguien confirme el año mirando la página.
 """
 
 from __future__ import annotations

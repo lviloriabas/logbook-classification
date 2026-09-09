@@ -4,10 +4,10 @@ El **habitual** (mes actual y anterior, hasta hoy) ordena candidatos: de dos
 lecturas posibles de una misma fecha, la que cae en él es la creíble. Es
 estrecho a propósito, porque solo sirve para comparar.
 
-El de **revisión** es mucho más ancho y decide otra cosa: cuándo una fecha
-es tan antigua que tiene que mirarla una persona. Una entrega normal arrastra
-semanas o unos meses de cola de escaneo, y medir eso con el periodo habitual
-mandaba a REVISAR bitácoras bien leídas solo por llevar un mes de más.
+El de **revisión** decide cuándo una fecha es tan antigua que tiene que
+mirarla una persona. Fuera de enero solo admite el año de la ejecución. En
+enero también admite el anterior, porque una entrega puede conservar la cola
+del cierre de diciembre.
 
 Ninguna fecha manuscrita puede ser futura; la representación a fin de mes se
 comprueba por mes porque su día se genera para el reporte, no se lee de la
@@ -59,20 +59,16 @@ def usual_start(today: Optional[date] = None) -> date:
     return (first - timedelta(days=1)).replace(day=1)
 
 
-# Meses que abarca el periodo de revisión, contando el de la ejecución. Un
-# atraso de semanas o de unos meses es lo normal en una entrega y no dice
-# nada de la lectura. Lo que casi nunca es real es un año entero de
-# diferencia: ahí el año suele estar mal leído (un '26' que salió '25' o
-# '24'). Por eso el periodo se cierra justo antes de cumplirse el año, y una
-# fecha del mismo mes del año pasado sí pasa a REVISAR.
-REVIEW_MONTHS = 12
-
-
 def review_start(today: Optional[date] = None) -> date:
-    """Primer día del periodo que no necesita revisión por antigüedad."""
+    """Primer día del periodo que no necesita revisión por antigüedad.
+
+    El año anterior solo entra durante enero, cuando todavía es normal recibir
+    páginas del cierre de diciembre. El resto del año, una fecha anterior al
+    año de la ejecución necesita revisión.
+    """
     reference = reference_date(today)
-    months = reference.year * 12 + reference.month - REVIEW_MONTHS
-    return date(months // 12, months % 12 + 1, 1)
+    first_year = reference.year - (1 if reference.month == 1 else 0)
+    return date(first_year, 1, 1)
 
 
 def needs_review_for_age(value: date, today: Optional[date] = None) -> bool:
