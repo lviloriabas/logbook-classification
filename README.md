@@ -95,7 +95,7 @@ Revise como mínimo:
   ejecución;
 - `dup=true`, que indica una aparición repetida;
 - `disc=true`, que indica una posible discrepancia de firmas, y
-  `discrepancia`, que dice en una frase cuál es;
+  `disc_reason`, que dice en una frase cuál es;
 - las páginas incluidas en **REVISAR** y en `errores.pdf`.
 
 Cada libro físico tiene 50 páginas y una sola aeronave. Los finales `00` a `49` pertenecen a un libro y `50` a `99` al siguiente. La fecha puede repetirse, pero no retroceder al aumentar `log_number` dentro del mismo libro.

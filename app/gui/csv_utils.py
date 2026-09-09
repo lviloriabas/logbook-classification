@@ -17,7 +17,7 @@ TEXTO_ELEGIR_EJECUCION = "Seleccionar ejecución"
 
 _CSV_METADATA_SUFFIXES = ("_conf", "_status", "_comment", "_source")
 _ALWAYS_IMPORTANT_COLUMNS = frozenset(
-    {"file", "page", "review", "dup", "disc", "discrepancia", "date",
+    {"file", "page", "review", "dup", "disc", "disc_reason", "date",
      "time_ms"}
 )
 _DATE_COMPONENT_FIELDS = frozenset({"day", "month", "year"})

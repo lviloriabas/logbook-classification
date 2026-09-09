@@ -74,7 +74,7 @@ Las discrepancias se ordenan globalmente por número de bitácora
 (``log_number``) ascendente, sin subdividirlas por matrícula o mes.
 
 Cada discrepancia confirmada resume en una frase qué le falta a la página
-(``Discrepancia.resumen``). Es lo que va a la columna ``discrepancia`` del
+(``Discrepancia.resumen``). Es lo que va a la columna ``disc_reason`` del
 CSV, así que se escribe corto y en el idioma del que revisa: «Faltan firma
 de técnico y licencia de técnico», no una lista de identificadores.
 """
