@@ -1,8 +1,17 @@
-"""Periodo habitual de las bitácoras: mes actual y anterior, hasta hoy.
+"""Dos periodos de las bitácoras, con usos distintos.
 
-Las fechas antiguas son posibles pero requieren revisión. Ninguna fecha
-manuscrita puede ser futura; la representación a fin de mes se comprueba
-por mes porque su día se genera para el reporte, no se lee de la página.
+El **habitual** (mes actual y anterior, hasta hoy) ordena candidatos: de dos
+lecturas posibles de una misma fecha, la que cae en él es la creíble. Es
+estrecho a propósito, porque solo sirve para comparar.
+
+El de **revisión** es mucho más ancho y decide otra cosa: cuándo una fecha
+es tan antigua que tiene que mirarla una persona. Una entrega normal arrastra
+semanas o unos meses de cola de escaneo, y medir eso con el periodo habitual
+mandaba a REVISAR bitácoras bien leídas solo por llevar un mes de más.
+
+Ninguna fecha manuscrita puede ser futura; la representación a fin de mes se
+comprueba por mes porque su día se genera para el reporte, no se lee de la
+página.
 """
 
 from __future__ import annotations
@@ -48,6 +57,27 @@ def usual_start(today: Optional[date] = None) -> date:
     """Primer día del mes anterior, incluyendo diciembre al pasar a enero."""
     first = reference_date(today).replace(day=1)
     return (first - timedelta(days=1)).replace(day=1)
+
+
+# Meses que abarca el periodo de revisión, contando el de la ejecución. Un
+# atraso de semanas o de unos meses es lo normal en una entrega y no dice
+# nada de la lectura. Lo que casi nunca es real es un año entero de
+# diferencia: ahí el año suele estar mal leído (un '26' que salió '25' o
+# '24'). Por eso el periodo se cierra justo antes de cumplirse el año, y una
+# fecha del mismo mes del año pasado sí pasa a REVISAR.
+REVIEW_MONTHS = 12
+
+
+def review_start(today: Optional[date] = None) -> date:
+    """Primer día del periodo que no necesita revisión por antigüedad."""
+    reference = reference_date(today)
+    months = reference.year * 12 + reference.month - REVIEW_MONTHS
+    return date(months // 12, months % 12 + 1, 1)
+
+
+def needs_review_for_age(value: date, today: Optional[date] = None) -> bool:
+    """Indica si la fecha es tan antigua que la página debe revisarse."""
+    return value < review_start(today)
 
 
 def days_outside_usual(value: date, today: Optional[date] = None) -> int:

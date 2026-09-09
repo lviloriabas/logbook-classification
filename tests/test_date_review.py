@@ -1,11 +1,16 @@
-"""Las fechas fuera del periodo habitual siempre pasan a revisión."""
+"""Qué fechas pasan a revisión y cuáles se indexan tal como se leyeron."""
 
 from datetime import date
 
 import pytest
 
 from app.models.schemas import FieldResult, PageResult, Status
-from app.utils.date_window import is_usual, month_is_possible, usual_start
+from app.utils.date_window import (
+    is_usual,
+    month_is_possible,
+    review_start,
+    usual_start,
+)
 from app.validation.date_review import review_date_window
 from app.validation.date_corrector import correct_dates_by_book
 from app.validation.page_status import ready_for_auto_index
@@ -27,7 +32,8 @@ def fixed_clock(monkeypatch):
 
 @pytest.mark.parametrize("value,review", [
     ("2026/09/06", False), ("2026/09/01", False), ("2026/08/01", False),
-    ("2026/08/31", False), ("2026/07/31", True), ("2025/09/06", True),
+    ("2026/08/31", False), ("2026/07/31", False), ("2026/05/11", False),
+    ("2025/10/01", False), ("2025/09/30", True), ("2025/09/06", True),
     ("2020/07/25", True), ("2026/09/07", True), ("2026/10/01", True),
     ("2027/01/01", True),
 ])
@@ -38,6 +44,38 @@ def test_temporal_review_keeps_the_read_date(value, review):
     assert page.date == value
     if review:
         assert por_revisar(page)
+
+
+def test_the_scanning_backlog_of_the_year_is_not_a_reason_to_review():
+    # El periodo habitual sigue siendo estrecho porque ordena candidatos; el
+    # de revisión cubre el año, que es lo que una entrega arrastra de verdad.
+    assert review_start(TODAY) == date(2025, 10, 1)
+    assert review_start(date(2026, 1, 15)) == date(2025, 2, 1)
+    assert not is_usual(date(2026, 5, 11), TODAY)
+    page = PageResult(page_number=1, date="2026/05/11")
+    assert not review_date_window(page)
+    assert not page.date_review
+
+
+def test_the_same_month_of_last_year_is_still_reviewed():
+    # Un año justo de diferencia casi siempre es el año mal leído, así que
+    # el periodo se cierra antes de cumplirlo.
+    page = PageResult(page_number=1, date="2025/09/06")
+    assert review_date_window(page)
+    assert "Fecha muy antigua" in page.comment
+
+
+def test_the_old_wording_is_cleaned_when_re_exporting_a_saved_run():
+    # Una ejecución guardada con la regla anterior trae su aviso escrito. Al
+    # volver a exportarla, la página no puede quedarse con el motivo de una
+    # regla que ya no la aparta.
+    page = PageResult(
+        page_number=1, date="2026/07/31", date_review=True,
+        comment="Fecha fuera del periodo habitual: 2026/07/31, anterior a 2026/08/01",
+    )
+    assert not review_date_window(page)
+    assert not page.date_review
+    assert page.comment == ""
 
 
 def test_previous_december_is_normal_when_processing_in_january():
@@ -88,6 +126,23 @@ def test_unread_day_is_never_filled_after_today():
     assert not page.date_review
 
 
+def test_an_unread_day_filled_by_the_book_is_checked_by_month():
+    # El día lo escribió el relleno del libro, no la página: con el mes y el
+    # año bien leídos, unos días por delante de hoy no son un motivo de
+    # revisión, y tratarlos como escritos apartaba la bitácora entera.
+    page = PageResult(page_number=1, date="2026/09/30")
+    page.add_field(FieldResult(
+        page_number=1, field_id="day", field_type="ocr", value="30",
+        confidence=.5, status=Status.WARNING, source="inferred",
+        inference_method="month_end_fallback",
+    ))
+    assert not review_date_window(page)
+    assert not page.date_review
+    # Un mes futuro sí lo es, aunque el día lo haya puesto el relleno.
+    page.date = "2026/10/31"
+    assert review_date_window(page)
+
+
 def test_month_end_policy_does_not_claim_a_future_handwritten_day():
     page = _page(1, "2147301", None, "SEP", "26")
     day = _field_of(page, "day")
@@ -105,7 +160,7 @@ def test_correcting_the_date_clears_only_the_temporal_warning():
     page = PageResult(page_number=1, date="2020/07/25", comment="Revisar matrícula")
     review_date_window(page)
     review_date_window(page)
-    assert page.comment.count("Fecha fuera") == 1
+    assert page.comment.count("Fecha muy antigua") == 1
     page.date = "2026/08/25"
     review_date_window(page)
     assert not page.date_review
