@@ -16,6 +16,7 @@ from app.gui.widgets import (
     PANE_SURFACE_BG,
     PANE_TEXT,
     TABLE_ALTERNATE_BG,
+    accent_button_qss,
 )
 from app.utils.app_identity import set_windows_native_window_style
 
@@ -80,7 +81,10 @@ def install_application_theme(app: QApplication) -> None:
         pass
     app.setFont(_application_font())
     app.setPalette(_dark_palette())
-    app.setStyleSheet(APP_CHROME_QSS)
+    # El fragmento del botón de acento va después de la paleta, no antes: lee
+    # el acento ya instalado para sacar de él el tono del cursor y el del
+    # pulsado, que es lo único que ``palette(highlight)`` no sabe dar.
+    app.setStyleSheet(APP_CHROME_QSS + accent_button_qss())
     app.setProperty(_APPLICATION_THEME_PROPERTY, True)
     native_theme = _NativeWindowTheme(app)
     app.installEventFilter(native_theme)
