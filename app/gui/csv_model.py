@@ -21,6 +21,7 @@ from typing import Callable, Iterable, Sequence
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor
 
+from app.gui.csv_utils import csv_display_name
 from app.gui.table_sort import sorted_row_order
 
 # Columna de las casillas: siempre la primera y siempre visible.
@@ -216,7 +217,10 @@ class CsvTableModel(QAbstractTableModel):
         if orientation is not Qt.Orientation.Horizontal:
             return None
         if role == Qt.ItemDataRole.DisplayRole:
-            return "" if section == CHECK_COLUMN else self.name_of(section)
+            return (
+                "" if section == CHECK_COLUMN
+                else csv_display_name(self.name_of(section))
+            )
         if role == Qt.ItemDataRole.ToolTipRole and section == CHECK_COLUMN:
             return (
                 "Marque las páginas que quiera juntar aunque no estén "

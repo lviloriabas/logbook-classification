@@ -74,7 +74,7 @@ from app.core.config import AppConfig
 from app.core.page_range import FileSlice, PageRange, slice_batch, total_pages
 from app.core.parallelism import available_cpu_threads, recommended_parallelism
 from app.core.progress import with_page_counter
-from app.gui.csv_utils import template_field_ids_for_columns
+from app.gui.csv_utils import csv_display_name, template_field_ids_for_columns
 from app.gui.csv_viewer import (
     CsvColumnModeButton,
     CsvViewerWindow,
@@ -3944,7 +3944,9 @@ class MainWindow(QMainWindow):
                     )
 
             self.table.setColumnCount(len(columns))
-            self.table.setHorizontalHeaderLabels(columns)
+            self.table.setHorizontalHeaderLabels([
+                csv_display_name(column) for column in columns
+            ])
             self.table.setRowCount(len(pending))
             self._table_columns = columns
             self._table_important_field_ids = {

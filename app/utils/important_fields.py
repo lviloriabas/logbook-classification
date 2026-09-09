@@ -11,6 +11,7 @@ from loguru import logger
 
 IMPORTANT_FIELDS_FILENAME = "important_fields.json"
 _DEFAULT_KEY = "__default__"
+_CURRENT_VERSION = 2
 
 # Columnas que se marcan solas mientras nadie edite la selección: los
 # identificadores de la página y los campos críticos de indexación. Vive aquí
@@ -30,6 +31,7 @@ _DEFAULT_IMPORTANT = frozenset({
 # leerlas: si no, la columna se quedaba sin marcar en las máquinas que ya
 # habían editado la lista.
 _RENOMBRADAS = {"discrepancia": "disc_reason"}
+_NUEVAS_IMPORTANTES = {"review"}
 
 
 def default_important_columns(columns: Iterable[str]) -> set[str]:
@@ -60,10 +62,22 @@ class ImportantFieldsStore:
         templates = payload.get("templates") if isinstance(payload, dict) else None
         if not isinstance(templates, dict):
             return {}
+        try:
+            version = int(payload.get("version", 1))
+        except (TypeError, ValueError):
+            version = 1
         return {
-            str(name): [
-                _RENOMBRADAS.get(str(column), str(column)) for column in columns
-            ]
+            str(name): sorted(set(
+                [
+                    _RENOMBRADAS.get(str(column), str(column))
+                    for column in columns
+                ]
+                + (
+                    list(_NUEVAS_IMPORTANTES)
+                    if version < _CURRENT_VERSION
+                    else []
+                )
+            ))
             for name, columns in templates.items()
             if isinstance(columns, list)
         }
@@ -103,7 +117,7 @@ class ImportantFieldsStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(
                 json.dumps(
-                    {"version": 1, "templates": templates},
+                    {"version": _CURRENT_VERSION, "templates": templates},
                     ensure_ascii=False,
                     indent=2,
                 )

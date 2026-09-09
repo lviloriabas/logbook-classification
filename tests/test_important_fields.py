@@ -92,11 +92,25 @@ def test_una_seleccion_guardada_con_el_nombre_viejo_sigue_marcada(
     )
 
     store = ImportantFieldsStore(path)
-    assert store.load("Aircraft Log") == {"disc", "disc_reason"}
+    assert store.load("Aircraft Log") == {"disc", "disc_reason", "review"}
 
     # Y al guardar cualquier cosa, el archivo se queda ya con el nombre nuevo.
     store.save("Aircraft Log", {"disc", "disc_reason"})
     assert "discrepancia" not in path.read_text(encoding="utf-8")
+
+
+def test_una_seleccion_anterior_recibe_review_una_sola_vez(tmp_path: Path):
+    path = tmp_path / "important_fields.json"
+    path.write_text(
+        '{"version": 1, "templates": {"Aircraft Log": ["file"]}}',
+        encoding="utf-8",
+    )
+    store = ImportantFieldsStore(path)
+
+    assert store.load("Aircraft Log") == {"file", "review"}
+
+    store.save("Aircraft Log", {"file"})
+    assert store.load("Aircraft Log") == {"file"}
 
 
 def test_editar_la_lista_no_borra_lo_que_el_selector_no_pudo_ensenar(
