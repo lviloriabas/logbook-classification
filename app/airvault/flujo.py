@@ -808,6 +808,9 @@ class Trabajo:
         # Si el batch esta tomado ahora mismo por este trabajo. Soltarlo dos
         # veces es un error del servidor, no una limpieza de mas.
         self._tomado = False
+        # Solo vive durante esta sesion. Una autorizacion de reenvio no debe
+        # sobrevivir a un cierre inesperado y convertirse en permiso automatico.
+        self._duplicado_permitido = False
 
     # ── ciclo de vida ──────────────────────────────────────────────
 
@@ -1115,12 +1118,12 @@ class Trabajo:
         # Search la hace el coordinador, que tiene una sola conexion para
         # toda la ejecucion, y lo que decida llega hasta aqui en la marca.
         motivo = self.manifiesto.posible_duplicado
-        if not motivo:
+        if not motivo and not self._duplicado_permitido:
             repetidas = libro_de_envios.repetidas(carpeta_del_libro(self), self)
             if repetidas:
                 motivo = _motivo_de_repetidas(repetidas)
                 marcar_posible_duplicado(self, motivo)
-        if motivo:
+        if motivo and not self._duplicado_permitido:
             raise ErrorDeCorrida(
                 f"No se sube «{self.manifiesto.nombre_batch}»: {motivo}. "
                 "Publicarlas otra vez dejaria el mismo documento dos veces "
@@ -1193,6 +1196,7 @@ class Trabajo:
             )
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, archivo.name)
         self.manifiesto.resubir_por_mezcla = False
+        self._duplicado_permitido = False
         self.guardar()
 
     def omitir_subida(self, motivo: str = "subido a mano") -> None:
@@ -1918,8 +1922,14 @@ def preparar_partes(
     limite_paginas = int(limite_paginas or 0)
     entrega = comprobar_entrega(csv)
     previos = trabajos_preparados(config, carpeta, csv)
+    memoria = registro_entrega.comprometidas(carpeta)
     if previos and _reparto_al_dia(
-        previos, entrega, limite_paginas, compresion, fin_de_mes
+        previos,
+        entrega,
+        limite_paginas,
+        compresion,
+        fin_de_mes,
+        tambien_cubiertas=memoria,
     ):
         # El reparto de disco sigue valiendo. Se devuelve por el camino que
         # comprueba que el juego este entero, que es el que sabe presentarlo.
@@ -1933,7 +1943,7 @@ def preparar_partes(
     # apartado o perdido. Sin el, rehacer el reparto dos veces seguidas
     # volveria a mandar lo que ya estaba en AirVault.
     cobertura = revisar_cobertura(
-        entrega, previos, tambien_cubiertas=registro_entrega.comprometidas(carpeta)
+        entrega, previos, tambien_cubiertas=memoria
     )
     if cobertura.repetidas:
         detalle = "; ".join(
@@ -2186,6 +2196,7 @@ def _reparto_al_dia(
     limite: int,
     compresion: bool,
     fin_de_mes: bool = False,
+    tambien_cubiertas: Collection[Tuple[str, int]] = (),
 ) -> bool:
     """Si los manifiestos de disco ya son el reparto que se esta pidiendo.
 
@@ -2209,7 +2220,12 @@ def _reparto_al_dia(
         # que un reparto hecho con la otra ya no es el que se esta pidiendo.
         if bool(manifiesto.fin_de_mes) != bool(fin_de_mes):
             return False
-    return revisar_cobertura(entrega, trabajos, solo_comprometidos=False).completa
+    return revisar_cobertura(
+        entrega,
+        trabajos,
+        solo_comprometidos=False,
+        tambien_cubiertas=tambien_cubiertas,
+    ).completa
 
 
 def _numeracion_ocupada(
@@ -2441,7 +2457,8 @@ def carpeta_del_libro(trabajo: "Trabajo") -> Path:
 
     Es la carpeta que contiene los trabajos de todas las ejecuciones, un
     nivel por encima de la de esta entrega: el libro es de la instalacion,
-    no de la ejecucion, y tiene que sobrevivir a borrar el registro local.
+    no de la ejecucion. El borrado local retira de el solo los batches que
+    la persona elimino.
     """
     return registro_entrega.raiz_de_registro(trabajo.carpeta).parent
 
@@ -2494,6 +2511,7 @@ def marcar_posible_duplicado(trabajo: "Trabajo", motivo: str) -> None:
     if trabajo.manifiesto.posible_duplicado == motivo:
         return
     trabajo.manifiesto.posible_duplicado = motivo
+    trabajo._duplicado_permitido = False
     trabajo.guardar()
     logger.warning(
         "Batch «{}» marcado como posible duplicado: {}",
@@ -2504,9 +2522,20 @@ def marcar_posible_duplicado(trabajo: "Trabajo", motivo: str) -> None:
 
 def limpiar_posible_duplicado(trabajo: "Trabajo") -> None:
     """Quita la sospecha porque alguien miro AirVault y dijo que no lo es."""
-    if not trabajo.manifiesto.posible_duplicado:
+    if (
+        not trabajo.manifiesto.posible_duplicado
+        and not getattr(trabajo, "_duplicado_permitido", False)
+    ):
         return
     trabajo.manifiesto.posible_duplicado = ""
+    trabajo._duplicado_permitido = False
+    trabajo.guardar()
+
+
+def autorizar_posible_duplicado(trabajo: "Trabajo") -> None:
+    """Permite un reenvio pedido tras revisar la alerta en AirVault."""
+    trabajo.manifiesto.posible_duplicado = ""
+    trabajo._duplicado_permitido = True
     trabajo.guardar()
 
 
@@ -2813,9 +2842,11 @@ def subir_partes(
         # llegar aqui: la carga nueva y la orden dada a mano. Todo lo
         # anterior mira la cola de Web Index; esto mira lo que ya esta
         # publicado.
-        motivo = trabajo.manifiesto.posible_duplicado or revisar_duplicado(
-            trabajo, buscador
-        )
+        motivo = ""
+        if not getattr(trabajo, "_duplicado_permitido", False):
+            motivo = trabajo.manifiesto.posible_duplicado or revisar_duplicado(
+                trabajo, buscador
+            )
         if motivo:
             marcar_posible_duplicado(trabajo, motivo)
             fallos.append((

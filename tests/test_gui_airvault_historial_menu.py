@@ -1,9 +1,9 @@
 """El clic derecho sobre el historial de «Indexar en AirVault».
 
-Son dos cosas distintas y por eso son dos acciones: olvidar lo que la
-aplicación recuerda de una ejecución en AirVault (para empezarla de nuevo) y
-deshacerse de la ejecución entera, que es lo que vacía la lista de lo que ya
-no hace falta. Ninguna de las dos toca los batches que ya estén en AirVault.
+Son dos cosas distintas y por eso son dos acciones: eliminar para siempre
+los batches locales de una ejecución y deshacerse de la ejecución entera,
+que es lo que vacía la lista de lo que ya no hace falta. Ninguna de las dos
+toca los batches que ya estén en AirVault.
 """
 
 from __future__ import annotations
@@ -15,8 +15,11 @@ import pytest
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QMessageBox
 
+from app.airvault.config import AirVaultConfig
+from app.airvault.flujo import preparar_partes
 from app.gui.airvault_window import AirVaultWindow
 
+from test_airvault_entrega import corrida as corrida_de_entrega
 from test_gui_airvault_window import corrida, registrar_en_airvault
 
 
@@ -164,6 +167,37 @@ def test_el_boton_elimina_registros_de_todas_las_ejecuciones_presentes(
         assert all(not ruta.exists() for ruta in manifiestos)
         assert primera.exists() and segunda.exists()
         assert not ventana.boton_eliminar_registro.isEnabled()
+    finally:
+        ventana.close()
+        app.processEvents()
+
+
+def test_eliminar_el_registro_no_reconstruye_los_batches_al_reiniciar(
+    app, tmp_path, papelera,
+):
+    csv, _partes = corrida_de_entrega(tmp_path)
+    carpeta = tmp_path / "output" / "airvault" / "BITS 19 AUG 2026 10 00"
+    trabajos = preparar_partes(
+        AirVaultConfig(), carpeta, csv, paginas_por_batch=5,
+    )
+    paginas = {
+        (r.archivo_origen.casefold(), int(r.pagina_origen))
+        for trabajo in trabajos for r in trabajo.manifiesto.bitacoras()
+    }
+    ventana = AirVaultWindow(tmp_path)
+    try:
+        ventana._eliminar_registro(csv)
+
+        assert all(not Path(trabajo.carpeta).exists() for trabajo in trabajos)
+        reiniciados = preparar_partes(
+            AirVaultConfig(), carpeta, csv, paginas_por_batch=5,
+        )
+        reconstruidas = {
+            (r.archivo_origen.casefold(), int(r.pagina_origen))
+            for trabajo in reiniciados for r in trabajo.manifiesto.bitacoras()
+        }
+        assert not (paginas & reconstruidas)
+        assert reiniciados == []
     finally:
         ventana.close()
         app.processEvents()

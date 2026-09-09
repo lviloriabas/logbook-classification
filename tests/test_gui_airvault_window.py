@@ -2300,7 +2300,7 @@ def test_solo_el_boton_pide_recuperar_y_solo_por_una_vez(ventana, tmp_path):
 
 # ── el posible duplicado ───────────────────────────────────────────
 
-def test_quitar_la_marca_devuelve_la_fila_a_la_cola(ventana):
+def test_quitar_la_marca_autoriza_y_reenvia_la_fila(ventana, monkeypatch):
     """La sospecha prueba que las bitácoras están en AirVault.
 
     No prueba quién las subió: pueden haber llegado por otro batch, por
@@ -2313,12 +2313,56 @@ def test_quitar_la_marca_devuelve_la_fila_a_la_cola(ventana):
     fila.trabajo.manifiesto.posible_duplicado = "ya se mandaron"
     ventana._estados = [fila]
     ventana._trabajos = [fila.trabajo]
+    reenviadas = []
+    monkeypatch.setattr(
+        ventana,
+        "_subir_estas",
+        lambda partes, duplicados_autorizados=False: reenviadas.append(
+            (list(partes), duplicados_autorizados)
+        ),
+    )
 
     ventana._quitar_sospecha([fila])
 
     assert not fila.trabajo.manifiesto.posible_duplicado
+    assert fila.trabajo._duplicado_permitido
     assert ventana._estados[0].estado != POSIBLE_DUPLICADO
-    assert any(
-        "posible duplicado" in ventana.bitacora.item(i).text()
-        for i in range(ventana.bitacora.count())
+    assert reenviadas == [([fila], True)]
+
+
+def test_reenviar_posible_duplicado_lo_deja_claro_en_la_bitacora(
+    ventana, monkeypatch,
+):
+    from app.airvault.flujo import POSIBLE_DUPLICADO
+
+    fila = parte(POSIBLE_DUPLICADO, "DP | BIT -2", "ya se mandaron")
+    fila.trabajo.manifiesto.posible_duplicado = "ya se mandaron"
+    ventana._estados = [fila]
+    ventana._trabajos = [fila.trabajo]
+    monkeypatch.setattr(ventana, "_ejecutar_accion", lambda *args: False)
+
+    ventana._quitar_sospecha([fila])
+
+    assert "Reenvío autorizado tras revisar posible duplicado" in (
+        ventana.bitacora.item(ventana.bitacora.count() - 1).text()
     )
+
+
+def test_volver_a_pulsar_subir_autoriza_los_posibles_duplicados(
+    ventana, monkeypatch,
+):
+    from app.airvault.flujo import POSIBLE_DUPLICADO
+
+    fila = parte(POSIBLE_DUPLICADO, "DP | BIT -2", "ya se mandaron")
+    fila.trabajo.manifiesto.posible_duplicado = "ya se mandaron"
+    ventana._estados = [fila]
+    ventana._trabajos = [fila.trabajo]
+    autorizadas = []
+    monkeypatch.setattr(
+        ventana, "_quitar_sospecha",
+        lambda partes: autorizadas.extend(partes),
+    )
+
+    ventana._subir_a_mano()
+
+    assert autorizadas == [fila]

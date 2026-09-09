@@ -6,12 +6,13 @@ perdía al rehacer un reparto: los manifiestos viejos se apartan y con
 ellos se iba lo único que sabía qué bitácoras ya estaban en AirVault.
 
 Aquí se fija que esa memoria sobreviva a los cambios de configuración, que
-no invente páginas por subir ni las esconda, y que se vaya entera cuando
-se elimina el registro local.
+no invente páginas por subir ni las esconda, y que una eliminación conserve
+solo la marca necesaria para que el batch no reaparezca al reiniciar.
 """
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from app.airvault import registro
@@ -197,13 +198,8 @@ def test_un_registro_ilegible_no_corta_el_trabajo(tmp_path):
     assert registro.comprometidas(carpeta) == set()
 
 
-def test_olvidar_un_batch_libera_sus_bitacoras_y_deja_las_demas(tmp_path):
-    """Eliminar un batch: se olvida el suyo y el resto del reparto sigue.
-
-    Sin esto, el batch desaparecería de la cola pero sus páginas seguirían
-    contando como enviadas, así que ningún reparto posterior las volvería a
-    mandar y se quedarían sin subir sin que nadie lo dijera.
-    """
+def test_olvidar_un_batch_impide_que_reaparezca_y_deja_los_demas(tmp_path):
+    """Eliminar un batch conserva una marca que sobrevive al reinicio."""
     csv_path, _partes = corrida(tmp_path)
     trabajos = preparar_partes(
         AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=5,
@@ -214,7 +210,7 @@ def test_olvidar_un_batch_libera_sus_bitacoras_y_deja_las_demas(tmp_path):
     registro.anotar(tmp_path / "job", trabajos, str(csv_path))
     fuera = trabajos[0]
     suyas = {
-        (r.archivo_origen, int(r.pagina_origen))
+        (r.archivo_origen.casefold(), int(r.pagina_origen))
         for r in fuera.manifiesto.registros
         if not r.es_separador and r.archivo_origen
     }
@@ -224,9 +220,39 @@ def test_olvidar_un_batch_libera_sus_bitacoras_y_deja_las_demas(tmp_path):
     assert [b.carpeta for b in quedan.batches] == [
         str(t.carpeta) for t in trabajos[1:]
     ]
-    assert not (suyas & quedan.comprometidas())
+    assert suyas <= quedan.comprometidas()
+    assert suyas <= set(quedan.eliminadas)
     # Y queda escrito, no solo devuelto.
     assert registro.leer(tmp_path / "job").batches == quedan.batches
+
+    shutil.rmtree(fuera.carpeta)
+    nuevos = preparar_partes(
+        AirVaultConfig(), tmp_path / "job", csv_path, paginas_por_batch=4,
+    )
+    repartidas = {
+        (r.archivo_origen.casefold(), int(r.pagina_origen))
+        for trabajo in nuevos for r in trabajo.manifiesto.bitacoras()
+    }
+    assert not (repartidas & suyas)
+
+
+def test_eliminar_historial_deja_solo_la_marca_permanente(tmp_path):
+    csv_path, _partes = corrida(tmp_path)
+    carpeta = tmp_path / "job"
+    trabajos = preparar_partes(
+        AirVaultConfig(), carpeta, csv_path, paginas_por_batch=5,
+    )
+    paginas = {
+        (r.archivo_origen.casefold(), int(r.pagina_origen))
+        for trabajo in trabajos for r in trabajo.manifiesto.bitacoras()
+    }
+
+    eliminado = registro.eliminar_historial(carpeta)
+
+    assert eliminado.batches == []
+    assert eliminado.historial == []
+    assert paginas <= eliminado.comprometidas()
+    assert registro.ruta_registro(carpeta) not in registro.rutas_del_registro(carpeta)
 
 
 def test_olvidar_lo_que_no_esta_anotado_no_toca_el_registro(tmp_path):

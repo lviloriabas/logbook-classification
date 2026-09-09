@@ -6,11 +6,12 @@ borrar el registro local para empezar de nuevo, o al procesar los mismos
 escaneos otra vez en otra carpeta, esa memoria desaparece y con ella la
 unica prueba de que aquellas bitacoras ya viajaron.
 
-Este libro es lo contrario: vive una sola vez, junto a los trabajos, y no lo
-borra ninguna limpieza de ejecucion. Y no anota carpetas ni nombres de
-batch, que cambian con cada reparto, sino **numeros de bitacora**, que son
-lo unico que identifica a un documento igual en el escaneo, en el CSV, en
-Quick Upload y en Web Search.
+Este libro vive una sola vez, junto a los trabajos, y sobrevive a cambios de
+reparto. Una eliminacion expresa si retira de el el batch correspondiente,
+porque conservarlo bloquearia como posible duplicado algo que la persona ya
+pidio olvidar. No se guia por nombres de batch, sino por **numeros de
+bitacora**, que son lo que identifica a un documento igual en el escaneo, en
+el CSV, en Quick Upload y en Web Search.
 
 Con eso responde la pregunta que ninguna consulta a la cola puede responder
 cuando el batch ya se completo: «esta bitacora, ¿ya la mande yo alguna
@@ -249,6 +250,52 @@ def anotar(raiz: Path | str, trabajos: Sequence) -> Libro:
                 else:
                     lista.append(envio)
                 cambio = True
+        if cambio:
+            guardar(libro, raiz)
+        return libro
+
+
+def olvidar(
+    raiz: Path | str,
+    carpetas: Sequence[Path | str],
+    incluir_hijas: bool = False,
+) -> Libro:
+    """Retira del libro los batches locales eliminados por la persona.
+
+    Esta es la contraparte de eliminar un manifiesto o una ejecución. Si el
+    envío siguiera en el libro, una carga posterior de esas bitácoras se
+    marcaría como posible duplicado por un batch que ya se pidió olvidar.
+    """
+    objetivos = [Path(carpeta) for carpeta in carpetas]
+
+    def corresponde(envio: Envio) -> bool:
+        propia = Path(str(envio.carpeta or ""))
+        for objetivo in objetivos:
+            if str(propia).casefold() == str(objetivo).casefold():
+                return True
+            if incluir_hijas:
+                try:
+                    if propia.resolve().is_relative_to(objetivo.resolve()):
+                        return True
+                except OSError:
+                    continue
+        return False
+
+    with _ESCRITURA:
+        libro = leer(raiz)
+        cambio = False
+        for numero in list(libro.envios):
+            quedan = [
+                envio for envio in libro.envios[numero]
+                if not corresponde(envio)
+            ]
+            if len(quedan) == len(libro.envios[numero]):
+                continue
+            cambio = True
+            if quedan:
+                libro.envios[numero] = quedan
+            else:
+                del libro.envios[numero]
         if cambio:
             guardar(libro, raiz)
         return libro

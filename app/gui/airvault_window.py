@@ -358,13 +358,13 @@ def estado_de_entrega(
 
 
 TOOLTIP_ELIMINAR_REGISTRO = (
-    "Borra el estado local de AirVault de esta ejecución para empezar de "
-    "nuevo. No toca el CSV, los PDF ni lo que ya esté en AirVault."
+    "Elimina los batches locales de esta ejecución y evita que vuelvan a "
+    "crearse. No toca el CSV, los PDF de entrega ni AirVault."
 )
 TOOLTIP_ELIMINAR_REGISTROS = (
-    "Borra el estado local de AirVault de todos los trabajos que quedan en "
-    "output/airvault, aunque su ejecución ya no esté en el historial. No "
-    "toca los CSV, los PDF ni los batches remotos."
+    "Elimina para siempre los batches locales que quedan en output/airvault, "
+    "aunque su ejecución ya no esté en el historial. No toca los CSV, los "
+    "PDF de entrega ni los batches remotos."
 )
 
 
@@ -1859,7 +1859,7 @@ class AirVaultWindow(QDialog):
             if parte.trabajo.manifiesto.posible_duplicado
         ]
         self._accion(
-            menu, "No es duplicado: volver a permitirlo", sospechosos,
+            menu, "No es duplicado: volver a subir", sospechosos,
             lambda: self._quitar_sospecha(sospechosos),
         )
 
@@ -1921,25 +1921,21 @@ class AirVaultWindow(QDialog):
         return accion
 
     def _quitar_sospecha(self, partes) -> None:
-        """Deja subir un batch que el programa dio por posible duplicado.
+        """Autoriza y reenvia un batch marcado como posible duplicado.
 
         La sospecha se levanta con pruebas de que esas bitácoras están en
         AirVault, no de que las subiera este batch: pueden haber llegado
         por otro batch, por otra persona o por una carga anterior de la
         misma ejecución. Quién lo decide es quien mira AirVault, así que
-        aquí solo se quita la marca; lo que el programa no hace es seguir
-        solo mientras la duda esté puesta.
+        aquí se autoriza el reenvío que la persona acaba de pedir. La
+        automatización sigue sin hacerlo sola mientras la duda esté puesta.
         """
-        from app.airvault.flujo import estado_local, limpiar_posible_duplicado
+        from app.airvault.flujo import autorizar_posible_duplicado, estado_local
 
         limpiadas = set()
         for parte in partes:
-            limpiar_posible_duplicado(parte.trabajo)
+            autorizar_posible_duplicado(parte.trabajo)
             limpiadas.add(str(parte.trabajo.carpeta))
-            self._anotar(
-                f"«{parte.nombre}»: ya no está marcado como posible "
-                "duplicado; se puede subir"
-            )
         # La fila la pinta el estado que se calculó antes de quitar la
         # marca, así que sin recalcularlo seguiría diciendo «Posible
         # duplicado» hasta la siguiente comprobación.
@@ -1950,6 +1946,7 @@ class AirVaultWindow(QDialog):
             for otra in self._estados
         ]
         self._pintar_lotes()
+        self._subir_estas(partes, duplicados_autorizados=True)
 
     def _ver_bitacoras(self, parte) -> None:
         """Abre la lista de las bitácoras que lleva dentro un batch."""
@@ -2068,7 +2065,7 @@ class AirVaultWindow(QDialog):
                 return True
         return False
 
-    def _subir_estas(self, partes) -> None:
+    def _subir_estas(self, partes, duplicados_autorizados: bool = False) -> None:
         """Manda estos batches a Quick Upload y no pregunta nada más.
 
         Es una orden expresa y se obedece como tal: el archivo sale hacia
@@ -2091,7 +2088,11 @@ class AirVaultWindow(QDialog):
         self._encolar(
             "resubir",
             trabajos,
-            f"Se vuelve a subir {nombres}",
+            (
+                f"Reenvío autorizado tras revisar posible duplicado: {nombres}"
+                if duplicados_autorizados else
+                f"Se vuelve a subir {nombres}"
+            ),
         )
 
     def _comprobar_estas(self, partes) -> None:
@@ -2280,14 +2281,13 @@ class AirVaultWindow(QDialog):
         return [manifiesto] if manifiesto.is_file() else []
 
     def _eliminar_estas(self, partes) -> None:
-        """Saca estos batches de la cola para siempre y olvida lo suyo.
+        """Saca estos batches de la cola local para siempre.
 
         No es cancelar. Un batch cancelado sigue en la cola con su ID y con
         sus bitácoras apuntadas, y por eso ningún reparto posterior las
-        vuelve a mandar. Eliminarlo borra esa memoria: su manifiesto se va a
-        la Papelera, su anotación sale del registro de la entrega y sus
-        bitácoras quedan libres, así que el reparto siguiente se las lleva en
-        otro batch. Lo que ya esté en AirVault no se toca, que no vive aquí.
+        vuelve a mandar. Eliminarlo retira sus archivos locales y conserva
+        solo una marca de supresión: al reiniciar o preparar la entrega no
+        reaparece. Lo que ya esté en AirVault no se toca, que no vive aquí.
         """
         from app.airvault import registro as registro_de_entrega
         from app.airvault.flujo import estado_local
@@ -2352,8 +2352,8 @@ class AirVaultWindow(QDialog):
             "Eliminar el batch",
             f"Se enviará a la Papelera lo que el programa guarda de "
             f"{cuantos}:\n\n{nombres}\n\n"
-            "Saldrán de la cola y sus bitácoras volverán a quedar libres: el "
-            "próximo reparto de esta ejecución las repartirá otra vez."
+            "Saldrán de la cola local y no volverán a crearse al reiniciar "
+            "el programa ni al preparar otra vez esta ejecución."
             f"{aviso}\n\n¿Desea continuar?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -2403,20 +2403,35 @@ class AirVaultWindow(QDialog):
 
         # El registro es de la entrega entera y una selección puede mezclar
         # batches de varias, así que se reescribe uno por entrega.
-        por_entrega: dict[Path, list[Path]] = {}
+        from app.airvault import duplicados as libro_de_envios
+
+        por_entrega: dict[Path, dict[str, list]] = {}
         for parte in idas:
             carpeta = Path(parte.trabajo.carpeta)
-            por_entrega.setdefault(
-                registro_de_entrega.raiz_de_registro(carpeta), []
-            ).append(carpeta)
-        for entrega, carpetas in por_entrega.items():
+            grupo = por_entrega.setdefault(
+                registro_de_entrega.raiz_de_registro(carpeta),
+                {"carpetas": [], "paginas": []},
+            )
+            grupo["carpetas"].append(carpeta)
+            grupo["paginas"].extend(
+                (registro.archivo_origen, int(registro.pagina_origen))
+                for registro in parte.trabajo.manifiesto.registros
+                if not registro.es_separador and registro.archivo_origen
+            )
+        for entrega, grupo in por_entrega.items():
             try:
-                registro_de_entrega.olvidar(entrega, carpetas)
+                registro_de_entrega.olvidar(
+                    entrega,
+                    grupo["carpetas"],
+                    grupo["paginas"],
+                )
+                libro_de_envios.olvidar(
+                    entrega.parent,
+                    grupo["carpetas"],
+                )
             except OSError:
-                # El manifiesto ya se fue: la cola queda bien y lo único que
-                # sobrevive es una anotación que el próximo guardado pisa.
                 self._anotar(
-                    f"No se pudo actualizar el registro de {entrega.name}"
+                    f"No se pudo guardar la eliminación de {entrega.name}"
                 )
 
         fuera = {id(parte.trabajo) for parte in idas}
@@ -3002,15 +3017,15 @@ class AirVaultWindow(QDialog):
         return carpeta
 
     def _rutas_del_registro_en(self, carpeta: Path) -> list[Path]:
-        """Memoria local que guarda esa carpeta de trabajo, nunca otra.
+        """Batches y memoria local de esa carpeta, nunca de otra.
 
-        Son los manifiestos vivos, el registro de batches de la entrega y
-        los manifiestos que se apartaron al rehacer un reparto. Es una sola
-        memoria: se olvida entera o queda un resto que después contradice a
-        lo que quede.
+        Las partes repartidas se eliminan con su carpeta completa para que
+        tampoco sobrevivan sus PDF temporales. El batch sin repartir vive en
+        la raíz de la entrega, junto a memoria compartida, y de él solo se
+        retira el manifiesto.
         """
         from app.airvault.manifest import MANIFIESTO_FILENAME
-        from app.airvault.registro import rutas_del_registro
+        from app.airvault.registro import raiz_de_registro, rutas_del_registro
 
         rutas = {
             ruta for ruta in carpeta.rglob(MANIFIESTO_FILENAME)
@@ -3020,7 +3035,48 @@ class AirVaultWindow(QDialog):
             ruta for ruta in rutas_del_registro(carpeta)
             if ruta.resolve().is_relative_to(carpeta)
         )
-        return sorted(rutas)
+        objetivos = {
+            ruta.parent
+            if ruta.is_file()
+            and raiz_de_registro(ruta.parent) != ruta.parent
+            else ruta
+            for ruta in rutas
+        }
+        return sorted(
+            ruta for ruta in objetivos
+            if not any(
+                ruta != otra and ruta.resolve().is_relative_to(otra.resolve())
+                for otra in objetivos
+            )
+        )
+
+    @staticmethod
+    def _paginas_de_los_batches_en(carpeta: Path) -> list[tuple[str, int]]:
+        """Claves del registro y de manifiestos que se van a retirar."""
+        from app.airvault.manifest import MANIFIESTO_FILENAME, cargar
+        from app.airvault.registro import leer
+
+        guardado = leer(carpeta)
+        paginas: set[tuple[str, int]] = {
+            clave for batch in guardado.batches for clave in batch.claves()
+        }
+        paginas.update(
+            clave
+            for reparto in guardado.historial
+            for batch in reparto.batches
+            for clave in batch.claves()
+        )
+        for ruta in carpeta.rglob(MANIFIESTO_FILENAME):
+            try:
+                manifiesto = cargar(ruta.parent)
+            except (OSError, ValueError):
+                continue
+            paginas.update(
+                (registro.archivo_origen, int(registro.pagina_origen))
+                for registro in manifiesto.registros
+                if not registro.es_separador and registro.archivo_origen
+            )
+        return sorted(paginas)
 
     def _rutas_del_registro(self, corrida: Path | str = "") -> list[Path]:
         """Memoria local de la ejecución indicada, nunca de otra."""
@@ -3063,7 +3119,7 @@ class AirVaultWindow(QDialog):
         )
 
     def _eliminar_registro(self, corrida: Path | str = "") -> None:
-        """Borra memoria local de una ejecución o de todos los trabajos.
+        """Elimina batches locales de una ejecución o de todos los trabajos.
 
         El menú del historial pasa una ``corrida`` y actúa solo sobre ella.
         El botón no la pasa y limpia todo lo que quede en la carpeta de
@@ -3093,6 +3149,10 @@ class AirVaultWindow(QDialog):
                 "Esa ejecución no tiene registro local de AirVault.",
             )
             return
+        paginas = {
+            carpeta: self._paginas_de_los_batches_en(carpeta)
+            for carpeta in registros
+        }
         rutas = sorted({ruta for grupo in registros.values() for ruta in grupo})
         cantidad = len(registros)
         if individual:
@@ -3105,11 +3165,11 @@ class AirVaultWindow(QDialog):
         respuesta = QMessageBox.warning(
             self,
             "Eliminar registros de AirVault",
-            f"Se enviará a la Papelera la memoria local de {alcance} "
-            f"({len(rutas)} archivo(s) de registro).\n\n"
-            "No se borrarán los CSV, los PDF ni los batches existentes en "
-            "AirVault. Las cargas se reconstruirán y se buscarán otra vez "
-            "por título.\n\n¿Desea continuar?",
+            f"Se enviarán a la Papelera los batches locales de {alcance} "
+            f"({len(rutas)} elemento(s)).\n\n"
+            "No volverán a crearse al reiniciar el programa. No se borrarán "
+            "los CSV, los PDF de entrega ni los batches existentes en "
+            "AirVault.\n\n¿Desea continuar?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -3123,6 +3183,27 @@ class AirVaultWindow(QDialog):
         )
         movidos, fallidos = send_to_trash(rutas)
         movidos_set = set(movidos)
+        from app.airvault import duplicados as libro_de_envios
+        from app.airvault import registro as registro_de_entrega
+
+        for carpeta_anotada, grupo in registros.items():
+            if not movidos_set.intersection(grupo):
+                continue
+            try:
+                registro_de_entrega.eliminar_historial(
+                    carpeta_anotada,
+                    paginas[carpeta_anotada],
+                )
+                libro_de_envios.olvidar(
+                    carpeta_anotada.parent,
+                    [carpeta_anotada],
+                    incluir_hijas=True,
+                )
+            except OSError as exc:
+                self._anotar(
+                    f"No se pudo guardar la eliminación de "
+                    f"{carpeta_anotada.name}: {exc}"
+                )
         if abierta is not None and movidos_set & rutas_abiertas:
             carpeta = self._carpeta_del_registro(abierta)
             self._parar_vigilancia()
@@ -3131,9 +3212,8 @@ class AirVaultWindow(QDialog):
                 self._cargar_trabajos(carpeta, abierta)
             self.estado_label.setText("Registro local eliminado")
             self.resumen.setText(
-                "Se eliminaron los registros locales de AirVault. Las "
-                "ejecuciones pueden iniciarse nuevamente; los batches "
-                "remotos no se modificaron."
+                "Se eliminaron los batches locales y no se reconstruirán al "
+                "reiniciar. Los batches remotos no se modificaron."
             )
         for carpeta_anotada, grupo in registros.items():
             if movidos_set.intersection(grupo):
@@ -3671,6 +3751,13 @@ class AirVaultWindow(QDialog):
         está mirando y mandar a AirVault batches de otro día sin pedirlo es
         justo como se acaban subiendo dos veces.
         """
+        sospechosos = [
+            parte for parte in self._partes_en_cola()
+            if parte.trabajo.manifiesto.posible_duplicado
+        ]
+        if sospechosos:
+            self._quitar_sospecha(sospechosos)
+            return
         self._recuperar_pendientes = True
         self._subir()
 
