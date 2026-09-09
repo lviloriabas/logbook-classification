@@ -184,11 +184,7 @@ def test_el_separador_no_cuenta_como_omitido(tmp_path):
 
 
 def test_revisar_conserva_separadores_y_escribe_lo_que_airvault_acepta(tmp_path):
-    """REVISAR se queda entero, y la pagina sin avion no se manda.
-
-    La 5 no tiene matricula: AirVault la rechaza con un 500 en vez de
-    dejarla amarilla, asi que se queda para quien revise el batch.
-    """
+    """REVISAR se queda entero y la pagina sin avion envia solo lo disponible."""
     cliente = ClienteFalso(page_count=5)
     manifiesto = manifiesto_con_separadores(tmp_path)
     manifiesto.solo_subir = True
@@ -201,6 +197,7 @@ def test_revisar_conserva_separadores_y_escribe_lo_que_airvault_acepta(tmp_path)
     assert [pagina for pagina, _valores, _estado in cliente.escrituras] == [
         2,
         3,
+        5,
     ]
 
 

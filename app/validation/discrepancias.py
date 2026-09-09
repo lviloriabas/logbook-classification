@@ -25,11 +25,9 @@ conserva como requisito de mantenimiento, pero no puede decidir el tipo.
 - Es de **vuelo** cuando esa licencia está vacía, el bloque de corrección no
   tiene nada escrito y hay algo escrito en el bloque del capitán o en la
   firma del piloto.
-- Es una hoja **anulada** (VOID) cuando la licencia de técnico, las dos
-  casillas del capitán, la firma del piloto y el bloque de corrección están
-  vacías. Se llenó mal, se apartó y lleva el log page y a veces la matrícula,
-  nada más. No le falta ninguna firma porque no llegó a usarse: se indexa
-  como cualquier otra y no abre discrepancia.
+- Una marca **VOID** grande y confirmada en la imagen anula los requisitos
+  de firmas, aunque queden vuelos, firmas o trabajo escrito debajo. Conserva
+  el indice de avion, logpage y fecha. Las casillas vacias no confirman VOID.
 - Si ninguna casilla limpia lo dice con seguridad, el tipo es **incierto**
   (INCIERTO): se reportan solo las anomalías robustas (firma de piloto,
   exigida en las dos interpretaciones) y las casillas ilegibles que impiden
@@ -250,20 +248,18 @@ def _clasificar_pagina(page: PageResult, template: Template
         (tipo, categoria, campos afectados, por corrección) si hay
         discrepancia, o None si la página cumple todas las firmas requeridas.
     """
+    if (page.void_mark is not None and page.void_mark.text == "VOID"
+            and page.void_mark.confidence >= .80):
+        return None
     licencia_tecnico = _campo_presente(page, template, FIELD_TECH_LICENSE)
     firma_capitan = _campo_presente(page, template, FIELD_CAPTAIN)
     licencia_capitan = _campo_presente(page, template, FIELD_CAPTAIN_LICENSE)
     firma_piloto = _campo_presente(page, template, FIELD_PILOT)
     correccion = _campo_presente(page, template, FIELD_CORRECTION)
 
-    # Una bitácora VOID se anuló al llenarla y se apartó: lleva el log page y
-    # a veces la matrícula, y nada más. No le falta ninguna firma porque no
-    # llegó a usarse, así que se indexa como cualquier otra y no abre
-    # discrepancia. Se reconoce porque ninguna de las casillas fiables tiene
-    # nada. La firma de técnico no entra en la comprobación a propósito: un
-    # sello sobre ella no convierte una hoja anulada en una discrepancia.
-    # El bloque de corrección sí: una hoja con el trabajo descrito no se
-    # anuló, se dejó a medias, y es exactamente lo que hay que reclamar.
+    # Sin evidencia de uso no se puede atribuir una falta de firma a vuelo
+    # o mantenimiento. Esto NO confirma VOID: solo la palabra grande leida
+    # en la imagen lo confirma, incluso si quedaron vuelos o firmas debajo.
     if (licencia_tecnico is False and firma_capitan is False
             and licencia_capitan is False and firma_piloto is False
             and correccion is not True):
@@ -401,6 +397,7 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
         for page in report.pages:
             page.discrepancy = False
             page.discrepancy_note = ""
+            page.discrepancy_fields = []
             if page.blank:
                 continue
             resultado = _clasificar_pagina(page, template)
@@ -420,6 +417,10 @@ def clasificar_lote(reports: List[ValidationReport], template: Template
             page.discrepancy = categoria is Categoria.MISSING
             if page.discrepancy:
                 page.discrepancy_note = entrada.resumen()
+                page.discrepancy_fields = [
+                    campo.field_id for campo in campos
+                    if campo.categoria is Categoria.MISSING
+                ]
             entradas.append(entrada)
 
     entradas.sort(key=lambda d: (

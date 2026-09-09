@@ -632,13 +632,11 @@ def test_el_lote_de_revisar_no_se_numera_como_una_parte_mas(tmp_path):
     assert principal[0].manifiesto.nombre_batch == "DP | BITS PRUEBA"
 
 
-def test_en_el_lote_de_revisar_no_se_manda_lo_que_airvault_no_acepta(tmp_path):
-    """Sin avion no hay pagina que guardar, ni siquiera amarilla.
+def test_en_revisar_se_omiten_vacios_y_se_comprueba_lo_enviado(tmp_path):
+    """El payload parcial omite Aircraft, no envia el vacio que se rechazaba.
 
-    Se intento mandar lo disponible confiando en que AirVault la dejara en
-    «Need Correction». No lo hace: contesta 500 «Field Aircraft value is
-    required» y ese rechazo paraba el batch entero. Las bitacoras de
-    REVISAR sin avion se quedan para que una persona las resuelva.
+    El cliente falso acepta la omision. Un servidor que tambien la rechace
+    debe conservar el fallo, como cubren las pruebas del indexador.
     """
     from app.airvault.indexer import Indexador
     from tests.airvault_fake import ClienteFalso, pagina
@@ -657,16 +655,18 @@ def test_en_el_lote_de_revisar_no_se_manda_lo_que_airvault_no_acepta(tmp_path):
     plan = indexador.planificar(total)
     resultado = indexador.aplicar(plan)
 
-    assert cliente.escrituras == []
-    assert resultado.omitidas == 2
+    assert len(cliente.escrituras) == 2
+    assert all(9633 not in valores and valores[9675]
+               for _, valores, _ in cliente.escrituras)
+    assert resultado.escritas == 2
     assert not resultado.interrumpido
-    assert cliente.lecturas == [2, 3]
-    motivos = {a.codigo for p in plan.bloqueadas for a in p.avisos}
-    assert "obligatorio_vacio" in motivos
-    assert plan.escribibles == []
+    assert cliente.lecturas == [2, 3, 2, 3]
+    motivos = {a.codigo for p in plan.paginas for a in p.avisos}
+    assert "indice_incompleto" in motivos
+    assert len(plan.escribibles) == 2
 
 
-def test_el_reporte_dice_por_que_esa_pagina_no_se_puede_escribir(tmp_path):
+def test_el_reporte_conserva_el_motivo_de_revision_del_indice_parcial(tmp_path):
     from app.airvault.indexer import Indexador
     from tests.airvault_fake import ClienteFalso
 
@@ -678,11 +678,10 @@ def test_el_reporte_dice_por_que_esa_pagina_no_se_puede_escribir(tmp_path):
     total = len(revisar.manifiesto.registros)
     plan = Indexador(ClienteFalso(page_count=total), revisar.manifiesto,
                      []).planificar(total)
-    motivos = {a.codigo for p in plan.bloqueadas for a in p.avisos}
-    # El reporte tiene que nombrar las dos cosas: que no se leyo el avion y
-    # que por eso la pagina no se puede guardar.
+    motivos = {a.codigo for p in plan.paginas for a in p.avisos}
+    # Guardar los campos disponibles no resuelve la matricula pendiente.
     assert "matricula_vacia" in motivos
-    assert "obligatorio_vacio" in motivos
+    assert "indice_incompleto" in motivos
 
 
 def test_una_entrega_que_no_cuadra_con_su_csv_no_se_prepara():

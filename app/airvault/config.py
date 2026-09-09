@@ -68,6 +68,9 @@ NOMBRE_ESTADO = {
 # «el campo 9633 quedaria vacio» no se puede leer sin abrir el codigo; el
 # mismo aviso con el nombre se resuelve mirando la bitacora.
 NOMBRE_CAMPO = {
+    9692: "ECN Reason",
+    9781: "2nd ECN Reason",
+    9782: "3rd ECN Reason",
     CAMPO_DOC_TYPE: "Doc Type",
     CAMPO_WORK_LOCATION: "Work Location",
     CAMPO_WORK_TYPE: "Work Type",

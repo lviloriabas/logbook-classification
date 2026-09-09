@@ -56,11 +56,11 @@ FALLOS_DE_CAMINO = (ErrorDeSesion, ErrorDeConexion)
 # Estos avisos describen calidad incompleta, no una correspondencia rota: se
 # envia lo disponible y AirVault deja la pagina pendiente de revision.
 #
-# «obligatorio_vacio» no esta en la lista y no puede estarlo, ni siquiera en
-# REVISAR: AirVault no acepta la pagina y contesta 500 «Field <campo> value
-# is required». Mandarla no la deja amarilla, la rechaza, y el rechazo se
-# llevaba por delante el resto del batch.
+# Un obligatorio explicitamente vacio sigue bloqueando. En REVISAR se
+# omiten los campos sin lectura y se guarda el resto con estado pendiente,
+# como ya se hacia con End Date cuando la fecha era dudosa.
 AVISOS_DE_REVISION = {
+    "indice_incompleto",
     "fecha_dudosa",
     "matricula_vacia",
     "matricula_desconocida",
@@ -90,12 +90,16 @@ class PlanPagina:
 
     @property
     def requiere_revision(self) -> bool:
-        return self.escribible and bool(self.avisos)
+        return self.escribible and bool(
+            self.avisos or self.registro.discrepancia
+            or self.registro.fecha_dudosa or self.registro.revision_pendiente
+        )
 
     @property
     def queda_incompleta(self) -> bool:
         """AirVault no puede validarla porque falta un campo obligatorio."""
-        return any(a.codigo == "obligatorio_vacio" for a in self.avisos)
+        return any(a.codigo in {"obligatorio_vacio", "indice_incompleto", "fecha_dudosa"}
+                   for a in self.avisos)
 
 
 @dataclass
@@ -266,10 +270,19 @@ class Indexador:
                 self.manifiesto.audit_status_discrepancia,
             )
             avisos = list(por_seq.get(registro.seq, ()))
+            if self.manifiesto.solo_subir:
+                # Omitir conserva lo que AirVault ya tenga. Enviar un
+                # obligatorio vacio provoca rechazo y deja sin guardar
+                # incluso el Log Page Number que si se pudo reconocer.
+                valores = {
+                    campo: valor for campo, valor in valores.items()
+                    if campo not in CAMPOS_OBLIGATORIOS or str(valor or "").strip()
+                }
             avisos.extend(verificar_obligatorios(
                 registro,
                 valores,
                 permitir_fecha_dudosa=self.manifiesto.solo_subir,
+                permitir_incompletos=self.manifiesto.solo_subir,
             ))
 
             remota = remotas.get(registro.seq)
@@ -281,6 +294,11 @@ class Indexador:
                     f"{ilegibles.get(registro.seq, 'sin respuesta')}",
                 ))
             else:
+                from app.airvault.ecn import conservar_razones
+                try:
+                    valores = conservar_razones(valores, remota.valores)
+                except ValueError as exc:
+                    avisos.append(Aviso(registro.seq, "ecn_sin_espacio", str(exc)))
                 avisos.extend(verificar_alineacion(
                     registro, remota.valores, self.permitir_log_distinto,
                     remota.estado,
@@ -321,7 +339,14 @@ class Indexador:
                 avisos=avisos,
                 ya_indexada=(
                     remota is not None
-                    and remota.estado == ESTADO_VALIDO
+                    and (remota.estado == ESTADO_VALIDO or (
+                        self.manifiesto.solo_subir
+                        and remota.estado == ESTADO_NECESITA_CORRECCION
+                        and (registro.revision_pendiente is not False
+                             or registro.discrepancia or registro.fecha_dudosa
+                             or any(a.codigo in AVISOS_DE_REVISION for a in avisos))
+                        and not campos_distintos(valores, remota.valores)
+                    ))
                     and not reparar_fecha
                     and not str(
                         remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
@@ -429,9 +454,12 @@ class Indexador:
                 resultado.omitidas += 1
                 continue
             if (
-                registro.estado is EstadoRegistro.ESCRITA
-                and entrada.ya_indexada
+                entrada.ya_indexada and (
+                    registro.estado is EstadoRegistro.ESCRITA
+                    or self.manifiesto.solo_subir
+                )
             ):
+                registro.estado = EstadoRegistro.ESCRITA
                 resultado.omitidas += 1
                 continue
             try:
@@ -453,7 +481,12 @@ class Indexador:
                 valores[CAMPO_WORK_LOCATION] = ""
                 estado = (
                     ESTADO_NECESITA_CORRECCION
-                    if self.manifiesto.solo_subir or entrada.queda_incompleta
+                    if entrada.queda_incompleta or (
+                        self.manifiesto.solo_subir and (
+                            entrada.requiere_revision
+                            or registro.revision_pendiente is None
+                        )
+                    )
                     else ESTADO_VALIDO
                 )
                 self.cliente.guardar_pagina(
@@ -463,6 +496,8 @@ class Indexador:
                     estado,
                     entrada.pagina_batch,
                 )
+                if self.manifiesto.solo_subir:
+                    self._verificar_guardado(entrada, valores, estado)
             except FALLOS_DE_CAMINO as exc:
                 # Se cayo la sesion o la red. Seguir escribiendo marcaria
                 # como fallidas paginas que nadie llego a intentar; se para
@@ -512,7 +547,10 @@ class Indexador:
                 continue
             registro.estado = EstadoRegistro.ESCRITA
             registro.pagina_batch = entrada.pagina_batch
-            registro.avisos = []
+            registro.avisos = (
+                [str(aviso) for aviso in entrada.avisos]
+                if self.manifiesto.solo_subir else []
+            )
             resultado.escritas += 1
             self._persistir()
             if al_avanzar is not None:
@@ -552,9 +590,86 @@ class Indexador:
                     )
         return resultado
 
+    def _verificar_guardado(
+        self, entrada: PlanPagina, valores: Mapping[int, str], estado: int,
+    ) -> None:
+        """Confirma que REVISAR conservo los datos antes de darla por escrita."""
+        remota = self.cliente.leer_pagina(
+            self.manifiesto.batch_id, entrada.pagina_batch,
+        )
+        distintos = campos_distintos(valores, remota.valores)
+        if distintos or remota.estado != estado:
+            detalle = ", ".join(distintos) or "estado de revision"
+            raise ErrorDeAirVault(
+                f"AirVault no conservo el guardado de la pagina "
+                f"{entrada.pagina_batch}: {detalle}"
+            )
+
     def _persistir(self) -> None:
         if self._al_guardar is not None:
             self._al_guardar(self.manifiesto)
+
+
+def campos_distintos(esperados: Mapping[int, str], recibidos: Mapping[int, str]) -> List[str]:
+    """Compara solo los campos enviados y admite fechas remotas equivalentes."""
+    distintos = []
+    for campo, esperado in esperados.items():
+        recibido = str(recibidos.get(campo, "") or "").strip()
+        esperado = str(esperado or "").strip()
+        coincide = recibido == esperado
+        if campo == CAMPO_END_DATE and esperado:
+            fecha = fecha_desde_airvault(esperado)
+            coincide = bool(fecha) and fecha_desde_airvault(recibido) == fecha
+        if not coincide:
+            distintos.append(nombre_campo(campo))
+    return distintos
+
+
+def verificar_revision(cliente, manifiesto: Manifiesto, al_avanzar=None) -> tuple[int, int, List[str]]:
+    """El trabajo automatico acaba cuando lo disponible esta guardado.
+
+    Una discrepancia o un dato ilegible pueden conservar el estado amarillo.
+    Exigir Valid a esas paginas repetia un guardado que ya habia terminado.
+    Esta comprobacion no publica ni completa el batch.
+    """
+    confirmadas = 0
+    problemas = []
+    registros = list(manifiesto.bitacoras())
+    for numero, registro in enumerate(registros):
+        if al_avanzar:
+            al_avanzar(numero, len(registros))
+        pagina = registro.pagina_batch or registro.seq
+        try:
+            remota = cliente.leer_pagina(manifiesto.batch_id, pagina)
+        except FALLOS_DE_CAMINO:
+            raise
+        except Exception as exc:
+            problemas.append(f"pagina {pagina}: no se pudo comprobar ({exc})")
+            continue
+        esperados = valores_de_indice(
+            registro, manifiesto.doc_type, manifiesto.audit_status,
+            manifiesto.nombre_batch, manifiesto.audit_status_discrepancia,
+        )
+        esperados = {campo: valor for campo, valor in esperados.items()
+                     if campo not in CAMPOS_OBLIGATORIOS or str(valor or "").strip()}
+        esperados[CAMPO_WORK_LOCATION] = ""
+        from app.airvault.ecn import conservar_razones
+        try:
+            esperados = conservar_razones(esperados, remota.valores)
+        except ValueError as exc:
+            problemas.append(f"pagina {pagina}: {exc}")
+            continue
+        distintos = campos_distintos(esperados, remota.valores)
+        if distintos or remota.estado not in (ESTADO_VALIDO, ESTADO_NECESITA_CORRECCION):
+            problemas.append(f"pagina {pagina}: falta confirmar "
+                             + (", ".join(distintos) or "el estado de indexacion"))
+            continue
+        confirmadas += 1
+        registro.estado = EstadoRegistro.ESCRITA
+        registro.pagina_batch = pagina
+    if al_avanzar:
+        al_avanzar(len(registros), len(registros))
+    return confirmadas, len(registros), problemas
 
 
 def verificar_lote(

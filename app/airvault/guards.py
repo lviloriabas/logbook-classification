@@ -193,6 +193,7 @@ def verificar_obligatorios(
     registro: Registro,
     valores: Mapping[int, str],
     permitir_fecha_dudosa: bool = False,
+    permitir_incompletos: bool = False,
 ) -> List[Aviso]:
     """Ningun campo obligatorio puede ir vacio.
 
@@ -220,6 +221,14 @@ def verificar_obligatorios(
                         "no pudo confirmarse",
                     )
                 )
+                continue
+            if permitir_incompletos and campo not in valores:
+                avisos.append(Aviso(
+                    registro.seq,
+                    "indice_incompleto",
+                    f"{nombre_campo(campo)} queda pendiente; se guardan "
+                    "los demas datos disponibles sin enviar este campo vacio",
+                ))
                 continue
             avisos.append(
                 Aviso(

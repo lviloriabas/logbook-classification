@@ -333,6 +333,7 @@ def _registro_de_fila(
     inferidas: Mapping[tuple[str, int], tuple[str, str]] | None = None,
     fin_de_mes: bool = False,
     fecha_dudosa: bool = False,
+    revision_pendiente: bool | None = None,
 ) -> Registro:
     """Traduce una fila del CSV al registro que viaja en el manifiesto.
 
@@ -356,6 +357,7 @@ def _registro_de_fila(
         # Va detras de la deduccion a proposito: una fecha deducida se
         # indexa con la misma politica que una leida.
         fecha = fecha_a_fin_de_mes(fecha)
+    from app.airvault.ecn import campos_del_resumen
     return Registro(
         seq=seq,
         archivo_origen=archivo,
@@ -371,6 +373,8 @@ def _registro_de_fila(
         fleet_inferido=inferido and bool(matricula),
         duplicado=str(fila.get("dup", "")).strip().lower() == "true",
         discrepancia=str(fila.get("disc", "")).strip().lower() == "true",
+        discrepancy_fields=campos_del_resumen(fila.get("disc_reason") or fila.get("discrepancia")),
+        revision_pendiente=revision_pendiente,
     )
 
 
@@ -499,8 +503,16 @@ def registros_desde_entrega(
             _registro_de_fila(
                 seq, fila, resolutor, inferidas, fin_de_mes,
                 fecha_dudosa=bool(entrada.get("fecha_dudosa", False)),
+                revision_pendiente=(
+                    entrada["revision_pendiente"]
+                    if isinstance(entrada.get("revision_pendiente"), bool)
+                    else None
+                ),
             )
         )
+        campos = entrada.get("discrepancy_fields")
+        if isinstance(campos, list):
+            registros[-1].discrepancy_fields = [c for c in campos if isinstance(c, str)]
     return registros
 
 
@@ -543,4 +555,7 @@ def valores_de_indice(
         valores[CAMPO_DESCRIPCION] = registro.flight_number
     if nombre_batch:
         valores[CAMPO_BATCH_NAME] = nombre_batch
+    if registro.discrepancia:
+        from app.airvault.ecn import CAMPOS_ECN, razones_ecn
+        valores.update(zip(CAMPOS_ECN, razones_ecn(registro.discrepancy_fields)))
     return valores

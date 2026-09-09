@@ -1575,10 +1575,19 @@ class Trabajo:
         self.guardar()
         return resultado
 
-    def verificar(self, cliente) -> Tuple[int, int, Sequence[str]]:
+    def verificar(self, cliente, al_avanzar=None) -> Tuple[int, int, Sequence[str]]:
         """Relee el batch y confirma contra el servidor como quedo."""
-        validas, total, problemas = verificar_lote(cliente, self.manifiesto)
-        detalle = f"{validas}/{total} en Valid"
+        if self.manifiesto.solo_subir:
+            from app.airvault.indexer import verificar_revision
+
+            validas, total, problemas = verificar_revision(
+                cliente, self.manifiesto, al_avanzar=al_avanzar,
+            )
+            detalle = (f"{validas}/{total} con los datos disponibles comprobados; "
+                       "las incidencias quedan para revision humana")
+        else:
+            validas, total, problemas = verificar_lote(cliente, self.manifiesto)
+            detalle = f"{validas}/{total} en Valid"
         if validas != total and problemas:
             detalle += f"; {problemas[0]}"
         self.manifiesto.etapa("verificar").marcar(
@@ -4661,8 +4670,8 @@ def detectar_indexados(
     bitacora con AirVault. Si alguien lo indexo a mano, la verificacion queda
     guardada en el manifiesto nuevo y no se vuelve a escribir ni a subir.
 
-    REVISAR conserva su flujo manual y un batch abierto por otra persona no
-    se toca. Los que aun tengan paginas pendientes quedan como incompletos y
+    REVISAR acaba su etapa automatica al confirmar lo disponible. Un batch
+    abierto por otra persona no se toca. Las paginas pendientes quedan incompletas y
     se pueden planificar de nuevo con el estado remoto mas reciente.
     """
     detectados: List[EstadoParte] = []
@@ -4670,7 +4679,6 @@ def detectar_indexados(
         trabajo = parte.trabajo
         if (
             parte.estado not in (LISTO, INCOMPLETO)
-            or trabajo.manifiesto.solo_subir
             or (parte.lote and parte.lote.bloqueado_por)
         ):
             detectados.append(parte)
@@ -4851,14 +4859,21 @@ def indexar_partes(
 
 
 def verificar_partes(
-    trabajos: Sequence["Trabajo"], cliente
+    trabajos: Sequence["Trabajo"], cliente, avisar=None,
 ) -> Tuple[int, int, List[str]]:
     """Relee todas las partes y suma como quedaron."""
     validas = total = 0
     problemas: List[str] = []
     for trabajo in trabajos:
         cabeza = _prefijo(trabajo)
-        propias, suyas, suyos = trabajo.verificar(cliente)
+        if avisar and trabajo.manifiesto.solo_subir:
+            propias, suyas, suyos = trabajo.verificar(
+                cliente, al_avanzar=lambda n, t: avisar(
+                    f"{cabeza}Comprobando datos guardados", n, t,
+                ),
+            )
+        else:
+            propias, suyas, suyos = trabajo.verificar(cliente)
         validas += propias
         total += suyas
         problemas.extend(f"{cabeza}{p}" for p in suyos)

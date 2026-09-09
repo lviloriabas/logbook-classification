@@ -466,13 +466,8 @@ def test_campo_obligatorio_vacio_bloquea_un_batch_automatico():
     assert cliente.escrituras == []
 
 
-def test_campo_obligatorio_vacio_tampoco_se_envia_en_revisar():
-    """AirVault no la deja amarilla: contesta 500 y la rechaza.
-
-    Mandarla no conseguia una pagina pendiente de revision, conseguia un
-    «Field <campo> value is required» que se leia como un corte de red y
-    paraba el batch en la primera bitacora incompleta.
-    """
+def test_revisar_omite_el_vacio_y_guarda_los_demas_datos():
+    """El campo sin lectura no viaja como vacio ni bloquea los demas."""
     m = manifiesto(1)
     m.solo_subir = True
     m.registros[0].log_number = ""
@@ -482,8 +477,11 @@ def test_campo_obligatorio_vacio_tampoco_se_envia_en_revisar():
     plan = indexador.planificar(1)
     indexador.aplicar(plan)
 
-    assert len(plan.escribibles) == 0
-    assert cliente.escrituras == []
+    assert len(plan.escribibles) == 1
+    assert CAMPO_LOG_NUMBER not in cliente.escrituras[0][1]
+    assert cliente.escrituras[0][1][CAMPO_MATRICULA] == "HP-1848CMP"
+    assert cliente.escrituras[0][2] == ESTADO_NECESITA_CORRECCION
+    assert any("Log Page Number" in aviso for aviso in m.registros[0].avisos)
 
 
 def test_una_discrepancia_completa_se_conserva_amarilla_en_revisar():

@@ -906,13 +906,13 @@ class TrabajoAirVaultWorker(QThread):
                 resultado.interrumpido = parcial.interrumpido
                 self._avisar("Verificando batches", 0, 0)
                 validas, total, _problemas = verificar_partes(
-                    trabajos, cliente
+                    trabajos, cliente, avisar=self._avisar,
                 )
                 if validas == total or parcial.interrumpido:
                     break
                 if intento < INTENTOS_INDEXADO:
                     self._avisar(
-                        f"Reintentando páginas amarillas "
+                        f"Reintentando páginas sin confirmar "
                         f"({intento + 1}/{INTENTOS_INDEXADO})", 0, 0,
                     )
                     resolutor = planes[0][1].resolutor if planes else None
@@ -961,6 +961,7 @@ class TrabajoAirVaultWorker(QThread):
         return {
             "resultado": resultado, "validas": validas, "total": total,
             "lotes": len(trabajos), "cierres": cierres,
+            "incluye_revision": any(t.manifiesto.solo_subir for t in trabajos),
             "incompleto": validas != total,
         }
 
@@ -4008,7 +4009,7 @@ class AirVaultWindow(QDialog):
         )
         self.resumen.setText(
             f"El batch {trabajo.manifiesto.nombre_batch} ya se indexó "
-            f"({datos['validas']} de {datos['total']} páginas válidas). "
+            f"({datos['validas']} de {datos['total']} páginas comprobadas). "
             "La búsqueda de los demás continúa en paralelo; todas las "
             "subidas ya terminaron."
         )
@@ -4094,9 +4095,16 @@ class AirVaultWindow(QDialog):
                 + self._aviso_para_subir_a_mano()
             )
         else:
+            incluye_revision = any(
+                p.trabajo.manifiesto.solo_subir for p in self._estados
+            )
             self.resumen.setText(
+                "El proceso automático terminó. Los datos disponibles de REVISAR "
+                "están guardados; sus incidencias se resuelven manualmente."
+                if incluye_revision else
                 "No queda nada pendiente en AirVault para esta ejecución."
             )
+            self.estado_label.setText("Proceso automático terminado")
         self._anotar(
             "Comprobado:",
             [f"{p.nombre}: {p}" for p in revisados],
@@ -4140,7 +4148,7 @@ class AirVaultWindow(QDialog):
         cuenta = (
             f"Escritas {resultado.escritas}, omitidas {resultado.omitidas} "
             f"y fallidas {resultado.fallidas}. En AirVault quedaron "
-            f"{datos['validas']} de {datos['total']} páginas válidas{donde}."
+            f"{datos['validas']} de {datos['total']} páginas comprobadas{donde}."
         )
         separadores_borrados = getattr(resultado, "separadores_borrados", 0)
         separadores_pendientes = getattr(
@@ -4189,6 +4197,11 @@ class AirVaultWindow(QDialog):
                 self._ajustar_vigilancia()
             return
         self._indexado_incompleto = False
+        if datos.get("incluye_revision"):
+            cuenta += (
+                " El guardado de REVISAR terminó. Las incidencias indicadas "
+                "quedan para revisión humana."
+            )
         self.resumen.setText(cuenta + self._cuenta_de_cierres(datos))
         self.estado_label.setText("Indexado terminado")
         self._anotar("Indexado terminado")

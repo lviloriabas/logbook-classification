@@ -899,7 +899,15 @@ class ResultadoFalso:
 def test_al_indexar_cuenta_como_quedo_el_lote(ventana):
     ventana._al_indexar({"resultado": ResultadoFalso(), "validas": 2, "total": 3})
     texto = ventana.resumen.text()
-    assert "Escritas 2" in texto and "2 de 3 páginas válidas" in texto
+    assert "Escritas 2" in texto and "2 de 3 páginas comprobadas" in texto
+
+
+def test_revisar_distingue_fin_del_guardado_y_revision_humana(ventana):
+    ventana._al_indexar({"resultado": ResultadoFalso(), "validas": 3,
+                         "total": 3, "incluye_revision": True})
+    assert ventana.estado_label.text() == "Indexado terminado"
+    assert "El guardado de REVISAR terminó" in ventana.resumen.text()
+    assert "revisión humana" in ventana.resumen.text()
 
 
 def test_un_indexado_cortado_dice_que_lo_que_falta_se_retoma(ventana):

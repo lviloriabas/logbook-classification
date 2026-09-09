@@ -1578,6 +1578,11 @@ class Pipeline:
                 renderer=renderer, first_page=first,
             )
 
+        if not self._is_cancelled():
+            from app.vision.void_mark import revisar_voids
+            revisar_voids(pdf_path, pages, self.template, renderer,
+                          self._notify, self._is_cancelled)
+
         self._notify(total, total, "Generando reporte")
         report = ValidationReport(
             pdf_path=str(pdf_path),
