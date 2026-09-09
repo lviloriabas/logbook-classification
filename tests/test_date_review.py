@@ -1,4 +1,9 @@
-"""Qué fechas pasan a revisión y cuáles se indexan tal como se leyeron."""
+"""Qué fechas pasan a revisión y cuáles se indexan tal como se leyeron.
+
+La antigüedad es el único motivo temporal que aparta una página. Una lectura
+posterior a la ejecución se aparta y la sustituye el libro, así que la
+bitácora se indexa en vez de pasar a REVISAR por un día mal leído.
+"""
 
 from datetime import date
 
@@ -34,8 +39,7 @@ def fixed_clock(monkeypatch):
     ("2026/09/06", False), ("2026/09/01", False), ("2026/08/01", False),
     ("2026/08/31", False), ("2026/07/31", False), ("2026/05/11", False),
     ("2025/10/01", False), ("2025/09/30", True), ("2025/09/06", True),
-    ("2020/07/25", True), ("2026/09/07", True), ("2026/10/01", True),
-    ("2027/01/01", True),
+    ("2020/07/25", True),
 ])
 def test_temporal_review_keeps_the_read_date(value, review):
     page = PageResult(page_number=1, date=value)
@@ -100,23 +104,31 @@ def test_old_book_is_reviewed_even_when_all_its_pages_agree():
     assert [page.date for page in pages] == ["2024/08/20", "2024/08/21"]
 
 
-def test_tomorrow_cannot_become_an_anchor_or_an_invented_today():
+def test_tomorrow_is_replaced_by_the_book_instead_of_going_to_review():
+    # El día de mañana está mal leído, pero el mes y el año no: la página se
+    # indexa con el último día que cabe y la lectura apartada queda a la
+    # vista en las alternativas y en el comentario.
     page = _page(1, "2147301", "07", "SEP", "26")
     stats = correct_dates_by_book([_report(page)])
     day = _field_of(page, "day")
     assert stats["after_the_run"] == 1
-    assert day.value is None
     assert "07" in day.alternatives
-    assert day.inference_method == "day_out_of_window"
-    assert page.date is None
-    assert page.date_review
+    assert day.value == "06"
+    assert day.inference_method == "month_end_fallback"
+    assert "Fecha futura: 2026/09/07" in day.comment
+    assert page.date == "2026/09/06"
+    assert not page.date_review
 
 
-def test_future_month_remains_pending_without_support():
+def test_future_month_stays_pending_but_is_not_a_reason_to_review():
+    # Sin mes no hay fecha, y el CSV la deduce de sus vecinas. La página solo
+    # va a REVISAR si el índice se queda de verdad sin End Date, no por
+    # haber leído un mes imposible.
     page = _page(1, "2147301", "01", "OCT", "26")
     correct_dates_by_book([_report(page)])
     assert _field_of(page, "month").value is None
-    assert page.date_review
+    assert page.date is None
+    assert not page.date_review
 
 
 def test_unread_day_is_never_filled_after_today():
@@ -138,8 +150,8 @@ def test_an_unread_day_filled_by_the_book_is_checked_by_month():
     ))
     assert not review_date_window(page)
     assert not page.date_review
-    # Un mes futuro sí lo es, aunque el día lo haya puesto el relleno.
-    page.date = "2026/10/31"
+    # Medido por mes, una fecha del año pasado sigue pasando a revisión.
+    page.date = "2025/07/31"
     assert review_date_window(page)
 
 
@@ -151,9 +163,6 @@ def test_month_end_policy_does_not_claim_a_future_handwritten_day():
     correct_dates_by_book([_report(page)])
     assert page.date == "2026/09/30"
     assert not page.date_review
-    # Esa representación no permite un mes futuro.
-    page.date = "2026/10/31"
-    assert review_date_window(page)
 
 
 def test_correcting_the_date_clears_only_the_temporal_warning():
@@ -182,11 +191,27 @@ def test_automatic_indexing_is_blocked_for_old_dates():
     assert por_revisar(page)
 
 
-def test_future_year_rejected_by_ocr_is_still_identified_as_future():
+def test_a_pending_future_reading_is_not_a_reason_to_review():
+    # El año leído '28' no existe y el campo quedó vacío. Eso deja la página
+    # sin fecha, que el CSV deduce de sus vecinas: apartarla además en
+    # REVISAR era cobrar dos veces la misma lectura.
     page = _page(1, "2147301", "01", "ENE", None)
     _field_of(page, "year").raw_value = "28"
-    assert review_date_window(page)
-    assert "Fecha futura" in page.comment
+    assert not review_date_window(page)
+    assert not page.date_review
+
+
+def test_no_page_keeps_a_date_after_the_run():
+    # La garantía que permite no revisar las fechas futuras: ninguna llega a
+    # escribirse, ni la que el propio libro podría reintroducir.
+    pages = [_page(1, "2147301", "05", "SEP", "26"),
+             _page(2, "2147302", "09", "SEP", "26"),
+             _page(3, "2147303", None, "SEP", "26")]
+    correct_dates_by_book([_report(*pages)])
+    assert [page.date for page in pages] == [
+        "2026/09/05", "2026/09/06", "2026/09/06",
+    ]
+    assert not any(page.date_review for page in pages)
 
 
 @pytest.mark.parametrize("day,month", [("07", "SEP"), ("01", "OCT")])

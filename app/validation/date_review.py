@@ -1,4 +1,12 @@
-"""Marca temporal de revisión sin alterar la fecha reconocida."""
+"""Marca temporal de revisión sin alterar la fecha reconocida.
+
+Solo la antigüedad aparta una página. Una fecha posterior a la ejecución no
+llega hasta aquí: el corrector de fechas aparta esa lectura y la sustituye
+por el día que el libro admite, así que la bitácora se indexa sola en vez de
+pasar a REVISAR por un número mal leído. Lo que se revisa es lo que ninguna
+inferencia puede arreglar: una fecha de hace más de un año, que casi siempre
+es el año mal leído y que nadie puede confirmar sin ver la página.
+"""
 
 from __future__ import annotations
 
@@ -10,13 +18,11 @@ from app.utils.date_window import reference_date, review_start
 from app.utils.postprocess import _parse_month
 
 _OLD = "Fecha muy antigua:"
-_FUTURE = "Fecha futura:"
-_FUTURE_METHODS = {"year_out_of_window", "month_out_of_window", "day_out_of_window"}
-# El aviso se llamaba «Fecha fuera del periodo habitual» cuando la revisión
-# se medía con el mes anterior. Se sigue reconociendo para poder quitarlo al
-# volver a exportar una ejecución guardada: si no, la página conservaría el
-# motivo de una regla que ya no la aparta.
-_OWNED = (_OLD, _FUTURE, "Fecha fuera del periodo habitual:")
+# Avisos de reglas anteriores: el periodo habitual como borde de la revisión
+# y la fecha futura como motivo para apartar. Se siguen reconociendo para
+# poder quitarlos al volver a exportar una ejecución guardada; si no, la
+# página conservaría el motivo de una regla que ya no la aparta.
+_OWNED = (_OLD, "Fecha futura:", "Fecha fuera del periodo habitual:")
 
 # Días que el programa escribe porque nadie los leyó: la ejecución a fin de
 # mes (``month_end_policy``) y el relleno con el último día que cabe en el
@@ -31,9 +37,6 @@ def date_window_issue(page: PageResult, today: Optional[date] = None) -> str:
     if page.blank:
         return ""
     fields = {field.field_id: field for field in page.fields}
-    if any(field.inference_method in _FUTURE_METHODS and not field.value
-           for field in fields.values()):
-        return f"{_FUTURE} la lectura pendiente supera el día de ejecución"
     reference = reference_date(today)
     day_field = fields.get("day")
     month_only = bool(
@@ -56,8 +59,6 @@ def date_window_issue(page: PageResult, today: Optional[date] = None) -> str:
         value = date(year, month, 1 if month_only else day)
     except (KeyError, TypeError, ValueError):
         return ""
-    if value > reference:
-        return f"{_FUTURE} {value:%Y/%m/%d}, posterior a {reference:%Y/%m/%d}"
     start = review_start(reference)
     if value < start:
         return f"{_OLD} {value:%Y/%m/%d}, anterior a {start:%Y/%m/%d}"
