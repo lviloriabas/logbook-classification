@@ -295,10 +295,7 @@ class Indexador:
                 ))
             else:
                 from app.airvault.ecn import conservar_razones
-                try:
-                    valores = conservar_razones(valores, remota.valores)
-                except ValueError as exc:
-                    avisos.append(Aviso(registro.seq, "ecn_sin_espacio", str(exc)))
+                valores = conservar_razones(valores, remota.valores)
                 avisos.extend(verificar_alineacion(
                     registro, remota.valores, self.permitir_log_distinto,
                     remota.estado,
@@ -654,11 +651,7 @@ def verificar_revision(cliente, manifiesto: Manifiesto, al_avanzar=None) -> tupl
                      if campo not in CAMPOS_OBLIGATORIOS or str(valor or "").strip()}
         esperados[CAMPO_WORK_LOCATION] = ""
         from app.airvault.ecn import conservar_razones
-        try:
-            esperados = conservar_razones(esperados, remota.valores)
-        except ValueError as exc:
-            problemas.append(f"pagina {pagina}: {exc}")
-            continue
+        esperados = conservar_razones(esperados, remota.valores)
         distintos = campos_distintos(esperados, remota.valores)
         if distintos or remota.estado not in (ESTADO_VALIDO, ESTADO_NECESITA_CORRECCION):
             problemas.append(f"pagina {pagina}: falta confirmar "

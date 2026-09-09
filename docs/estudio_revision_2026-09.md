@@ -50,7 +50,7 @@ medicion de falsos positivos.
 
 Consultado en Edge, con el perfil de trabajo y la sesion del usuario, en
 MX:MXDocs, busqueda Key Fields Log Page, el 8 de septiembre de 2026.
-Los campos son ECN Reason (9692), 2nd ECN Reason (9781) y 3rd ECN Reason (9782).
+Solo se escribe ECN Reason (9692). No se escriben 2nd ECN Reason ni 3rd ECN Reason.
 
 | Falta confirmada | Valor exacto |
 | --- | --- |
@@ -59,10 +59,12 @@ Los campos son ECN Reason (9692), 2nd ECN Reason (9781) y 3rd ECN Reason (9782).
 | Firma de tecnico | DISCREPANCY NOTE: MISSING TECHNICIAN SIGNATURE |
 | Licencia de tecnico | DISCREPANCY NOTE: MISSING LICENSE NUMBER |
 
-Firma y licencia de capitan comparten categoria. Las faltas de tecnico usan
-dos categorias distintas. Se conservan las anotaciones existentes y se agregan
-las nuevas en espacios libres; si los tres estan ocupados, se informa el
-conflicto. Una lectura incierta no genera una categoria de falta confirmada.
+Siempre se elige una sola categoria por pagina, con la prioridad solicitada:
+capitan, piloto y tecnico. Firma y licencia de capitan comparten categoria.
+Si al tecnico le faltan firma y licencia, se elige la firma; si solo falta la
+licencia, se usa su categoria. Se conserva una anotacion que ya exista en ECN
+Reason. Los campos secundarios existentes no se modifican. Una lectura incierta
+no genera una categoria de falta confirmada.
 
 ## VOID
 

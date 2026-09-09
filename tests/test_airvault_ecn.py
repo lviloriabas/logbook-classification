@@ -10,35 +10,44 @@ from tests.airvault_fake import ClienteFalso, pagina
 from tests.test_airvault_indexer import manifiesto, PICKLIST
 
 
-def test_capitan_comparte_categoria_y_tecnico_tiene_dos():
+def test_capitan_comparte_categoria_y_tecnico_prioriza_firma():
     assert len(razones_ecn(["captain_signature", "captain_license"])) == 1
     assert razones_ecn(["technician_signature", "technician_license"]) == [
         "DISCREPANCY NOTE: MISSING TECHNICIAN SIGNATURE",
-        "DISCREPANCY NOTE: MISSING LICENSE NUMBER",
     ]
+    assert razones_ecn(["technician_license"]) == ["DISCREPANCY NOTE: MISSING LICENSE NUMBER"]
     assert razones_ecn(["correction_block", "desconocido"]) == []
 
 
-def test_guarda_tres_razones_y_confirma_el_final():
+@pytest.mark.parametrize("faltantes,esperada", [
+    (["technician_license", "pilot_signature", "captain_signature"], "captain_signature"),
+    (["captain_license", "pilot_signature", "technician_signature"], "captain_license"),
+    (["technician_signature", "technician_license", "pilot_signature"], "pilot_signature"),
+    (["technician_license", "technician_signature"], "technician_signature"),
+    (["technician_license"], "technician_license"),
+])
+def test_guarda_solo_una_razon_segun_prioridad_y_confirma_el_final(faltantes, esperada):
     m = manifiesto(1)
     m.solo_subir = True
     r = m.registros[0]
     r.discrepancia = True
-    r.discrepancy_fields = ["pilot_signature", "technician_signature", "technician_license"]
+    r.discrepancy_fields = faltantes
     cli = ClienteFalso(page_count=1)
     indexador = Indexador(cli, m, PICKLIST)
     assert indexador.aplicar(indexador.planificar(1)).escritas == 1
     valores = cli.escrituras[0][1]
-    assert [valores[c] for c in CAMPOS_ECN] == razones_ecn(r.discrepancy_fields)
+    assert valores[9692] == RAZON_POR_CAMPO[esperada]
+    assert 9781 not in valores and 9782 not in valores
     assert verificar_revision(cli, m) == (1, 1, [])
+    assert indexador.aplicar(indexador.planificar(1)).escritas == 0
 
 
 def test_preserva_razon_manual_y_evitar_duplicarla():
     razon = RAZON_POR_CAMPO["pilot_signature"]
-    assert conservar_razones({9692: razon}, {9692: "manual"}) == {9692: "manual", 9781: razon}
-    assert conservar_razones({9692: razon}, {9782: razon}) == {9782: razon}
-    with pytest.raises(ValueError, match="ocupados"):
-        conservar_razones({9692: razon}, {c: "manual" for c in CAMPOS_ECN})
+    assert conservar_razones({9692: razon}, {9692: "manual"}) == {9692: "manual"}
+    assert conservar_razones({9692: razon}, {9782: razon}) == {9692: razon}
+    assert conservar_razones({9692: razon, 9781: "otra", 9782: "otra"}, {}) == {9692: razon}
+    assert conservar_razones({}, {9692: "manual"}) == {}
 
 
 def test_no_pisa_categorias_manual_al_verificar():
@@ -50,7 +59,7 @@ def test_no_pisa_categorias_manual_al_verificar():
     indexador = Indexador(cli, m, PICKLIST)
     assert indexador.aplicar(indexador.planificar(1)).escritas == 1
     assert cli.escrituras[0][1][9692] == "manual"
-    assert cli.escrituras[0][1][9781] == RAZON_POR_CAMPO["captain_license"]
+    assert 9781 not in cli.escrituras[0][1] and 9782 not in cli.escrituras[0][1]
     assert verificar_revision(cli, m) == (1, 1, [])
 
 

@@ -3,7 +3,12 @@
 import re
 import unicodedata
 
-CAMPOS_ECN = (9692, 9781, 9782)
+CAMPOS_ECN = (9692,)
+_CAMPOS_SECUNDARIOS = (9781, 9782)
+_PRIORIDAD = (
+    "captain_signature", "captain_license", "pilot_signature",
+    "technician_signature", "technician_license",
+)
 _PREFIJO = "DISCREPANCY NOTE: "
 RAZON_POR_CAMPO = {
     "captain_signature": _PREFIJO + "MISSING SIGNATURE AND/OR LICENSE NUMBER OF THE CAPTAIN",
@@ -15,8 +20,12 @@ RAZON_POR_CAMPO = {
 
 
 def razones_ecn(campos):
-    """Solo ausencias confirmadas; firma y licencia de capitan comparten categoria."""
-    return list(dict.fromkeys(RAZON_POR_CAMPO[c] for c in campos if c in RAZON_POR_CAMPO))
+    """Una sola falta confirmada: capitan, piloto y tecnico, en ese orden."""
+    faltantes = set(campos)
+    for campo in _PRIORIDAD:
+        if campo in faltantes:
+            return [RAZON_POR_CAMPO[campo]]
+    return []
 
 
 def campos_del_resumen(resumen):
@@ -40,20 +49,10 @@ def campos_del_resumen(resumen):
 
 
 def conservar_razones(valores, remotos):
-    """Anade faltas detectadas en espacios libres, conservando anotaciones manuales."""
-    pendientes = [valores[c] for c in CAMPOS_ECN if valores.get(c)]
-    if not pendientes:
-        return valores
-    resultado = dict(valores)
-    for campo in CAMPOS_ECN:
-        resultado.pop(campo, None)
-    existentes = {c: str(remotos.get(c, "") or "").strip() for c in CAMPOS_ECN}
-    for razon in pendientes:
-        if razon in existentes.values():
-            continue
-        libre = next((c for c, v in existentes.items() if not v), None)
-        if libre is None:
-            raise ValueError("Los tres campos ECN Reason estan ocupados; revisar las categorias")
-        existentes[libre] = razon
-    resultado.update({c: v for c, v in existentes.items() if v})
+    """Solo escribe ECN Reason y respeta su anotacion existente, si la hay."""
+    resultado = {c: v for c, v in valores.items() if c not in _CAMPOS_SECUNDARIOS}
+    campo = CAMPOS_ECN[0]
+    existente = str(remotos.get(campo, "") or "").strip()
+    if resultado.get(campo) and existente:
+        resultado[campo] = existente
     return resultado
