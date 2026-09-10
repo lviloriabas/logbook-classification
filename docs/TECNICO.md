@@ -142,6 +142,26 @@ El manifiesto permite reanudar sin repetir guardados verificados. Reiniciar un p
 
 Código: `app/airvault/flujo.py`, `session.py`, `navegador.py`, `uploader.py`, `discovery.py`, `mapping.py`, `guards.py`, `indexer.py`, `manifest.py` y `registro.py`.
 
+### 7. Web Reports: consulta y corrección de excepciones
+
+Log Page Audit es un informe de SSRS, no una API. Se conduce su visor por pantalla con el mismo Edge del perfil `portable/edge-airvault/`. Se entra por el enlace federado de `url_sso`: el enlace del informe lleva a la pantalla de acceso local de AirVault, que pide unas credenciales que en una instalación federada con Entra ID nadie tiene. Esa entrada renueva la sesión sin intervención mientras la sesión de Entra ID siga viva; cuando también ha caducado hace falta un acceso interactivo.
+
+El plan sale entero del reporte y no consulta nada: una mal indexada ya trae las dos matrículas y una duplicada, cuántas copias hay. Lo que el reporte no diga con esas palabras queda como caso a revisar, con el motivo escrito.
+
+| Acción | Operación interna |
+|---|---|
+| Consultar | Ejecuta cada filtro en la misma sesión y analiza las filas del visor. No escribe nada. |
+| Borrar copias | Conserva la aparición más antigua por fecha y borra el resto con `onDeletePage`. Sin una fecha legible en todas, no borra ninguna. |
+| Reindexar | Abre `onReindexDocument` y escribe matrícula y flota. Cambiar de aeronave puede cambiar la flota, y conservar la anterior sustituiría un dato malo por otro. |
+
+Tres reglas gobiernan la escritura. Cada caso se contrasta antes con lo que la pantalla muestra: el reporte se generó en su momento y actuar sobre un plan viejo borraría lo que ya estaba bien. De un grupo de copias se conserva la más antigua, y sin columna de fecha legible no se borra ninguna. Un control que no aparece detiene ese caso, no la corrida: se busca por lo que el control dice, no por identificadores copiados de una instalación.
+
+Se conduce por pantalla y no por peticiones sueltas a propósito: así valen los permisos de la cuenta y las validaciones del repositorio, y una cuenta sin permiso para borrar no encuentra el botón. Después de escribir se recarga la búsqueda y se relee: una orden pulsada que no surtió efecto no se da por hecha. Cada caso trabaja en su pestaña y la cierra; si el cuadro se abre y algo falla a mitad, se cancela para no dejar el documento tomado. Guardar un reindexado puede pedir confirmación, que llega después de la respuesta del servidor y se contesta mientras se espera el cierre.
+
+Los resultados se informan uno a uno: la corrida termina con cuántas se corrigieron, cuántas no y el motivo de cada una. Los motivos que devuelve AirVault se copian tal cual, porque dicen más que cualquier frase propia.
+
+Código: `app/airvault/web_reports.py`, `correcciones.py` y `app/gui/web_reports_window.py`.
+
 ## Visor y editor
 
 El visor usa un modelo Qt (`csv_model.py`) para cargar y ordenar tablas grandes. La selección y búsqueda resuelven la página original mediante los datos de la ejecución. No edita celdas directamente; las acciones de depuración y exportación utilizan el modelo de resultados. Código: `app/gui/csv_viewer.py` y `csv_utils.py`.

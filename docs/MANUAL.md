@@ -129,6 +129,22 @@ Con clic derecho sobre un batch puede subirlo, comprobarlo, indexarlo, completar
 
 **No es duplicado: volver a subir** autoriza un reenvío: úselo después de comprobar en AirVault que la carga realmente falta. **Eliminar el batch…** actúa sobre el batch remoto; **Eliminar el registro de AirVault** quita el seguimiento local. **Eliminar la ejecución…**, en el historial, envía la carpeta local a la Papelera y conserva lo que ya está en AirVault.
 
+### 9. Corregir excepciones con Web Reports
+
+Log Page Audit es un reporte de AirVault que señala dos defectos de lo ya publicado: una bitácora **duplicada**, que aparece más de una vez, y una **mal indexada**, archivada bajo una aeronave que no es la de su libro. **Web Reports…**, en la ventana principal, consulta ese reporte y corrige lo que el propio reporte deja decidido.
+
+1. Pulse **Web Reports…** y elija **Desde** y **Hasta**. En **Mostrar** decida si quiere mal indexadas, duplicadas o ambas.
+2. Pulse **Consultar**. Consultar no modifica nada en AirVault.
+3. Revise la tabla. **Matrícula del libro** es la aeronave que le corresponde a la bitácora; **Matrícula indexada**, aquella bajo la que quedó archivada. En una mal indexada las dos difieren, y esa diferencia es el defecto. En una duplicada la segunda queda vacía: el reporte no la indica.
+4. Las celdas subrayadas abren Web Search: la de **Página**, sus apariciones; la de **Rango del libro**, el libro entero.
+5. Pulse **Corregir todas…**, o seleccione filas con Ctrl o Mayús y pulse **Corregir seleccionadas…**. Confirme el resumen.
+
+De una duplicada se conserva la aparición más antigua y se borran las demás. Una mal indexada se pasa a la aeronave de su libro. Antes de escribir, cada caso se contrasta con lo que Web Search muestra en ese momento: si el reporte quedó viejo y alguien ya lo corrigió, la bitácora se deja como está.
+
+Los casos se corrigen uno a uno y son independientes. Que uno falle no detiene los demás: al terminar, el resumen dice cuántas se corrigieron y cuántas no, y un aviso enumera cada bitácora que quedó sin cambiar con el motivo que dio AirVault. Los motivos habituales son que la página esté tomada por otro usuario y que Web Search ya no muestre lo que decía el reporte.
+
+**Las copias borradas no se pueden recuperar desde BITS.**
+
 ## Proceso automático
 
 1. Seleccione PDF y plantilla y configure **Salida**, como en los pasos 1 y 2.
@@ -193,6 +209,7 @@ Abra **Herramientas → Editor de plantillas…**. Una zona de plantilla es un r
 | Los recuadros no cubren los datos | Compruebe la plantilla y la vista preprocesada en varias páginas. |
 | No encuentra el PDF original | Abra el visor y pulse **Ubicar PDF…**. |
 | La sesión de AirVault venció | Inicie sesión de nuevo en Edge y use **Continuar pendiente**. |
+| Web Reports no corrigió una bitácora | Lea el motivo en el aviso final. Si está tomada por otro usuario, reintente más tarde; si Web Search ya no coincide con el reporte, vuelva a consultar. |
 | Un batch tiene distinta cantidad de páginas | Revise la entrega y el batch antes de indexar; la diferencia bloquea el trabajo afectado. |
 | Hay valores remotos distintos o posible duplicado | Revise el conflicto en AirVault antes de reintentar. |
 | Necesita liberar espacio | **Carpetas → Vaciar input / Vaciar output** envía esos archivos a la Papelera. `input/processed/` se conserva al vaciar input. |
