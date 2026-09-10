@@ -206,7 +206,7 @@ def test_la_ventana_abre_en_el_mes_actual_y_solo_consulta(app, tmp_path) -> None
         assert ventana.desde_edit.date() == QDate(hoy.year(), hoy.month(), 1)
         assert ventana.hasta_edit.date() == hoy
         assert ventana.filtro_combo.count() == 3
-        assert ventana.tabla.columnCount() == 7
+        assert ventana.tabla.columnCount() == 8
         assert "no modifica AirVault" in ventana.tabla.toolTip()
         assert ventana.hilo() is None
     finally:

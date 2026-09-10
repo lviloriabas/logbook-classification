@@ -88,8 +88,13 @@ ADVERTENCIA_CORRECCION = (
 
 # Las dos columnas que llevan a Web Search, y lo que abre cada una: la
 # página, sus apariciones; el rango, el libro entero al que pertenece.
-COLUMNA_BITACORA = 2
-COLUMNA_RANGO_LIBRO = 4
+COLUMNA_BITACORA = 3
+COLUMNA_RANGO_LIBRO = 5
+
+# La matricula bajo la que quedo indexada la bitacora, al lado de la del
+# libro. Vacia en las duplicadas: el reporte solo la dice de las mal
+# indexadas.
+COLUMNA_MATRICULA_INDEXADA = 2
 
 # Donde cada una de esas celdas guarda su dirección. No se recalcula al
 # pulsar: la tabla se ordena, y la fila que se pulsa ya no es la que trajo
@@ -246,6 +251,12 @@ class WebReportsWindow(QDialog):
     COLUMNAS = (
         "Tipo",
         "Matrícula del libro",
+        # Las dos matrículas van juntas a propósito: la del libro es la que
+        # le toca a la bitácora y esta es bajo la que quedó indexada, así
+        # que una mal indexada enseña la contradicción de un vistazo. En las
+        # duplicadas el reporte no la trae y la celda queda vacía, que es lo
+        # que hacen las demás columnas cuando el reporte no dice el dato.
+        "Matrícula indexada",
         "Página",
         "Tipo de libro",
         "Rango del libro",
@@ -694,6 +705,7 @@ class WebReportsWindow(QDialog):
             valores = (
                 excepcion.tipo,
                 excepcion.matricula_libro,
+                excepcion.destino,
                 excepcion.log_number,
                 excepcion.tipo_libro,
                 excepcion.rango_libro,

@@ -12,6 +12,7 @@ from app.airvault.web_reports import (
 )
 from app.gui.web_reports_window import (
     COLUMNA_BITACORA,
+    COLUMNA_MATRICULA_INDEXADA,
     COLUMNA_RANGO_LIBRO,
     ROL_ENLACE,
     WebReportsWindow,
@@ -60,6 +61,43 @@ def test_la_excepcion_trae_las_dos_busquedas() -> None:
 
     assert "3=2008159%094=2008159" in excepcion.url_busqueda
     assert "3=2008150%094=2008199" in excepcion.url_busqueda_libro
+
+
+def test_la_mal_indexada_ensena_las_dos_matriculas_juntas(
+    app, tmp_path
+) -> None:
+    """La del libro es la que le toca; la de al lado, donde quedó."""
+    ventana = WebReportsWindow(tmp_path)
+    try:
+        ventana._al_recibir(
+            _excepciones(
+                _fila("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]")
+            )
+        )
+
+        assert ventana.tabla.item(0, 1).text() == "HP-9913CMP"
+        assert (
+            ventana.tabla.item(0, COLUMNA_MATRICULA_INDEXADA).text()
+            == "HP-9813CMP"
+        )
+    finally:
+        ventana.close()
+
+
+def test_la_duplicada_deja_vacia_la_matricula_indexada(
+    app, tmp_path
+) -> None:
+    """El reporte no la dice, y una celda en blanco no afirma nada."""
+    ventana = WebReportsWindow(tmp_path)
+    try:
+        ventana._al_recibir(
+            _excepciones(_fila("HP-9913CMP", "DUPLICATED 2008159(3x)"))
+        )
+
+        assert ventana.tabla.item(0, 1).text() == "HP-9913CMP"
+        assert ventana.tabla.item(0, COLUMNA_MATRICULA_INDEXADA).text() == ""
+    finally:
+        ventana.close()
 
 
 def test_las_dos_columnas_quedan_subrayadas_y_con_su_direccion(
