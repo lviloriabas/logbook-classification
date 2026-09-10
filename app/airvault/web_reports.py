@@ -18,10 +18,12 @@ from pathlib import Path
 from typing import Callable, Iterable, Sequence
 from urllib.parse import quote
 
+from app.airvault import cookies as galletas
 from app.airvault.config import AirVaultConfig
 from app.airvault.navegador import (
     PERFIL_POR_DEFECTO,
     SesionDeNavegador,
+    _del_dominio,
     _WebSocket,
 )
 
@@ -134,6 +136,47 @@ def _perfil_de(config: AirVaultConfig) -> Path:
         if config.perfil_navegador
         else PERFIL_POR_DEFECTO
     )
+
+
+def entrada_federada(config: AirVaultConfig) -> str:
+    """Por donde se entra a AirVault para que la sesion se rehaga sola.
+
+    El acceso de la empresa esta federado con Entra ID, y quien dispara esa
+    redireccion es el enlace federado, no la raiz del sitio: entrando por la
+    raiz sale el formulario local de usuario y contrasena, que nadie usa.
+    Es lo que hace el resto del programa antes de pedir nada.
+    """
+    return config.url_sso or config.base_url
+
+
+def esperar_acceso(
+    cookies: Callable[[], dict],
+    config: AirVaultConfig,
+    segundos: float = 25.0,
+    dormir: Callable[[float], None] = time.sleep,
+    reloj: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Espera a que el perfil tenga la cookie que abre la sesion.
+
+    La visita al enlace federado no autentica en el acto: el navegador va y
+    vuelve de Microsoft, y mientras tanto lo que hay en el perfil son las
+    cookies de la vez anterior. Esperar a que aparezca la buena es ademas lo
+    que renueva la sesion sin que nadie teclee nada.
+
+    Devuelve si llego a haberla. Un ``False`` no es motivo para no seguir:
+    la pantalla dira mejor que nadie si hace falta entrar a mano.
+    """
+    host = galletas.dominio(config.base_url)
+    limite = reloj() + max(0.0, segundos)
+    while True:
+        try:
+            if galletas.sostienen_sesion(_del_dominio(cookies(), host)):
+                return True
+        except (OSError, RuntimeError, ValueError):
+            pass
+        if reloj() >= limite:
+            return False
+        dormir(1.0)
 
 
 def abrir_en_web_search(
@@ -357,9 +400,16 @@ class ClienteLogPageAudit:
         notificar("Abriendo Log Page Audit en Edge")
         pagina: _Pagina | None = None
         with SesionDeNavegador(perfil, visible=False) as navegador:
+            # Se entra por el enlace federado y no por el reporte: el
+            # reporte vive en el servidor de informes, y su enlace lleva a
+            # la pantalla de acceso local de AirVault, que pide un usuario y
+            # una contrasena que aqui no existen. Por el enlace federado el
+            # navegador rehace la sesion solo.
             version = navegador.abrir(
-                LOG_PAGE_AUDIT_URL, espera_s=self.config.espera_login_s
+                entrada_federada(self.config),
+                espera_s=self.config.espera_login_s,
             )
+            esperar_acceso(lambda: navegador.cookies(version), self.config)
             try:
                 # La pestana la abre la sesion, que ademas cierra las que
                 # hubieran quedado de una consulta anterior: el visor pesa, y

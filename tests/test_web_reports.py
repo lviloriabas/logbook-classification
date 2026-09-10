@@ -101,6 +101,7 @@ def test_la_consulta_de_reportes_mantiene_edge_oculto(monkeypatch) -> None:
     visibles = []
     pestanas = []
     cerradas = []
+    entradas = []
 
     class _SesionFalsa:
         def __init__(self, _perfil, visible=True):
@@ -112,12 +113,18 @@ def test_la_consulta_de_reportes_mantiene_edge_oculto(monkeypatch) -> None:
         def __exit__(self, *_exc):
             return None
 
-        def abrir(self, _url, espera_s=30.0):
+        def abrir(self, url, espera_s=30.0):
+            entradas.append(url)
             return {"webSocketDebuggerUrl": "ws://127.0.0.1:4321/x"}
 
         def abrir_pestana(self, url):
             pestanas.append(url)
             return "x"
+
+        def cookies(self, _version):
+            return {"airvault.criticaltech.com": [
+                {"name": "Critical", "value": "x"}
+            ]}
 
     class _PaginaFalsa:
         def __init__(self, *_args):
@@ -143,10 +150,52 @@ def test_la_consulta_de_reportes_mantiene_edge_oculto(monkeypatch) -> None:
     )
 
     assert visibles == [False]
+    # Se entra por el enlace federado. Por el del reporte se llega a la
+    # pantalla de acceso local de AirVault, que pide un usuario y una
+    # contrasena que en una empresa federada nadie tiene.
+    assert entradas == [AirVaultConfig().url_sso]
     # La pestana la abre la sesion (que de paso cierra las sobrantes) y se
     # cierra al terminar: el visor no se queda cargado en el perfil.
     assert pestanas == [web_reports.LOG_PAGE_AUDIT_URL]
     assert cerradas == [True]
+
+
+def test_se_espera_a_que_la_sesion_federada_termine_de_rehacerse() -> None:
+    """Recien abierta la pagina, lo que hay en el perfil es lo de antes."""
+    config = AirVaultConfig()
+    tandas = [
+        {"airvault.criticaltech.com": [
+            {"name": "ASP.NET_SessionId", "value": "x"}
+        ]},
+        {"airvault.criticaltech.com": [
+            {"name": "ASP.NET_SessionId", "value": "x"},
+            {"name": "Critical", "value": "y"},
+        ]},
+    ]
+    esperas: list[float] = []
+
+    assert web_reports.esperar_acceso(
+        lambda: tandas.pop(0) if len(tandas) > 1 else tandas[0],
+        config,
+        segundos=25.0,
+        dormir=esperas.append,
+        reloj=lambda: 0.0,
+    )
+    # La primera lectura no traia la cookie que autentica: hubo que esperar.
+    assert esperas == [1.0]
+
+
+def test_una_sesion_que_no_llega_no_detiene_la_consulta() -> None:
+    """La pantalla dira mejor que nadie si hace falta entrar a mano."""
+    reloj = iter([0.0, 0.0, 30.0])
+
+    assert not web_reports.esperar_acceso(
+        lambda: {},
+        AirVaultConfig(),
+        segundos=25.0,
+        dormir=lambda _s: None,
+        reloj=lambda: next(reloj),
+    )
 
 
 def test_la_ventana_abre_en_el_mes_actual_y_solo_consulta(app, tmp_path) -> None:

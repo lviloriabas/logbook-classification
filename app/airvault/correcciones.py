@@ -55,6 +55,7 @@ from app.airvault.navegador import (
     PERFIL_POR_DEFECTO,
     ErrorDeNavegador,
     SesionDeNavegador,
+    cookies_de,
     _edges_del_perfil,
     _puerto_anotado,
     _sin_ventana,
@@ -66,6 +67,8 @@ from app.airvault.web_reports import (
     TIPO_MAL_INDEXADA,
     ConsultaCancelada,
     ExcepcionLogPageAudit,
+    entrada_federada,
+    esperar_acceso,
     _Pagina,
 )
 from app.utils.portable import app_root
@@ -147,6 +150,10 @@ class _NavegadorDeCorrecciones:
                 "Edge no abrió la pestaña temporal de corrección"
             )
         return target_id
+
+    def cookies(self, version: dict) -> dict:
+        """Las cookies del perfil, sea propio el navegador o prestado."""
+        return cookies_de(version)
 
     def _edge_visible(self) -> dict | None:
         anotado = _puerto_anotado(self.perfil)
@@ -660,9 +667,13 @@ class CorrectorLogPageAudit:
         )
         notificar("Abriendo AirVault en Edge")
         with _NavegadorDeCorrecciones(perfil) as navegador:
+            # Por el enlace federado, no por la raiz: es el que rehace
+            # la sesion sin que nadie teclee nada.
             version = navegador.abrir(
-                self.config.base_url, espera_s=self.config.espera_login_s
+                entrada_federada(self.config),
+                espera_s=self.config.espera_login_s,
             )
+            esperar_acceso(lambda: navegador.cookies(version), self.config)
             for numero, correccion in enumerate(pendientes, start=1):
                 if esta_cancelado():
                     raise ConsultaCancelada()
@@ -767,11 +778,16 @@ class CorrectorLogPageAudit:
                 detalle="No se pudo identificar la copia más antigua.",
             )
         if ensayo:
+            se_van = (
+                "se borraría una copia"
+                if len(sobran) == 1
+                else f"se borrarían {len(sobran)} copias"
+            )
             return Resultado(
                 correccion,
                 detalle=(
-                    f"Se conservaría la del {se_queda.cuando:%d/%m/%Y} y se "
-                    f"borrarían {len(sobran)}."
+                    f"Se conservaría la del {se_queda.cuando:%d/%m/%Y} y "
+                    f"{se_van}."
                 ),
             )
         if any(not copia.clave for copia in sobran):

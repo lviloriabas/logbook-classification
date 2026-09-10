@@ -807,16 +807,7 @@ class SesionDeNavegador:
 
     def cookies(self, version: dict) -> Dict[str, List[dict]]:
         """Pide al navegador sus cookies, ya descifradas."""
-        ws = _WebSocket(version["webSocketDebuggerUrl"])
-        try:
-            crudas = ws.pedir("Storage.getCookies").get("cookies", [])
-        finally:
-            ws.cerrar()
-        por_dominio: Dict[str, List[dict]] = {}
-        for cookie in crudas:
-            dominio = str(cookie.get("domain", ""))
-            por_dominio.setdefault(dominio, []).append(cookie)
-        return por_dominio
+        return cookies_de(version)
 
     def cerrar(self, version: Optional[dict] = None) -> None:
         """Cierra el navegador, pidiendoselo antes de matarlo.
@@ -925,6 +916,25 @@ def _del_dominio(por_dominio: Dict[str, List[dict]], host: str
         for dominio, lista in por_dominio.items()
     }
     return galletas.del_dominio(mapa, host)
+
+
+def cookies_de(version: dict) -> Dict[str, List[dict]]:
+    """Las cookies del navegador de ese ``version``, por dominio.
+
+    Es de modulo y no de la sesion porque tambien la pide quien trabaja
+    sobre un Edge que abrio otro (la correccion de Web Reports usa la
+    ventana que ya tiene el perfil, sin duenarla).
+    """
+    ws = _WebSocket(version["webSocketDebuggerUrl"])
+    try:
+        crudas = ws.pedir("Storage.getCookies").get("cookies", [])
+    finally:
+        ws.cerrar()
+    por_dominio: Dict[str, List[dict]] = {}
+    for cookie in crudas:
+        dominio = str(cookie.get("domain", ""))
+        por_dominio.setdefault(dominio, []).append(cookie)
+    return por_dominio
 
 
 def obtener_cookies(

@@ -67,6 +67,31 @@ def test_la_duplicada_de_dos_copias_habla_de_una_sola_que_sobra() -> None:
     assert "1 restantes" not in plan[0].descripcion
 
 
+def test_el_ensayo_del_borrado_tambien_habla_de_una_sola_copia() -> None:
+    """El ensayo es lo que se lee antes de autorizar; tiene que leerse bien."""
+    correccion = planificar(
+        _excepciones(("HP-9913CMP", "DUPLICATED 2008159(2x)"))
+    )[0]
+    rejilla = [
+        _fila_de_rejilla("1", "551", "2008159", "HP-9913CMP", "1/9/2025 9:00:00 AM"),
+        _fila_de_rejilla("2", "552", "2008159", "HP-9913CMP", "2/9/2025 9:00:00 AM"),
+    ]
+    pagina = _PaginaFalsa(rejilla)
+    corrector = CorrectorLogPageAudit(AirVaultConfig(), ResolutorFlota())
+
+    resultado = corrector._borrar(
+        pagina,
+        correccion,
+        copias_en(corrector._rejilla(pagina), "2008159"),
+        ensayo=True,
+    )
+
+    assert "se borraría una copia" in resultado.detalle
+    assert "borrarían 1" not in resultado.detalle
+    # Y el ensayo no escribe: ni abre el cuadro de borrado.
+    assert not any("deletePageDialog" in orden for orden in pagina.ordenes)
+
+
 def test_la_duplicada_de_mas_copias_dice_cuantas_sobran() -> None:
     plan = planificar(
         _excepciones(("HP-9913CMP", "DUPLICATED 2008159(4x)"))
@@ -467,6 +492,47 @@ def test_un_caso_que_se_corta_suelta_el_documento() -> None:
     assert any(
         "ui-dialog-titlebar-close" in orden for orden in pagina.ordenes
     )
+
+
+def test_la_correccion_entra_por_el_enlace_federado(monkeypatch) -> None:
+    """Por la raiz sale el formulario local, que en la empresa nadie usa."""
+    entradas: list[str] = []
+
+    class _NavegadorFalso:
+        def __init__(self, _perfil):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def abrir(self, url, espera_s):
+            entradas.append(url)
+            return {"webSocketDebuggerUrl": "ws://x"}
+
+        def cookies(self, _version):
+            return {"airvault.criticaltech.com": [
+                {"name": "Critical", "value": "x"}
+            ]}
+
+    monkeypatch.setattr(
+        modulo_correcciones, "_NavegadorDeCorrecciones", _NavegadorFalso
+    )
+    monkeypatch.setattr(
+        CorrectorLogPageAudit,
+        "_un_caso",
+        lambda self, *_args: modulo_correcciones.Resultado(_args[1]),
+    )
+    config = AirVaultConfig()
+    plan = planificar(
+        _excepciones(("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]"))
+    )
+
+    CorrectorLogPageAudit(config, ResolutorFlota()).aplicar(plan)
+
+    assert entradas == [config.url_sso]
 
 
 def test_la_correccion_usa_una_pestana_de_fondo_y_deja_edge_abierto(
