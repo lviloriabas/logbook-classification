@@ -94,6 +94,10 @@ from app.gui.responsive import (
 )
 from app.gui.table_sort import ColumnSortController
 from app.gui.airvault_window import AIRVAULT_TOOLTIP, AirVaultWindow
+from app.gui.web_reports_window import (
+    WEB_REPORTS_TOOLTIP,
+    WebReportsWindow,
+)
 from app.gui import automatizacion as pasos_automaticos
 from app.gui.automatizacion import (
     CadenaAutomatica,
@@ -652,6 +656,7 @@ class MainWindow(QMainWindow):
         self._airvault_window: AirVaultWindow | None = None
         self._airvault_windows: list[AirVaultWindow] = []
         self._airvault_corrida: Path | None = None
+        self._web_reports_window: WebReportsWindow | None = None
 
         self._preview_thread = QThread(self)
         self._preview_loader = PreviewLoader()
@@ -792,6 +797,9 @@ class MainWindow(QMainWindow):
         """Pasa la ventana entera al juego de medidas ``density``."""
         self._density = density
         self._apply_density_stylesheet()
+        if hasattr(self, "btn_web_reports"):
+            self.btn_web_reports.setVisible(not density.compact)
+            self.web_reports_action.setVisible(density.compact)
         margin = density.window_margin
         self._root_layout.setContentsMargins(margin, margin, margin, margin)
         self._root_layout.setSpacing(density.root_spacing)
@@ -1128,6 +1136,9 @@ class MainWindow(QMainWindow):
             "procesadas y sus CSV"
         )
         self.btn_csv_viewer.triggered.connect(self._open_csv_viewer)
+        self.web_reports_action = template_menu.addAction("Web Reports…")
+        self.web_reports_action.setToolTip(WEB_REPORTS_TOOLTIP)
+        self.web_reports_action.triggered.connect(self._open_web_reports)
         self.template_actions_button = QToolButton()
         self.template_actions_button.setText("Herramientas")
         configure_menu_button(self.template_actions_button, template_menu)
@@ -1232,9 +1243,24 @@ class MainWindow(QMainWindow):
         self.btn_airvault = QPushButton("Indexar en AirVault…")
         self.btn_airvault.setToolTip(AIRVAULT_TOOLTIP)
         self.btn_airvault.clicked.connect(lambda: self._open_airvault())
+        self.btn_web_reports = QPushButton("Web Reports…")
+        self.btn_web_reports.setToolTip(WEB_REPORTS_TOOLTIP)
+        self.btn_web_reports.clicked.connect(self._open_web_reports)
+        self.btn_web_reports.setVisible(not self._density.compact)
+        self.web_reports_action.setVisible(self._density.compact)
+        # Los tres que abren otra ventana, juntos y contra el margen
+        # derecho; a la izquierda queda solo la casilla, que es lo que esta
+        # fila elige. «Editar flota…» estaba en medio, entre la casilla y el
+        # hueco elástico, así que la fila alternaba botón y opción sin que
+        # el sitio de cada uno dijera nada. Van de menos a más alcance: la
+        # lista local, la consulta y el indexado.
         tools_row.addStretch()
-        tools_row.addWidget(fleet_button)
-        tools_row.addWidget(self.btn_airvault)
+        for boton in (
+            fleet_button,
+            self.btn_web_reports,
+            self.btn_airvault,
+        ):
+            tools_row.addWidget(boton)
         layout.addLayout(tools_row)
         self._fleet_row = tools_row
         return group
@@ -1263,6 +1289,19 @@ class MainWindow(QMainWindow):
             self._airvault_window = ventana
             if self._airvault_corrida is not None:
                 ventana.fijar_corrida(self._airvault_corrida)
+        ventana.show()
+        ventana.raise_()
+        ventana.activateWindow()
+
+    def _open_web_reports(self) -> None:
+        """Abre la consulta de limpieza de Log Page Audit."""
+        ventana = self._web_reports_window
+        if ventana is None:
+            # Igual que AirVault, queda sin dueño para tener su propia
+            # entrada en la barra de tareas de Windows.
+            ventana = WebReportsWindow(SCRIPT_DIR)
+            ventana.setWindowIcon(self.windowIcon())
+            self._web_reports_window = ventana
         ventana.show()
         ventana.raise_()
         ventana.activateWindow()
@@ -4679,9 +4718,15 @@ class MainWindow(QMainWindow):
                 indexado = None
             if indexado is not None:
                 indexados.append(indexado)
+        consulta_web = None
+        if self._web_reports_window is not None:
+            try:
+                consulta_web = self._web_reports_window.hilo()
+            except RuntimeError:
+                consulta_web = None
         for worker in (
             self._worker, self._preprocess_worker, self._outputs_worker,
-            self._input_scan_worker, *indexados,
+            self._input_scan_worker, consulta_web, *indexados,
         ):
             if worker is None:
                 continue
@@ -4815,6 +4860,12 @@ class MainWindow(QMainWindow):
             timer.stop()
         if self._csv_viewer is not None:
             self._csv_viewer.close()
+        if self._web_reports_window is not None:
+            try:
+                self._web_reports_window.detener()
+                self._web_reports_window.close()
+            except RuntimeError:
+                pass
         for ventana in self._airvault_windows:
             # Suelta los batches que una revisión sin indexar dejó tomados en
             # AirVault. Uno que queda tomado no da error: cuelga la próxima

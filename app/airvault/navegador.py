@@ -289,6 +289,17 @@ def _version_en(puerto: int, timeout: float = 2.0) -> Optional[dict]:
     return None
 
 
+def _sin_ventana(version: dict) -> bool:
+    """Si ese navegador esta corriendo sin ventana que nadie ve.
+
+    Lo dice el propio navegador en lo que contesta ``/json/version``: en modo
+    sin ventana se anuncia como «HeadlessChrome». Importa porque sumarle una
+    pestana a uno asi no ensena nada, y quien pidio mirar una busqueda se
+    quedaria esperando una ventana que no llega.
+    """
+    return "headless" in str(version.get("User-Agent", "")).lower()
+
+
 # Con que se le pregunta a Windows por los Edge abiertos. Se pide la linea
 # de ordenes porque el perfil es lo unico que distingue al navegador del
 # programa del de la persona: por el nombre son el mismo msedge.exe.
@@ -569,6 +580,67 @@ class SesionDeNavegador:
         finally:
             ws.cerrar()
 
+    def sumar_pestana(self, url: str, version: Optional[dict] = None,
+                      timeout: float = 15.0) -> str:
+        """Abre otra pagina y deja donde estaban las que ya habia.
+
+        Es la contraria de :meth:`abrir_pestana`, y la diferencia esta en
+        quien conduce. Al trabajo lo conduce el programa, y ahi una pestana
+        de mas es una copia vieja que se puede acabar pilotando por error:
+        por eso aquella deja el navegador con una sola. Estas las abre una
+        persona para mirarlas, asi que se acumulan y las cierra ella cuando
+        termina; que la anterior desapareciera al pedir la siguiente era lo
+        que impedia comparar dos.
+        """
+        version = version or self._version or {}
+        ws = _WebSocket(version["webSocketDebuggerUrl"], timeout=timeout)
+        try:
+            creada = ws.pedir("Target.createTarget", url=url)
+            target_id = str(creada.get("targetId", ""))
+            if not target_id:
+                raise ErrorDeNavegador(
+                    f"Edge no abrio {url} y no dijo por que."
+                )
+            try:
+                ws.pedir("Target.activateTarget", targetId=target_id)
+            except (ErrorDeNavegador, OSError, ValueError) as exc:
+                # Traerla al frente es comodidad, no el encargo: la pestana
+                # ya esta abierta y el fallo no puede tumbar la apertura.
+                logger.debug("No se pudo traer al frente la pestana: {}", exc)
+            return target_id
+        finally:
+            ws.cerrar()
+
+    def abrir_a_la_vista(self, url: str, espera_s: float = 30.0) -> dict:
+        """Deja esa pagina a la vista, sumandola a lo que ya estuviera.
+
+        Es para las paginas que se abren para mirarlas. Si el perfil ya lo
+        tiene un Edge con ventana, la pagina se le suma como una pestana mas
+        y las que hubiera se quedan: es lo unico que permite abrir dos
+        busquedas y compararlas. Si no hay ninguno, o el que hay es uno sin
+        ventana (que no ensenaria nada) o ya no contesta, se cae en
+        :meth:`abrir`, que se encarga de dejar el perfil libre y lanzar el
+        navegador propio.
+        """
+        self.perfil.mkdir(parents=True, exist_ok=True)
+        puerto = _puerto_anotado(self.perfil)
+        version = _version_en(puerto) if puerto is not None else None
+        if version is not None and not _sin_ventana(version):
+            try:
+                self.sumar_pestana(url, version=version)
+            except (ErrorDeNavegador, OSError, KeyError, ValueError) as exc:
+                logger.debug("El Edge que estaba no sumo la pestana: {}", exc)
+            else:
+                logger.info(
+                    "Se suma una pestana al Edge que ya tenia el perfil {} "
+                    "(puerto {})", self.perfil, puerto,
+                )
+                self.puerto = int(puerto)
+                self._version = version
+                self._adoptado = True
+                return version
+        return self.abrir(url, espera_s=espera_s)
+
     def _abrir_pagina(self, version: dict, url: str,
                       timeout: float = 5.0, insistir: bool = False) -> bool:
         """Manda al navegador que ya estaba a la pagina de entrada.
@@ -735,16 +807,7 @@ class SesionDeNavegador:
 
     def cookies(self, version: dict) -> Dict[str, List[dict]]:
         """Pide al navegador sus cookies, ya descifradas."""
-        ws = _WebSocket(version["webSocketDebuggerUrl"])
-        try:
-            crudas = ws.pedir("Storage.getCookies").get("cookies", [])
-        finally:
-            ws.cerrar()
-        por_dominio: Dict[str, List[dict]] = {}
-        for cookie in crudas:
-            dominio = str(cookie.get("domain", ""))
-            por_dominio.setdefault(dominio, []).append(cookie)
-        return por_dominio
+        return cookies_de(version)
 
     def cerrar(self, version: Optional[dict] = None) -> None:
         """Cierra el navegador, pidiendoselo antes de matarlo.
@@ -853,6 +916,25 @@ def _del_dominio(por_dominio: Dict[str, List[dict]], host: str
         for dominio, lista in por_dominio.items()
     }
     return galletas.del_dominio(mapa, host)
+
+
+def cookies_de(version: dict) -> Dict[str, List[dict]]:
+    """Las cookies del navegador de ese ``version``, por dominio.
+
+    Es de modulo y no de la sesion porque tambien la pide quien trabaja
+    sobre un Edge que abrio otro (la correccion de Web Reports usa la
+    ventana que ya tiene el perfil, sin duenarla).
+    """
+    ws = _WebSocket(version["webSocketDebuggerUrl"])
+    try:
+        crudas = ws.pedir("Storage.getCookies").get("cookies", [])
+    finally:
+        ws.cerrar()
+    por_dominio: Dict[str, List[dict]] = {}
+    for cookie in crudas:
+        dominio = str(cookie.get("domain", ""))
+        por_dominio.setdefault(dominio, []).append(cookie)
+    return por_dominio
 
 
 def obtener_cookies(

@@ -150,6 +150,17 @@ def checked_row_color() -> str:
     return blend(accent_color(), CARD_BG, 0.45)
 
 
+def link_text_color() -> str:
+    """Texto de una celda que se puede pulsar para ir a otro sitio.
+
+    Sale del acento, por lo mismo que las bandas de fila, pero aclarado con
+    blanco: el acento tal cual es un tono pensado para pintar fondos y sobre
+    el gris de la tabla se lee mal, que es justo lo contrario de lo que esta
+    celda tiene que conseguir.
+    """
+    return blend(TEXT, accent_color(), 0.45)
+
+
 def on_accent_text(accent: str | None = None) -> str:
     """Blanco o negro sobre el acento, el que se lea.
 
