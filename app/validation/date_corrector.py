@@ -65,7 +65,7 @@ from app.validation.book_corrector import (
     _storage_key,
 )
 from app.validation.grouping import group_books, log_number
-from app.validation.date_review import review_date_window
+from app.validation.date_review import review_date_windows
 from app.validation.page_status import AUTO_INDEX_MIN_VOTES
 
 DATE_FIELD_IDS = ("day", "month", "year")
@@ -2100,7 +2100,11 @@ def correct_dates_by_book(
     for report in reports:
         for page in report.pages:
             _recombine(page)
-            review_date_window(page)
+    # La antigüedad se juzga con el libro a la vista: un año que leyeron dos
+    # bitácoras del libro es un libro atrasado, no una lectura dudosa.
+    review_date_windows(reports)
+    for report in reports:
+        for page in report.pages:
             _recompute_page_status(page)
         _recompute_summary(report)
     logger.info(f"Corrector de fechas por log_number: {stats}")

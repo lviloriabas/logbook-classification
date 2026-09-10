@@ -15,6 +15,7 @@ from app.models.schemas import ValidationReport
 from app.templates.manager import TemplateManager
 from app.validation.book_corrector import correct_matricula_by_book
 from app.validation.date_corrector import correct_dates_by_book
+from app.validation.log_sequence import infer_log_numbers_from_pdf_order
 
 if TYPE_CHECKING:  # el módulo de salidas se importa dentro del hilo
     from app.reports.outputs import OutputOptions
@@ -185,6 +186,7 @@ class PipelineWorker(QThread):
                         self.file_finished.emit(index + 1, report)
                         if report.cancelled:
                             break
+            infer_log_numbers_from_pdf_order(reports)
             correct_matricula_by_book(
                 reports, self.config.book_matriculas_file
             )

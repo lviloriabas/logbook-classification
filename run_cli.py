@@ -444,6 +444,10 @@ def _run(args: argparse.Namespace) -> int:
     # ── Corrector de matrículas por libro (un avión por libro) ──────────
     from app.validation.book_corrector import correct_matricula_by_book
     from app.validation.date_corrector import correct_dates_by_book
+    from app.validation.log_sequence import infer_log_numbers_from_pdf_order
+
+    inferred = infer_log_numbers_from_pdf_order(reports)
+    print(f"\nNúmeros de bitácora deducidos por sus páginas vecinas: {inferred}")
 
     stats = correct_matricula_by_book(
         reports, config.book_matriculas_file

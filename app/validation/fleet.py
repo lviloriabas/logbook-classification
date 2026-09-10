@@ -7,9 +7,11 @@ import re
 
 from loguru import logger
 
-from app.models.schemas import Status, ValidationReport
+from app.models.schemas import FieldResult, Status, ValidationReport
 from app.utils.fleet import load_fleet
+from app.utils.postprocess import apply_postprocess
 from app.validation.book_corrector import _recompute_summary
+from app.validation.grouping import book_key
 from app.validation.page_status import recompute_page_status
 
 
@@ -87,6 +89,43 @@ def _nearest_fleet_match(
     return (tied[0] if len(tied) == 1 else None), tied
 
 
+def _readings(field: FieldResult) -> list[re.Match[str]]:
+    """Lecturas con formato de matrícula que conserva el campo.
+
+    El texto crudo del OCR y las alternativas, donde los correctores dejan lo
+    que la página leyó antes de imponerle la matrícula del libro.
+    """
+    texts = list(field.alternatives)
+    if field.raw_value:
+        texts.append(
+            apply_postprocess(field.field_id, "matricula", field.raw_value)[0]
+        )
+    return [
+        match for text in texts
+        if (match := _MATRICULA_RE.fullmatch(str(text or "").strip().upper()))
+        is not None
+    ]
+
+
+def _break_tie(
+    tied: list[str], readings: list[re.Match[str]]
+) -> str | None:
+    """Entre aviones igual de parecidos, el que mejor explica el libro.
+
+    El valor que empata es uno solo, pero cada página del libro conserva lo
+    que leyó. El avión al que menos cuesta llegar desde todas esas lecturas
+    es el que las explica; si siguen empatados, no se elige.
+    """
+    scored = sorted(
+        (sum(_distance(reading, expected) for reading in readings), candidate)
+        for candidate in tied
+        if (expected := _MATRICULA_RE.fullmatch(candidate)) is not None
+    )
+    if readings and len(scored) > 1 and scored[0][0] < scored[1][0]:
+        return scored[0][1]
+    return None
+
+
 def verify_reports_against_fleet(
     reports: list[ValidationReport], fleet_path: Path
 ) -> None:
@@ -112,18 +151,40 @@ def verify_reports_against_fleet(
             "ninguna matrícula."
         )
         return
+    def matricula_of(page) -> FieldResult | None:
+        return next(
+            (item for item in page.fields if item.field_id == "matricula"),
+            None,
+        )
+
+    # Se toman antes de reclasificar nada: al hacerlo, cada página guarda en
+    # sus alternativas el valor del libro, que no es una lectura suya.
+    readings_by_book: dict[tuple[str, str], list[re.Match[str]]] = {}
     for report in reports:
         for page in report.pages:
-            field = next(
-                (item for item in page.fields if item.field_id == "matricula"),
-                None,
-            )
+            key = book_key(page)
+            field = matricula_of(page)
+            if key is not None and field is not None:
+                readings_by_book.setdefault(key, []).extend(_readings(field))
+
+    for report in reports:
+        for page in report.pages:
+            field = matricula_of(page)
             if field is None:
                 continue
             value = (field.value or "").strip().upper()
             if not value or value in allowed:
                 continue
             fleet_match, tied = _nearest_fleet_match(value, allowed)
+            tie_broken = False
+            if fleet_match is None and len(tied) > 1:
+                key = book_key(page)
+                fleet_match = _break_tie(
+                    tied,
+                    readings_by_book.get(key, [])
+                    if key is not None else _readings(field),
+                )
+                tie_broken = fleet_match is not None
             if value not in field.alternatives:
                 field.alternatives.append(value)
             if fleet_match is not None:
@@ -137,7 +198,12 @@ def verify_reports_against_fleet(
                 field.votes = 0
                 note = (
                     f"Matrícula reclasificada de {value} a {fleet_match}: "
-                    "es la más parecida de la lista de flota"
+                    + (
+                        f"empataba con {', '.join(c for c in tied if c != fleet_match)} "
+                        "y la desempatan las lecturas del libro"
+                        if tie_broken
+                        else "es la más parecida de la lista de flota"
+                    )
                 )
             else:
                 # La lista de flota es el catálogo completo, así que este

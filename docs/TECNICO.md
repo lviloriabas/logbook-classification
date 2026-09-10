@@ -73,10 +73,10 @@ Código: `app/core/pipeline.py`, `app/ocr/`, `app/vision/signature.py` y `book_b
 
 | Regla | Comportamiento que debe conservarse |
 |---|---|
-| Libro | 50 páginas, una aeronave; los siete dígitos de `log_number` separan grupos terminados en `00..49` y `50..99`. El número no se inventa. |
-| Matrícula | Normalización y validación con `fleet.json`; el consenso por libro necesita páginas independientes. `HP-1990WWP` y `HP-1522CMP` tienen normalización específica. |
+| Libro | 50 páginas, una aeronave; los siete dígitos de `log_number` separan grupos terminados en `00..49` y `50..99`. Un número ilegible solo se deduce (`log_sequence.py`) cuando las páginas vecinas del PDF, del mismo libro, lo encierran sin hueco, el número no está ya en la ejecución y los dígitos leídos no lo contradicen. |
+| Matrícula | Normalización y validación con `fleet.json`; el consenso por libro necesita páginas independientes. Una lectura canónica a una sola cifra del consenso con respaldo (o del registro de libros) se corrige sin revisión, salvo que sea la matrícula de otro libro de la ejecución. Un empate con la flota se desempata con las lecturas del libro. `HP-1990WWP` y `HP-1522CMP` tienen normalización específica. |
 | Fecha | No retrocede dentro del libro. Las anclas completan o corrigen componentes y conservan alternativas, fuente y confianza. |
-| Antigüedad | Fuera de enero se revisan fechas anteriores al año de ejecución. En enero también se admite el año anterior. Se conserva la fecha antigua. |
+| Antigüedad | Fuera de enero se revisan fechas anteriores al año de ejecución, salvo que dos bitácoras distintas del libro lean ese mismo año. En enero también se admite el año anterior. Se conserva la fecha antigua. |
 | Futuro | Una fecha manuscrita posterior a la ejecución es inválida. El día generado por una política de fin de mes se valida por mes. |
 | Duplicados | `dup` se marca desde la segunda aparición del mismo número válido, sin comparar imágenes. |
 | Estado | `OK`, `WARNING` o `ERROR` según los datos principales y su evidencia. Firmas y vuelo opcional no determinan por sí solos ese estado. |

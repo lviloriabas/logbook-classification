@@ -32,7 +32,7 @@ from collections import defaultdict
 import json
 from pathlib import Path
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Collection, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -82,6 +82,32 @@ _CANONICAL_MATRICULA_RE = re.compile(r"^HP-(\d{4})(CMP|WWP)$")
 # las guardas adicionales que deciden si la inferencia puede ir automática.
 _MIN_BOOK_AUTO_CONFIDENCE = 0.50
 _BOOK_STORAGE_KEY_RE = re.compile(r"^\d{5}[AB]$")
+# Cifras en que una lectura canónica puede diferir de la matrícula del libro
+# y seguir contándose como mal leída. Una sola es el error habitual del trazo
+# manuscrito; con dos ya puede ser otro avión con el log_number mal leído.
+_MISREAD_MAX_DIGITS = 1
+
+
+def _misread_of(
+    reading: str, winner: str, foreign: Collection[str] = frozenset()
+) -> bool:
+    """La lectura se explica como la matrícula del libro con una cifra mal leída.
+
+    ``foreign`` son las matrículas que otros libros de la ejecución dan por
+    suyas: si la página leyó una de ellas, puede ser una bitácora de ese otro
+    avión y no se da por mal leída.
+    """
+    if reading in foreign:
+        return False
+    observed = _CANONICAL_MATRICULA_RE.fullmatch(reading)
+    expected = _CANONICAL_MATRICULA_RE.fullmatch(winner)
+    if observed is None or expected is None:
+        return False
+    different = sum(
+        left != right
+        for left, right in zip(observed.group(1), expected.group(1))
+    )
+    return different <= _MISREAD_MAX_DIGITS
 
 
 def _storage_key(book: List[PageResult]) -> Optional[str]:
@@ -257,12 +283,15 @@ def _book_winner(
     return winner, len(matches), confidence
 
 
-def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
+def _correct_book(
+    book: List[PageResult], foreign: Collection[str] = frozenset()
+) -> Tuple[int, int]:
     """Corrige las matrículas de un libro. Devuelve (corregidas, marcadas).
 
     Corrección agresiva: toda página cuya matrícula difiera del ganador
     (vacía, ilegible, de formato válido pero distinta) se sobrescribe con
     la matrícula del libro; el valor original queda en el comentario.
+    ``foreign`` son las matrículas de los demás libros de la ejecución.
     """
     entries = [(page, _matricula_field(page)) for page in book]
     entries = [(p, f) for p, f in entries if f is not None]
@@ -316,6 +345,13 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
             count >= AUTO_INDEX_MIN_VOTES
             and winner_confidence >= _MIN_BOOK_AUTO_CONFIDENCE
         )
+        # Frente a un consenso con respaldo, una cifra distinta es el error
+        # habitual del reconocedor y no otro avión: se corrige sin apartar la
+        # página. Más cifras, o la matrícula de otro libro, sí se revisan.
+        conflicting = canonical_original and not (
+            sufficiently_supported
+            and _misread_of(original, winner, foreign)
+        )
         field.status = (
             Status.OK
             if not canonical_original and sufficiently_supported
@@ -332,9 +368,11 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
                 f"Corrected from {original!r} by book consensus "
                 f"({count} vote(s))"
             )
-            if canonical_original:
+            if conflicting:
                 field.comment += "; conflicting registration requires review"
                 page.airvault_discrepancy = True
+            elif canonical_original:
+                field.comment += "; one digit apart, taken as a misreading"
             flagged += 1
         else:
             field.comment = (
@@ -354,13 +392,17 @@ def _correct_book(book: List[PageResult]) -> Tuple[int, int]:
 
 
 def _apply_stored_matricula(
-    book: List[PageResult], matricula: str
+    book: List[PageResult],
+    matricula: str,
+    foreign: Collection[str] = frozenset(),
 ) -> Tuple[int, int]:
     """Aplica una asociación confirmada en otra ejecución.
 
     Una lectura canónica distinta no se oculta: se conserva como alternativa
-    y la página queda en WARNING. Los valores vacíos, inválidos o coincidentes
-    sí quedan confirmados porque el mapa solo aprende consensos fuertes.
+    y la página queda en WARNING. Solo va a revisión cuando no se explica
+    como una cifra mal leída (ver :func:`_misread_of`). Los valores vacíos,
+    inválidos o coincidentes sí quedan confirmados porque el mapa solo
+    aprende consensos fuertes.
     """
     corrected = 0
     flagged = 0
@@ -369,10 +411,13 @@ def _apply_stored_matricula(
         if field is None:
             continue
         original = (field.value or "").strip()
-        canonical_conflict = bool(
+        different_reading = bool(
             original
             and original != matricula
             and _CANONICAL_MATRICULA_RE.fullmatch(original)
+        )
+        canonical_conflict = different_reading and not _misread_of(
+            original, matricula, foreign
         )
         if original and original != matricula \
                 and original not in field.alternatives:
@@ -381,7 +426,7 @@ def _apply_stored_matricula(
             field.value = matricula
             corrected += 1
         field.confidence = max(field.confidence, _MIN_BOOK_AUTO_CONFIDENCE)
-        field.status = Status.WARNING if canonical_conflict else Status.OK
+        field.status = Status.WARNING if different_reading else Status.OK
         field.source = "book_registry"
         field.inference_method = "stored_book_matricula"
         field.votes = AUTO_INDEX_MIN_VOTES
@@ -392,6 +437,11 @@ def _apply_stored_matricula(
             )
             page.airvault_discrepancy = True
             flagged += 1
+        elif different_reading:
+            field.comment = (
+                f"Stored book registration {matricula} replaces direct "
+                f"reading {original}: one digit apart"
+            )
         else:
             field.comment = f"Confirmed from stored book registration: {matricula}"
         _recompute_page_status(page)
@@ -479,6 +529,7 @@ def correct_matricula_by_book(
         "reused": 0,
         "registry_conflicts": 0,
     }
+    plans = []
     for book in books:
         key = _storage_key(book)
         remembered = stored.get(key, "") if key is not None else ""
@@ -490,19 +541,32 @@ def correct_matricula_by_book(
             and winner_info[1] >= AUTO_INDEX_MIN_VOTES
             and winner_info[2] >= _MIN_BOOK_AUTO_CONFIDENCE
         )
+        plans.append((book, remembered, winner_info, strong_current))
+    # Lo que cada libro da por suyo. Una página que lee la matrícula de otro
+    # libro de la ejecución puede ser de ese avión, y no se da por mal leída.
+    claimed = [
+        {remembered, winner_info[0] if strong_current else ""} - {""}
+        for _book, remembered, winner_info, strong_current in plans
+    ]
+    for index, (book, remembered, winner_info, strong_current) in enumerate(plans):
+        foreign = frozenset().union(
+            *(values for other, values in enumerate(claimed) if other != index)
+        )
         if remembered and winner_info and winner_info[0] != remembered \
                 and strong_current:
-            corrected, flagged = _correct_book(book)
+            corrected, flagged = _correct_book(book, foreign)
             conflict_count = _mark_stored_conflict(
                 book, remembered, winner_info[0]
             )
             flagged += conflict_count
             stats["registry_conflicts"] += 1
         elif remembered:
-            corrected, flagged = _apply_stored_matricula(book, remembered)
+            corrected, flagged = _apply_stored_matricula(
+                book, remembered, foreign
+            )
             stats["reused"] += 1
         else:
-            corrected, flagged = _correct_book(book)
+            corrected, flagged = _correct_book(book, foreign)
         stats["corrected"] += corrected
         stats["flagged"] += flagged
     for report in reports:

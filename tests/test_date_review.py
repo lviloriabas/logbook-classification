@@ -1,8 +1,9 @@
 """Qué fechas pasan a revisión y cuáles se indexan tal como se leyeron.
 
-La antigüedad es el único motivo temporal que aparta una página. Una lectura
-posterior a la ejecución se aparta y la sustituye el libro, así que la
-bitácora se indexa en vez de pasar a REVISAR por un día mal leído.
+La antigüedad es el único motivo temporal que aparta una página, y solo
+cuando su libro no respalda ese año con otra bitácora. Una lectura posterior
+a la ejecución se aparta y la sustituye el libro, así que la bitácora se
+indexa en vez de pasar a REVISAR por un día mal leído.
 """
 
 from datetime import date
@@ -107,12 +108,28 @@ def test_previous_month_is_complete_even_at_the_end_of_a_long_month():
     assert not month_is_possible(2026, 13, TODAY)
 
 
-def test_old_book_is_reviewed_even_when_all_its_pages_agree():
+def test_an_old_book_read_by_two_log_pages_indexes_alone():
+    # Dos bitácoras del libro leyeron el mismo año: es un libro atrasado, no
+    # un año mal leído, y sus datos no necesitan que nadie los teclee.
     pages = [_page(1, "2147301", "20", "AGO", "24"),
              _page(2, "2147302", "21", "AGO", "24")]
     correct_dates_by_book([_report(*pages)])
-    assert all(page.date_review for page in pages)
+    assert not any(page.date_review for page in pages)
     assert [page.date for page in pages] == ["2024/08/20", "2024/08/21"]
+
+
+def test_an_old_year_with_a_single_reading_is_still_reviewed():
+    page = _page(1, "2147301", "20", "AGO", "24")
+    correct_dates_by_book([_report(page)])
+    assert page.date_review
+    assert "Fecha muy antigua" in page.comment
+
+
+def test_the_same_log_page_scanned_twice_is_one_reading():
+    first = _page(1, "2147301", "20", "AGO", "24")
+    copy = _page(1, "2147301", "20", "AGO", "24")
+    correct_dates_by_book([_report(first), _report(copy, name="copia.pdf")])
+    assert first.date_review and copy.date_review
 
 
 def test_tomorrow_is_replaced_by_the_book_instead_of_going_to_review():

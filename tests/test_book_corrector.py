@@ -192,10 +192,40 @@ class TestAggressiveCorrection(unittest.TestCase):
             self.assertEqual(_matricula(page).value, "HP-1534CMP")
         self.assertIn("Corrected from 'HP-1734CMP'",
                       _matricula(pages[5]).comment)
-        # La inferencia se conserva, pero una lectura canónica distinta no
-        # puede publicarse bajo el separador ganador sin que alguien la mire.
+        # Una sola cifra frente a cuatro páginas es una lectura equivocada:
+        # queda en WARNING para auditoría, pero no va a REVISAR.
         self.assertIs(_matricula(pages[5]).status, Status.WARNING)
-        self.assertTrue(por_revisar(pages[5]))
+        self.assertIn("HP-1734CMP", _matricula(pages[5]).alternatives)
+        self.assertFalse(por_revisar(pages[5]))
+
+    def test_a_reading_several_digits_away_stays_for_review(self):
+        pages = [
+            _page(1, "2147337", "HP-1534CMP"),
+            _page(2, "2147338", "HP-1534CMP"),
+            _page(3, "2147339", "HP-1534CMP"),
+            _page(4, "2147340", "HP-1719CMP"),
+        ]
+        correct_matricula_by_book([_report(*pages)])
+        self.assertEqual(_matricula(pages[3]).value, "HP-1534CMP")
+        self.assertTrue(pages[3].airvault_discrepancy)
+        self.assertTrue(por_revisar(pages[3]))
+
+    def test_a_reading_that_another_book_claims_stays_for_review(self):
+        # HP-1537CMP está a una cifra, pero es el avión de otro libro de la
+        # ejecución: la página puede ser suya con el log_number mal leído.
+        book = [
+            _page(1, "2147337", "HP-1534CMP"),
+            _page(2, "2147338", "HP-1534CMP"),
+            _page(3, "2147339", "HP-1537CMP"),
+        ]
+        other = [
+            _page(4, "2250010", "HP-1537CMP"),
+            _page(5, "2250011", "HP-1537CMP"),
+        ]
+        correct_matricula_by_book([_report(*book, *other)])
+        self.assertEqual(_matricula(book[2]).value, "HP-1534CMP")
+        self.assertTrue(por_revisar(book[2]))
+        self.assertFalse(any(por_revisar(page) for page in other))
 
     def test_empty_value_inferred(self):
         pages = [
@@ -351,6 +381,22 @@ class TestPersistentBookMatriculas(unittest.TestCase):
             path.write_text(
                 '{"21473A":"HP-1534CMP"}\n', encoding="utf-8"
             )
+            page = _page(1, "2147339", "HP-1719CMP")
+
+            correct_matricula_by_book([_report(page)], path)
+
+        field = _matricula(page)
+        self.assertEqual(field.value, "HP-1534CMP")
+        self.assertIn("HP-1719CMP", field.alternatives)
+        self.assertIs(field.status, Status.WARNING)
+        self.assertTrue(por_revisar(page))
+
+    def test_one_digit_away_from_the_store_is_a_misreading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "book_matriculas.json"
+            path.write_text(
+                '{"21473A":"HP-1534CMP"}\n', encoding="utf-8"
+            )
             page = _page(1, "2147339", "HP-1734CMP")
 
             correct_matricula_by_book([_report(page)], path)
@@ -359,7 +405,7 @@ class TestPersistentBookMatriculas(unittest.TestCase):
         self.assertEqual(field.value, "HP-1534CMP")
         self.assertIn("HP-1734CMP", field.alternatives)
         self.assertIs(field.status, Status.WARNING)
-        self.assertTrue(por_revisar(page))
+        self.assertFalse(por_revisar(page))
 
 
 if __name__ == "__main__":

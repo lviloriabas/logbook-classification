@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 from app.models.schemas import ValidationReport
 from app.reports.outputs import marcar_revision
 from app.templates.manager import TemplateManager
-from app.validation.date_review import review_date_window
+from app.validation.date_review import review_date_windows
 from app.validation.discrepancias import clasificar_lote
 from app.validation.page_status import has_log_number, has_matricula, needs_review
 
@@ -34,9 +34,7 @@ def estudiar(path: Path, template, reference: date | None = None) -> dict | None
     reference = reference or date.fromisoformat(data["generado"][:10])
     anteriores = sum(p.discrepancy for r in reports for p in r.pages)
     clasificar_lote(reports, template)
-    for report in reports:
-        for page in report.pages:
-            review_date_window(page, reference)
+    review_date_windows(reports, reference)
     faltantes = marcar_revision(reports, template)
     causes = Counter()
     detail = []

@@ -20,7 +20,7 @@ from app.reports.dual_csv import minimal_columns, write_minimal_csv
 from app.reports.debug_pdf import write_debug_pdf
 from app.reports.json_reporter import JsonReporter
 from app.templates.schema import Template
-from app.validation.date_review import review_date_window
+from app.validation.date_review import review_date_windows
 
 
 _MONTHS = [
@@ -199,9 +199,7 @@ def write_outputs(
             on_stage(message, percent)
 
     reports = list(reports)
-    for report in reports:
-        for page in report.pages:
-            review_date_window(page)
+    review_date_windows(reports)
     template = options.template
     output_root = Path(options.output_root)
     skip_pdfs = options.skip_pdfs

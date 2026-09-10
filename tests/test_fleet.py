@@ -132,6 +132,40 @@ def test_tied_fleet_matches_leave_the_page_without_registration(tmp_path: Path):
     assert page.status is not Status.OK
 
 
+def test_the_book_readings_break_a_fleet_tie(tmp_path: Path):
+    """El valor del libro empata, pero lo que leyó otra página no.
+
+    El consenso dejó ``HP-1217CMP`` en las dos páginas; la segunda había
+    leído ``HP-1717CMP`` antes de corregirse, y eso basta para elegir.
+    """
+    store = FleetStore(tmp_path / "fleet.json")
+    store.save(["HP-1717CMP", "HP-7217CMP"])
+    pages = []
+    for number, log, alternatives in (
+        (1, "2147301", []), (2, "2147302", ["HP-1717CMP"]),
+    ):
+        page = PageResult(page_number=number, fields=[
+            FieldResult(page_number=number, field_id="log_number",
+                        field_type="ocr", value=log, confidence=0.9),
+            FieldResult(page_number=number, field_id="matricula",
+                        field_type="ocr", value="HP-1217CMP",
+                        raw_value="HP-1217CMP", confidence=0.8,
+                        alternatives=list(alternatives)),
+        ])
+        pages.append(page)
+    report = ValidationReport(
+        pdf_path="book.pdf", template_name="test", pages=pages
+    )
+
+    verify_reports_against_fleet([report], store.path)
+
+    for page in pages:
+        field = next(f for f in page.fields if f.field_id == "matricula")
+        assert field.value == "HP-1717CMP"
+        assert "desempatan las lecturas del libro" in field.comment
+        assert not por_revisar(page)
+
+
 def test_reading_without_registration_format_is_not_kept(tmp_path: Path):
     store = FleetStore(tmp_path / "fleet.json")
     store.save(["HP-1717CMP"])

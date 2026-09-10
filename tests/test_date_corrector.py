@@ -496,8 +496,9 @@ class TestRunYearConsensus(unittest.TestCase):
 
         correct_dates_by_book([_report(*pages)])
 
-        self.assertTrue(old_first.date_review)
-        self.assertTrue(old_second.date_review)
+        # Dos lecturas del libro sostienen el año: no se corrige ni se revisa.
+        self.assertFalse(old_first.date_review)
+        self.assertFalse(old_second.date_review)
         self.assertEqual(old_first.date, "2024/08/20")
         self.assertEqual(old_second.date, "2024/08/21")
 
