@@ -42,6 +42,7 @@ caso que no se entiende no se toque.
 from __future__ import annotations
 
 import json
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -931,11 +932,32 @@ class CorrectorLogPageAudit:
             raise
 
     @classmethod
-    def _cerrar_cuadro(cls, pagina: _Pagina, cuadro: str, que: str) -> None:
-        if not pagina.esperar(_cuadro_cerrado(cuadro), 300.0):
-            raise ControlNoEncontrado(
-                f"AirVault dejó abierto el cuadro de {que}."
-            )
+    def _cerrar_cuadro(
+        cls,
+        pagina: _Pagina,
+        cuadro: str,
+        que: str,
+        contestando: Sequence[str] = (),
+    ) -> None:
+        """Espera a que el cuadro se cierre, contestando lo que pregunte.
+
+        AirVault puede pararse a medio guardar para pedir confirmacion, y
+        ese cuadro no aparece en el instante en que se pulsa el boton: llega
+        cuando contesta el servidor. Preguntar una sola vez, nada mas
+        pulsar, era preguntar antes de que hubiera nada que contestar, y el
+        caso se quedaba los cinco minutos esperando a que se cerrara un
+        cuadro que nadie iba a cerrar.
+        """
+        limite = time.monotonic() + 300.0
+        while not pagina.esperar(_cuadro_cerrado(cuadro), 1.0):
+            if time.monotonic() >= limite:
+                raise ControlNoEncontrado(
+                    f"AirVault dejó abierto el cuadro de {que}."
+                )
+            if contestando:
+                pagina.evaluar(
+                    _SEGUIR_GUARDANDO % json.dumps(list(contestando))
+                )
         aviso = pagina.evaluar(_MENSAJE)
         if aviso:
             raise ControlNoEncontrado(f"AirVault contestó: {aviso}")
@@ -984,7 +1006,6 @@ class CorrectorLogPageAudit:
                 raise ControlNoEncontrado(
                     f"No se pudo cambiar la matrícula ({hecho})."
                 )
-            pagina.evaluar(
-                _SEGUIR_GUARDANDO % json.dumps(list(TEXTOS_SEGUIR))
+            cls._cerrar_cuadro(
+                pagina, "reindexDialog", "reindexado", TEXTOS_SEGUIR,
             )
-            cls._cerrar_cuadro(pagina, "reindexDialog", "reindexado")

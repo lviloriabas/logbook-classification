@@ -341,6 +341,55 @@ def test_el_reindexado_escribe_la_matricula_y_la_flota_que_le_toca() -> None:
     assert '"MAX"' in escritas[0]
 
 
+class _PaginaQuePregunta(_PaginaFalsa):
+    """Una que no cierra el cuadro hasta que alguien contesta «Continue».
+
+    AirVault se para a medio guardar y pregunta, pero no en el instante en
+    que se pulsa «Save»: el aviso llega cuando contesta el servidor.
+    """
+
+    def __init__(self, *lecturas: list[dict[str, str]]) -> None:
+        super().__init__(*lecturas)
+        self.contestado = False
+
+    def esperar(self, condicion, segundos, cada: float = 0.5) -> bool:
+        cerrado = modulo_correcciones._cuadro_cerrado("reindexDialog")
+        if str(condicion) == cerrado:
+            return self.contestado
+        return True
+
+    def evaluar(self, expresion: str):
+        if expresion.startswith(modulo_correcciones._SEGUIR_GUARDANDO[:40]):
+            self.contestado = True
+        return super().evaluar(expresion)
+
+
+def test_el_reindexado_contesta_el_aviso_que_llega_despues_de_guardar() -> None:
+    correccion = planificar(
+        _excepciones(("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]"))
+    )[0]
+    antes = [
+        _fila_de_rejilla("1", "551", "2008152", "HP-9813CMP", "1/9/2025 9:00:00 AM")
+    ]
+    despues = [
+        _fila_de_rejilla("1", "551", "2008152", "HP-9913CMP", "1/9/2025 9:00:00 AM")
+    ]
+    pagina = _PaginaQuePregunta(antes, despues)
+    corrector = CorrectorLogPageAudit(
+        AirVaultConfig(), ResolutorFlota({"HP-9913CMP": {"fleet": "MAX"}})
+    )
+
+    resultado = corrector._reindexar(
+        pagina,
+        correccion,
+        copias_en(corrector._rejilla(pagina), "2008152"),
+        ensayo=False,
+    )
+
+    assert pagina.contestado
+    assert resultado.hecho
+
+
 def test_un_reindexado_que_no_cuajo_no_se_da_por_hecho() -> None:
     correccion = planificar(
         _excepciones(("HP-9913CMP", "2008152 MIS-INDEX to ACN [HP-9813CMP]"))
