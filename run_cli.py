@@ -446,11 +446,14 @@ def _run(args: argparse.Namespace) -> int:
     from app.validation.date_corrector import correct_dates_by_book
     from app.validation.log_sequence import infer_log_numbers_from_pdf_order
 
+    from app.utils.fleet import load_fleet
+
+    fleet = load_fleet(config.fleet_file) if config.verify_fleet else []
     inferred = infer_log_numbers_from_pdf_order(reports)
     print(f"\nNúmeros de bitácora deducidos por sus páginas vecinas: {inferred}")
 
     stats = correct_matricula_by_book(
-        reports, config.book_matriculas_file
+        reports, config.book_matriculas_file, fleet=fleet
     )
     print(f"\nCorrector de matrículas por libro: {stats['books']} libro(s), "
           f"{stats['corrected']} matrícula(s) corregidas, "
@@ -472,7 +475,7 @@ def _run(args: argparse.Namespace) -> int:
     from app.validation.book_corrector import learn_book_matriculas
     from app.validation.date_corrector import learn_book_dates
 
-    learn_book_matriculas(reports, config.book_matriculas_file)
+    learn_book_matriculas(reports, config.book_matriculas_file, fleet=fleet)
     learn_book_dates(reports, config.book_fechas_file)
 
     # ── Salidas de la ejecución ───────────────────────────────────────────

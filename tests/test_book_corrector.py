@@ -210,6 +210,59 @@ class TestAggressiveCorrection(unittest.TestCase):
         self.assertTrue(pages[3].airvault_discrepancy)
         self.assertTrue(por_revisar(pages[3]))
 
+    def test_noisy_readings_are_read_against_the_fleet(self):
+        # Sin la flota, "He-18320me" votaba por HP-8320CMP, un avión que no
+        # existe, y las páginas ilegibles quedaban sin matrícula.
+        fleet = ["HP-1534CMP", "HP-1830CMP", "HP-1832CMP", "HP-1719CMP"]
+        pages = [
+            _page(1, "2147337", "", status=Status.ERROR, conf=0.6),
+            _page(2, "2147338", "HP-8320CMP", conf=0.7),
+            _page(3, "2147339", "", status=Status.ERROR, conf=0.6),
+        ]
+        for page, raw in zip(pages, ("He-18320me", "HP-18320MP", "HPI832CMP")):
+            _matricula(page).raw_value = raw
+
+        stats = correct_matricula_by_book([_report(*pages)], fleet=fleet)
+
+        self.assertEqual(stats["fleet_matched"], 3)
+        for page in pages:
+            self.assertEqual(_matricula(page).value, "HP-1832CMP")
+            self.assertFalse(por_revisar(page))
+
+    def test_the_raw_text_votes_through_the_fleet_over_a_previous_value(self):
+        # Al volver a procesar, las páginas traen el avión que impuso una
+        # corrección anterior; lo que vota es lo que leyó cada una.
+        fleet = ["HP-9920CMP", "HP-9926CMP"]
+        pages = [
+            _page(1, "2295238", "HP-9920CMP"),
+            _page(2, "2295239", "HP-9920CMP"),
+            _page(3, "2295240", "HP-9920CMP"),
+        ]
+        for page, raw in zip(pages, ("HP-99260", "HP-q926cmP", "HP.9920")):
+            _matricula(page).raw_value = raw
+            _matricula(page).source = "book_correction"
+
+        correct_matricula_by_book([_report(*pages)], fleet=fleet)
+
+        for page in pages:
+            self.assertEqual(_matricula(page).value, "HP-9926CMP")
+            self.assertFalse(por_revisar(page))
+
+    def test_a_reading_that_is_no_aircraft_is_a_misreading_at_any_distance(self):
+        fleet = ["HP-1534CMP", "HP-1719CMP"]
+        pages = [
+            _page(1, "2147337", "HP-1534CMP"),
+            _page(2, "2147338", "HP-1534CMP"),
+            _page(3, "2147339", "HP-4096CMP"),
+        ]
+        _matricula(pages[2]).raw_value = "HP-4096CMP"
+
+        correct_matricula_by_book([_report(*pages)], fleet=fleet)
+
+        self.assertEqual(_matricula(pages[2]).value, "HP-1534CMP")
+        self.assertIn("HP-4096CMP", _matricula(pages[2]).alternatives)
+        self.assertFalse(por_revisar(pages[2]))
+
     def test_a_reading_that_another_book_claims_stays_for_review(self):
         # HP-1537CMP está a una cifra, pero es el avión de otro libro de la
         # ejecución: la página puede ser suya con el log_number mal leído.

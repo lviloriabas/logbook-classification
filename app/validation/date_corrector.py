@@ -54,6 +54,7 @@ from app.utils.date_window import (
     date_is_possible,
     reference_date,
     month_is_possible,
+    review_start,
     year_is_possible,
     years_outside_usual,
 )
@@ -476,6 +477,79 @@ def _correct_year_by_book_consensus(book: Sequence[PageResult]) -> int:
     return corrected
 
 
+def _correct_year_outliers(book: Sequence[PageResult]) -> int:
+    """Devuelve al año del libro la página que quedó fuera de él.
+
+    Un libro son 50 páginas llenadas en pocas semanas: el año solo puede
+    cambiar una vez dentro de él, de diciembre a enero. Con una mayoría clara
+    de lecturas directas, un año a dos o más de ella es imposible, y uno a
+    uno solo cabe en el borde que corresponde (el anterior antes del bloque
+    mayoritario, el siguiente después). Se revisa también lo que pusieron
+    los correctores, que no vota pero sí puede equivocarse.
+
+    Un año que el libro leyó en dos bitácoras propias no se toca: ya no es
+    una página suelta.
+    """
+    pages = _ordered_pages(book)
+    readings: Dict[str, set] = {}
+    for page in pages:
+        field = _field(page, YEAR_FIELD_ID)
+        value = _year_normalize(field.value if field else None)
+        if (
+            field is None
+            or value is None
+            or field.source in {"inferred", "book_correction"}
+        ):
+            continue
+        readings.setdefault(value, set()).add(log_number(page))
+    if not readings:
+        return 0
+    ranked = sorted(
+        ((len(numbers), year) for year, numbers in readings.items()),
+        reverse=True,
+    )
+    count, majority = ranked[0]
+    runner = ranked[1][0] if len(ranked) > 1 else 0
+    total = sum(len(numbers) for numbers in readings.values())
+    if (
+        count < MIN_YEAR_CONSENSUS_COUNT
+        or count <= runner
+        or count / total < MIN_YEAR_CONSENSUS_RATIO
+    ):
+        return 0
+    positions = [
+        index for index, page in enumerate(pages)
+        if _page_year(page) == majority
+    ]
+    first, last = min(positions), max(positions)
+    corrected = 0
+    for index, page in enumerate(pages):
+        field = _field(page, YEAR_FIELD_ID)
+        value = _year_normalize(field.value if field else None)
+        if field is None or value is None or value == majority:
+            continue
+        if len(readings.get(value, ())) >= MIN_YEAR_CONSENSUS_COUNT:
+            continue
+        delta = int(value) - int(majority)
+        if (delta == -1 and index < first) or (delta == 1 and index > last):
+            continue
+        previous = field.value
+        if previous and previous not in field.alternatives:
+            field.alternatives.append(previous)
+        field.value = majority
+        field.confidence = round(min(0.95, 0.55 + count / total * 0.40), 3)
+        field.status = Status.WARNING
+        field.source = "book_correction"
+        field.inference_method = "book_year_outlier"
+        field.comment = (
+            f"Year {previous!r} outside its book ({count}/{total} direct "
+            f"readings of {majority!r})"
+        )
+        _recombine(page)
+        corrected += 1
+    return corrected
+
+
 def _correct_year_by_run_consensus(
     books: Sequence[Sequence[PageResult]],
 ) -> Tuple[int, int]:
@@ -530,9 +604,41 @@ def _correct_year_by_run_consensus(
         date.today().year,
         date.today().year - 1,
     }
+    # Meses que la ejecución leyó con el año mayoritario. Una página suelta
+    # con otro año en uno de esos meses es ese mismo mes con el año mal
+    # leído: una entrega no mezcla agosto de hace dos años con agosto de este
+    # si el libro de la página no lo respalda con otra lectura.
+    run_months = set()
+    for book in books:
+        for page in book:
+            if _page_year(page) != majority_year:
+                continue
+            month_field = _field(page, "month")
+            month = _month_number(month_field.value if month_field else None)
+            if month is not None:
+                run_months.add(month)
+
+    def adopt(field: FieldResult, page: PageResult, method: str, why: str) -> None:
+        previous = field.value
+        if previous and previous not in field.alternatives:
+            field.alternatives.append(previous)
+        field.value = majority_year
+        field.confidence = round(min(0.92, 0.55 + ratio * 0.35), 3)
+        field.status = Status.WARNING
+        field.source = "book_correction"
+        field.inference_method = method
+        field.comment = (
+            f"Year corrected by execution consensus "
+            f"({majority_count}/{total} direct readings across "
+            f"{len(books_by_year[majority_year])} books) and {why}: "
+            f"{previous!r} -> {majority_year!r}"
+        )
+        page.date_review = False
+        _recombine(page)
+
     for book_index, book in enumerate(books):
         for page in book:
-            if page.blank or page.alignment_quality != "ok":
+            if page.blank:
                 continue
             field = _field(page, YEAR_FIELD_ID)
             current = _year_normalize(field.value if field else None)
@@ -540,35 +646,38 @@ def _correct_year_by_run_consensus(
                 continue
             if readings_by_book.get(book_index, Counter())[current] >= 2:
                 continue
-            if abs(int(current) - int(majority_year)) \
-                    < MIN_RUN_YEAR_CORRECTION_DISTANCE:
-                continue
+            distance = abs(int(current) - int(majority_year))
+            aligned = page.alignment_quality == "ok"
             alternatives = {
                 value for raw in field.alternatives
                 if (value := _year_normalize(raw)) is not None
             }
-            if majority_year in alternatives:
-                previous = field.value
-                if previous and previous not in field.alternatives:
-                    field.alternatives.append(previous)
-                field.value = majority_year
-                field.confidence = round(
-                    min(0.92, 0.55 + ratio * 0.35), 3
-                )
-                field.status = Status.WARNING
-                field.source = "book_correction"
-                field.inference_method = "run_year_consensus"
-                field.comment = (
-                    f"Year corrected by execution consensus "
-                    f"({majority_count}/{total} direct readings across "
-                    f"{len(books_by_year[majority_year])} books) and OCR "
-                    f"alternative: {previous!r} -> {majority_year!r}"
-                )
-                page.date_review = False
-                _recombine(page)
+            if (
+                aligned
+                and distance >= MIN_RUN_YEAR_CORRECTION_DISTANCE
+                and majority_year in alternatives
+            ):
+                adopt(field, page, "run_year_consensus", "OCR alternative")
                 corrected += 1
                 continue
-            if not majority_is_recent:
+            month_field = _field(page, "month")
+            month = _month_number(month_field.value if month_field else None)
+            if (
+                majority_is_recent
+                and month in run_months
+                and (
+                    distance >= MIN_RUN_YEAR_CORRECTION_DISTANCE
+                    or date(2000 + int(current), month, 1) < review_start()
+                )
+            ):
+                adopt(field, page, "run_year_month_fit", "a month of the run")
+                corrected += 1
+                continue
+            if (
+                not aligned
+                or distance < MIN_RUN_YEAR_CORRECTION_DISTANCE
+                or not majority_is_recent
+            ):
                 continue
             field.status = Status.ERROR
             field.inference_method = "run_year_review"
@@ -1982,6 +2091,7 @@ def correct_dates_by_book(
         "years_consensus": 0,
         "run_year_consensus": 0,
         "run_year_review": 0,
+        "year_outliers": 0,
         "after_the_run": 0,
         "bracket_corrected": 0,
         "days_repaired": 0,
@@ -2061,6 +2171,12 @@ def correct_dates_by_book(
         for page in book:
             _recombine(page)
 
+        # La última palabra sobre el año la tiene el libro: algún paso
+        # anterior (las alternativas de secuencia, el registro) puede haber
+        # dejado un año que el resto del libro desmiente.
+        year_outliers = _correct_year_outliers(book)
+        stats["year_outliers"] += year_outliers
+
         # Segunda vuelta: las alternativas de secuencia, la decena repuesta
         # y el relleno del dia trabajan despues del primer descarte, asi que
         # pueden devolver a la pagina una fecha posterior a la ejecucion. Se
@@ -2081,7 +2197,7 @@ def correct_dates_by_book(
         stats["days_filled"] += days
         stats["corrected"] += (
             years + months + days + year_consensus + sequence_candidates
-            + registry_filled + bracket + days_repaired
+            + registry_filled + bracket + days_repaired + year_outliers
         )
         stats["flagged"] += year_flags + month_flags
         stats["regressions"] += regressions

@@ -13,6 +13,7 @@ from app.core.config import AppConfig
 from app.core.page_range import PageRange, slice_batch, slice_paths
 from app.models.schemas import ValidationReport
 from app.templates.manager import TemplateManager
+from app.utils.fleet import load_fleet
 from app.validation.book_corrector import correct_matricula_by_book
 from app.validation.date_corrector import correct_dates_by_book
 from app.validation.log_sequence import infer_log_numbers_from_pdf_order
@@ -186,9 +187,15 @@ class PipelineWorker(QThread):
                         self.file_finished.emit(index + 1, report)
                         if report.cancelled:
                             break
+            # Con la verificación activa, la flota también ayuda a leer: una
+            # lectura ruidosa que solo se parece a un avión se toma por él.
+            fleet = (
+                load_fleet(self.config.fleet_file)
+                if self.config.verify_fleet else []
+            )
             infer_log_numbers_from_pdf_order(reports)
             correct_matricula_by_book(
-                reports, self.config.book_matriculas_file
+                reports, self.config.book_matriculas_file, fleet=fleet
             )
             correct_dates_by_book(reports, self.config.book_fechas_file)
             if self.config.verify_fleet:
@@ -199,7 +206,7 @@ class PipelineWorker(QThread):
             from app.validation.date_corrector import learn_book_dates
 
             learn_book_matriculas(
-                reports, self.config.book_matriculas_file
+                reports, self.config.book_matriculas_file, fleet=fleet
             )
             learn_book_dates(reports, self.config.book_fechas_file)
             self.reports = reports

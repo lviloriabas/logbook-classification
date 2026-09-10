@@ -465,8 +465,10 @@ class TestRunYearConsensus(unittest.TestCase):
                 ))
                 page_number += 1
 
+        # Marzo no aparece en la ejecución: nada dice que sea 2026 y no
+        # un libro de 2024, así que el año queda para revisión.
         suspicious = _page(
-            page_number, "2147601", "20", "AGO", "24"
+            page_number, "2147601", "20", "MAR", "24"
         )
         pages.append(suspicious)
 
@@ -501,6 +503,77 @@ class TestRunYearConsensus(unittest.TestCase):
         self.assertFalse(old_second.date_review)
         self.assertEqual(old_first.date, "2024/08/20")
         self.assertEqual(old_second.date, "2024/08/21")
+
+    def test_a_lone_old_year_in_a_month_of_the_run_takes_the_run_year(self):
+        pages = []
+        page_number = 1
+        for prefix in ("21473", "21474", "21475", "21476", "21477"):
+            for suffix in range(1, 5):
+                pages.append(_page(
+                    page_number, f"{prefix}{suffix:02d}",
+                    "20", "AGO", "26",
+                ))
+                page_number += 1
+        far = _page(page_number, "2148601", "14", "AGO", "20")
+        near = _page(page_number + 1, "2148801", "15", "AGO", "25")
+        pages.extend((far, near))
+
+        stats = correct_dates_by_book([_report(*pages)])
+
+        for page in (far, near):
+            year = _field_of(page, "year")
+            self.assertEqual(year.value, "26")
+            self.assertEqual(year.inference_method, "run_year_month_fit")
+            self.assertFalse(page.date_review)
+        self.assertEqual(far.date, "2026/08/14")
+        self.assertEqual(near.date, "2026/08/15")
+        self.assertEqual(stats["run_year_review"], 0)
+
+
+class TestYearOutliers(unittest.TestCase):
+    """El año que un paso anterior dejó fuera de su libro vuelve a él."""
+
+    def test_a_year_a_corrector_left_outside_the_book_is_returned(self):
+        from app.validation.date_corrector import _correct_year_outliers
+
+        pages = [
+            _page(n, f"21473{n:02d}", f"{10 + n}", "AGO", "26")
+            for n in range(1, 6)
+        ]
+        wrong = _field_of(pages[2], "year")
+        wrong.value = "06"
+        wrong.source = "book_correction"
+
+        self.assertEqual(_correct_year_outliers(pages), 1)
+        self.assertEqual(wrong.value, "26")
+        self.assertIn("06", wrong.alternatives)
+        self.assertEqual(wrong.inference_method, "book_year_outlier")
+        self.assertEqual(pages[2].date, "2026/08/13")
+
+    def test_the_year_change_at_the_edge_of_the_book_is_kept(self):
+        from app.validation.date_corrector import _correct_year_outliers
+
+        pages = [
+            _page(1, "2147301", "31", "DIC", "25"),
+            _page(2, "2147302", "01", "ENE", "26"),
+            _page(3, "2147303", "02", "ENE", "26"),
+        ]
+
+        self.assertEqual(_correct_year_outliers(pages), 0)
+        self.assertEqual(_field_of(pages[0], "year").value, "25")
+
+    def test_the_previous_year_between_two_of_the_majority_is_returned(self):
+        from app.validation.date_corrector import _correct_year_outliers
+
+        pages = [
+            _page(1, "2147301", "20", "AGO", "26"),
+            _page(2, "2147302", "21", "AGO", "25"),
+            _page(3, "2147303", "22", "AGO", "26"),
+        ]
+
+        self.assertEqual(_correct_year_outliers(pages), 1)
+        self.assertEqual(_field_of(pages[1], "year").value, "26")
+
 
 class TestSafetyBoundaries(unittest.TestCase):
     def test_unreadable_log_number_is_not_positionally_inferred(self):

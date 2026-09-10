@@ -9,42 +9,20 @@ from loguru import logger
 
 from app.models.schemas import FieldResult, Status, ValidationReport
 from app.utils.fleet import load_fleet
-from app.utils.postprocess import apply_postprocess
 from app.validation.book_corrector import _recompute_summary
+from app.validation.fleet_match import (
+    SUFFIX_COST as _SUFFIX_COST,
+    digit_cost as _digit_cost,
+    reading_cost,
+)
 from app.validation.grouping import book_key
 from app.validation.page_status import recompute_page_status
 
 
 _MATRICULA_RE = re.compile(r"^HP-(\d{4})(CMP|WWP)$")
 
-# Pares de dígitos que el trazo manuscrito de estas bitácoras confunde de
-# verdad: el 1 sin base contra el 7 con travesaño, el 2 mal cerrado contra el
-# 7, el 3 contra el 8 cuando el lazo se cierra, el 0 contra el 6 y el 9 según
-# dónde arranque el trazo. Cambiar uno de estos cuesta menos que cambiar una
-# cifra que no se le parece, así que entre dos aviones de la flota que están
-# a la misma cantidad de dígitos de distancia gana el que solo pide el trazo
-# confundible, que es el error que de verdad comete el reconocedor.
-_CONFUSABLE_DIGITS = frozenset({
-    "17", "27", "12", "14", "47", "49", "07",
-    "38", "35", "58", "56", "68", "08", "06", "09",
-})
-# Costos enteros: comparar distancias en float haría que 0.6+0.6 no empatara
-# exacto con 1.2 y un empate real se resolvería por ruido de coma flotante.
-_DIFFERENT_DIGIT_COST = 10
-_CONFUSABLE_DIGIT_COST = 6
-# El sufijo no se lee de la página: ``apply_postprocess`` lo deduce del número
-# con su propia lista de aviones WWP. Por eso cuesta menos que un dígito: si la
-# flota trae un WWP que esa lista no conoce, la flota manda y corrige el sufijo.
-_SUFFIX_COST = 5
-
-
-def _digit_cost(left: str, right: str) -> int:
-    if left == right:
-        return 0
-    pair = "".join(sorted(left + right))
-    if pair in _CONFUSABLE_DIGITS:
-        return _CONFUSABLE_DIGIT_COST
-    return _DIFFERENT_DIGIT_COST
+# Los costos por cifra (trazos confundibles, sufijo) viven en
+# ``app.validation.fleet_match``, que también los usa el corrector del libro.
 
 
 def _distance(observed: re.Match[str], expected: re.Match[str]) -> int:
@@ -89,38 +67,27 @@ def _nearest_fleet_match(
     return (tied[0] if len(tied) == 1 else None), tied
 
 
-def _readings(field: FieldResult) -> list[re.Match[str]]:
-    """Lecturas con formato de matrícula que conserva el campo.
+def _readings(field: FieldResult) -> list[str]:
+    """Lo que leyó el campo: el texto crudo del OCR y las alternativas.
 
-    El texto crudo del OCR y las alternativas, donde los correctores dejan lo
-    que la página leyó antes de imponerle la matrícula del libro.
+    En las alternativas dejan los correctores lo que la página leyó antes de
+    imponerle la matrícula del libro.
     """
-    texts = list(field.alternatives)
-    if field.raw_value:
-        texts.append(
-            apply_postprocess(field.field_id, "matricula", field.raw_value)[0]
-        )
-    return [
-        match for text in texts
-        if (match := _MATRICULA_RE.fullmatch(str(text or "").strip().upper()))
-        is not None
-    ]
+    return [text for text in (field.raw_value, *field.alternatives) if text]
 
 
-def _break_tie(
-    tied: list[str], readings: list[re.Match[str]]
-) -> str | None:
+def _break_tie(tied: list[str], readings: list[str]) -> str | None:
     """Entre aviones igual de parecidos, el que mejor explica el libro.
 
     El valor que empata es uno solo, pero cada página del libro conserva lo
     que leyó. El avión al que menos cuesta llegar desde todas esas lecturas
     es el que las explica; si siguen empatados, no se elige.
     """
-    scored = sorted(
-        (sum(_distance(reading, expected) for reading in readings), candidate)
-        for candidate in tied
-        if (expected := _MATRICULA_RE.fullmatch(candidate)) is not None
-    )
+    scored = []
+    for candidate in tied:
+        costs = [reading_cost(text, candidate) for text in readings]
+        scored.append((sum(cost for cost in costs if cost is not None), candidate))
+    scored.sort()
     if readings and len(scored) > 1 and scored[0][0] < scored[1][0]:
         return scored[0][1]
     return None
@@ -159,7 +126,7 @@ def verify_reports_against_fleet(
 
     # Se toman antes de reclasificar nada: al hacerlo, cada página guarda en
     # sus alternativas el valor del libro, que no es una lectura suya.
-    readings_by_book: dict[tuple[str, str], list[re.Match[str]]] = {}
+    readings_by_book: dict[tuple[str, str], list[str]] = {}
     for report in reports:
         for page in report.pages:
             key = book_key(page)

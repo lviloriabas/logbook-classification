@@ -42,6 +42,7 @@ from app.utils.postprocess import (
     WEAK_MATRICULA_NOTE,
     apply_postprocess,
 )
+from app.validation.fleet_match import fleet_match
 from app.validation.grouping import book_key, group_books, log_number
 from app.validation.page_status import (
     AUTO_INDEX_MIN_VOTES,
@@ -89,16 +90,23 @@ _MISREAD_MAX_DIGITS = 1
 
 
 def _misread_of(
-    reading: str, winner: str, foreign: Collection[str] = frozenset()
+    reading: str,
+    winner: str,
+    foreign: Collection[str] = frozenset(),
+    fleet: Collection[str] = frozenset(),
 ) -> bool:
-    """La lectura se explica como la matrícula del libro con una cifra mal leída.
+    """La lectura se explica como la matrícula del libro mal leída.
 
     ``foreign`` son las matrículas que otros libros de la ejecución dan por
     suyas: si la página leyó una de ellas, puede ser una bitácora de ese otro
-    avión y no se da por mal leída.
+    avión y no se da por mal leída. Con la flota a la vista, una lectura que
+    no es ningún avión tampoco puede ser otro avión: es un error de lectura,
+    esté a las cifras que esté.
     """
     if reading in foreign:
         return False
+    if fleet and reading not in fleet:
+        return True
     observed = _CANONICAL_MATRICULA_RE.fullmatch(reading)
     expected = _CANONICAL_MATRICULA_RE.fullmatch(winner)
     if observed is None or expected is None:
@@ -165,6 +173,7 @@ def _matricula_field(page: PageResult):
 
 def _page_evidence(
     field: FieldResult,
+    fleet: Collection[str] = frozenset(),
 ) -> Optional[Tuple[str, str, float]]:
     """(número de 4 dígitos, sufijo, peso) con que una página vota.
 
@@ -176,6 +185,14 @@ def _page_evidence(
     inferencia anterior como si fuera una lectura nueva.
     """
     confidence = max(float(field.confidence), _MIN_WEIGHT)
+    if fleet and field.raw_value and field.source not in _VERIFIED_SOURCES:
+        # Con la flota, el texto crudo se lee contra ella y no con la ventana
+        # de cifras que el postproceso elige a ciegas.
+        match = fleet_match(field.raw_value, fleet)
+        if match is not None:
+            found = _CANONICAL_MATRICULA_RE.fullmatch(match[0])
+            if found is not None:
+                return found.group(1), found.group(2), confidence
     if field.raw_value and field.source not in _VERIFIED_SOURCES:
         value, note = apply_postprocess(
             field.field_id, MATRICULA_FIELD_ID, field.raw_value
@@ -206,6 +223,7 @@ def _page_evidence(
 
 def _unique_evidence(
     entries: List[Tuple[PageResult, FieldResult]],
+    fleet: Collection[str] = frozenset(),
 ) -> List[Tuple[str, str, float]]:
     """Evidencia del libro con una sola aportación por página física.
 
@@ -216,7 +234,7 @@ def _unique_evidence(
     """
     best: Dict[object, Tuple[str, str, float]] = {}
     for index, (page, field) in enumerate(entries):
-        evidence = _page_evidence(field)
+        evidence = _page_evidence(field, fleet)
         if evidence is None:
             continue
         # Sin log_number legible no se puede saber si dos páginas son la
@@ -228,8 +246,50 @@ def _unique_evidence(
     return list(best.values())
 
 
+def _snap_to_fleet(
+    reports: List[ValidationReport], fleet: Collection[str]
+) -> int:
+    """Lleva al avión de la flota cada lectura que solo se parece a uno.
+
+    Va antes del voto del libro: una página cuyo texto crudo señala sin
+    competencia un avión (ver :func:`app.validation.fleet_match.fleet_match`)
+    vota por ese avión y no por la ventana de cifras que el postproceso eligió
+    a ciegas, o por nada si la descartó. La lectura anterior queda en las
+    alternativas.
+    """
+    snapped = 0
+    for report in reports:
+        for page in report.pages:
+            field = _matricula_field(page)
+            if page.blank or field is None or not field.raw_value:
+                continue
+            current = (field.value or "").strip().upper()
+            if current in fleet:
+                continue
+            match = fleet_match(field.raw_value, fleet)
+            if match is None:
+                continue
+            aircraft, cost = match
+            if current and current not in field.alternatives:
+                field.alternatives.append(current)
+            field.value = aircraft
+            field.source = "fleet_validation"
+            field.inference_method = "fleet_reading_match"
+            if cost or field.status is Status.ERROR:
+                field.status = Status.WARNING
+            note = (
+                f"Reading {field.raw_value!r} matches fleet aircraft "
+                f"{aircraft} (cost {cost})"
+            )
+            field.comment = f"{field.comment} | {note}".strip(" |")
+            _recompute_page_status(page)
+            snapped += 1
+    return snapped
+
+
 def _book_winner(
     entries: List[Tuple[PageResult, FieldResult]],
+    fleet: Collection[str] = frozenset(),
 ) -> Optional[Tuple[str, int, float]]:
     """Matrícula del libro por consenso dígito a dígito.
 
@@ -245,7 +305,14 @@ def _book_winner(
         (matrícula canónica, páginas que la leyeron entera, confianza) o
         None si el libro no aporta ninguna lectura utilizable.
     """
-    evidence = _unique_evidence(entries)
+    evidence = _unique_evidence(entries, fleet)
+    if fleet:
+        # Con la flota a la vista, lo que no es ningún avión no vota mientras
+        # alguna página del libro sí haya leído uno.
+        in_fleet = [
+            item for item in evidence if f"HP-{item[0]}{item[1]}" in fleet
+        ]
+        evidence = in_fleet or evidence
     if not evidence:
         return None
     votes: List[Dict[str, float]] = [defaultdict(float) for _ in range(4)]
@@ -284,7 +351,9 @@ def _book_winner(
 
 
 def _correct_book(
-    book: List[PageResult], foreign: Collection[str] = frozenset()
+    book: List[PageResult],
+    foreign: Collection[str] = frozenset(),
+    fleet: Collection[str] = frozenset(),
 ) -> Tuple[int, int]:
     """Corrige las matrículas de un libro. Devuelve (corregidas, marcadas).
 
@@ -298,7 +367,7 @@ def _correct_book(
     if not entries:
         return 0, 0
 
-    winner_info = _book_winner(entries)
+    winner_info = _book_winner(entries, fleet)
     if winner_info is None:
         return 0, 0
     winner, count, winner_confidence = winner_info
@@ -350,7 +419,7 @@ def _correct_book(
         # página. Más cifras, o la matrícula de otro libro, sí se revisan.
         conflicting = canonical_original and not (
             sufficiently_supported
-            and _misread_of(original, winner, foreign)
+            and _misread_of(original, winner, foreign, fleet)
         )
         field.status = (
             Status.OK
@@ -395,6 +464,7 @@ def _apply_stored_matricula(
     book: List[PageResult],
     matricula: str,
     foreign: Collection[str] = frozenset(),
+    fleet: Collection[str] = frozenset(),
 ) -> Tuple[int, int]:
     """Aplica una asociación confirmada en otra ejecución.
 
@@ -417,7 +487,7 @@ def _apply_stored_matricula(
             and _CANONICAL_MATRICULA_RE.fullmatch(original)
         )
         canonical_conflict = different_reading and not _misread_of(
-            original, matricula, foreign
+            original, matricula, foreign, fleet
         )
         if original and original != matricula \
                 and original not in field.alternatives:
@@ -505,6 +575,7 @@ def _recompute_summary(report: ValidationReport) -> None:
 def correct_matricula_by_book(
     reports: List[ValidationReport],
     book_matriculas_path: Optional[Path] = None,
+    fleet: Collection[str] = (),
 ) -> Dict[str, int]:
     """Corrector global de matrículas (un avión por libro).
 
@@ -512,10 +583,15 @@ def correct_matricula_by_book(
         reports: Reportes ya validados (uno por PDF procesado).
         book_matriculas_path: Mapa compacto aprendido en otras ejecuciones.
             Si se omite, el corrector conserva el comportamiento aislado.
+        fleet: Lista de aviones cuando la verificación está activa. Con ella
+            las lecturas ruidosas se leen contra la flota antes de votar, y
+            una lectura que no es ningún avión no aparta la página.
 
     Returns:
         Estadísticas: libros, corregidas, marcadas.
     """
+    fleet = frozenset(fleet or ())
+    fleet_matched = _snap_to_fleet(reports, fleet) if fleet else 0
     books = group_books(reports)
     stored = (
         _load_book_matriculas(Path(book_matriculas_path))
@@ -528,6 +604,7 @@ def correct_matricula_by_book(
         "flagged": 0,
         "reused": 0,
         "registry_conflicts": 0,
+        "fleet_matched": fleet_matched,
     }
     plans = []
     for book in books:
@@ -535,7 +612,7 @@ def correct_matricula_by_book(
         remembered = stored.get(key, "") if key is not None else ""
         entries = [(page, _matricula_field(page)) for page in book]
         entries = [(page, field) for page, field in entries if field is not None]
-        winner_info = _book_winner(entries) if entries else None
+        winner_info = _book_winner(entries, fleet) if entries else None
         strong_current = bool(
             winner_info
             and winner_info[1] >= AUTO_INDEX_MIN_VOTES
@@ -554,7 +631,7 @@ def correct_matricula_by_book(
         )
         if remembered and winner_info and winner_info[0] != remembered \
                 and strong_current:
-            corrected, flagged = _correct_book(book, foreign)
+            corrected, flagged = _correct_book(book, foreign, fleet)
             conflict_count = _mark_stored_conflict(
                 book, remembered, winner_info[0]
             )
@@ -562,11 +639,11 @@ def correct_matricula_by_book(
             stats["registry_conflicts"] += 1
         elif remembered:
             corrected, flagged = _apply_stored_matricula(
-                book, remembered, foreign
+                book, remembered, foreign, fleet
             )
             stats["reused"] += 1
         else:
-            corrected, flagged = _correct_book(book, foreign)
+            corrected, flagged = _correct_book(book, foreign, fleet)
         stats["corrected"] += corrected
         stats["flagged"] += flagged
     for report in reports:
@@ -576,7 +653,9 @@ def correct_matricula_by_book(
 
 
 def learn_book_matriculas(
-    reports: List[ValidationReport], path: Path
+    reports: List[ValidationReport],
+    path: Path,
+    fleet: Collection[str] = (),
 ) -> int:
     """Guarda asociaciones fuertes libro→matrícula para otras ejecuciones.
 
@@ -597,7 +676,9 @@ def learn_book_matriculas(
             continue
         entries = [(page, _matricula_field(page)) for page in book]
         entries = [(page, field) for page, field in entries if field is not None]
-        winner_info = _book_winner(entries) if entries else None
+        winner_info = (
+            _book_winner(entries, frozenset(fleet or ())) if entries else None
+        )
         if winner_info is None:
             continue
         winner, count, confidence = winner_info
