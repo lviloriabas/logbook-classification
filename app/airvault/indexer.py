@@ -287,6 +287,7 @@ class Indexador:
 
             remota = remotas.get(registro.seq)
             reparar_fecha = False
+            completar_revision = False
             if remota is None:
                 avisos.append(Aviso(
                     registro.seq, "no_cargo",
@@ -303,6 +304,24 @@ class Indexador:
                 work_location = str(
                     remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
                 ).strip()
+                if self.manifiesto.solo_subir and remota.estado == ESTADO_VALIDO:
+                    faltantes = {
+                        campo: valor for campo, valor in valores.items()
+                        if str(valor or "").strip()
+                        and not str(remota.valores.get(campo, "") or "").strip()
+                    }
+                    completar_revision = bool(faltantes)
+                    if completar_revision:
+                        # Valid no garantiza que se hayan guardado todos los
+                        # datos. Se rellenan los vacios sin pisar los presentes;
+                        # las guardas de correspondencia siguen vigentes.
+                        valores = {
+                            campo: valor
+                            for campo, valor in {
+                                **valores, **remota.valores, **faltantes,
+                            }.items()
+                            if campo not in CAMPOS_OBLIGATORIOS or str(valor or "").strip()
+                        }
                 # Solo se recupera una fecha ausente si log y avion confirman
                 # la identidad. Una fecha existente conserva la guarda habitual.
                 reparar_fecha = bool(
@@ -314,16 +333,16 @@ class Indexador:
                     and str(remota.valores.get(CAMPO_MATRICULA, "")).strip().upper()
                     == registro.matricula.upper()
                 )
-                if reparar_fecha:
+                if reparar_fecha and not completar_revision:
                     valores = {
                         **valores, **remota.valores,
                         CAMPO_END_DATE: valores[CAMPO_END_DATE],
                     }
                 # Incluso una pagina Valid se vuelve a guardar si AirVault
-                # lleno Work Location. Es el unico caso en que se toca una
-                # pagina verde sin pedir sobrescritura: el flujo exige ese
-                # campo vacio y el payload conserva el resto de sus datos.
-                if not (remota.estado == ESTADO_VALIDO and work_location) and not reparar_fecha:
+                # lleno Work Location: el flujo exige ese campo vacio.
+                # Tambien se permiten las recuperaciones de datos anteriores.
+                if (not (remota.estado == ESTADO_VALIDO and work_location)
+                        and not reparar_fecha and not completar_revision):
                     avisos.extend(verificar_no_pisar(
                         registro, remota.estado, self.sobrescribir
                     ))
@@ -345,6 +364,7 @@ class Indexador:
                         and not campos_distintos(valores, remota.valores)
                     ))
                     and not reparar_fecha
+                    and not completar_revision
                     and not str(
                         remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
                     ).strip()

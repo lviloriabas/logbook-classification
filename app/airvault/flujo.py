@@ -994,8 +994,9 @@ class Trabajo:
         nombre numerado que recibe un PDF al archivarse. Esos manifiestos ya
         pueden tener un batch confirmado en AirVault, asi que no se pueden
         borrar ni preparar otra vez. Se reconstruyen solamente los registros
-        ``sin_fila`` o sin los tres datos del CSV y se conserva la identidad
-        completa del trabajo remoto.
+        ``sin_fila`` o sin los tres datos del CSV. En REVISAR tambien se
+        completan campos vacios de registros parciales, conservando los datos
+        existentes, las causas de revision y la identidad del trabajo remoto.
         """
         manifiesto = self.manifiesto
         if manifiesto.cancelado or manifiesto.etapa_hecha("completar"):
@@ -1016,8 +1017,20 @@ class Trabajo:
             )
             return marcado_sin_fila or sin_datos_del_csv
 
+        campos_recuperables = (
+            "matricula", "log_number", "fecha", "flight_number", "fleet", "lessor",
+        )
+
+        def recuperable(registro: Registro) -> bool:
+            return huerfano(registro) or (
+                manifiesto.solo_subir
+                and registro.pagina_origen > 0
+                and any(not getattr(registro, campo).strip()
+                        for campo in campos_recuperables)
+            )
+
         if not any(
-            huerfano(registro)
+            recuperable(registro)
             for registro in manifiesto.registros
             if not registro.es_separador
         ):
@@ -1029,6 +1042,10 @@ class Trabajo:
             else {
                 "archivo": registro.archivo_origen,
                 "pagina": registro.pagina_origen,
+                **({
+                    "fecha_dudosa": registro.fecha_dudosa,
+                    "revision_pendiente": registro.revision_pendiente,
+                } if manifiesto.solo_subir else {}),
             }
             for registro in manifiesto.registros
         ]
@@ -1063,11 +1080,41 @@ class Trabajo:
         ):
             if (
                 anterior.es_separador
-                or not huerfano(anterior)
+                or not recuperable(anterior)
                 or huerfano(reconstruido)
             ):
                 registros.append(anterior)
                 continue
+            if manifiesto.solo_subir:
+                # Una fila que contradice la identidad guardada no se mezcla
+                # con ella aunque tenga campos que aqui esten vacios.
+                if any(
+                    getattr(anterior, campo).strip()
+                    and getattr(reconstruido, campo).strip()
+                    and getattr(anterior, campo) != getattr(reconstruido, campo)
+                    for campo in ("matricula", "log_number")
+                ):
+                    registros.append(anterior)
+                    continue
+                cambios = {
+                    campo: getattr(reconstruido, campo)
+                    for campo in campos_recuperables
+                    if not getattr(anterior, campo).strip()
+                    and getattr(reconstruido, campo).strip()
+                }
+                if not cambios:
+                    registros.append(anterior)
+                    continue
+                if "fecha" in cambios:
+                    cambios["fecha_inferida"] = reconstruido.fecha_inferida
+                if "fleet" in cambios:
+                    cambios["fleet_inferido"] = reconstruido.fleet_inferido
+                cambios["duplicado"] = anterior.duplicado or reconstruido.duplicado
+                cambios["discrepancia"] = anterior.discrepancia or reconstruido.discrepancia
+                cambios["discrepancy_fields"] = list(dict.fromkeys(
+                    anterior.discrepancy_fields + reconstruido.discrepancy_fields
+                ))
+                reconstruido = anterior.model_copy(update=cambios)
             reconstruido.pagina_batch = anterior.pagina_batch
             reconstruido.estado = (
                 EstadoRegistro.ESCRITA
@@ -1085,7 +1132,7 @@ class Trabajo:
         manifiesto.etapas["completar"] = Etapa()
         self.guardar()
         logger.info(
-            "Se recuperaron {} registros huerfanos de {} sin volver a subir el batch",
+            "Se recuperaron datos de {} registros de {} sin volver a subir el batch",
             reparados,
             manifiesto.nombre_batch or manifiesto.job_id,
         )
@@ -1411,6 +1458,8 @@ class Trabajo:
             raise ErrorDeCorrida(
                 "El trabajo todavía no tiene batch. Hay que buscarlo primero."
             )
+        if self.manifiesto.solo_subir and self.manifiesto.csv_origen:
+            self.rehidratar_registros_huerfanos(self.manifiesto.csv_origen, resolutor)
         info = self._abrir_lote(cliente)
         paginas = paginas_de_lote(info)
         try:
