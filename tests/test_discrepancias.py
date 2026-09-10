@@ -468,7 +468,7 @@ class TestColumnaDiscEnElCsv(unittest.TestCase):
             with open(path, encoding="utf-8-sig", newline="") as fh:
                 rows = list(csv.DictReader(fh))
 
-        self.assertEqual([row["discrepancia"] for row in rows], [
+        self.assertEqual([row["disc_reason"] for row in rows], [
             "",
             "Faltan firma de capitán y licencia de capitán",
             "Corrección escrita: faltan firma de piloto, firma de técnico "
@@ -477,7 +477,7 @@ class TestColumnaDiscEnElCsv(unittest.TestCase):
 
     def test_la_columna_va_pegada_a_disc(self):
         columnas = CsvReporter.columns_for([_reporte(_vuelo_ok())], TEMPLATE)
-        self.assertEqual(columnas[columnas.index("disc") + 1], "discrepancia")
+        self.assertEqual(columnas[columnas.index("disc") + 1], "disc_reason")
 
 
 class TestBloqueDeCorreccion(unittest.TestCase):
@@ -560,7 +560,7 @@ class TestBloqueDeCorreccion(unittest.TestCase):
 
 
 class TestResumenDeLaDiscrepancia(unittest.TestCase):
-    """La frase de una línea que va a la columna ``discrepancia``."""
+    """La frase de una línea que va a la columna ``disc_reason``."""
 
     def _resumen(self, pagina: PageResult) -> str:
         entradas = clasificar_lote([_reporte(pagina)], TEMPLATE)

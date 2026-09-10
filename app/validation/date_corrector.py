@@ -621,8 +621,10 @@ def _flag_readings_after_the_run(book: Sequence[PageResult]) -> int:
     posterior al que corre (un AGO leido OCT o DIC) son errores de lectura
     y no bitacoras adelantadas. Se apartan para que nunca anclen una
     inferencia y para que el libro los complete con lo que si leyo. Si el
-    libro no puede completarlos, la pagina se queda sin fecha y va a
-    revision: es preferible a indexarla meses o decadas fuera de sitio.
+    libro no puede completarlos, la pagina se queda sin fecha: el CSV sigue
+    escribiendo el ultimo dia del mes cuando el dia no se resolvio, asi que
+    la bitacora se indexa igual y solo va a revision si el indice no se
+    puede completar. Lo que no pasa nunca es escribir la fecha imposible.
 
     El mes se mira con el ano ya validado y a resolucion de mes: la
     politica de fin de mes del CSV escribe el ultimo dia del mes en curso,
@@ -1387,6 +1389,12 @@ def _fill_days_to_month_end(book: Sequence[PageResult]) -> int:
     siguiente: se escribe el último día que cabe en ese hueco y, si no hay
     página posterior del mismo mes, el último del mes.
 
+    También recoge el día que se apartó por caer después de la ejecución.
+    Una página no se firma en el futuro, así que ese número está mal leído,
+    pero el resto de la fecha suele estar bien: el libro lo sustituye por el
+    día que sí cabe y la bitácora se indexa sola. La lectura apartada queda
+    en las alternativas y el motivo en el comentario, así que nada se pierde.
+
     El día queda en WARNING, con su procedencia y su comentario, así que en
     el CSV se distingue de un día leído de la casilla.
     """
@@ -1401,7 +1409,7 @@ def _fill_days_to_month_end(book: Sequence[PageResult]) -> int:
     filled = 0
     for index, page in enumerate(ordered):
         field = _field(page, "day")
-        if field is None or _day_normalize(field.value) is not None or _is_after_the_run(field):
+        if field is None or _day_normalize(field.value) is not None:
             continue
         month = _month_number(
             _field(page, "month").value if _field(page, "month") else None
@@ -1423,6 +1431,10 @@ def _fill_days_to_month_end(book: Sequence[PageResult]) -> int:
         day = min(last_day, after if after is not None else last_day)
         if before is not None:
             day = max(day, before)
+        # La página previa puede empujar el día por encima del tope: un día
+        # posterior a la ejecución volvería a apartarse y la bitácora daría
+        # la vuelta entera para nada.
+        day = min(day, last_day)
         previous = field.value
         if previous and previous not in field.alternatives:
             field.alternatives.append(previous)
@@ -1430,6 +1442,7 @@ def _fill_days_to_month_end(book: Sequence[PageResult]) -> int:
         # día que no se pudo leer, y el CSV no debe decir lo mismo de los
         # dos: quien revisa buscaría un problema donde no lo hay.
         por_politica = field.inference_method == "month_end_policy"
+        apartado = field.inference_method in AFTER_THE_RUN_METHODS
         field.value = f"{day:02d}"
         field.status = Status.WARNING
         field.confidence = _inferred_confidence(1)
@@ -1437,12 +1450,21 @@ def _fill_days_to_month_end(book: Sequence[PageResult]) -> int:
         field.inference_method = (
             "month_end_policy" if por_politica else "month_end_fallback"
         )
-        field.comment = (
-            f"Día no leído (ejecución a fin de mes); "
-            f"último día del libro que cabe: {day:02d}"
-            if por_politica else
-            f"Day not read; last day that fits the book sequence: {day:02d}"
-        )
+        if apartado:
+            # El comentario del descarte ya dice que la lectura caía después
+            # de la ejecución: se le añade con qué se sustituyó, y así el CSV
+            # cuenta la historia completa en una sola celda.
+            _append_comment(
+                field,
+                f"day replaced by the book sequence: {day:02d}",
+            )
+        else:
+            field.comment = (
+                f"Día no leído (ejecución a fin de mes); "
+                f"último día del libro que cabe: {day:02d}"
+                if por_politica else
+                f"Day not read; last day that fits the book sequence: {day:02d}"
+            )
         dates[index] = (full_year, month, day)
         filled += 1
     return filled
@@ -1976,8 +1998,7 @@ def correct_dates_by_book(
 
         # Lo que cae despues de la ejecucion se aparta lo primero: no
         # debe votar en el consenso ni anclar una inferencia.
-        after_the_run = _flag_readings_after_the_run(book)
-        stats["after_the_run"] += after_the_run
+        stats["after_the_run"] += _flag_readings_after_the_run(book)
 
         year_consensus = _correct_year_by_book_consensus(book)
         stats["years_consensus"] += year_consensus
@@ -2039,6 +2060,19 @@ def correct_dates_by_book(
         days = _fill_days_to_month_end(book)
         for page in book:
             _recombine(page)
+
+        # Segunda vuelta: las alternativas de secuencia, la decena repuesta
+        # y el relleno del dia trabajan despues del primer descarte, asi que
+        # pueden devolver a la pagina una fecha posterior a la ejecucion. Se
+        # aparta otra vez y el libro vuelve a completar el dia, que es lo
+        # unico que puede sobrar cuando el mes y el ano ya son posibles.
+        late = _flag_readings_after_the_run(book)
+        if late:
+            days += _fill_days_to_month_end(book)
+            for page in book:
+                _recombine(page)
+        stats["after_the_run"] += late
+
         regressions = _check_regressions(book)
         unresolved = _flag_unresolved(book)
 

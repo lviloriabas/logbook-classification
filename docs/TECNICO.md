@@ -1,0 +1,193 @@
+# BITS: guía técnica de mantenimiento
+
+El [manual](MANUAL.md) describe la operación. Esta guía resume tecnologías, procesos, archivos de estado y puntos de mantenimiento. Las [instrucciones del repositorio](../AGENTS.md) siguen vigentes.
+
+## Tecnologías y arranque
+
+| Componente | Tecnología y función |
+|---|---|
+| Ejecución | Python 3.12 portable para Windows. `BITS.exe` inicia `run_gui.py` mediante el intérprete incluido. |
+| Interfaz | PySide6/Qt: ventanas, tablas con modelos, visor, editor y trabajos de fondo con `QThread`. |
+| PDF | PyMuPDF: renderizado, extracción y composición de páginas. |
+| Imágenes | OpenCV, NumPy y Pillow: alineación, recortes, análisis de tinta y conversiones. |
+| OCR | PaddleOCR 3.7.0, PaddleX 3.7.2 y PaddlePaddle, siempre en CPU. |
+| Datos | Pydantic valida configuración, plantillas y resultados; `csv` y `json` generan los reportes. |
+| AirVault | `requests` para HTTP, `truststore` para certificados de Windows y Edge para autenticación. |
+| Soporte | Loguru para registros, Send2Trash para Papelera y pytest para pruebas. |
+
+Consulte [requirements.txt](../requirements.txt) para las dependencias declaradas. Los modelos habituales son `PP-OCRv6_medium_det` y `PP-OCRv5_mobile_rec`; las marcas VOID usan `PP-OCRv6_medium_rec`.
+
+La distribución incluye intérprete, bibliotecas y modelos dentro de `portable/`. `ensure_portable_env()`, en `app/utils/portable.py`, configura el entorno antes de importar Paddle:
+
+```text
+PADDLE_PDX_CACHE_HOME=<raíz>/portable/paddlex
+PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=1
+PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT=0
+FLAGS_use_mkldnn=0
+```
+
+Los motores se crean con `device="cpu"`. oneDNN está desactivado por compatibilidad. El OCR normal no necesita internet ni descarga modelos durante el procesamiento. AirVault sí utiliza servicios de red y Edge instalado.
+
+## Flujo de datos
+
+```text
+PDF originales + plantilla
+  -> renderizado y calibración
+  -> recortes, OCR y análisis de tinta
+  -> validación por página y corrección por libro
+  -> CSV, JSON y estadísticas
+  -> exportación PDF e índice de páginas
+  -> carga, comprobación, indexado y cierre en AirVault
+```
+
+La GUI y la consola comparten `Pipeline`, `process_pdf_batch()` y `write_outputs()`. La GUI ejecuta todos los PDF seleccionados; la consola también permite rangos. `PageRange` numera el conjunto desde 1 y lo divide por archivo.
+
+### 1. Preprocesado
+
+PyMuPDF renderiza las páginas; la GUI configura 200 DPI. OpenCV corrige inclinación y alinea el formulario contra la referencia canónica declarada por la plantilla. Si no está disponible, utiliza la página de referencia como respaldo.
+
+La alineación extrae estructura impresa y estima rotación, escala uniforme y desplazamiento con ORB/AKAZE y RANSAC; puede usar correlación de fase como respaldo. Descarta transformaciones sin evidencia suficiente. La geometría de fecha se localiza dinámicamente para tolerar casillas desplazadas entre escaneos.
+
+**Preprocesar**, por separado, ejecuta la preparación y actualiza la vista previa sin OCR ni entrega. **Procesar** incorpora esa preparación antes de leer.
+
+Código: `app/vision/pdf_loader.py`, `preprocessing.py`, `alignment.py`, `date_geometry.py` y `app/gui/worker.py`.
+
+### 2. Procesado: OCR y firmas
+
+1. Detecta páginas en blanco y aplica la geometría calculada.
+2. Recorta los campos según la plantilla y prepara contraste, tinta y fondo impreso.
+3. Reconoce texto por línea con Paddle; reintenta con detección cuando el formato lo requiere.
+4. Normaliza matrícula, número de bitácora, vuelo y componentes de fecha.
+5. Analiza presencia de escritura en firmas, licencias y bloque de corrección.
+6. Aplica validación por página y luego las reglas del libro completo.
+
+La fecha combina evidencia de la palabra y sus posiciones. `month_evidence.py` conserva candidatos ambiguos; `month_retry.py` limita la relectura a recortes relevantes. La cercanía a la fecha actual ayuda a ordenar candidatos, pero no reemplaza la evidencia. La GUI usa geometría dinámica y no activa el motor separado de OCR por casillas.
+
+Con **Fin de mes**, `read_day=False` omite los campos de día y guarda `dia_leido: false`; esa ejecución no admite indexado con día exacto. La política de representación del CSV se distingue de la lectura original.
+
+Las firmas se clasifican por tinta presente, ausente o incierta, sin verificar identidad. Cuando hay suficientes páginas alineadas, `book_background.py` estima mediante mediana el fondo repetido del libro y separa la escritura variable. Si no hay evidencia suficiente, conserva el detector habitual.
+
+Código: `app/core/pipeline.py`, `app/ocr/`, `app/vision/signature.py` y `book_background.py`.
+
+### 3. Reglas de validación y revisión
+
+| Regla | Comportamiento que debe conservarse |
+|---|---|
+| Libro | 50 páginas, una aeronave; los siete dígitos de `log_number` separan grupos terminados en `00..49` y `50..99`. El número no se inventa. |
+| Matrícula | Normalización y validación con `fleet.json`; el consenso por libro necesita páginas independientes. `HP-1990WWP` y `HP-1522CMP` tienen normalización específica. |
+| Fecha | No retrocede dentro del libro. Las anclas completan o corrigen componentes y conservan alternativas, fuente y confianza. |
+| Antigüedad | Fuera de enero se revisan fechas anteriores al año de ejecución. En enero también se admite el año anterior. Se conserva la fecha antigua. |
+| Futuro | Una fecha manuscrita posterior a la ejecución es inválida. El día generado por una política de fin de mes se valida por mes. |
+| Duplicados | `dup` se marca desde la segunda aparición del mismo número válido, sin comparar imágenes. |
+| Estado | `OK`, `WARNING` o `ERROR` según los datos principales y su evidencia. Firmas y vuelo opcional no determinan por sí solos ese estado. |
+| Revisión | `needs_review()` alimenta tanto `review` del CSV como el reparto de la entrega. Un `WARNING` no implica siempre revisión manual. |
+
+La clasificación de firmas se hace por página. Mantenimiento (licencia de técnico o corrección escrita) requiere firma de piloto, firma de técnico y licencia de técnico. Vuelo requiere firma de piloto y firma y licencia de capitán. La firma de técnico no determina el tipo porque su zona puede recibir sellos ajenos. `disc` y `disc_reason` describen faltas confirmadas; una lectura incierta no equivale a ausencia confirmada.
+
+Antes de confirmar posibles discrepancias, `void_mark.py` busca una marca VOID en regiones propuestas de toda la página. Exige dos lecturas compatibles, limita regiones y variantes y admite cancelación. Una marca confirmada anula el reclamo de firmas, conservando los controles de identidad y fecha. Si falta su modelo portable, registra el motivo y mantiene la discrepancia. Puede omitir marcas de trazo fino, letras muy separadas u orientación difícil; no debe interpretarse la ausencia de detección como prueba de que la página no es VOID.
+
+`book_matriculas.json` y `book_fechas.json` conservan anclas entre ejecuciones. El plan de AirVault las contrasta con páginas remotas válidas; reemplazarlas exige respaldo coherente de dos bitácoras distintas. Con `buscar_publicadas` activado, una ronda posterior consulta libros antiguos en Web Search y guarda su turno en `book_ronda.json`.
+
+Código: `app/validation/`, `app/utils/date_window.py`, `app/vision/void_mark.py` y `app/airvault/memoria.py`.
+
+### 4. Paralelismo y cancelación
+
+`QThread` mantiene la interfaz activa; procesos persistentes distribuyen el OCR pesado. `app/core/parallelism.py` calcula procesos e hilos según CPU y memoria. Los resultados se ordenan antes de escribirlos. La cancelación se propaga a los trabajos y corta la cadena automática; lo ya escrito puede permanecer, pero una ejecución OCR cancelada no es una entrega completa.
+
+### 5. Reportes, depuración y exportación
+
+`write_outputs()` guarda los CSV, el JSON y las estadísticas. La exportación compone PDF copiando páginas originales, sin rasterizarlas otra vez, y agrega separadores. En modo único genera `_paginas.json` con correspondencia de páginas, separadores y causas de revisión.
+
+```text
+output/
+  BITS DD MON YYYY HH MM/
+    datos/
+      <ejecución>.CSV
+      <ejecución>_completo.CSV
+      <ejecución>.json
+      <ejecución>_paginas.json
+    stats.json
+    <PDF de entrega>
+  airvault/
+  logs/
+```
+
+El CSV principal usa las columnas importantes; el completo añade evidencia de campos. El JSON conserva alternativas y procedencia. Cambiar la fecha de representación puede reescribir el CSV sin OCR, sujeto a que se haya leído el día.
+
+Depurar modifica el modelo de resultados y vuelve a guardar los datos. El diálogo permite elegir apariciones duplicadas y blancos; conserva una aparición por número y evita vaciar la ejecución. El visor permite además retirar páginas seleccionadas. Los originales permanecen disponibles. Hay que reexportar los PDF después; las copias previas se conservan con numeración para las nuevas.
+
+Código: `app/reports/outputs.py`, `csv_reporter.py`, `json_reporter.py`, `organize.py`, `stats.py` y `app/validation/depuracion.py`.
+
+### 6. Automatización y AirVault
+
+`app/gui/automatizacion.py` comparte y persiste las opciones del botón **Automático** y la ventana de AirVault. Preprocesar, procesar y exportar siempre se ejecutan. Subir, indexar y completar son etapas opcionales dependientes. La espera de publicación pertenece a la subida; depurar queda fuera de la cadena.
+
+| Etapa | Operación interna |
+|---|---|
+| Sesión | Edge obtiene la autenticación federada y conserva el perfil en `portable/edge-airvault/`. Python reutiliza cookies y tokens antifalsificación. |
+| Preparar | Relaciona CSV, PDF e índice de páginas; divide las cargas y separa revisión. La compresión opcional crea copias a 200 DPI. |
+| Subir | Envía un PDF por vez a Quick Upload. Registra la aceptación antes de buscar el batch remoto. |
+| Comprobar | Identifica la carga por nombre, cantidad y contenido. Una aceptación sin descubrimiento no autoriza reenvío automático. |
+| Planear | Mapea páginas y campos; comprueba obligatorios, duplicados, valores remotos y matrícula del libro. Una diferencia de cantidad bloquea el batch. |
+| Indexar | Escribe las páginas permitidas, relee los valores y actualiza el manifiesto. Conserva páginas válidas, omite conflictos y retira separadores del flujo normal. |
+| Completar | Completa solo batches válidos para Web Search. **REVISAR** conserva separadores y no se publica automáticamente. |
+
+Si una página remota válida asigna otra aeronave al mismo libro, la escritura contradictoria se bloquea. Si AirVault contiene matrículas incompatibles para ese libro, no se toma un consenso remoto.
+
+En **REVISAR** se envían los campos disponibles y se omiten obligatorios sin lectura; no se mandan explícitamente vacíos para forzar el guardado. Se confirma cada página por relectura. Una incidencia puede mantener `Need Correction` aunque el guardado haya terminado; una página completa sin incidencia independiente puede quedar `Valid`. Si el servidor rechaza campos omitidos, el fallo sigue pendiente. La aceptación depende de la configuración real de AirVault y debe comprobarse en una carga operativa.
+
+Las causas viajan en el índice JSON y el manifiesto. Para faltas confirmadas se usa `AUDIT IN PROGRESS` y se selecciona un solo `ECN Reason`, respetando uno existente. La prioridad es capitán, piloto y técnico; para técnico, firma antes que licencia. No se escriben el segundo ni el tercer ECN Reason. El catálogo y la conversión están en `app/airvault/ecn.py`.
+
+El manifiesto permite reanudar sin repetir guardados verificados. Reiniciar un paso modifica seguimiento local; eliminar un batch es una operación remota distinta. Las bajas conservan estado local para que la cola no reconstruya automáticamente lo eliminado.
+
+Código: `app/airvault/flujo.py`, `session.py`, `navegador.py`, `uploader.py`, `discovery.py`, `mapping.py`, `guards.py`, `indexer.py`, `manifest.py` y `registro.py`.
+
+## Visor y editor
+
+El visor usa un modelo Qt (`csv_model.py`) para cargar y ordenar tablas grandes. La selección y búsqueda resuelven la página original mediante los datos de la ejecución. No edita celdas directamente; las acciones de depuración y exportación utilizan el modelo de resultados. Código: `app/gui/csv_viewer.py` y `csv_utils.py`.
+
+El editor combina `QGraphicsScene` con renderizado de PyMuPDF. Guarda zonas en coordenadas relativas `x`, `y`, `w`, `h` entre 0 y 1. Cada campo incluye identificador, tipo, obligatoriedad, formato, postproceso y umbrales; Pydantic valida el JSON. Al guardar conserva propiedades adicionales de cada campo cargado. Revise también la referencia canónica y los metadatos generales de una plantilla nueva antes de sustituir la de producción. Código: `app/gui/editor_window.py` y `app/templates/`.
+
+## Configuración y diagnóstico
+
+| Ubicación | Contenido |
+|---|---|
+| `template/` | Plantillas y referencias del formulario. |
+| `fleet.json` | Matrículas válidas para OCR. |
+| `important_fields.json` | Columnas importantes por plantilla. |
+| `airvault.json` | Configuración y preferencias de AirVault; ejemplo en `airvault.example.json`. |
+| `airvault_flota.json` | Correspondencias de aeronave, flota y arrendador. |
+| `book_*.json` | Memorias de libros y turno de comprobación. |
+| `output/airvault/` | Manifiestos y seguimiento de cargas. |
+| `output/logs/` | Registros de la GUI; otras ejecuciones pueden guardar registros propios. |
+| `portable/paddlex/official_models/` | Modelos locales. |
+
+Para investigar una página, conserve original, plantilla, JSON completo, índice de entrega y manifiesto. Compare su lectura cruda, alternativas, fuente, motivo de revisión y valores remotos antes de cambiar umbrales. El CSV por sí solo no contiene toda la evidencia.
+
+Ejecute desde la raíz del proyecto:
+
+```powershell
+.\portable\python312\tools\python.exe run_cli.py --help
+.\portable\python312\tools\python.exe run_airvault.py --help
+.\portable\python312\tools\python.exe run_editor.py
+```
+
+`run_airvault.py plan` prepara el plan; `indexar --revisar` permite revisarlo antes de escribir. `todo` descubre, planea, indexa y verifica un batch ya cargado: no realiza la subida. `memoria` informa diferencias y solo aplica cambios con `--aplicar`. `--sobrescribir` reemplaza datos remotos válidos y requiere una decisión explícita del operador.
+
+## Reconstrucción y comprobación
+
+La preparación del paquete se hace en un equipo con red; el uso posterior del OCR es portable y sin conexión.
+
+```powershell
+.\setup.cmd
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Check
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Launcher
+.\portable\python312\tools\python.exe tools/precache_paddle.py
+.\portable\python312\tools\python.exe -m pytest tests -q
+```
+
+`setup.ps1 -Force` reconstruye intérprete y modelos; úselo sobre una copia controlada. Después de cambiar modelos, precárguelos en `portable/` y compruebe su uso con la red bloqueada.
+
+Para liberar cambios: ejecute las pruebas pertinentes, procese una muestra por GUI y consola, compare CSV/JSON/PDF y pruebe la carpeta copiada a otra ubicación sin administrador. Las pruebas de AirVault con clientes simulados no prueban la aceptación real del servidor. No distribuya sesiones personales del perfil `portable/edge-airvault/`.
+
+`tools/estudiar_revision.py` permite reconstruir causas desde ejecuciones guardadas sin repetir OCR; sus cifras describen la clasificación, no la exactitud del reconocimiento. Para evaluar VOID o firmas use muestras visuales etiquetadas y mida también falsos positivos y tiempo por página.

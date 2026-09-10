@@ -37,7 +37,7 @@ _FECHA_CSV_RE = re.compile(r"^(\d{4})/(\d{2})/(\d{2})$")
 # Como vuelve una fecha leida de AirVault: la que se escribio, o el ISO que
 # entrega alguna de sus vistas. La hora que a veces acompana no estorba.
 _FECHA_AIRVAULT_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(20\d{2})\b")
-_FECHA_ISO_RE = re.compile(r"^(20\d{2})-(\d{2})-(\d{2})\b")
+_FECHA_ISO_RE = re.compile(r"^(20\d{2})-(\d{2})-(\d{2})(?=$|[Tt\s])")
 # Sufijo con el que se numera un nombre repetido al apartar la entrada a
 # «input/processed» (``bitacora-2.pdf``).
 _SUFIJO_DE_COPIA_RE = re.compile(r"^(?P<base>.+)-\d+$")
@@ -76,6 +76,10 @@ def fecha_airvault(fecha_csv: str) -> str:
     if not match:
         return ""
     anio, mes, dia = match.groups()
+    try:
+        date(int(anio), int(mes), int(dia))
+    except ValueError:
+        return ""
     return f"{mes}/{dia}/{anio}"
 
 
@@ -329,6 +333,7 @@ def _registro_de_fila(
     inferidas: Mapping[tuple[str, int], tuple[str, str]] | None = None,
     fin_de_mes: bool = False,
     fecha_dudosa: bool = False,
+    revision_pendiente: bool | None = None,
 ) -> Registro:
     """Traduce una fila del CSV al registro que viaja en el manifiesto.
 
@@ -352,6 +357,7 @@ def _registro_de_fila(
         # Va detras de la deduccion a proposito: una fecha deducida se
         # indexa con la misma politica que una leida.
         fecha = fecha_a_fin_de_mes(fecha)
+    from app.airvault.ecn import campos_del_resumen
     return Registro(
         seq=seq,
         archivo_origen=archivo,
@@ -367,6 +373,8 @@ def _registro_de_fila(
         fleet_inferido=inferido and bool(matricula),
         duplicado=str(fila.get("dup", "")).strip().lower() == "true",
         discrepancia=str(fila.get("disc", "")).strip().lower() == "true",
+        discrepancy_fields=campos_del_resumen(fila.get("disc_reason") or fila.get("discrepancia")),
+        revision_pendiente=revision_pendiente,
     )
 
 
@@ -495,8 +503,16 @@ def registros_desde_entrega(
             _registro_de_fila(
                 seq, fila, resolutor, inferidas, fin_de_mes,
                 fecha_dudosa=bool(entrada.get("fecha_dudosa", False)),
+                revision_pendiente=(
+                    entrada["revision_pendiente"]
+                    if isinstance(entrada.get("revision_pendiente"), bool)
+                    else None
+                ),
             )
         )
+        campos = entrada.get("discrepancy_fields")
+        if isinstance(campos, list):
+            registros[-1].discrepancy_fields = [c for c in campos if isinstance(c, str)]
     return registros
 
 
@@ -539,4 +555,7 @@ def valores_de_indice(
         valores[CAMPO_DESCRIPCION] = registro.flight_number
     if nombre_batch:
         valores[CAMPO_BATCH_NAME] = nombre_batch
+    if registro.discrepancia:
+        from app.airvault.ecn import CAMPOS_ECN, razones_ecn
+        valores.update(zip(CAMPOS_ECN, razones_ecn(registro.discrepancy_fields)))
     return valores

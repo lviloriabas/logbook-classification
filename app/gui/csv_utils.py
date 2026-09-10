@@ -17,12 +17,19 @@ TEXTO_ELEGIR_EJECUCION = "Seleccionar ejecución"
 
 _CSV_METADATA_SUFFIXES = ("_conf", "_status", "_comment", "_source")
 _ALWAYS_IMPORTANT_COLUMNS = frozenset(
-    {"file", "page", "dup", "disc", "discrepancia", "date", "time_ms"}
+    {"file", "page", "review", "dup", "disc", "disc_reason", "date",
+     "time_ms"}
 )
 _DATE_COMPONENT_FIELDS = frozenset({"day", "month", "year"})
 _FALLBACK_IMPORTANT_FIELDS = frozenset(
     {"log_number", "matricula", "flight_number", "captain_license"}
 )
+_RENAMED_COLUMNS = {"discrepancia": "disc_reason"}
+
+
+def csv_display_name(column: str) -> str:
+    """Nombre vigente que muestra la interfaz para una columna del CSV."""
+    return _RENAMED_COLUMNS.get(column, column)
 
 
 def csv_field_id(column: str, columns: Iterable[str]) -> str | None:
@@ -168,16 +175,24 @@ def find_run_dirs(root: Path, limit: int | None = None) -> list[Path]:
 
 
 def read_csv_file(path: Path) -> tuple[list[str], list[dict[str, str]]]:
-    """Lee un CSV generado por la aplicación sin escribir sobre él."""
+    """Lee un CSV y actualiza en memoria los encabezados ya renombrados."""
     with Path(path).open("r", newline="", encoding="utf-8-sig") as handle:
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
             raise ValueError("El CSV no contiene encabezados.")
-        columns = list(reader.fieldnames)
-        rows = [
-            {column: (row.get(column) or "") for column in columns}
-            for row in reader
-        ]
+        source_columns = list(reader.fieldnames)
+        columns = list(dict.fromkeys(
+            csv_display_name(column) for column in source_columns
+        ))
+        rows = []
+        for source_row in reader:
+            row = {column: "" for column in columns}
+            for source_column in source_columns:
+                column = csv_display_name(source_column)
+                value = source_row.get(source_column) or ""
+                if value or not row[column]:
+                    row[column] = value
+            rows.append(row)
     return columns, rows
 
 

@@ -14,6 +14,7 @@ from app.models.schemas import PageResult, Status, ValidationReport
 from app.templates.schema import FieldType, Template
 from app.utils.postprocess import MONTH_WORDS
 from app.validation.duplicates import detect_duplicate_log_pages
+from app.validation.page_status import needs_review
 
 _DATE_RE = re.compile(r"^\d{4}/\d{2}/\d{2}$")
 _MATRICULA_RE = re.compile(r"^HP-\d{4}(CMP|WWP)$")
@@ -34,10 +35,19 @@ class CsvReporter:
     """Escribe el reporte de validación en CSV ancho (en inglés).
 
     Una fila por página del PDF:
-        file, page, <field>, dup, disc, discrepancia, <field>_conf,
+        file, page, <field>, review, dup, disc, disc_reason, <field>_conf,
         <field>_status, <field>_comment, <field>_source, ..., date, time_ms
 
     - ``file``: nombre del PDF del que proviene la página.
+    - ``review``: ``true`` cuando la bitácora no se indexa sola y viaja en el
+      batch REVISAR. Recoge todo lo que aparta una página: un campo
+      obligatorio del Web Index que no pudo completarse, una fecha que
+      contradice al libro, una página en blanco y también las discrepancias,
+      que además llevan su propia columna ``disc``. Es la columna con la que
+      se sabe, sin abrir los PDFs, cuánto de la ejecución hay que indexar a
+      mano. Sale de ``needs_review`` (``app/validation/page_status.py``), el
+      mismo criterio con el que la exportación reparte la entrega, así que
+      el archivo y los PDFs nunca cuentan cosas distintas.
     - ``dup``: ``true`` cuando el ``log_number`` ya apareció antes en el batch.
     - ``disc``: ``true`` cuando a la bitácora le falta una firma exigida y
       esa ausencia se leyó con seguridad. Sale de ``page.discrepancy``, que
@@ -45,7 +55,7 @@ class CsvReporter:
       escribir el reporte; si esa clasificación no se ejecutó, la columna
       queda en ``false``. Es la columna que le pone AUDIT IN PROGRESS a la
       página al indexarla, así que las lecturas inciertas no entran.
-    - ``discrepancia``: qué le falta a la página, en una frase corta
+    - ``disc_reason``: qué le falta a la página, en una frase corta
       («Faltan firma de técnico y licencia de técnico»). Solo se escribe
       cuando ``disc`` es ``true``: es la misma decisión contada en palabras,
       para no tener que abrir el reporte de discrepancias para saber qué
@@ -102,31 +112,52 @@ class CsvReporter:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        fields = self.fields_for(reports, template)
         skip_ids = self._skip_ids(reports, template)
-        columns = self.columns_for_fields(fields, skip_ids=skip_ids)
-        duplicates = iter(detect_duplicate_log_pages(reports))
-
-        time_factor = self.run_time_factor(reports)
+        columns = self.columns_for_fields(
+            self.fields_for(reports, template), skip_ids=skip_ids
+        )
+        rows = self.rows_for(reports, template, date_mode=date_mode)
 
         with open(path, "w", newline="", encoding="utf-8-sig") as fh:
             writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
-            for report in reports:
-                for page in report.pages:
-                    duplicate = next(duplicates)
-                    writer.writerow(self.row_for_page(
-                        report,
-                        page,
-                        fields,
-                        date_mode=date_mode,
-                        duplicate=duplicate.duplicate,
-                        time_factor=time_factor,
-                    ))
+            writer.writerows(rows)
 
         logger.info(f"Reporte CSV generado: {path} "
                     f"({sum(len(r.pages) for r in reports)} páginas)")
         return path
+
+    @classmethod
+    def rows_for(
+        cls,
+        reports: List[ValidationReport],
+        template: Optional[Template] = None,
+        date_mode: str = CSV_DATE_MONTH_END,
+    ) -> List[dict[str, object]]:
+        """Las filas del CSV, en el mismo orden en que se escriben.
+
+        Existe para poder mirar la fila final sin haberla escrito todavía.
+        Quién va al batch REVISAR se decide sobre ella (una matrícula que el
+        CSV no llega a traer deja la página amarilla en AirVault, y eso solo
+        se ve en la fila), pero esa decisión es a su vez la columna
+        ``review``: sin este paso previo el archivo tendría que escribirse
+        dos veces para poder contarse a sí mismo.
+        """
+        fields = cls.fields_for(reports, template)
+        duplicates = iter(detect_duplicate_log_pages(reports))
+        time_factor = cls.run_time_factor(reports)
+        return [
+            cls.row_for_page(
+                report,
+                page,
+                fields,
+                date_mode=date_mode,
+                duplicate=next(duplicates).duplicate,
+                time_factor=time_factor,
+            )
+            for report in reports
+            for page in report.pages
+        ]
 
     @classmethod
     def columns_for_fields(cls, fields: List[str],
@@ -142,7 +173,7 @@ class CsvReporter:
         for field_id in fields:
             columns.append(field_id)
             if field_id == "log_number":
-                columns.extend(["dup", "disc", "discrepancia"])
+                columns.extend(["review", "dup", "disc", "disc_reason"])
             columns.append(f"{field_id}_conf")
             if field_id not in skip_ids:
                 columns.extend([
@@ -150,10 +181,10 @@ class CsvReporter:
                     f"{field_id}_comment",
                 ])
             columns.append(f"{field_id}_source")
-        # Las dos banderas de la página acompañan al ``log_number``, que es lo
+        # Las banderas de la página acompañan al ``log_number``, que es lo
         # que identifica la bitácora; sin ese campo se emiten igual al final.
-        if "dup" not in columns:
-            columns.extend(["dup", "disc", "discrepancia"])
+        if "review" not in columns:
+            columns.extend(["review", "dup", "disc", "disc_reason"])
         columns.extend(["date", "time_ms"])
         return columns
 
@@ -191,9 +222,10 @@ class CsvReporter:
         row: dict[str, object] = {
             "file": report.source_filename,
             "page": page.page_number,
+            "review": str(needs_review(page)).lower(),
             "dup": str(duplicate).lower(),
             "disc": str(bool(page.discrepancy)).lower(),
-            "discrepancia": page.discrepancy_note if page.discrepancy else "",
+            "disc_reason": page.discrepancy_note if page.discrepancy else "",
         }
         by_id = {field.field_id: field for field in page.fields}
 

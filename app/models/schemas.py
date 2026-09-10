@@ -69,9 +69,12 @@ class PageResult(BaseModel):
     # Qué discrepancia se detectó, en una frase corta y en castellano
     # («Faltan firma de técnico y licencia de técnico»). La escribe
     # ``clasificar_lote`` junto con ``discrepancy``, y solo cuando esa
-    # bandera queda en True: es el texto de la columna ``discrepancia`` del
+    # bandera queda en True: es el texto de la columna ``disc_reason`` del
     # CSV, que está vacía siempre que no haya nada que reclamar.
     discrepancy_note: str = ""
+    discrepancy_fields: List[str] = Field(default_factory=list)
+    # Evidencia de la palabra grande, con caja normalizada a la pagina.
+    void_mark: Optional[OcrResult] = None
     date: Optional[str] = None
     # La fecha leida contradice una evidencia amplia de la ejecucion y no
     # pudo corregirse con seguridad. Se conserva para diagnostico, pero el

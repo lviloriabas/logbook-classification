@@ -28,6 +28,12 @@ def test_fecha_del_csv_a_airvault():
     assert fecha_airvault("2026/08/31") == "08/31/2026"
 
 
+def test_no_envia_fechas_imposibles():
+    for valor in ("2026/02/29", "2026/04/31", "2026/13/01", "2026/00/12"):
+        assert fecha_airvault(valor) == ""
+    assert fecha_airvault("2028/02/29") == "02/29/2028"
+
+
 def test_fecha_invalida_queda_vacia():
     # Mejor un obligatorio vacio que la guarda acuse, a inventar una fecha.
     for valor in ("", "31/08/2026", "2026-08-31", "basura", None):

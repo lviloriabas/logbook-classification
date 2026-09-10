@@ -1,8 +1,17 @@
-"""Periodo habitual de las bitácoras: mes actual y anterior, hasta hoy.
+"""Dos periodos de las bitácoras, con usos distintos.
 
-Las fechas antiguas son posibles pero requieren revisión. Ninguna fecha
-manuscrita puede ser futura; la representación a fin de mes se comprueba
-por mes porque su día se genera para el reporte, no se lee de la página.
+El **habitual** (mes actual y anterior, hasta hoy) ordena candidatos: de dos
+lecturas posibles de una misma fecha, la que cae en él es la creíble. Es
+estrecho a propósito, porque solo sirve para comparar.
+
+El de **revisión** decide cuándo una fecha es tan antigua que tiene que
+mirarla una persona. Fuera de enero solo admite el año de la ejecución. En
+enero también admite el anterior, porque una entrega puede conservar la cola
+del cierre de diciembre.
+
+Ninguna fecha manuscrita puede ser futura; la representación a fin de mes se
+comprueba por mes porque su día se genera para el reporte, no se lee de la
+página.
 """
 
 from __future__ import annotations
@@ -48,6 +57,23 @@ def usual_start(today: Optional[date] = None) -> date:
     """Primer día del mes anterior, incluyendo diciembre al pasar a enero."""
     first = reference_date(today).replace(day=1)
     return (first - timedelta(days=1)).replace(day=1)
+
+
+def review_start(today: Optional[date] = None) -> date:
+    """Primer día del periodo que no necesita revisión por antigüedad.
+
+    El año anterior solo entra durante enero, cuando todavía es normal recibir
+    páginas del cierre de diciembre. El resto del año, una fecha anterior al
+    año de la ejecución necesita revisión.
+    """
+    reference = reference_date(today)
+    first_year = reference.year - (1 if reference.month == 1 else 0)
+    return date(first_year, 1, 1)
+
+
+def needs_review_for_age(value: date, today: Optional[date] = None) -> bool:
+    """Indica si la fecha es tan antigua que la página debe revisarse."""
+    return value < review_start(today)
 
 
 def days_outside_usual(value: date, today: Optional[date] = None) -> int:

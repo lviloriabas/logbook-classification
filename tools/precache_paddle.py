@@ -10,8 +10,8 @@ completo funciona sin conexión ni instalación.
 Los nombres de modelo son los usados por app/ocr/engine.py:
 el detector ``PP-OCRv6_medium_det`` (mejor con manuscrito pequeño) +
 el reconocedor ``PP-OCRv5_mobile_rec`` (mejor en escritura a mano).
-Ambos son la configuración fija validada. No se precargan modelos alternativos
-porque la aplicación no encadena motores ni cambia de modelo en ejecución.
+Ambos se mantienen para el indice. El reconocedor PP-OCRv6_medium_rec se
+precarga ademas para las marcas grandes VOID, sin cambiar el OCR de campos.
 """
 
 from __future__ import annotations
@@ -51,6 +51,10 @@ def main() -> int:
         )
         engine.predict(image)
         print(f"  {name} listo.")
+    from app.ocr.engine import PaddleOcrEngine
+    from app.vision.void_mark import MODELO_VOID
+    print(f"Precargando reconocedor de marcas grandes: {MODELO_VOID}")
+    PaddleOcrEngine(cpu_threads=4, rec_model=MODELO_VOID).recognize_lines([image])
     print("Modelos listos. Caché en:", _ROOT / "portable" / "paddlex")
     return 0
 

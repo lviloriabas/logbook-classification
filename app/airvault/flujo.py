@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -59,6 +60,7 @@ from app.airvault.mapping import (
 )
 from app.airvault import duplicados as libro_de_envios
 from app.airvault import registro as registro_entrega
+from app.airvault.uploader import serializar_cargas
 from app.airvault import websearch
 from app.airvault.model import (
     EstadoEtapa,
@@ -806,6 +808,9 @@ class Trabajo:
         # Si el batch esta tomado ahora mismo por este trabajo. Soltarlo dos
         # veces es un error del servidor, no una limpieza de mas.
         self._tomado = False
+        # Solo vive durante esta sesion. Una autorizacion de reenvio no debe
+        # sobrevivir a un cierre inesperado y convertirse en permiso automatico.
+        self._duplicado_permitido = False
 
     # ── ciclo de vida ──────────────────────────────────────────────
 
@@ -989,8 +994,9 @@ class Trabajo:
         nombre numerado que recibe un PDF al archivarse. Esos manifiestos ya
         pueden tener un batch confirmado en AirVault, asi que no se pueden
         borrar ni preparar otra vez. Se reconstruyen solamente los registros
-        ``sin_fila`` o sin los tres datos del CSV y se conserva la identidad
-        completa del trabajo remoto.
+        ``sin_fila`` o sin los tres datos del CSV. En REVISAR tambien se
+        completan campos vacios de registros parciales, conservando los datos
+        existentes, las causas de revision y la identidad del trabajo remoto.
         """
         manifiesto = self.manifiesto
         if manifiesto.cancelado or manifiesto.etapa_hecha("completar"):
@@ -1011,8 +1017,20 @@ class Trabajo:
             )
             return marcado_sin_fila or sin_datos_del_csv
 
+        campos_recuperables = (
+            "matricula", "log_number", "fecha", "flight_number", "fleet", "lessor",
+        )
+
+        def recuperable(registro: Registro) -> bool:
+            return huerfano(registro) or (
+                manifiesto.solo_subir
+                and registro.pagina_origen > 0
+                and any(not getattr(registro, campo).strip()
+                        for campo in campos_recuperables)
+            )
+
         if not any(
-            huerfano(registro)
+            recuperable(registro)
             for registro in manifiesto.registros
             if not registro.es_separador
         ):
@@ -1024,6 +1042,10 @@ class Trabajo:
             else {
                 "archivo": registro.archivo_origen,
                 "pagina": registro.pagina_origen,
+                **({
+                    "fecha_dudosa": registro.fecha_dudosa,
+                    "revision_pendiente": registro.revision_pendiente,
+                } if manifiesto.solo_subir else {}),
             }
             for registro in manifiesto.registros
         ]
@@ -1058,11 +1080,41 @@ class Trabajo:
         ):
             if (
                 anterior.es_separador
-                or not huerfano(anterior)
+                or not recuperable(anterior)
                 or huerfano(reconstruido)
             ):
                 registros.append(anterior)
                 continue
+            if manifiesto.solo_subir:
+                # Una fila que contradice la identidad guardada no se mezcla
+                # con ella aunque tenga campos que aqui esten vacios.
+                if any(
+                    getattr(anterior, campo).strip()
+                    and getattr(reconstruido, campo).strip()
+                    and getattr(anterior, campo) != getattr(reconstruido, campo)
+                    for campo in ("matricula", "log_number")
+                ):
+                    registros.append(anterior)
+                    continue
+                cambios = {
+                    campo: getattr(reconstruido, campo)
+                    for campo in campos_recuperables
+                    if not getattr(anterior, campo).strip()
+                    and getattr(reconstruido, campo).strip()
+                }
+                if not cambios:
+                    registros.append(anterior)
+                    continue
+                if "fecha" in cambios:
+                    cambios["fecha_inferida"] = reconstruido.fecha_inferida
+                if "fleet" in cambios:
+                    cambios["fleet_inferido"] = reconstruido.fleet_inferido
+                cambios["duplicado"] = anterior.duplicado or reconstruido.duplicado
+                cambios["discrepancia"] = anterior.discrepancia or reconstruido.discrepancia
+                cambios["discrepancy_fields"] = list(dict.fromkeys(
+                    anterior.discrepancy_fields + reconstruido.discrepancy_fields
+                ))
+                reconstruido = anterior.model_copy(update=cambios)
             reconstruido.pagina_batch = anterior.pagina_batch
             reconstruido.estado = (
                 EstadoRegistro.ESCRITA
@@ -1080,7 +1132,7 @@ class Trabajo:
         manifiesto.etapas["completar"] = Etapa()
         self.guardar()
         logger.info(
-            "Se recuperaron {} registros huerfanos de {} sin volver a subir el batch",
+            "Se recuperaron datos de {} registros de {} sin volver a subir el batch",
             reparados,
             manifiesto.nombre_batch or manifiesto.job_id,
         )
@@ -1113,12 +1165,12 @@ class Trabajo:
         # Search la hace el coordinador, que tiene una sola conexion para
         # toda la ejecucion, y lo que decida llega hasta aqui en la marca.
         motivo = self.manifiesto.posible_duplicado
-        if not motivo:
+        if not motivo and not self._duplicado_permitido:
             repetidas = libro_de_envios.repetidas(carpeta_del_libro(self), self)
             if repetidas:
                 motivo = _motivo_de_repetidas(repetidas)
                 marcar_posible_duplicado(self, motivo)
-        if motivo:
+        if motivo and not self._duplicado_permitido:
             raise ErrorDeCorrida(
                 f"No se sube «{self.manifiesto.nombre_batch}»: {motivo}. "
                 "Publicarlas otra vez dejaria el mismo documento dos veces "
@@ -1190,6 +1242,8 @@ class Trabajo:
                 f"No se pudo subir {archivo.name}: {resultado.detalle}"
             )
         self.manifiesto.etapa("subir").marcar(EstadoEtapa.HECHA, archivo.name)
+        self.manifiesto.resubir_por_mezcla = False
+        self._duplicado_permitido = False
         self.guardar()
 
     def omitir_subida(self, motivo: str = "subido a mano") -> None:
@@ -1404,6 +1458,8 @@ class Trabajo:
             raise ErrorDeCorrida(
                 "El trabajo todavía no tiene batch. Hay que buscarlo primero."
             )
+        if self.manifiesto.solo_subir and self.manifiesto.csv_origen:
+            self.rehidratar_registros_huerfanos(self.manifiesto.csv_origen, resolutor)
         info = self._abrir_lote(cliente)
         paginas = paginas_de_lote(info)
         try:
@@ -1530,6 +1586,8 @@ class Trabajo:
         ya no se lo queda: entre revisar y escribir puede pasar un rato
         largo, y AirVault admite un solo dueno.
         """
+        if plan.batch_id != self.manifiesto.batch_id:
+            raise ErrorDeCorrida("El batch cambio desde la revision; vuelva a comprobar antes de indexar")
         self.manifiesto.etapa("indexar").marcar(EstadoEtapa.EN_CURSO)
         self.guardar()
         avanzar = None
@@ -1538,9 +1596,15 @@ class Trabajo:
             def avanzar(hechas: int, previstas: int) -> None:
                 avisar("Escribiendo en AirVault", hechas, previstas)
 
-        if plan.escribibles or (plan.separadores and not self.manifiesto.solo_subir):
-            self.tomar(indexador.cliente)
         try:
+            if plan.escribibles or (plan.separadores and not self.manifiesto.solo_subir):
+                from app.airvault.guards import verificar_cantidad
+
+                info = self.tomar(indexador.cliente)
+                verificar_cantidad(
+                    self.manifiesto.registros, paginas_de_lote(info),
+                    self.manifiesto.separadores_borrados(),
+                )
             resultado = indexador.aplicar(plan, detener_en_error, avanzar)
         finally:
             # Tambien si se corto a medias: lo escrito queda escrito y el
@@ -1564,12 +1628,24 @@ class Trabajo:
         self.guardar()
         return resultado
 
-    def verificar(self, cliente) -> Tuple[int, int, Sequence[str]]:
+    def verificar(self, cliente, al_avanzar=None) -> Tuple[int, int, Sequence[str]]:
         """Relee el batch y confirma contra el servidor como quedo."""
-        validas, total, problemas = verificar_lote(cliente, self.manifiesto)
+        if self.manifiesto.solo_subir:
+            from app.airvault.indexer import verificar_revision
+
+            validas, total, problemas = verificar_revision(
+                cliente, self.manifiesto, al_avanzar=al_avanzar,
+            )
+            detalle = (f"{validas}/{total} con los datos disponibles comprobados; "
+                       "las incidencias quedan para revision humana")
+        else:
+            validas, total, problemas = verificar_lote(cliente, self.manifiesto)
+            detalle = f"{validas}/{total} en Valid"
+        if validas != total and problemas:
+            detalle += f"; {problemas[0]}"
         self.manifiesto.etapa("verificar").marcar(
             EstadoEtapa.HECHA if validas == total else EstadoEtapa.ERROR,
-            f"{validas}/{total} en Valid",
+            detalle,
         )
         self.guardar()
         return validas, total, problemas
@@ -1895,8 +1971,14 @@ def preparar_partes(
     limite_paginas = int(limite_paginas or 0)
     entrega = comprobar_entrega(csv)
     previos = trabajos_preparados(config, carpeta, csv)
+    memoria = registro_entrega.comprometidas(carpeta)
     if previos and _reparto_al_dia(
-        previos, entrega, limite_paginas, compresion, fin_de_mes
+        previos,
+        entrega,
+        limite_paginas,
+        compresion,
+        fin_de_mes,
+        tambien_cubiertas=memoria,
     ):
         # El reparto de disco sigue valiendo. Se devuelve por el camino que
         # comprueba que el juego este entero, que es el que sabe presentarlo.
@@ -1910,7 +1992,7 @@ def preparar_partes(
     # apartado o perdido. Sin el, rehacer el reparto dos veces seguidas
     # volveria a mandar lo que ya estaba en AirVault.
     cobertura = revisar_cobertura(
-        entrega, previos, tambien_cubiertas=registro_entrega.comprometidas(carpeta)
+        entrega, previos, tambien_cubiertas=memoria
     )
     if cobertura.repetidas:
         detalle = "; ".join(
@@ -2163,6 +2245,7 @@ def _reparto_al_dia(
     limite: int,
     compresion: bool,
     fin_de_mes: bool = False,
+    tambien_cubiertas: Collection[Tuple[str, int]] = (),
 ) -> bool:
     """Si los manifiestos de disco ya son el reparto que se esta pidiendo.
 
@@ -2186,7 +2269,12 @@ def _reparto_al_dia(
         # que un reparto hecho con la otra ya no es el que se esta pidiendo.
         if bool(manifiesto.fin_de_mes) != bool(fin_de_mes):
             return False
-    return revisar_cobertura(entrega, trabajos, solo_comprometidos=False).completa
+    return revisar_cobertura(
+        entrega,
+        trabajos,
+        solo_comprometidos=False,
+        tambien_cubiertas=tambien_cubiertas,
+    ).completa
 
 
 def _numeracion_ocupada(
@@ -2418,7 +2506,8 @@ def carpeta_del_libro(trabajo: "Trabajo") -> Path:
 
     Es la carpeta que contiene los trabajos de todas las ejecuciones, un
     nivel por encima de la de esta entrega: el libro es de la instalacion,
-    no de la ejecucion, y tiene que sobrevivir a borrar el registro local.
+    no de la ejecucion. El borrado local retira de el solo los batches que
+    la persona elimino.
     """
     return registro_entrega.raiz_de_registro(trabajo.carpeta).parent
 
@@ -2471,6 +2560,7 @@ def marcar_posible_duplicado(trabajo: "Trabajo", motivo: str) -> None:
     if trabajo.manifiesto.posible_duplicado == motivo:
         return
     trabajo.manifiesto.posible_duplicado = motivo
+    trabajo._duplicado_permitido = False
     trabajo.guardar()
     logger.warning(
         "Batch «{}» marcado como posible duplicado: {}",
@@ -2481,9 +2571,20 @@ def marcar_posible_duplicado(trabajo: "Trabajo", motivo: str) -> None:
 
 def limpiar_posible_duplicado(trabajo: "Trabajo") -> None:
     """Quita la sospecha porque alguien miro AirVault y dijo que no lo es."""
-    if not trabajo.manifiesto.posible_duplicado:
+    if (
+        not trabajo.manifiesto.posible_duplicado
+        and not getattr(trabajo, "_duplicado_permitido", False)
+    ):
         return
     trabajo.manifiesto.posible_duplicado = ""
+    trabajo._duplicado_permitido = False
+    trabajo.guardar()
+
+
+def autorizar_posible_duplicado(trabajo: "Trabajo") -> None:
+    """Permite un reenvio pedido tras revisar la alerta en AirVault."""
+    trabajo.manifiesto.posible_duplicado = ""
+    trabajo._duplicado_permitido = True
     trabajo.guardar()
 
 
@@ -2561,6 +2662,7 @@ def _motivo_de_repetidas(repetidas: Sequence[str]) -> str:
     )
 
 
+@serializar_cargas
 def subir_partes(
     trabajos: Sequence["Trabajo"],
     sesion,
@@ -2646,6 +2748,11 @@ def subir_partes(
             if a_confirmar
             else []
         )
+        if any(p.estado == DESCUADRADO or p.trabajo.manifiesto.mezcla_pendiente for p in estados):
+            from app.airvault.mezclas import recuperar_mezclas
+
+            if recuperar_mezclas(a_confirmar, cliente, avisar):
+                estados = comprobar_partes(a_confirmar, cliente, avisar=avisar)
         claves_por_subir = claves_forzadas | {
             str(parte.trabajo.carpeta)
             for parte in estados
@@ -2657,6 +2764,19 @@ def subir_partes(
             trabajo for trabajo in trabajos
             if str(trabajo.carpeta) in claves_por_subir
         ]
+        sin_confirmar = [
+            parte for parte in estados
+            if parte.estado in (BUSCANDO, PROCESANDO, DESCUADRADO)
+            and _subida_rastreable(parte.trabajo)
+        ]
+        if sin_confirmar and por_subir:
+            detalle = (
+                "No se inicia otra carga hasta confirmar la anterior: "
+                + ", ".join(parte.nombre for parte in sin_confirmar)
+            )
+            if avisar:
+                avisar(detalle, 0, 0)
+            return [(trabajo, detalle) for trabajo in por_subir]
         procesandose = sum(
             parte.estado in (BUSCANDO, PROCESANDO) for parte in estados
         )
@@ -2771,9 +2891,11 @@ def subir_partes(
         # llegar aqui: la carga nueva y la orden dada a mano. Todo lo
         # anterior mira la cola de Web Index; esto mira lo que ya esta
         # publicado.
-        motivo = trabajo.manifiesto.posible_duplicado or revisar_duplicado(
-            trabajo, buscador
-        )
+        motivo = ""
+        if not getattr(trabajo, "_duplicado_permitido", False):
+            motivo = trabajo.manifiesto.posible_duplicado or revisar_duplicado(
+                trabajo, buscador
+            )
         if motivo:
             marcar_posible_duplicado(trabajo, motivo)
             fallos.append((
@@ -2818,6 +2940,10 @@ def subir_partes(
                     0,
                     0,
                 )
+            if trabajo.manifiesto.etapa("subir").estado is EstadoEtapa.EN_CURSO:
+                # La respuesta pudo perderse despues de aceptar los trozos.
+                # Otra carga aqui podria incorporarse al mismo batch remoto.
+                break
             continue
         # Quick Upload lo acepto: desde aqui esas bitacoras estan
         # comprometidas y no se vuelven a repartir aunque cambie la
@@ -2854,19 +2980,29 @@ def subir_partes(
             detalle = str(exc)
             fallos.append((trabajo, detalle))
             logger.error(
-                "No se pudo encontrar el batch {}: {}. Se sube el siguiente.",
+                "No se pudo encontrar el batch {}: {}. Se detienen las cargas.",
                 trabajo.manifiesto.nombre_batch,
                 detalle,
             )
             if avisar is not None:
                 avisar(
-                    f"{cabeza}AirVault aun no lo publica; se sube "
-                    "el siguiente batch",
+                    f"{cabeza}Falta confirmar esta carga; las siguientes "
+                    "esperan para evitar que AirVault las junte",
                     0,
                     0,
                 )
-            continue
+            break
         hallados.append(trabajo)
+
+    if cliente is not None and len(por_subir) > 1:
+        from app.airvault.mezclas import recuperar_mezclas
+
+        recuperados = recuperar_mezclas(trabajos, cliente, avisar)
+        if recuperados:
+            hallados = [t for t in hallados if t not in recuperados]
+            encontrados_antes = [t for t in encontrados_antes if t not in recuperados]
+            if al_finalizar_subidas is not None:
+                al_finalizar_subidas(trabajos)
 
     # Esta es la barrera entre Quick Upload y cualquier indexado: los
     # callbacks se difieren hasta haber intentado todos los archivos.
@@ -2908,7 +3044,11 @@ def ya_esta_en_airvault(trabajo: "Trabajo", cliente):
     if cliente is None:
         return None
     manifiesto = trabajo.manifiesto
-    lotes = list(_listar_cola(cliente))
+    lotes = [
+        lote for lote in _listar_cola(cliente)
+        if lote.batch_id not in trabajo.manifiesto.batches_descartados
+        and not lote.nombre.startswith("NO INDEXAR - CARGA MEZCLADA ")
+    ]
     try:
         return buscar_lote(
             lotes,
@@ -3721,6 +3861,7 @@ def _lote_por_identidad_y_contenido(
     )
     ids_nuevos = {lote.batch_id.strip().upper() for lote in nuevos}
     excluir_ids = {str(valor).strip().upper() for valor in excluir_ids or set()}
+    excluir_ids.update(str(valor).strip().upper() for valor in manifiesto.batches_descartados)
     cache = cache if cache is not None else {}
     esperado = normalizar_nombre(manifiesto.nombre_batch)
     candidatos: List[tuple[int, ResumenLote, str]] = []
@@ -3728,6 +3869,7 @@ def _lote_por_identidad_y_contenido(
         clave = lote.batch_id.strip().upper()
         if (
             clave in excluir_ids
+            or lote.nombre.startswith("NO INDEXAR - CARGA MEZCLADA ")
             or (lote.repo_id and lote.repo_id != manifiesto.repo_id)
             or lote.paginas not in compatibles
         ):
@@ -3864,7 +4006,10 @@ def _ubicar(
 
 def _es_nombre_temporal(nombre: str) -> bool:
     """Nombres provisionales que AirVault usa antes del renombrado."""
-    return normalizar_nombre(nombre) in {"empty batch", "index batch"}
+    normalizado = normalizar_nombre(nombre)
+    return normalizado in {"empty batch", "index batch"} or bool(
+        re.search(r"(?:^| )batch(?: \d+)?$", normalizado)
+    )
 
 
 def _nombre_visible_compatible(nombre: str, esperado: str) -> bool:
@@ -4026,6 +4171,7 @@ def _reconciliar_batches(
         trabajo
         for trabajo in trabajos
         if not trabajo.manifiesto.batch_id
+        and _pendiente_de_busqueda(trabajo)
         and trabajo.manifiesto.lotes_previos
         and trabajo.manifiesto.etapa_hecha("subir")
         and not trabajo.manifiesto.etapa_hecha("completar")
@@ -4445,7 +4591,7 @@ def comprobar_partes(
     """Mira en que va cada parte en AirVault. No escribe nada.
 
     Es lo que responde «¿ya se subio?». La tabla local manda el recorrido:
-    primero se buscan, en su mismo orden, los nombres que todavía faltan por
+    primero se consultan en paralelo los nombres que todavía faltan por
     subir o indexar. Solo si una carga ya registrada no aparece con su nombre
     se pide la cola completa para recuperar un ``Empty-Batch`` o un título
     incorrecto. Que un batch tarde en aparecer no es un fallo: AirVault lo
@@ -4460,8 +4606,39 @@ def comprobar_partes(
     fallos_identidad: set[str] = set()
     sin_hallar: set[str] = set()
     por_busqueda_amplia: List["Trabajo"] = []
+    terminados = {
+        str(trabajo.manifiesto.batch_id).strip().upper()
+        for trabajo in trabajos
+        if not _pendiente_de_busqueda(trabajo) and trabajo.manifiesto.batch_id
+    }
+    terminados.update(
+        str(batch_id).strip().upper()
+        for trabajo in trabajos for batch_id in trabajo.manifiesto.batches_descartados
+    )
 
-    for numero, trabajo in enumerate(pendientes, start=1):
+    def consultas():
+        buscar = getattr(cliente, "buscar_lotes", None)
+        if callable(buscar):
+            por_nombre = {}
+            for trabajo in pendientes:
+                nombre = trabajo.manifiesto.nombre_batch
+                por_nombre.setdefault(nombre, []).append(trabajo)
+            if por_nombre and avisar is not None:
+                avisar("Consultando los batches pendientes en AirVault", 0, 0)
+            for nombre, encontrados in buscar(list(por_nombre)):
+                for trabajo in por_nombre[nombre]:
+                    yield trabajo, encontrados
+        else:
+            for trabajo in pendientes:
+                try:
+                    encontrados = list(cliente.listar_lotes(
+                        trabajo.manifiesto.nombre_batch
+                    ))
+                except TypeError:
+                    encontrados = list(cliente.listar_lotes())
+                yield trabajo, encontrados
+
+    for numero, (trabajo, encontrados) in enumerate(consultas(), start=1):
         manifiesto = trabajo.manifiesto
         nombre = manifiesto.nombre_batch
         if avisar is not None:
@@ -4471,12 +4648,10 @@ def comprobar_partes(
                 0,
             )
         batch_id_anterior = str(manifiesto.batch_id or "").strip().upper()
-        try:
-            encontrados = list(cliente.listar_lotes(nombre))
-        except TypeError:
-            # Compatibilidad con adaptadores antiguos y clientes falsos que
-            # aun no reciben el filtro de nombre.
-            encontrados = list(cliente.listar_lotes())
+        encontrados = [
+            lote for lote in encontrados
+            if lote.batch_id.strip().upper() not in terminados
+        ]
         dirigidos = [
             lote
             for lote in encontrados
@@ -4512,7 +4687,10 @@ def comprobar_partes(
                 0,
                 0,
             )
-        lotes = list(cliente.listar_lotes())
+        lotes = [
+            lote for lote in cliente.listar_lotes()
+            if lote.batch_id.strip().upper() not in terminados
+        ]
         corregidos = _reconciliar_batches(
             trabajos,
             cliente,
@@ -4524,7 +4702,10 @@ def comprobar_partes(
         if corregidos:
             # UpdateBatchName puede tardar en reflejarse en la cola. La
             # segunda lectura deja la tabla con el título ya confirmado.
-            lotes = list(cliente.listar_lotes())
+            lotes = [
+                lote for lote in cliente.listar_lotes()
+                if lote.batch_id.strip().upper() not in terminados
+            ]
         lotes_por_id = {
             lote.batch_id.strip().upper(): lote for lote in lotes
         }
@@ -4569,8 +4750,8 @@ def detectar_indexados(
     bitacora con AirVault. Si alguien lo indexo a mano, la verificacion queda
     guardada en el manifiesto nuevo y no se vuelve a escribir ni a subir.
 
-    REVISAR conserva su flujo manual y un batch abierto por otra persona no
-    se toca. Los que aun tengan paginas pendientes quedan como incompletos y
+    REVISAR acaba su etapa automatica al confirmar lo disponible. Un batch
+    abierto por otra persona no se toca. Las paginas pendientes quedan incompletas y
     se pueden planificar de nuevo con el estado remoto mas reciente.
     """
     detectados: List[EstadoParte] = []
@@ -4578,7 +4759,6 @@ def detectar_indexados(
         trabajo = parte.trabajo
         if (
             parte.estado not in (LISTO, INCOMPLETO)
-            or trabajo.manifiesto.solo_subir
             or (parte.lote and parte.lote.bloqueado_por)
         ):
             detectados.append(parte)
@@ -4595,7 +4775,7 @@ def detectar_indexados(
         detectados.append(EstadoParte(
             trabajo,
             INDEXADO if completo else INCOMPLETO,
-            f"{validas}/{total} en Valid",
+            trabajo.manifiesto.etapa("verificar").detalle,
             parte.lote,
         ))
     return detectados
@@ -4707,6 +4887,7 @@ def indexar_partes(
     planes: Sequence[Tuple[Plan, Indexador]],
     detener_en_error: bool = True,
     avisar: Optional[Aviso] = None,
+    al_indexar: Optional[Callable[["Trabajo", bool], None]] = None,
 ) -> Resultado:
     """Escribe todas las partes y devuelve el resultado sumado.
 
@@ -4731,9 +4912,15 @@ def indexar_partes(
             if avisar is not None:
                 avisar(f"{cabeza}{texto}", arrastre + propias, total)
 
-        resultado = trabajo.indexar(
-            indexador, plan, detener_en_error, propio if avisar else None
-        )
+        if al_indexar is not None:
+            al_indexar(trabajo, True)
+        try:
+            resultado = trabajo.indexar(
+                indexador, plan, detener_en_error, propio if avisar else None
+            )
+        finally:
+            if al_indexar is not None:
+                al_indexar(trabajo, False)
         hechas += resultado.escritas
         sumado.escritas += resultado.escritas
         sumado.omitidas += resultado.omitidas
@@ -4752,14 +4939,21 @@ def indexar_partes(
 
 
 def verificar_partes(
-    trabajos: Sequence["Trabajo"], cliente
+    trabajos: Sequence["Trabajo"], cliente, avisar=None,
 ) -> Tuple[int, int, List[str]]:
     """Relee todas las partes y suma como quedaron."""
     validas = total = 0
     problemas: List[str] = []
     for trabajo in trabajos:
         cabeza = _prefijo(trabajo)
-        propias, suyas, suyos = trabajo.verificar(cliente)
+        if avisar and trabajo.manifiesto.solo_subir:
+            propias, suyas, suyos = trabajo.verificar(
+                cliente, al_avanzar=lambda n, t: avisar(
+                    f"{cabeza}Comprobando datos guardados", n, t,
+                ),
+            )
+        else:
+            propias, suyas, suyos = trabajo.verificar(cliente)
         validas += propias
         total += suyas
         problemas.extend(f"{cabeza}{p}" for p in suyos)

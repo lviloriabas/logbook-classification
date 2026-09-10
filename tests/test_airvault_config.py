@@ -38,3 +38,18 @@ def test_guarda_la_ultima_cantidad_sin_perder_la_configuracion(tmp_path):
     assert datos["paginas_por_batch"] == 425
     assert datos["repo_id"] == 3209
     assert AirVaultConfig.load(ruta).paginas_por_batch == 425
+
+
+def test_otras_preferencias_no_ocultan_la_cantidad_del_ejemplo(tmp_path):
+    ruta = tmp_path / "airvault.json"
+    ejemplo = tmp_path / "airvault.example.json"
+    ejemplo.write_text(json.dumps({"paginas_por_batch": 375,
+                                   "csv_date_mode": "month_end"}), encoding="utf-8")
+    ruta.write_text(json.dumps({"auto_subir": False, "csv_date_mode": "specific"}), encoding="utf-8")
+    config = AirVaultConfig.load(ruta)
+    assert config.paginas_por_batch == 375
+    assert config.auto_subir is False
+    assert config.csv_date_mode == "specific"
+    assert guardar_paginas_por_batch(ruta, 525)
+    assert AirVaultConfig.load(ruta).paginas_por_batch == 525
+    assert json.loads(ruta.read_text(encoding="utf-8"))["csv_date_mode"] == "specific"

@@ -184,11 +184,7 @@ def test_el_separador_no_cuenta_como_omitido(tmp_path):
 
 
 def test_revisar_conserva_separadores_y_escribe_lo_que_airvault_acepta(tmp_path):
-    """REVISAR se queda entero, y la pagina sin avion no se manda.
-
-    La 5 no tiene matricula: AirVault la rechaza con un 500 en vez de
-    dejarla amarilla, asi que se queda para quien revise el batch.
-    """
+    """REVISAR se queda entero y la pagina sin avion envia solo lo disponible."""
     cliente = ClienteFalso(page_count=5)
     manifiesto = manifiesto_con_separadores(tmp_path)
     manifiesto.solo_subir = True
@@ -201,6 +197,7 @@ def test_revisar_conserva_separadores_y_escribe_lo_que_airvault_acepta(tmp_path)
     assert [pagina for pagina, _valores, _estado in cliente.escrituras] == [
         2,
         3,
+        5,
     ]
 
 
@@ -235,8 +232,11 @@ def test_la_matricula_vacia_de_un_separador_no_es_un_aviso(tmp_path):
 
 
 def test_la_verificacion_no_espera_que_una_divisoria_sea_valida(tmp_path):
+    from app.airvault.config import CAMPO_DOC_TYPE, CAMPO_FLEET, CAMPO_AUDIT_STATUS
     """En AirVault un separador queda en estado Separator, no en Valid."""
     from app.airvault.indexer import verificar_lote
+    from app.airvault.config import CAMPO_END_DATE
+    from app.airvault.mapping import fecha_airvault
 
     manifiesto = manifiesto_con_separadores(tmp_path)
     for registro in manifiesto.registros:
@@ -245,19 +245,25 @@ def test_la_verificacion_no_espera_que_una_divisoria_sea_valida(tmp_path):
     cliente = ClienteFalso(paginas={
         1: pagina(1, estado=2),
         2: pagina(2, estado=0, valores={
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+            CAMPO_END_DATE: fecha_airvault(manifiesto.registros[1].fecha),
             CAMPO_LOG_NUMBER: "2312238", CAMPO_MATRICULA: "HP-1848CMP",
         }),
         3: pagina(3, estado=0, valores={
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+            CAMPO_END_DATE: fecha_airvault(manifiesto.registros[2].fecha),
             CAMPO_LOG_NUMBER: "2312239", CAMPO_MATRICULA: "HP-1848CMP",
         }),
         4: pagina(4, estado=2),
         5: pagina(5, estado=0, valores={
+                CAMPO_DOC_TYPE: "Log Page", CAMPO_FLEET: "NG", CAMPO_AUDIT_STATUS: "PUBLISHED",
+            CAMPO_END_DATE: fecha_airvault(manifiesto.registros[4].fecha),
             CAMPO_LOG_NUMBER: "2312240", CAMPO_MATRICULA: "",
         }),
     }, page_count=5)
     validas, total, problemas = verificar_lote(cliente, manifiesto)
-    assert (validas, total) == (3, 3)
-    assert problemas == []
+    assert (validas, total) == (2, 3)
+    assert any("Aircraft" in p for p in problemas)
 
 
 # ── de punta a punta con el indice de la ejecución ───────────────────

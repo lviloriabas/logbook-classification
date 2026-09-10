@@ -23,6 +23,10 @@ def _page(page_number: int, log_number: str, **firmas: tuple[str, float]
           ) -> PageResult:
     page = PageResult(page_number=page_number)
     page.add_field(FieldResult(
+        page_number=page_number, field_id="matricula", field_type="ocr",
+        value="HP-1848CMP", confidence=1.0, status=Status.OK,
+    ))
+    page.add_field(FieldResult(
         page_number=page_number, field_id="log_number", field_type="ocr",
         value=log_number, confidence=1.0, status=Status.OK,
     ))
@@ -47,7 +51,13 @@ def _vuelo(page_number: int, log_number: str, **extra) -> PageResult:
     return _page(page_number, log_number, **firmas)
 
 
-def test_disc_column_shows_the_classified_pages(window):
+def test_disc_column_shows_the_classified_pages(window, tmp_path):
+    from app.utils.important_fields import ImportantFieldsStore
+
+    window._important_fields_store = ImportantFieldsStore(
+        tmp_path / "important_fields.json"
+    )
+    window._important_fields_user_selected = False
     reports = [ValidationReport(
         pdf_path="bitacora.pdf",
         template_name=TEMPLATE.name,
@@ -69,3 +79,11 @@ def test_disc_column_shows_the_classified_pages(window):
     assert "discrepancia" in marcada.toolTip()
     # Es un indicador de la bitácora: se ve también en la vista resumida.
     assert not window.table.isColumnHidden(column)
+    reason = window._table_columns.index("disc_reason")
+    review = window._table_columns.index("review")
+    assert window.table.horizontalHeaderItem(reason).text() == "disc_reason"
+    assert window.table.horizontalHeaderItem(review).text() == "review"
+    assert not window.table.isColumnHidden(reason)
+    assert not window.table.isColumnHidden(review)
+    assert window.table.item(0, review).text() == "false"
+    assert window.table.item(1, review).text() == "true"

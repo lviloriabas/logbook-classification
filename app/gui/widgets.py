@@ -61,6 +61,7 @@ from app.gui.tokens import (
     WEIGHT_STRONG,
     WINDOW_BG,
     accent_color,
+    blend,
     checked_row_color,
     hover_row_color,
 )
@@ -339,13 +340,13 @@ QPushButton:disabled, QToolButton:disabled {{
     color: {PANE_TEXT};
     border-color: palette(highlight);
 }}
-#primaryButton:hover {{
-    background-color: palette(highlight);
-    border-color: {PANE_TEXT};
-}}
-#primaryButton:pressed {{
-    background-color: palette(highlight);
-    border-color: {TEXT_DISABLED};
+/* El separador de la celda de la flecha. El gris del marco se apagaba sobre
+   el acento, así que es blanco translúcido: no trae color propio y vale para
+   cualquier acento del sistema. Lo que le pasa a esa celda al pasar el cursor
+   lo fija ``accent_button_qss``, con el acento ya conocido; aquí no se puede
+   porque la hoja se arma al importar el módulo. */
+QToolButton#primaryButton[menuRole="split"]::menu-button {{
+    border-left: 1px solid rgba(255, 255, 255, 0.45);
 }}
 QToolButton#spinStepButton {{
     min-width: 18px; max-width: 18px; min-height: 0;
@@ -577,10 +578,15 @@ QMenu {{
     border-radius: {TABLE_RADIUS}px;
     padding: 4px;
 }}
+/* El relleno de la izquierda no es la sangría del texto: Qt le suma la
+   columna del icono o de la marca, así que los 30 px de antes dejaban al
+   rótulo a 46 px del borde y abrían un hueco enorme entre la marca y su
+   texto. Con 12 px la separación queda en los ~12 que usa el menú de
+   Windows, y los menús sin marcas ni iconos siguen con su sangría. */
 QMenu::item {{
     border-radius: {TABLE_RADIUS}px;
     min-height: 22px;
-    padding: 5px 28px 5px 30px;
+    padding: 5px 28px 5px 12px;
 }}
 QMenu::item:selected {{ background-color: {PANE_CONTROL_HOVER}; }}
 QMenu::item:disabled {{ color: {TEXT_DISABLED}; }}
@@ -651,13 +657,61 @@ QStatusBar {{
 
 _APPLICATION_THEME_PROPERTY = "bitsApplicationThemeInstalled"
 
+# Cuánto se aclara el botón de acento al pasar el cursor y cuánto se oscurece
+# al pulsarlo. Es el gesto de Fluent para el botón de acento: el color se
+# mueve un paso, el mismo en todo el botón, sin marco de otro color.
+_ACCENT_HOVER = 0.10
+_ACCENT_PRESSED = 0.12
+
+
+def accent_button_qss() -> str:
+    """Estados del botón de acento, ya con el acento del sistema delante.
+
+    La hoja base se arma al importar el módulo, cuando todavía no hay
+    ``QApplication`` a la que preguntarle el color: por eso el reposo pide
+    ``palette(highlight)``, que es el único acento que QSS sabe leer solo.
+    Pero de ``palette(highlight)`` no se puede sacar un tono más claro ni uno
+    más oscuro, y esa era la raíz de lo que se veía: el hover se distinguía
+    cambiando el marco a blanco y el pulsado a gris, así que el botón se
+    rodeaba de un anillo que no es de ningún estado de Windows.
+
+    Aquí ya hay acento, así que hover y pulsado son el mismo color un paso
+    más claro y un paso más oscuro, con el marco a juego. La celda de la
+    flecha del botón dividido se pinta con ese mismo color y no con el gris
+    de la regla general de los botones divididos: Qt le pasa el ``:hover`` de
+    todo el widget, esté el cursor sobre el texto o sobre la flecha, y
+    cualquier color propio partía el botón en dos mitades distintas.
+    """
+    accent = accent_color()
+    hover = blend("#ffffff", accent, _ACCENT_HOVER)
+    pressed = blend("#000000", accent, _ACCENT_PRESSED)
+    return f"""
+#primaryButton:hover {{
+    background-color: {hover};
+    border-color: {hover};
+}}
+#primaryButton:pressed {{
+    background-color: {pressed};
+    border-color: {pressed};
+}}
+QToolButton#primaryButton[menuRole="split"]::menu-button:hover {{
+    background-color: {hover};
+}}
+/* Después del de hover: al pulsar el cursor sigue encima, así que las dos
+   reglas valen a la vez y decide la última. Sin esta, la celda se quedaba
+   con el tono del cursor mientras el resto del botón ya estaba pulsado. */
+QToolButton#primaryButton[menuRole="split"]::menu-button:pressed {{
+    background-color: {pressed};
+}}
+"""
+
 
 def window_stylesheet(local_qss: str) -> str:
     """Compone una hoja local sin duplicar el tema global instalado."""
     app = QApplication.instance()
     if app is not None and app.property(_APPLICATION_THEME_PROPERTY):
         return local_qss
-    return APP_CHROME_QSS + local_qss
+    return APP_CHROME_QSS + accent_button_qss() + local_qss
 
 
 class MultiSelectMenu(QMenu):

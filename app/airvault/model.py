@@ -88,6 +88,12 @@ class Registro(BaseModel):
 
     duplicado: bool = False
     discrepancia: bool = False
+    discrepancy_fields: List[str] = Field(default_factory=list)
+    # True conserva una causa de revision independiente de los faltantes
+    # (firmas, fecha dudosa o contradiccion del libro). False permite validar
+    # cuando el indice ya esta completo. None conserva la revision de las
+    # entregas antiguas que no detallaban el motivo.
+    revision_pendiente: Optional[bool] = None
 
     pagina_batch: Optional[int] = None
     estado: EstadoRegistro = EstadoRegistro.PENDIENTE
@@ -139,6 +145,10 @@ class Manifiesto(BaseModel):
     # pierde C_BatchName y publica ``Empty-Batch``, acota los candidatos que
     # despues se confirman por paginas y contenido.
     lotes_previos: List[str] = Field(default_factory=list)
+    # Mezclas identificadas por su contenido y apartadas antes de resubir.
+    batches_descartados: List[str] = Field(default_factory=list)
+    mezcla_pendiente: str = ""
+    resubir_por_mezcla: bool = False
     # Antes de considerar perdida una subida, varias revisiones completas
     # recorren nombres, cantidades y contenido. Solo al agotarlas empieza el
     # reloj de espera que eventualmente permite ofrecer una resubida.

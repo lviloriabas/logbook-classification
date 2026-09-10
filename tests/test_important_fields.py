@@ -69,9 +69,48 @@ def test_store_separates_templates_and_remembers_an_empty_selection(
 
 def test_la_frase_de_la_discrepancia_viene_marcada_por_defecto():
     marcadas = default_important_columns(
-        ["file", "page", "log_number", "dup", "disc", "discrepancia", "date"]
+        ["file", "page", "log_number", "dup", "disc", "disc_reason", "date"]
     )
-    assert "discrepancia" in marcadas
+    assert "disc_reason" in marcadas
+
+
+def test_una_seleccion_guardada_con_el_nombre_viejo_sigue_marcada(
+    tmp_path: Path,
+):
+    """La nota de la discrepancia cambió de nombre sin perder la memoria.
+
+    Se llamaba «discrepancia» a secas y en el selector quedaba pegada a
+    «disc», como si fueran dos columnas de lo mismo. El archivo de cada
+    máquina no se versiona, así que el que ya estaba escrito nombra a la
+    vieja: sin traducirla al leerla, la columna aparecía sin marcar en las
+    instalaciones que alguna vez editaron la lista.
+    """
+    path = tmp_path / "important_fields.json"
+    path.write_text(
+        '{"version": 1, "templates": {"Aircraft Log": ["disc", "discrepancia"]}}',
+        encoding="utf-8",
+    )
+
+    store = ImportantFieldsStore(path)
+    assert store.load("Aircraft Log") == {"disc", "disc_reason", "review"}
+
+    # Y al guardar cualquier cosa, el archivo se queda ya con el nombre nuevo.
+    store.save("Aircraft Log", {"disc", "disc_reason"})
+    assert "discrepancia" not in path.read_text(encoding="utf-8")
+
+
+def test_una_seleccion_anterior_recibe_review_una_sola_vez(tmp_path: Path):
+    path = tmp_path / "important_fields.json"
+    path.write_text(
+        '{"version": 1, "templates": {"Aircraft Log": ["file"]}}',
+        encoding="utf-8",
+    )
+    store = ImportantFieldsStore(path)
+
+    assert store.load("Aircraft Log") == {"file", "review"}
+
+    store.save("Aircraft Log", {"file"})
+    assert store.load("Aircraft Log") == {"file"}
 
 
 def test_editar_la_lista_no_borra_lo_que_el_selector_no_pudo_ensenar(

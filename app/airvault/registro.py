@@ -9,10 +9,10 @@ nuevo con otro maximo de paginas, los manifiestos viejos se apartan y con
 ellos se iba la unica memoria de lo que ya se habia subido.
 
 Este registro es esa memoria, y es independiente de la configuracion. Vive
-en la carpeta del trabajo, junto a los manifiestos, de modo que borrar el
-registro local de la ejecucion lo borra tambien: es una sola memoria, y se
-olvida entera o no se olvida. Guarda ademas unas cuantas versiones
-anteriores, para poder mirar (o recuperar) un reparto que se descarto.
+en la carpeta del trabajo, junto a los manifiestos. Al eliminar los batches
+locales se vacia el historial visible, pero conserva las claves minimas que
+impiden reconstruirlos durante el siguiente arranque. Guarda ademas unas
+cuantas versiones anteriores mientras el historial siga vigente.
 
 La identidad de una bitacora es la de siempre: el archivo del que salio y
 su pagina dentro de el. Solo es unica dentro de su entrega, asi que el
@@ -79,13 +79,20 @@ class RegistroDeEntrega(BaseModel):
     actualizado: str = ""
     batches: List[BatchAnotado] = Field(default_factory=list)
     historial: List[RepartoArchivado] = Field(default_factory=list)
+    # Bitacoras de batches locales que alguien elimino expresamente. No son
+    # historial visible ni un trabajo recuperable, pero deben sobrevivir al
+    # reinicio para que preparar la misma entrega no los construya otra vez.
+    eliminadas: List[Tuple[str, int]] = Field(default_factory=list)
 
     def por_carpeta(self) -> Dict[str, BatchAnotado]:
         return {batch.carpeta: batch for batch in self.batches}
 
     def comprometidas(self) -> Set[Tuple[str, int]]:
-        """Bitacoras que ya viajaron a AirVault y no se vuelven a mandar."""
-        claves: Set[Tuple[str, int]] = set()
+        """Bitacoras que no deben volver a formar un batch local."""
+        claves: Set[Tuple[str, int]] = {
+            (str(archivo).casefold(), int(pagina))
+            for archivo, pagina in self.eliminadas
+        }
         for batch in self.batches:
             if batch.subido or batch.batch_id:
                 claves |= batch.claves()
@@ -246,7 +253,19 @@ def rutas_del_registro(carpeta: Path | str) -> List[Path]:
     raiz = raiz_de_registro(carpeta)
     if not raiz.is_dir():
         return []
-    rutas = [ruta for ruta in [ruta_registro(raiz)] if ruta.is_file()]
+    archivo_registro = ruta_registro(raiz)
+    rutas: List[Path] = []
+    if archivo_registro.is_file():
+        try:
+            datos = json.loads(archivo_registro.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # Un registro ilegible tambien se ofrece para eliminar. Solo se
+            # oculta el archivo valido que conserva exclusivamente las
+            # marcas necesarias para no resucitar batches borrados.
+            rutas.append(archivo_registro)
+        else:
+            if datos.get("batches") or datos.get("historial"):
+                rutas.append(archivo_registro)
     rutas.extend(
         sorted(
             ruta for ruta in raiz.rglob("manifiesto-reemplazado-*.json")
@@ -257,30 +276,82 @@ def rutas_del_registro(carpeta: Path | str) -> List[Path]:
 
 
 def olvidar(
-    carpeta: Path | str, carpetas_de_batch: Sequence[Path | str]
+    carpeta: Path | str,
+    carpetas_de_batch: Sequence[Path | str],
+    paginas: Sequence[Tuple[str, int]] = (),
 ) -> RegistroDeEntrega:
-    """Borra del registro los batches indicados y conserva los demas.
+    """Saca batches del registro sin permitir que vuelvan a construirse.
 
-    Es la mitad que le falta a eliminar un batch. Mandar su manifiesto a la
-    Papelera lo saca de la cola, pero mientras su anotacion siga aqui sus
-    bitacoras cuentan como comprometidas y el reparto siguiente pasa de
-    largo por ellas: el batch desapareceria y sus paginas no volverian a
-    salir en ninguno. Al olvidarlo vuelven a estar libres.
+    Mandar el manifiesto a la Papelera lo saca de la cola actual. Las claves
+    se conservan aparte como eliminadas para que preparar la entrega durante
+    un arranque posterior no recree el batch a partir del CSV y los PDF.
 
     Lo que ya viajo a AirVault no se deshace con esto: el batch remoto
-    sigue donde estaba. Quien lo elimina es quien sabe que ahi no hay nada
-    que conservar.
+    sigue donde estaba.
     """
     registro = leer(carpeta)
-    if not registro.batches:
-        return registro
     fuera = {str(Path(ruta)).casefold() for ruta in carpetas_de_batch}
+    quitados = [
+        batch for batch in registro.batches
+        if str(Path(batch.carpeta)).casefold() in fuera
+    ]
     quedan = [
         batch for batch in registro.batches
         if str(Path(batch.carpeta)).casefold() not in fuera
     ]
-    if len(quedan) == len(registro.batches):
+    eliminadas = {
+        (str(archivo).casefold(), int(pagina))
+        for archivo, pagina in registro.eliminadas
+    }
+    eliminadas.update(
+        clave for batch in quitados for clave in batch.claves()
+    )
+    eliminadas.update(
+        (str(archivo).casefold(), int(pagina))
+        for archivo, pagina in paginas
+    )
+    nuevas = sorted(eliminadas)
+    if (
+        len(quedan) == len(registro.batches)
+        and nuevas == sorted(registro.eliminadas)
+    ):
         return registro
     registro.batches = quedan
+    registro.eliminadas = nuevas
+    guardar(registro, carpeta)
+    return registro
+
+
+def eliminar_historial(
+    carpeta: Path | str,
+    paginas: Sequence[Tuple[str, int]] = (),
+) -> RegistroDeEntrega:
+    """Vacía el registro visible y conserva solo la supresion permanente.
+
+    Se llama despues de retirar los manifiestos locales. Las paginas del
+    reparto vigente y de sus versiones archivadas quedan marcadas para que
+    el arranque automatico no reconstruya lo que se pidio eliminar.
+    """
+    registro = leer(carpeta)
+    eliminadas = {
+        (str(archivo).casefold(), int(pagina))
+        for archivo, pagina in registro.eliminadas
+    }
+    eliminadas.update(
+        clave for batch in registro.batches for clave in batch.claves()
+    )
+    eliminadas.update(
+        clave
+        for reparto in registro.historial
+        for batch in reparto.batches
+        for clave in batch.claves()
+    )
+    eliminadas.update(
+        (str(archivo).casefold(), int(pagina))
+        for archivo, pagina in paginas
+    )
+    registro.batches = []
+    registro.historial = []
+    registro.eliminadas = sorted(eliminadas)
     guardar(registro, carpeta)
     return registro

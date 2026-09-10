@@ -1,10 +1,9 @@
 """Eliminar batches desde el clic derecho de la cola.
 
 Cancelar y eliminar no son lo mismo, y la diferencia importa. Un batch
-cancelado sigue en la cola con su ID y con sus bitácoras apuntadas, así que
-ningún reparto posterior las vuelve a mandar. Eliminarlo borra esa memoria:
-su manifiesto se va a la Papelera, su anotación sale del registro de la
-entrega y sus bitácoras vuelven a quedar libres para el reparto siguiente.
+cancelado sigue en la cola con su ID y con sus bitácoras apuntadas.
+Eliminarlo retira sus archivos locales y conserva una marca mínima para que
+el reparto siguiente no lo vuelva a crear.
 
 Lo que ya esté en AirVault no se toca: eso no vive aquí, y el batch remoto
 se queda donde estaba.
@@ -119,16 +118,16 @@ def test_eliminar_manda_el_batch_a_la_papelera_y_lo_saca_de_la_cola(
         app.processEvents()
 
 
-def test_eliminar_libera_las_bitacoras_para_el_proximo_reparto(
+def test_eliminar_no_recrea_las_bitacoras_en_el_proximo_reparto(
     app, tmp_path, papelera, dice_que_si,
 ):
-    """La diferencia con cancelar: aquí las páginas vuelven a repartirse."""
+    """La marca permanente impide que el arranque reconstruya el batch."""
     _csv, carpeta, trabajos = repartida(tmp_path)
     ventana = cargada(tmp_path, trabajos)
     try:
         fuera = ventana._estados[0]
         suyas = {
-            (r.archivo_origen, int(r.pagina_origen))
+            (r.archivo_origen.casefold(), int(r.pagina_origen))
             for r in fuera.trabajo.manifiesto.registros
             if not r.es_separador and r.archivo_origen
         }
@@ -136,10 +135,25 @@ def test_eliminar_libera_las_bitacoras_para_el_proximo_reparto(
 
         ventana._eliminar_estas([fuera])
 
-        anotadas = registro.leer(carpeta).anotadas()
-        assert not (suyas & anotadas)
-        # Lo de los demás batches sigue anotado: se olvida uno, no la entrega.
-        assert anotadas
+        guardado = registro.leer(carpeta)
+        assert not (suyas & guardado.anotadas())
+        assert suyas <= guardado.comprometidas()
+
+        nuevos = preparar_partes(
+            AirVaultConfig(), carpeta, _csv, paginas_por_batch=4,
+        )
+        repartidas = {
+            (r.archivo_origen.casefold(), int(r.pagina_origen))
+            for trabajo in nuevos for r in trabajo.manifiesto.bitacoras()
+        }
+        assert not (suyas & repartidas)
+        historial = len(registro.leer(carpeta).historial)
+
+        recargados = preparar_partes(
+            AirVaultConfig(), carpeta, _csv, paginas_por_batch=4,
+        )
+        assert [t.carpeta for t in recargados] == [t.carpeta for t in nuevos]
+        assert len(registro.leer(carpeta).historial) == historial
     finally:
         ventana.close()
         app.processEvents()

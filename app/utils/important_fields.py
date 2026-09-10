@@ -11,6 +11,7 @@ from loguru import logger
 
 IMPORTANT_FIELDS_FILENAME = "important_fields.json"
 _DEFAULT_KEY = "__default__"
+_CURRENT_VERSION = 2
 
 # Columnas que se marcan solas mientras nadie edite la selección: los
 # identificadores de la página y los campos críticos de indexación. Vive aquí
@@ -18,10 +19,19 @@ _DEFAULT_KEY = "__default__"
 # una ejecución de línea de comandos tiene que dar el mismo archivo que la
 # interfaz sobre la misma plantilla.
 _DEFAULT_IMPORTANT = frozenset({
-    "file", "page", "date", "time_ms", "dup", "disc", "discrepancia",
-    "log_number", "matricula", "flight_number", "pilot_signature",
-    "captain_signature", "captain_license",
+    "file", "page", "date", "time_ms", "review", "dup", "disc",
+    "disc_reason", "log_number", "matricula", "flight_number",
+    "pilot_signature", "captain_signature", "captain_license",
 })
+
+# La nota de la discrepancia se llamaba «discrepancia» a secas, y en la lista
+# del selector quedaba junto a «disc» como si fueran dos columnas de lo mismo.
+# Se renombró a ``disc_reason``, que dice que es el porqué de la bandera. Las
+# selecciones ya guardadas siguen nombrando a la vieja, así que se traducen al
+# leerlas: si no, la columna se quedaba sin marcar en las máquinas que ya
+# habían editado la lista.
+_RENOMBRADAS = {"discrepancia": "disc_reason"}
+_NUEVAS_IMPORTANTES = {"review"}
 
 
 def default_important_columns(columns: Iterable[str]) -> set[str]:
@@ -52,8 +62,22 @@ class ImportantFieldsStore:
         templates = payload.get("templates") if isinstance(payload, dict) else None
         if not isinstance(templates, dict):
             return {}
+        try:
+            version = int(payload.get("version", 1))
+        except (TypeError, ValueError):
+            version = 1
         return {
-            str(name): [str(column) for column in columns]
+            str(name): sorted(set(
+                [
+                    _RENOMBRADAS.get(str(column), str(column))
+                    for column in columns
+                ]
+                + (
+                    list(_NUEVAS_IMPORTANTES)
+                    if version < _CURRENT_VERSION
+                    else []
+                )
+            ))
             for name, columns in templates.items()
             if isinstance(columns, list)
         }
@@ -93,7 +117,7 @@ class ImportantFieldsStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(
                 json.dumps(
-                    {"version": 1, "templates": templates},
+                    {"version": _CURRENT_VERSION, "templates": templates},
                     ensure_ascii=False,
                     indent=2,
                 )

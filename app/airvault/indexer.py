@@ -15,6 +15,9 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence
 from loguru import logger
 
 from app.airvault.config import (
+    CAMPO_END_DATE,
+    CAMPOS_OBLIGATORIOS,
+    nombre_campo,
     CAMPO_DESCRIPCION,
     CAMPO_FLEET,
     CAMPO_LESSOR,
@@ -36,7 +39,9 @@ from app.airvault.guards import (
     verificar_no_pisar,
     verificar_obligatorios,
 )
-from app.airvault.mapping import ResolutorFlota, valores_de_indice
+from app.airvault.mapping import (
+    ResolutorFlota, fecha_airvault, fecha_desde_airvault, valores_de_indice,
+)
 from app.airvault.model import EstadoRegistro, Manifiesto, Registro
 from app.airvault.session import (
     ErrorDeAirVault,
@@ -51,11 +56,11 @@ FALLOS_DE_CAMINO = (ErrorDeSesion, ErrorDeConexion)
 # Estos avisos describen calidad incompleta, no una correspondencia rota: se
 # envia lo disponible y AirVault deja la pagina pendiente de revision.
 #
-# «obligatorio_vacio» no esta en la lista y no puede estarlo, ni siquiera en
-# REVISAR: AirVault no acepta la pagina y contesta 500 «Field <campo> value
-# is required». Mandarla no la deja amarilla, la rechaza, y el rechazo se
-# llevaba por delante el resto del batch.
+# Un obligatorio explicitamente vacio sigue bloqueando. En REVISAR se
+# omiten los campos sin lectura y se guarda el resto con estado pendiente,
+# como ya se hacia con End Date cuando la fecha era dudosa.
 AVISOS_DE_REVISION = {
+    "indice_incompleto",
     "fecha_dudosa",
     "matricula_vacia",
     "matricula_desconocida",
@@ -85,12 +90,16 @@ class PlanPagina:
 
     @property
     def requiere_revision(self) -> bool:
-        return self.escribible and bool(self.avisos)
+        return self.escribible and bool(
+            self.avisos or self.registro.discrepancia
+            or self.registro.fecha_dudosa or self.registro.revision_pendiente
+        )
 
     @property
     def queda_incompleta(self) -> bool:
         """AirVault no puede validarla porque falta un campo obligatorio."""
-        return any(a.codigo == "obligatorio_vacio" for a in self.avisos)
+        return any(a.codigo in {"obligatorio_vacio", "indice_incompleto", "fecha_dudosa"}
+                   for a in self.avisos)
 
 
 @dataclass
@@ -261,13 +270,24 @@ class Indexador:
                 self.manifiesto.audit_status_discrepancia,
             )
             avisos = list(por_seq.get(registro.seq, ()))
+            if self.manifiesto.solo_subir:
+                # Omitir conserva lo que AirVault ya tenga. Enviar un
+                # obligatorio vacio provoca rechazo y deja sin guardar
+                # incluso el Log Page Number que si se pudo reconocer.
+                valores = {
+                    campo: valor for campo, valor in valores.items()
+                    if campo not in CAMPOS_OBLIGATORIOS or str(valor or "").strip()
+                }
             avisos.extend(verificar_obligatorios(
                 registro,
                 valores,
                 permitir_fecha_dudosa=self.manifiesto.solo_subir,
+                permitir_incompletos=self.manifiesto.solo_subir,
             ))
 
             remota = remotas.get(registro.seq)
+            reparar_fecha = False
+            completar_revision = False
             if remota is None:
                 avisos.append(Aviso(
                     registro.seq, "no_cargo",
@@ -275,6 +295,8 @@ class Indexador:
                     f"{ilegibles.get(registro.seq, 'sin respuesta')}",
                 ))
             else:
+                from app.airvault.ecn import conservar_razones
+                valores = conservar_razones(valores, remota.valores)
                 avisos.extend(verificar_alineacion(
                     registro, remota.valores, self.permitir_log_distinto,
                     remota.estado,
@@ -282,11 +304,45 @@ class Indexador:
                 work_location = str(
                     remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
                 ).strip()
+                if self.manifiesto.solo_subir and remota.estado == ESTADO_VALIDO:
+                    faltantes = {
+                        campo: valor for campo, valor in valores.items()
+                        if str(valor or "").strip()
+                        and not str(remota.valores.get(campo, "") or "").strip()
+                    }
+                    completar_revision = bool(faltantes)
+                    if completar_revision:
+                        # Valid no garantiza que se hayan guardado todos los
+                        # datos. Se rellenan los vacios sin pisar los presentes;
+                        # las guardas de correspondencia siguen vigentes.
+                        valores = {
+                            campo: valor
+                            for campo, valor in {
+                                **valores, **remota.valores, **faltantes,
+                            }.items()
+                            if campo not in CAMPOS_OBLIGATORIOS or str(valor or "").strip()
+                        }
+                # Solo se recupera una fecha ausente si log y avion confirman
+                # la identidad. Una fecha existente conserva la guarda habitual.
+                reparar_fecha = bool(
+                    remota.estado == ESTADO_VALIDO
+                    and valores.get(CAMPO_END_DATE)
+                    and not str(remota.valores.get(CAMPO_END_DATE, "") or "").strip()
+                    and str(remota.valores.get(CAMPO_LOG_NUMBER, "")).strip()
+                    == registro.log_number
+                    and str(remota.valores.get(CAMPO_MATRICULA, "")).strip().upper()
+                    == registro.matricula.upper()
+                )
+                if reparar_fecha and not completar_revision:
+                    valores = {
+                        **valores, **remota.valores,
+                        CAMPO_END_DATE: valores[CAMPO_END_DATE],
+                    }
                 # Incluso una pagina Valid se vuelve a guardar si AirVault
-                # lleno Work Location. Es el unico caso en que se toca una
-                # pagina verde sin pedir sobrescritura: el flujo exige ese
-                # campo vacio y el payload conserva el resto de sus datos.
-                if not (remota.estado == ESTADO_VALIDO and work_location):
+                # lleno Work Location: el flujo exige ese campo vacio.
+                # Tambien se permiten las recuperaciones de datos anteriores.
+                if (not (remota.estado == ESTADO_VALIDO and work_location)
+                        and not reparar_fecha and not completar_revision):
                     avisos.extend(verificar_no_pisar(
                         registro, remota.estado, self.sobrescribir
                     ))
@@ -299,7 +355,16 @@ class Indexador:
                 avisos=avisos,
                 ya_indexada=(
                     remota is not None
-                    and remota.estado == ESTADO_VALIDO
+                    and (remota.estado == ESTADO_VALIDO or (
+                        self.manifiesto.solo_subir
+                        and remota.estado == ESTADO_NECESITA_CORRECCION
+                        and (registro.revision_pendiente is not False
+                             or registro.discrepancia or registro.fecha_dudosa
+                             or any(a.codigo in AVISOS_DE_REVISION for a in avisos))
+                        and not campos_distintos(valores, remota.valores)
+                    ))
+                    and not reparar_fecha
+                    and not completar_revision
                     and not str(
                         remota.valores.get(CAMPO_WORK_LOCATION, "") or ""
                     ).strip()
@@ -406,9 +471,12 @@ class Indexador:
                 resultado.omitidas += 1
                 continue
             if (
-                registro.estado is EstadoRegistro.ESCRITA
-                and entrada.ya_indexada
+                entrada.ya_indexada and (
+                    registro.estado is EstadoRegistro.ESCRITA
+                    or self.manifiesto.solo_subir
+                )
             ):
+                registro.estado = EstadoRegistro.ESCRITA
                 resultado.omitidas += 1
                 continue
             try:
@@ -430,7 +498,12 @@ class Indexador:
                 valores[CAMPO_WORK_LOCATION] = ""
                 estado = (
                     ESTADO_NECESITA_CORRECCION
-                    if self.manifiesto.solo_subir or entrada.queda_incompleta
+                    if entrada.queda_incompleta or (
+                        self.manifiesto.solo_subir and (
+                            entrada.requiere_revision
+                            or registro.revision_pendiente is None
+                        )
+                    )
                     else ESTADO_VALIDO
                 )
                 self.cliente.guardar_pagina(
@@ -440,6 +513,8 @@ class Indexador:
                     estado,
                     entrada.pagina_batch,
                 )
+                if self.manifiesto.solo_subir:
+                    self._verificar_guardado(entrada, valores, estado)
             except FALLOS_DE_CAMINO as exc:
                 # Se cayo la sesion o la red. Seguir escribiendo marcaria
                 # como fallidas paginas que nadie llego a intentar; se para
@@ -489,7 +564,10 @@ class Indexador:
                 continue
             registro.estado = EstadoRegistro.ESCRITA
             registro.pagina_batch = entrada.pagina_batch
-            registro.avisos = []
+            registro.avisos = (
+                [str(aviso) for aviso in entrada.avisos]
+                if self.manifiesto.solo_subir else []
+            )
             resultado.escritas += 1
             self._persistir()
             if al_avanzar is not None:
@@ -529,9 +607,82 @@ class Indexador:
                     )
         return resultado
 
+    def _verificar_guardado(
+        self, entrada: PlanPagina, valores: Mapping[int, str], estado: int,
+    ) -> None:
+        """Confirma que REVISAR conservo los datos antes de darla por escrita."""
+        remota = self.cliente.leer_pagina(
+            self.manifiesto.batch_id, entrada.pagina_batch,
+        )
+        distintos = campos_distintos(valores, remota.valores)
+        if distintos or remota.estado != estado:
+            detalle = ", ".join(distintos) or "estado de revision"
+            raise ErrorDeAirVault(
+                f"AirVault no conservo el guardado de la pagina "
+                f"{entrada.pagina_batch}: {detalle}"
+            )
+
     def _persistir(self) -> None:
         if self._al_guardar is not None:
             self._al_guardar(self.manifiesto)
+
+
+def campos_distintos(esperados: Mapping[int, str], recibidos: Mapping[int, str]) -> List[str]:
+    """Compara solo los campos enviados y admite fechas remotas equivalentes."""
+    distintos = []
+    for campo, esperado in esperados.items():
+        recibido = str(recibidos.get(campo, "") or "").strip()
+        esperado = str(esperado or "").strip()
+        coincide = recibido == esperado
+        if campo == CAMPO_END_DATE and esperado:
+            fecha = fecha_desde_airvault(esperado)
+            coincide = bool(fecha) and fecha_desde_airvault(recibido) == fecha
+        if not coincide:
+            distintos.append(nombre_campo(campo))
+    return distintos
+
+
+def verificar_revision(cliente, manifiesto: Manifiesto, al_avanzar=None) -> tuple[int, int, List[str]]:
+    """El trabajo automatico acaba cuando lo disponible esta guardado.
+
+    Una discrepancia o un dato ilegible pueden conservar el estado amarillo.
+    Exigir Valid a esas paginas repetia un guardado que ya habia terminado.
+    Esta comprobacion no publica ni completa el batch.
+    """
+    confirmadas = 0
+    problemas = []
+    registros = list(manifiesto.bitacoras())
+    for numero, registro in enumerate(registros):
+        if al_avanzar:
+            al_avanzar(numero, len(registros))
+        pagina = registro.pagina_batch or registro.seq
+        try:
+            remota = cliente.leer_pagina(manifiesto.batch_id, pagina)
+        except FALLOS_DE_CAMINO:
+            raise
+        except Exception as exc:
+            problemas.append(f"pagina {pagina}: no se pudo comprobar ({exc})")
+            continue
+        esperados = valores_de_indice(
+            registro, manifiesto.doc_type, manifiesto.audit_status,
+            manifiesto.nombre_batch, manifiesto.audit_status_discrepancia,
+        )
+        esperados = {campo: valor for campo, valor in esperados.items()
+                     if campo not in CAMPOS_OBLIGATORIOS or str(valor or "").strip()}
+        esperados[CAMPO_WORK_LOCATION] = ""
+        from app.airvault.ecn import conservar_razones
+        esperados = conservar_razones(esperados, remota.valores)
+        distintos = campos_distintos(esperados, remota.valores)
+        if distintos or remota.estado not in (ESTADO_VALIDO, ESTADO_NECESITA_CORRECCION):
+            problemas.append(f"pagina {pagina}: falta confirmar "
+                             + (", ".join(distintos) or "el estado de indexacion"))
+            continue
+        confirmadas += 1
+        registro.estado = EstadoRegistro.ESCRITA
+        registro.pagina_batch = pagina
+    if al_avanzar:
+        al_avanzar(len(registros), len(registros))
+    return confirmadas, len(registros), problemas
 
 
 def verificar_lote(
@@ -568,6 +719,27 @@ def verificar_lote(
             remota.valores.get(CAMPO_MATRICULA, "") or ""
         ).strip().upper()
         identidad_correcta = True
+        faltantes = [
+            campo for campo in CAMPOS_OBLIGATORIOS
+            if not str(remota.valores.get(campo, "") or "").strip()
+        ]
+        if faltantes:
+            problemas.append(
+                f"pagina {pagina}: faltan datos obligatorios en AirVault: "
+                + ", ".join(nombre_campo(campo) for campo in faltantes)
+            )
+        fecha_esperada = fecha_desde_airvault(fecha_airvault(registro.fecha))
+        fecha_remota = fecha_desde_airvault(remota.valores.get(CAMPO_END_DATE))
+        fecha_correcta = bool(
+            fecha_esperada and not registro.fecha_dudosa
+            and fecha_remota == fecha_esperada
+        )
+        if not fecha_correcta:
+            problemas.append(
+                f"pagina {pagina}: fecha guardada "
+                f"{fecha_remota or '(vacia o no reconocida)'}; "
+                f"se esperaba {fecha_esperada or '(sin fecha confirmada)'}"
+            )
         if log_remoto != registro.log_number:
             identidad_correcta = False
             problemas.append(
@@ -587,7 +759,7 @@ def verificar_lote(
                 problemas.append(
                     f"pagina {pagina}: Work Location no quedo vacio"
                 )
-            if not work_location and identidad_correcta:
+            if not work_location and identidad_correcta and fecha_correcta and not faltantes:
                 validas += 1
         else:
             problemas.append(

@@ -191,6 +191,63 @@ def test_el_limite_de_quick_upload_toma_las_400_paginas_guardadas(app, tmp_path)
     ventana.close()
 
 
+def test_configuracion_parcial_y_reapertura_conservan_la_cantidad(app, tmp_path):
+    from app.airvault.config import guardar_preferencias
+    from app.gui.export_options import ExportOptionsGroup
+
+    (tmp_path / "airvault.example.json").write_text(
+        json.dumps({"paginas_por_batch": 400}), encoding="utf-8",
+    )
+    guardar_preferencias(tmp_path / "airvault.json", auto_subir=False)
+    primera = AirVaultWindow(tmp_path)
+    assert primera.limite_batch_spin.value() == 400
+    primera.limite_batch_spin.setValue(475)
+    primera.close()
+    guardar_preferencias(tmp_path / "airvault.json", completar_batch=False)
+
+    segunda = AirVaultWindow(tmp_path)
+    exportacion = ExportOptionsGroup(raiz=tmp_path)
+    assert segunda.limite_batch_spin.value() == 475
+    assert exportacion.partes_spin.value() == 475
+    segunda.close()
+    exportacion.close()
+
+
+def test_un_batch_antiguo_no_reemplaza_la_cantidad_configurada(app, tmp_path):
+    csv = corrida(tmp_path)
+    registro = registrar_en_airvault(tmp_path, csv)
+    datos = json.loads(registro.read_text(encoding="utf-8"))
+    datos["paginas_por_batch"] = 10
+    registro.write_text(json.dumps(datos), encoding="utf-8")
+    ventana = AirVaultWindow(tmp_path)
+    ventana.limite_batch_spin.setValue(475)
+
+    ventana.fijar_corrida(csv)
+
+    assert len(ventana._trabajos) == 1
+    assert ventana._trabajos[0].manifiesto.paginas_por_batch == 10
+    assert ventana.limite_batch_spin.value() == 475
+    assert ventana._base_del_estado()["paginas_por_batch"] == 475
+    assert AirVaultConfig.load(tmp_path / "airvault.json").paginas_por_batch == 475
+    ventana.close()
+
+
+def test_al_elegir_corrida_recupera_la_preferencia_cambiada_en_exportacion(app, tmp_path):
+    from app.gui.export_options import ExportOptionsGroup
+
+    ventana = AirVaultWindow(tmp_path)
+    ventana.limite_batch_spin.setValue(300)
+    exportacion = ExportOptionsGroup(raiz=tmp_path)
+    exportacion.partes_spin.setValue(550)
+
+    ventana.fijar_corrida(corrida(tmp_path))
+
+    assert ventana.limite_batch_spin.value() == 550
+    assert ventana._config.paginas_por_batch == 550
+    ventana.close()
+    exportacion.close()
+
+
 def test_la_compresion_es_opcional_y_explica_los_200_dpi(ventana):
     assert ventana.compresion_check.text() == "Compresión"
     assert not ventana.compresion_check.isChecked()
@@ -602,6 +659,75 @@ def parte(estado, nombre="DP | BITS", detalle="", carpeta="job", lote=None):
     )
 
 
+def cola_de_dos_ejecuciones(ventana):
+    from app.airvault.flujo import LISTO
+
+    actual = parte(LISTO, "Actual", carpeta="actual")
+    anterior = parte(LISTO, "Anterior", carpeta="anterior")
+    actual.trabajo.manifiesto.csv_origen = "C:/entregas/actual.csv"
+    anterior.trabajo.manifiesto.csv_origen = "C:/entregas/anterior.csv"
+    ventana.corrida_edit.setText(actual.trabajo.manifiesto.csv_origen)
+    ventana.lote_edit.setText("Actual")
+    ventana._trabajos = [anterior.trabajo, actual.trabajo]
+    ventana._estados = [anterior, actual]
+    ventana._estado["planes"] = {"actual": object(), "anterior": object()}
+    ventana._pintar_lotes()
+    return actual, anterior
+
+
+def test_filtrar_cola_conserva_correspondencia_de_filas_y_acciones(ventana):
+    actual, anterior = cola_de_dos_ejecuciones(ventana)
+    ventana.solo_ejecucion_check.setChecked(True)
+    assert ventana.lotes.rowCount() == 1
+    assert ventana.lotes.item(0, 1).text() == "Actual"
+    ventana.lotes.selectRow(0)
+    assert ventana._seleccionadas() == [actual]
+    assert ventana._elegidas(0) == [actual]
+    assert ventana._listos() == [actual.trabajo]
+    assert ventana._ejecucion() == [actual.trabajo]
+    assert [nombre for nombre, _registros in ventana._batches_de_la_cola()] == ["Actual"]
+    ventana.solo_ejecucion_check.setChecked(False)
+    assert ventana.lotes.rowCount() == 2
+    assert ventana._seleccionadas() == []
+    assert ventana._ejecucion() == [anterior.trabajo, actual.trabajo]
+
+
+@pytest.mark.parametrize("modo,clave", [
+    ("comprobar", "comprobar_trabajos"), ("indexar", "listos"),
+    ("completar", "por_completar"), ("resubir", "pendientes_subida"),
+])
+def test_acciones_en_espera_excluyen_batches_ocultos(ventana, monkeypatch, modo, clave):
+    actual, anterior = cola_de_dos_ejecuciones(ventana)
+    ventana.solo_ejecucion_check.setChecked(True)
+    llamadas = []
+    monkeypatch.setattr(ventana, "_lanzar", lambda modo, estado: llamadas.append((modo, dict(estado))))
+    assert ventana._ejecutar_accion(modo, [anterior.trabajo, actual.trabajo])
+    assert llamadas[0][1][clave] == [actual.trabajo]
+    assert llamadas[0][1]["trabajos"] == [actual.trabajo]
+    assert not ventana._ejecutar_accion(modo, [anterior.trabajo])
+    assert len(llamadas) == 1
+
+
+def test_subir_filtrado_no_recupera_ejecuciones_anteriores(ventana, monkeypatch):
+    actual, _anterior = cola_de_dos_ejecuciones(ventana)
+    ventana.solo_ejecucion_check.setChecked(True)
+    llamadas = []
+    monkeypatch.setattr(ventana, "_lanzar", lambda modo, estado: llamadas.append(dict(estado)))
+    ventana._subir_a_mano()
+    assert llamadas[0]["trabajos"] == [actual.trabajo]
+    assert llamadas[0]["recuperar_pendientes"] is False
+
+
+def test_actualizacion_filtrada_conserva_ocultos_sin_meterlos_en_el_worker(ventana):
+    actual, anterior = cola_de_dos_ejecuciones(ventana)
+    ventana.solo_ejecucion_check.setChecked(True)
+    ventana._al_actualizar_subidas({"trabajos": [actual.trabajo]})
+    assert ventana._estado["trabajos"] == [actual.trabajo]
+    assert anterior.trabajo in ventana._trabajos
+    ventana.solo_ejecucion_check.setChecked(False)
+    assert ventana.lotes.rowCount() == 2
+
+
 def test_subir_no_indexa_nada_y_dice_que_falta_esperar(ventana):
     """Subir y estar listo son cosas distintas: entre medias está AirVault."""
     ventana._al_subir({"trabajos": [TrabajoFalso()], "cliente": object()})
@@ -742,6 +868,24 @@ def test_gris_solo_significa_sin_subir_y_subido_queda_blanco(ventana):
     assert ventana.lotes.item(1, 0).foreground().style() is Qt.BrushStyle.NoBrush
 
 
+def test_azul_solo_durante_indexacion_y_verde_al_terminar(ventana):
+    from app.airvault.flujo import INDEXADO, LISTO
+    from app.gui.airvault_window import COLOR_INDEXANDO
+
+    activo = parte(LISTO)
+    terminado = parte(INDEXADO, carpeta="terminado")
+    ventana._estados = [activo, terminado]
+    ventana._al_batch_indexando(activo.trabajo, True)
+    for columna in range(ventana.lotes.columnCount()):
+        assert ventana.lotes.item(0, columna).foreground().color() == QColor(COLOR_INDEXANDO)
+        assert ventana.lotes.item(1, columna).foreground().color() == QColor(COLOR_INDEXADO)
+    ventana._al_batch_indexando(activo.trabajo, False)
+    assert ventana.lotes.item(0, 0).foreground().style() is Qt.BrushStyle.NoBrush
+    ventana._estados = [parte(INDEXADO)]
+    ventana._pintar_lotes()
+    assert ventana.lotes.item(0, 0).foreground().color() == QColor(COLOR_INDEXADO)
+
+
 def test_un_batch_parcial_no_se_pinta_como_terminado(ventana):
     from app.airvault.flujo import LISTO
     from app.airvault.model import EstadoEtapa, Etapa
@@ -812,7 +956,15 @@ class ResultadoFalso:
 def test_al_indexar_cuenta_como_quedo_el_lote(ventana):
     ventana._al_indexar({"resultado": ResultadoFalso(), "validas": 2, "total": 3})
     texto = ventana.resumen.text()
-    assert "Escritas 2" in texto and "2 de 3 páginas válidas" in texto
+    assert "Escritas 2" in texto and "2 de 3 páginas comprobadas" in texto
+
+
+def test_revisar_distingue_fin_del_guardado_y_revision_humana(ventana):
+    ventana._al_indexar({"resultado": ResultadoFalso(), "validas": 3,
+                         "total": 3, "incluye_revision": True})
+    assert ventana.estado_label.text() == "Indexado terminado"
+    assert "El guardado de REVISAR terminó" in ventana.resumen.text()
+    assert "revisión humana" in ventana.resumen.text()
 
 
 def test_un_indexado_cortado_dice_que_lo_que_falta_se_retoma(ventana):
@@ -2148,7 +2300,7 @@ def test_solo_el_boton_pide_recuperar_y_solo_por_una_vez(ventana, tmp_path):
 
 # ── el posible duplicado ───────────────────────────────────────────
 
-def test_quitar_la_marca_devuelve_la_fila_a_la_cola(ventana):
+def test_quitar_la_marca_autoriza_y_reenvia_la_fila(ventana, monkeypatch):
     """La sospecha prueba que las bitácoras están en AirVault.
 
     No prueba quién las subió: pueden haber llegado por otro batch, por
@@ -2161,12 +2313,56 @@ def test_quitar_la_marca_devuelve_la_fila_a_la_cola(ventana):
     fila.trabajo.manifiesto.posible_duplicado = "ya se mandaron"
     ventana._estados = [fila]
     ventana._trabajos = [fila.trabajo]
+    reenviadas = []
+    monkeypatch.setattr(
+        ventana,
+        "_subir_estas",
+        lambda partes, duplicados_autorizados=False: reenviadas.append(
+            (list(partes), duplicados_autorizados)
+        ),
+    )
 
     ventana._quitar_sospecha([fila])
 
     assert not fila.trabajo.manifiesto.posible_duplicado
+    assert fila.trabajo._duplicado_permitido
     assert ventana._estados[0].estado != POSIBLE_DUPLICADO
-    assert any(
-        "posible duplicado" in ventana.bitacora.item(i).text()
-        for i in range(ventana.bitacora.count())
+    assert reenviadas == [([fila], True)]
+
+
+def test_reenviar_posible_duplicado_lo_deja_claro_en_la_bitacora(
+    ventana, monkeypatch,
+):
+    from app.airvault.flujo import POSIBLE_DUPLICADO
+
+    fila = parte(POSIBLE_DUPLICADO, "DP | BIT -2", "ya se mandaron")
+    fila.trabajo.manifiesto.posible_duplicado = "ya se mandaron"
+    ventana._estados = [fila]
+    ventana._trabajos = [fila.trabajo]
+    monkeypatch.setattr(ventana, "_ejecutar_accion", lambda *args: False)
+
+    ventana._quitar_sospecha([fila])
+
+    assert "Reenvío autorizado tras revisar posible duplicado" in (
+        ventana.bitacora.item(ventana.bitacora.count() - 1).text()
     )
+
+
+def test_volver_a_pulsar_subir_autoriza_los_posibles_duplicados(
+    ventana, monkeypatch,
+):
+    from app.airvault.flujo import POSIBLE_DUPLICADO
+
+    fila = parte(POSIBLE_DUPLICADO, "DP | BIT -2", "ya se mandaron")
+    fila.trabajo.manifiesto.posible_duplicado = "ya se mandaron"
+    ventana._estados = [fila]
+    ventana._trabajos = [fila.trabajo]
+    autorizadas = []
+    monkeypatch.setattr(
+        ventana, "_quitar_sospecha",
+        lambda partes: autorizadas.extend(partes),
+    )
+
+    ventana._subir_a_mano()
+
+    assert autorizadas == [fila]

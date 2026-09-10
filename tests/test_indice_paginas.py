@@ -178,7 +178,7 @@ def test_el_indice_describe_separadores_y_bitacoras(tmp_path):
     assert datos["partes"][0]["paginas"] == [
         {"archivo": "fixture.pdf", "pagina": 1},
         {"separador": ETIQUETA_REVISAR},
-        {"archivo": "fixture.pdf", "pagina": 2},
+        {"archivo": "fixture.pdf", "pagina": 2, "revision_pendiente": False},
     ]
 
 
@@ -240,6 +240,7 @@ def test_el_indice_marca_solo_la_pagina_con_fecha_dudosa(tmp_path):
             "archivo": "fixture.pdf",
             "pagina": 2,
             "fecha_dudosa": True,
+            "revision_pendiente": True,
         },
     ]
 

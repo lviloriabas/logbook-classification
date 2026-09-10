@@ -103,6 +103,7 @@ from app.utils.io import PROCESSED_DIRNAME
 # páginas cambia los totales y el JSON no puede quedar diciendo los de antes.
 from app.validation.book_corrector import _recompute_summary
 from app.validation.depuracion import depurar_claves
+from app.validation.page_status import needs_review
 
 
 _PROGRAM_DIR = Path(__file__).resolve().parents[2]
@@ -628,6 +629,56 @@ def reports_from_companion(csv_path: Path) -> list:
         ValidationReport.model_validate(entry)
         for entry in _companion_payload(Path(csv_path)).get("reportes", [])
     ]
+
+
+def restore_run_columns(
+    csv_path: Path,
+    columns: list[str],
+    rows: list[dict[str, str]],
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Recupera columnas nuevas para un CSV histórico con JSON compañero."""
+    missing = {"review", "disc_reason"}.difference(columns)
+    if not missing:
+        return columns, rows
+    try:
+        reports = reports_from_companion(csv_path)
+    except Exception:  # noqa: BLE001 - compatibilidad opcional del visor
+        return columns, rows
+    pages = {
+        (report.source_filename.casefold(), str(page.page_number)): page
+        for report in reports
+        for page in report.pages
+    }
+    matched = [
+        pages.get(((row.get("file") or "").casefold(), row.get("page") or ""))
+        for row in rows
+    ]
+    if not rows or any(page is None for page in matched):
+        return columns, rows
+
+    restored = list(columns)
+    if "review" in missing:
+        position = (
+            restored.index("log_number") + 1
+            if "log_number" in restored
+            else 2
+        )
+        restored.insert(min(position, len(restored)), "review")
+    if "disc_reason" in missing:
+        position = (
+            restored.index("disc") + 1
+            if "disc" in restored
+            else len(restored)
+        )
+        restored.insert(position, "disc_reason")
+    for row, page in zip(rows, matched):
+        if "review" in missing:
+            row["review"] = str(needs_review(page)).lower()
+        if "disc_reason" in missing:
+            row["disc_reason"] = (
+                page.discrepancy_note if page.discrepancy else ""
+            )
+    return restored, rows
 
 
 def reports_for_csv(
@@ -1876,6 +1927,7 @@ class CsvViewerWindow(QMainWindow):
     def _load_csv(self, path: Path) -> None:
         try:
             columns, rows = read_csv_file(path)
+            columns, rows = restore_run_columns(path, columns, rows)
         except (OSError, ValueError, csv.Error) as exc:
             QMessageBox.critical(
                 self, "No se pudo abrir el CSV", f"{path}\n\n{exc}"

@@ -68,6 +68,9 @@ NOMBRE_ESTADO = {
 # «el campo 9633 quedaria vacio» no se puede leer sin abrir el codigo; el
 # mismo aviso con el nombre se resuelve mirando la bitacora.
 NOMBRE_CAMPO = {
+    9692: "ECN Reason",
+    9781: "2nd ECN Reason",
+    9782: "3rd ECN Reason",
     CAMPO_DOC_TYPE: "Doc Type",
     CAMPO_WORK_LOCATION: "Work Location",
     CAMPO_WORK_TYPE: "Work Type",
@@ -202,6 +205,16 @@ class AirVaultConfig:
             return cls()
         if not isinstance(datos, Mapping):
             return cls()
+        # Guardar otra preferencia puede crear un JSON parcial. La cantidad
+        # inicial sigue saliendo del archivo portable hasta que se elija una.
+        if datos.get("paginas_por_batch") is None:
+            ejemplo = ruta.with_name(AIRVAULT_EXAMPLE_FILENAME)
+            try:
+                iniciales = json.loads(ejemplo.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                iniciales = {}
+            if isinstance(iniciales, Mapping) and iniciales.get("paginas_por_batch") is not None:
+                datos = {**datos, "paginas_por_batch": iniciales["paginas_por_batch"]}
         return cls.from_mapping(datos)
 
     @classmethod

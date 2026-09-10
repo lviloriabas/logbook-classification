@@ -15,6 +15,7 @@ from app.gui.csv_viewer import (
     EmbeddedPdfViewer,
     reports_for_csv,
     resolve_source_documents,
+    restore_run_columns,
     run_dir_for_csv,
     source_pdf_paths_for_rows,
 )
@@ -115,6 +116,67 @@ def test_find_and_read_csv_from_processed_data_folder(tmp_path: Path):
             "date": "2026/08/13",
         }
     ]
+
+
+def test_legacy_discrepancy_header_uses_the_current_name(tmp_path: Path):
+    csv_path = tmp_path / "run.csv"
+    csv_path.write_text(
+        "file,page,discrepancia\na.pdf,1,Falta firma de capitán\n",
+        encoding="utf-8",
+    )
+
+    columns, rows = read_csv_file(csv_path)
+
+    assert columns == ["file", "page", "disc_reason"]
+    assert rows[0]["disc_reason"] == "Falta firma de capitán"
+
+
+def test_viewer_restores_review_for_a_historical_run(tmp_path: Path):
+    import json
+
+    from app.models.schemas import FieldResult, PageResult, ValidationReport
+
+    csv_path = tmp_path / "run.csv"
+    csv_path.write_text(
+        "file,page,log_number,dup,disc,discrepancia,matricula\n"
+        "a.pdf,1,1234500,false,false,,HP-1848CMP\n"
+        "a.pdf,2,1234501,false,true,Falta firma de capitán,HP-1848CMP\n",
+        encoding="utf-8",
+    )
+    pages = []
+    for number, log_number in ((1, "1234500"), (2, "1234501")):
+        page = PageResult(
+            page_number=number,
+            discrepancy=number == 2,
+            discrepancy_note=(
+                "Falta firma de capitán" if number == 2 else ""
+            ),
+        )
+        page.add_field(FieldResult(
+            page_number=number, field_id="log_number", field_type="ocr",
+            value=log_number, confidence=1.0,
+        ))
+        page.add_field(FieldResult(
+            page_number=number, field_id="matricula", field_type="ocr",
+            value="HP-1848CMP", confidence=1.0,
+        ))
+        pages.append(page)
+    report = ValidationReport(
+        pdf_path="a.pdf", template_name="fixture", pages=pages
+    )
+    csv_path.with_suffix(".json").write_text(
+        json.dumps({"reportes": [report.model_dump(mode="json")]}),
+        encoding="utf-8",
+    )
+
+    columns, rows = read_csv_file(csv_path)
+    columns, rows = restore_run_columns(csv_path, columns, rows)
+
+    assert columns[:7] == [
+        "file", "page", "log_number", "review", "dup", "disc",
+        "disc_reason",
+    ]
+    assert [row["review"] for row in rows] == ["false", "true"]
 
 
 def test_column_mode_control_is_compact_icon_only():

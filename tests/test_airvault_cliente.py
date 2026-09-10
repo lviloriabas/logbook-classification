@@ -10,6 +10,8 @@ parámetros de cada llamada que escribe.
 from __future__ import annotations
 
 import pytest
+import threading
+from types import SimpleNamespace
 
 from app.airvault.client import ClienteHttp, RespuestaInesperada
 from app.airvault.config import AirVaultConfig
@@ -41,6 +43,60 @@ def cliente(respuesta=None):
     return ClienteHttp(SesionFalsa(respuesta), AirVaultConfig())
 
 
+def test_busqueda_paralela_acotada_con_sesiones_independientes():
+    barrera = threading.Barrier(4)
+    creador = threading.get_ident()
+    sesiones = []
+
+    class Conexion:
+        def __init__(self):
+            self.cerrada = False
+            self.http = SimpleNamespace(close=self.cerrar)
+
+        def cerrar(self):
+            self.cerrada = True
+
+        def get(self, ruta, params):
+            assert threading.get_ident() != creador
+            barrera.wait(timeout=5)
+            return []
+
+    class Sesion:
+        def clonar(self):
+            assert threading.get_ident() == creador
+            conexion = Conexion()
+            sesiones.append(conexion)
+            return conexion
+
+    cli = ClienteHttp(Sesion(), AirVaultConfig())
+    nombres = [f"Batch {n}" for n in range(8)]
+    resultados = list(cli.buscar_lotes(nombres + nombres))
+    assert dict(resultados) == dict.fromkeys(nombres, [])
+    assert len(sesiones) == 8
+    assert all(sesion.cerrada for sesion in sesiones)
+
+
+def test_busqueda_paralela_propaga_error_y_cierra_conexiones():
+    conexiones = []
+
+    class Sesion:
+        def clonar(self):
+            conexion = Sesion()
+            conexion.cerrada = False
+            conexion.http = SimpleNamespace(close=lambda: setattr(conexion, "cerrada", True))
+            conexiones.append(conexion)
+            return conexion
+
+        def get(self, *_args):
+            raise RuntimeError("sin conexion")
+
+    cli = ClienteHttp(Sesion(), AirVaultConfig())
+    with pytest.raises(RuntimeError, match="sin conexion"):
+        list(cli.buscar_lotes([f"Batch {n}" for n in range(20)]))
+    assert len(conexiones) == 4
+    assert all(conexion.cerrada for conexion in conexiones)
+
+
 def test_guardar_una_pagina_va_por_post():
     """Por GET la ruta ni existe y el 404 se leía como página borrada."""
     cli = cliente({"ok": True})
@@ -58,6 +114,15 @@ def test_guardar_deja_abierta_la_pagina_que_se_pida():
     cli.guardar_pagina("003SUS", 7, {}, 0, pagina_siguiente=8)
     _ruta, datos = cli.sesion.posts[0]
     assert datos["nextPageToOpen"] == 8
+
+
+@pytest.mark.parametrize("indicador", [True, "true", "True", 1])
+def test_guardar_no_confunde_rechazo_de_fecha_con_exito(indicador):
+    from app.airvault.session import ErrorDeAirVault
+
+    cli = cliente({"IsError": indicador, "Message": "End Date is required"})
+    with pytest.raises(ErrorDeAirVault, match="End Date is required"):
+        cli.guardar_pagina("003SUS", 7, {9593: "08/31/2026"}, 0)
 
 
 def test_ponerle_nombre_al_lote_va_por_post_y_en_base64():

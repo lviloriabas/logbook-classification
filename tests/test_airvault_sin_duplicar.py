@@ -4,9 +4,10 @@ Es el unico error de este modulo que no se deshace desde el programa: hay
 que ir a borrar la copia a mano en Web Index. Las defensas que ya existian
 miran la **cola** de Web Index, y ahi esta el hueco: completar un batch lo
 saca de esa cola y lo manda a Web Search, asi que a partir de ese momento
-ninguna consulta a la cola lo ve. Si ademas se pierde la memoria local (se
-borra el registro, se reprocesan los escaneos en otra carpeta), nada
-impedia volver a subirlo.
+ninguna consulta a la cola lo ve. Si ademas se reprocesan los escaneos en
+otra carpeta, nada impedia volver a subirlo. Eliminar un batch expresamente
+es distinto: tambien debe retirarlo de esta memoria para no dejar una alerta
+falsa.
 
 Lo que se comprueba aqui son las dos que si llegan a ese caso, el tope de
 reenvios y lo que pasa cuando una de ellas salta.
@@ -24,6 +25,7 @@ from app.airvault.flujo import (
     POSIBLE_DUPLICADO,
     ErrorDeCorrida,
     Trabajo,
+    autorizar_posible_duplicado,
     buscador_de,
     carpeta_del_libro,
     completar_partes,
@@ -45,7 +47,7 @@ def _trabajo(tmp_path, entrega="hoy", carpeta="job-1", nombre="DP | BIT"):
 
     Todos los trabajos cuelgan de la misma carpeta de la instalacion, que
     es donde vive el libro de envios: la memoria es de la instalacion, no
-    de la entrega, y por eso sobrevive a borrar el registro de una.
+    de una sola entrega.
     """
     csv = corrida(tmp_path / entrega, nombre=f"BITS {entrega}")
     trabajo = Trabajo.preparar(
@@ -93,6 +95,19 @@ def test_una_bitacora_ya_mandada_en_otra_entrega_para_la_carga(tmp_path):
     assert "ya se mandaron a AirVault en otro batch" in motivo
 
 
+def test_eliminar_un_batch_lo_saca_del_libro_de_posibles_duplicados(tmp_path):
+    lunes = _trabajo(tmp_path, "lunes", "job-1", "DP | LUNES")
+    _dado_por_subido(lunes)
+    raiz = carpeta_del_libro(lunes)
+    libro_de_envios.anotar(raiz, [lunes])
+    martes = _trabajo(tmp_path, "martes", "job-2", "DP | MARTES")
+    assert revisar_duplicado(martes)
+
+    libro_de_envios.olvidar(raiz, [lunes.carpeta])
+
+    assert revisar_duplicado(martes) == ""
+
+
 def test_subir_se_niega_y_deja_la_marca_puesta(tmp_path):
     """Por ``Trabajo.subir`` pasan todas las cargas, venga de donde venga."""
     lunes = _trabajo(tmp_path, "lunes", "job-1", "DP | LUNES")
@@ -109,6 +124,42 @@ def test_subir_se_niega_y_deja_la_marca_puesta(tmp_path):
     assert Trabajo.cargar(
         AirVaultConfig(), martes.carpeta
     ).manifiesto.posible_duplicado
+
+
+def test_la_autorizacion_expresa_permite_reenviar_el_posible_duplicado(
+    tmp_path, monkeypatch,
+):
+    from app.airvault import uploader
+    from app.airvault.uploader import ResultadoSubida
+
+    lunes = _trabajo(tmp_path, "lunes", "job-1", "DP | LUNES")
+    _dado_por_subido(lunes)
+    libro_de_envios.anotar(carpeta_del_libro(lunes), [lunes])
+    martes = _trabajo(tmp_path, "martes", "job-2", "DP | MARTES")
+    martes.manifiesto.posible_duplicado = revisar_duplicado(martes)
+    martes.guardar()
+    enviados = []
+
+    class SubidorQueAcepta:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def subir(self, ruta, valores, avisar=None):
+            enviados.append(Path(ruta))
+            return ResultadoSubida(str(ruta), True)
+
+    monkeypatch.setattr(uploader, "SubidorQuickUpload", SubidorQueAcepta)
+    monkeypatch.setattr(
+        "app.airvault.flujo._paginas_del_pdf",
+        lambda _ruta: len(martes.manifiesto.registros),
+    )
+
+    autorizar_posible_duplicado(martes)
+    martes.subir(object())
+
+    assert enviados == [Path(martes.manifiesto.pdf_origen)]
+    assert martes.manifiesto.etapa_hecha("subir")
+    assert not martes._duplicado_permitido
 
 
 # ── Web Search, que ve lo que la cola ya no tiene ──────────────────
@@ -133,6 +184,38 @@ def test_un_batch_ya_publicado_no_se_vuelve_a_subir(tmp_path, monkeypatch):
     assert subidas == []
     assert es_posible_duplicado(trabajo)
     assert "Web Search ya tiene publicadas" in fallos[0][1]
+
+
+def test_repetir_la_orden_autorizada_supera_la_alerta_de_web_search(
+    tmp_path, monkeypatch,
+):
+    trabajo = _trabajo(tmp_path)
+    numeros = [
+        r.log_number for r in trabajo.manifiesto.registros if r.log_number
+    ]
+    trabajo.manifiesto.posible_duplicado = "ya aparece en Web Search"
+    trabajo.guardar()
+    subidas = []
+    monkeypatch.setattr(
+        Trabajo,
+        "subir",
+        lambda self, *args, **kwargs: subidas.append(
+            self.manifiesto.nombre_batch
+        ),
+    )
+    monkeypatch.setattr(Trabajo, "descubrir", lambda *args, **kwargs: "003SRO")
+
+    autorizar_posible_duplicado(trabajo)
+    fallos = subir_partes(
+        [trabajo],
+        SesionFalsa(),
+        cliente=ClienteFalso(),
+        forzados=[str(trabajo.carpeta)],
+        buscador=BuscadorFalso(numeros),
+    )
+
+    assert fallos == []
+    assert subidas == [trabajo.manifiesto.nombre_batch]
 
 
 def test_si_web_search_no_lo_tiene_la_carga_sigue(tmp_path, monkeypatch):
