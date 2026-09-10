@@ -797,9 +797,6 @@ class MainWindow(QMainWindow):
         """Pasa la ventana entera al juego de medidas ``density``."""
         self._density = density
         self._apply_density_stylesheet()
-        if hasattr(self, "btn_web_reports"):
-            self.btn_web_reports.setVisible(not density.compact)
-            self.web_reports_action.setVisible(density.compact)
         margin = density.window_margin
         self._root_layout.setContentsMargins(margin, margin, margin, margin)
         self._root_layout.setSpacing(density.root_spacing)
@@ -1136,9 +1133,6 @@ class MainWindow(QMainWindow):
             "procesadas y sus CSV"
         )
         self.btn_csv_viewer.triggered.connect(self._open_csv_viewer)
-        self.web_reports_action = template_menu.addAction("Web Reports…")
-        self.web_reports_action.setToolTip(WEB_REPORTS_TOOLTIP)
-        self.web_reports_action.triggered.connect(self._open_web_reports)
         self.template_actions_button = QToolButton()
         self.template_actions_button.setText("Herramientas")
         configure_menu_button(self.template_actions_button, template_menu)
@@ -1246,8 +1240,9 @@ class MainWindow(QMainWindow):
         self.btn_web_reports = QPushButton("Web Reports…")
         self.btn_web_reports.setToolTip(WEB_REPORTS_TOOLTIP)
         self.btn_web_reports.clicked.connect(self._open_web_reports)
-        self.btn_web_reports.setVisible(not self._density.compact)
-        self.web_reports_action.setVisible(self._density.compact)
+        # Siempre en esta fila, con cualquier tamaño de ventana. Antes se
+        # escondía en las medidas compactas y pasaba al menú «Herramientas»,
+        # y en un escritorio remoto pequeño parecía que no existía.
         # Los tres que abren otra ventana, juntos y contra el margen
         # derecho; a la izquierda queda solo la casilla, que es lo que esta
         # fila elige. «Editar flota…» estaba en medio, entre la casilla y el

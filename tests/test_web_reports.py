@@ -213,6 +213,22 @@ def test_la_ventana_abre_en_el_mes_actual_y_solo_consulta(app, tmp_path) -> None
         ventana.close()
 
 
+def test_el_boton_de_web_reports_no_se_mueve_con_el_tamano(app) -> None:
+    """Escondido en «Herramientas», en un escritorio pequeño no se encontraba."""
+    from app.gui.main_window import MainWindow
+    from app.gui.responsive import COMPACT, ROOMY
+
+    principal = MainWindow()
+    try:
+        for densidad in (ROOMY, COMPACT):
+            principal._apply_density(densidad)
+            assert not principal.btn_web_reports.isHidden(), densidad.name
+        menu = principal.template_actions_button.menu()
+        assert "Web Reports…" not in [a.text() for a in menu.actions()]
+    finally:
+        principal.close()
+
+
 def test_la_ventana_principal_abre_un_solo_web_reports(app) -> None:
     from app.gui.main_window import MainWindow
 
