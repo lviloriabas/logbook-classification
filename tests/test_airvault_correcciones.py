@@ -56,6 +56,26 @@ def test_una_duplicada_conserva_una_copia_y_borra_el_resto() -> None:
     assert "2008159" in plan[0].descripcion
 
 
+def test_la_duplicada_de_dos_copias_habla_de_una_sola_que_sobra() -> None:
+    """Es el caso corriente del reporte y se leía «borrar las 1 restantes»."""
+    plan = planificar(
+        _excepciones(("HP-9913CMP", "DUPLICATED 2008159(2x)"))
+    )
+
+    assert plan[0].sobran == 1
+    assert "borrar la que sobra" in plan[0].descripcion
+    assert "1 restantes" not in plan[0].descripcion
+
+
+def test_la_duplicada_de_mas_copias_dice_cuantas_sobran() -> None:
+    plan = planificar(
+        _excepciones(("HP-9913CMP", "DUPLICATED 2008159(4x)"))
+    )
+
+    assert "conservar la más antigua de 4 copias" in plan[0].descripcion
+    assert "borrar las 3 que sobran" in plan[0].descripcion
+
+
 def test_una_mal_indexada_sale_del_reporte_sin_adivinar_nada() -> None:
     """Las dos matrículas vienen en la fila: la del libro y la de destino."""
     plan = planificar(

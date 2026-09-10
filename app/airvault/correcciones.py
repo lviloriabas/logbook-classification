@@ -185,10 +185,16 @@ class Correccion:
     def descripcion(self) -> str:
         """Una linea que dice lo que va a pasar, en el idioma de la ventana."""
         if self.accion == ACCION_BORRAR:
+            # El caso corriente es de dos copias y una que sobra, y en
+            # plural quedaba «borrar las 1 restantes».
+            sobrantes = (
+                "borrar la que sobra"
+                if self.sobran == 1
+                else f"borrar las {self.sobran} que sobran"
+            )
             return (
                 f"Bitácora {self.log_number}: conservar la más antigua de "
-                f"{self.sobran + 1} copias y borrar las {self.sobran} "
-                "restantes."
+                f"{self.sobran + 1} copias y {sobrantes}."
             )
         if self.accion == ACCION_REINDEXAR:
             return (
